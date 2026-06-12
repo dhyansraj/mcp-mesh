@@ -48,7 +48,7 @@ test:
   - name: "Start gateway-agent (port 9172)"
     handler: shell
     workdir: /workspace
-    command: "meshctl start streaming/gateway-agent/main.py -d"
+    command: "meshctl start streaming/gateway-agent/main.py --env MCP_MESH_SETTLE_TIMEOUT=60 -d"
     capture: start_gateway
 
   # NOTE: gateway-agent registers as "api-<hash>" (mesh.route-only services do not
@@ -89,12 +89,28 @@ test:
     capture: wait_output
     timeout: 150
 
-  # Small additional sleep to let the gateway's `chat` dep resolve before
-  # curl tests fire. End-to-end SSE assertions below will fail loudly if it
-  # didn't, so this just avoids a flaky first-call race.
-  - name: "Brief settle for gateway chat dep resolution"
-    handler: wait
-    seconds: 5
+  # Liveness gate (NOT dependency resolution): the gateway registers as
+  # "api-<hash>" so the named-agent wait above never covers it — poll its
+  # plain-JSON health route until uvicorn has bound. Dependency resolution
+  # itself needs no wait: the settling-window grace
+  # (MCP_MESH_SETTLE_TIMEOUT=60 on the gateway) holds the first SSE request
+  # until the `chat` dep resolves (issue #1206).
+  - name: "Wait for gateway HTTP server up"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 30); do
+        CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9172/api/health 2>/dev/null || true)
+        if [ "$CODE" = "200" ]; then
+          echo "gateway HTTP up after $i attempt(s)"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: gateway /api/health not responding within 30s (last code: $CODE)"
+      exit 1
+    capture: gateway_up
+    timeout: 45
 
   - name: "Curl POST /api/chat (capture full SSE stream body)"
     handler: shell

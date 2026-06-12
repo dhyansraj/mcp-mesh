@@ -1776,19 +1776,63 @@ def route(
             # Also store a flag on the wrapper itself so route integration can detect it
             wrapped._mesh_is_injection_wrapper = True
 
-            # FastAPI inspects the endpoint's return annotation (via get_type_hints
-            # following __wrapped__) to build a Pydantic response_field. An
-            # AsyncIterator[str] / Stream[str] return is not a valid Pydantic field
-            # and crashes registration. The route integration step later detects the
-            # stream annotation on the underlying _mesh_original_func and installs an
-            # SSE-emitting endpoint, so the wrapper itself does not need to expose
-            # the streaming return type to FastAPI.
+            # Streaming routes: build the SSE endpoint at DECORATION time so
+            # FastAPI registers the correct streaming endpoint at @app.post()
+            # time (issue #1206). The route-integration pipeline step runs
+            # debounced AFTER uvicorn may already be serving — with only the
+            # post-registration endpoint swap, a request arriving in that
+            # window (or HELD across it by the #1193 settling-window grace)
+            # completed inside the plain DI wrapper, whose raw async-generator
+            # return value FastAPI cannot serialize → 500. Registering the
+            # SSE endpoint from the start removes the window entirely; the
+            # integration step detects ``_mesh_is_sse_endpoint`` and only
+            # registers the inner wrapper for heartbeat dependency updates.
             try:
                 from _mcp_mesh.engine.stream_introspection import (
                     detect_stream_type,
                 )
 
-                if detect_stream_type(target) == "text":
+                is_stream_route = detect_stream_type(target) == "text"
+            except Exception as e:
+                logger.debug(
+                    f"Stream-route detection skipped for {target.__name__}: {e}"
+                )
+                is_stream_route = False
+
+            if is_stream_route:
+                try:
+                    from _mcp_mesh.pipeline.api_startup.route_integration import (
+                        _build_sse_endpoint,
+                    )
+
+                    sse_endpoint = _build_sse_endpoint(wrapped, target)
+                    logger.debug(
+                        f"📡 Built SSE endpoint for streaming route "
+                        f"'{target.__name__}' at decoration time"
+                    )
+                    _trigger_debounced_processing()
+                    return sse_endpoint
+                except Exception as e:
+                    # Graceful degradation: fall back to the pre-#1206 flow
+                    # (annotation strip below + integration-time SSE swap).
+                    logger.warning(
+                        f"Decoration-time SSE endpoint build failed for route "
+                        f"'{target.__name__}' ({e}); falling back to the "
+                        f"integration-time endpoint swap — the pre-#1206 "
+                        f"startup race window applies to this route (a "
+                        f"request arriving before route integration runs may "
+                        f"hit the plain DI wrapper and fail with a 500)"
+                    )
+
+                # FastAPI inspects the endpoint's return annotation (via
+                # get_type_hints following __wrapped__) to build a Pydantic
+                # response_field. An AsyncIterator[str] / Stream[str] return
+                # is not a valid Pydantic field and crashes registration. The
+                # route integration step later detects the stream annotation
+                # on the underlying _mesh_original_func and installs an
+                # SSE-emitting endpoint, so the wrapper itself does not need
+                # to expose the streaming return type to FastAPI.
+                try:
                     import inspect as _inspect
 
                     from _mcp_mesh.engine.dependency_injector import (
@@ -1825,10 +1869,11 @@ def route(
                             parameters=cleaned_params,
                             return_annotation=_inspect.Signature.empty,
                         )
-            except Exception as e:
-                logger.debug(
-                    f"Stream-route annotation strip skipped for {target.__name__}: {e}"
-                )
+                except Exception as e:
+                    logger.debug(
+                        f"Stream-route annotation strip skipped for "
+                        f"{target.__name__}: {e}"
+                    )
 
             # Return the wrapped function - FastAPI will register this wrapper when it runs
             logger.debug(

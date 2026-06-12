@@ -179,6 +179,37 @@ class SettleState:
                 # nothing left to wake.
                 pass
 
+    def retire_declared(self, dep_key: str) -> None:
+        """Remove a declared key that no update path will ever resolve.
+
+        Used by route-wrapper convergence in the dual-import scenario
+        (``python main.py`` + ``from main import X``): each decoration pass
+        created its own DI wrapper and declared its own func_id-scoped keys,
+        but after convergence only the preferred instance receives heartbeat
+        updates. Leaving the abandoned instance's keys declared would pin
+        the eager latch open for the full window — every graced call would
+        then wait out the budget even after all live dependencies resolved.
+
+        Any waiter already parked on the retired key (a call that collected
+        its pending set just before convergence) is woken so it proceeds
+        immediately instead of dead-waiting a key that can never resolve.
+        """
+        with self._lock:
+            self._declared.discard(dep_key)
+            event = self._events.get(dep_key)
+            async_waiters = list(self._async_waiters.get(dep_key, ()))
+            if self._declared and self._declared <= self._resolved:
+                # Eager latch: the retired key was the last unresolved one.
+                self._settled = True
+        if event is not None:
+            event.set()
+        for loop, async_event in async_waiters:
+            try:
+                loop.call_soon_threadsafe(async_event.set)
+            except RuntimeError:
+                # The waiter's loop already closed (shutdown mid-wait).
+                pass
+
     def is_settled(self) -> bool:
         """Permanent latch check; flips on window expiry or timeout=0."""
         if self._settled:
