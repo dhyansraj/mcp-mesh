@@ -290,6 +290,7 @@ async def commission_downstream(
 # the agent startup pipeline) and POSTs ``/jobs/{id}/events``.
 
 import asyncio  # noqa: E402  (event-injection helpers below need asyncio.sleep)
+import time  # noqa: E402  (claim-gate deadline in commission_cancel_via_event)
 
 
 @app.tool()
@@ -378,7 +379,34 @@ async def commission_cancel_via_event(
     if run_until_cancel is None:
         return {"error": "run_until_cancel submitter not injected"}
     proxy = await run_until_cancel.submit(ctx={}, max_duration=60)
-    await asyncio.sleep(2.0)
+    # Deterministic claim gate (was a fixed 2s sleep): wait until a
+    # producer replica has CLAIMED the job before posting 'work' and
+    # cancelling below. Pull-mode rows are created with
+    # owner_instance_id = NULL; the registry sets it on /jobs/claim.
+    # The producer's idle claim poll backs off to a 5s cap, so the old
+    # fixed 2s (+1s pre-cancel) budget could fire the cancel BEFORE the
+    # claim — the producer then never ran run_until_cancel and the
+    # synthetic 'cancelled' event went unobserved (issue #1207). Events
+    # posted after the claim are safe: a fresh JobController's
+    # recv_event replays from the first event in the job's event log.
+    claim_deadline = time.monotonic() + 30.0
+    while True:
+        try:
+            claim_status = await proxy.status()
+        except Exception:
+            # Transient status-read failures (registry hiccup) are
+            # tolerated within the budget — keep polling.
+            claim_status = None
+        owner = (claim_status or {}).get("owner_instance_id")
+        if owner:
+            break
+        if time.monotonic() >= claim_deadline:
+            return {
+                "error": "job never claimed within 30s — cannot exercise cancel-via-event",
+                "job_id": proxy.job_id,
+                "last_status": claim_status,
+            }
+        await asyncio.sleep(0.3)
     work_receipt = await mesh.jobs.post_event(
         job_id=proxy.job_id,
         event_type="work",

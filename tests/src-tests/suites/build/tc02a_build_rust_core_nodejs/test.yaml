@@ -61,9 +61,14 @@ test:
       # CARGO_HTTP_MULTIPLEXING=false + CARGO_NET_RETRY: crates.io downloads
       # from this host intermittently die mid-transfer; disabling HTTP/2
       # multiplexing is the canonical cargo remedy (see tc04a for history).
+      # NPM_CONFIG_FETCH_*: same treatment for registry.npmjs.org transients
+      # (npm defaults to 2 retries with 10s min backoff — too fragile).
       docker run --rm \
         -e CARGO_HTTP_MULTIPLEXING=false \
         -e CARGO_NET_RETRY=10 \
+        -e NPM_CONFIG_FETCH_RETRIES=5 \
+        -e NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=2000 \
+        -e NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=30000 \
         -v "$SOURCE_ABS:/src-host:ro" \
         -v "$OUTPUT_ABS:/out" \
         ${config.build.image} \
@@ -116,7 +121,12 @@ test:
       CORE_PKG=$(ls "${run_path}/${config.output.packages}"/*core*.tgz 2>/dev/null | head -1)
 
       echo "Testing @mcpmesh/core installation inside container..."
+      # NPM_CONFIG_FETCH_*: harden against registry.npmjs.org transients
+      # (transitive deps still resolve from the registry).
       docker run --rm \
+        -e NPM_CONFIG_FETCH_RETRIES=5 \
+        -e NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=2000 \
+        -e NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=30000 \
         -v "$OUTPUT_ABS:/out:ro" \
         ${config.build.image} \
         bash -c "cd /tmp && npm init -y > /dev/null 2>&1 && \

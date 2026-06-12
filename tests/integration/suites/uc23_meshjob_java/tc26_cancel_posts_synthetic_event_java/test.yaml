@@ -6,9 +6,13 @@
 # List.of("work","cancelled"), Duration.ofSeconds(15))`. Consumer:
 #
 #   1. submits the job
-#   2. posts a 'work' event with payload `{item: 1}`
-#   3. sleeps so producer consumes it
-#   4. calls `proxy.cancel("external_stop_requested")`
+#   2. polls proxy.status() until owner_instance_id is set — i.e. a
+#      producer replica has CLAIMED the job (deterministic gate; a
+#      fixed 2s sleep here used to race the producer's claim poll,
+#      whose idle backoff caps at 5s — same race class as #1207)
+#   3. posts a 'work' event with payload `{item: 1}`
+#   4. sleeps so producer consumes it
+#   5. calls `proxy.cancel("external_stop_requested")`
 #
 # Inside the registry's CancelJob handler the row transitions to
 # status=cancelled AND the handler then posts a synthetic
