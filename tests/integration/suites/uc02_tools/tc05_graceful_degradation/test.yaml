@@ -108,31 +108,41 @@ test:
     workdir: /workspace
     capture: list_with_dep
 
-  # Check calculator is now available
+  # Check calculator is now available - hard requirement.
+  # The provider is up and registered, so the consumer MUST rewire.
+  # Retry to allow for heartbeat/topology propagation, then fail hard.
   - name: "Check calculator is now available"
     handler: shell
     command: |
-      RESULT=$(meshctl call check_calculator 2>&1)
-      echo "check_calculator: $RESULT"
-      if echo "$RESULT" | grep -q "available"; then
-        echo "PASS: Calculator now available"
-      else
-        echo "INFO: Calculator might need rewiring"
-        echo "PASS: Check complete"
-      fi
+      for i in $(seq 1 10); do
+        RESULT=$(meshctl call check_calculator 2>&1)
+        echo "check_calculator (attempt $i): $RESULT"
+        if echo "$RESULT" | grep -q "Calculator is available"; then
+          echo "PASS: Calculator now available (dependency rewired)"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "FAIL: Calculator never became available after provider startup"
+      exit 1
     workdir: /workspace
     capture: check_with_dep
+    timeout: 60
 
-  # Call smart_add - should now use calculator
+  # Call smart_add - must now use the calculator, not the local fallback
   - name: "Call smart_add with calculator"
     handler: shell
     command: |
       RESULT=$(meshctl call smart_add '{"a": 10, "b": 7}' 2>&1)
       echo "smart_add(10,7) with calculator: $RESULT"
-      if echo "$RESULT" | grep -q "17"; then
-        echo "PASS: Calculation returned correct result"
+      if echo "$RESULT" | grep -q "Local result"; then
+        echo "FAIL: smart_add used local fallback - calc_add was not injected"
+        exit 1
+      fi
+      if echo "$RESULT" | grep -q "Calculator result" && echo "$RESULT" | grep -q "17"; then
+        echo "PASS: smart_add used the injected calculator and returned 17"
       else
-        echo "FAIL: Expected result 17"
+        echo "FAIL: Expected 'Calculator result' with 17"
         exit 1
       fi
     workdir: /workspace
@@ -146,12 +156,18 @@ assertions:
   - expr: "${captured.call_without_dep} contains 'PASS'"
     message: "Agent should gracefully degrade to local calculation"
 
-  # Phase 2: With dependency
+  # Phase 2: With dependency (recovered phase - hard requirements)
   - expr: "${captured.list_with_dep} contains 'PASS'"
     message: "Calculator should be registered after starting"
 
+  - expr: "${captured.check_with_dep} contains 'Calculator is available'"
+    message: "check_calculator must report the dependency as wired after provider startup"
+
   - expr: "${captured.call_with_dep} contains 'PASS'"
-    message: "Agent should return correct result (with or without calculator)"
+    message: "Agent should use the injected calculator and return 17"
+
+  - expr: "${captured.call_with_dep} contains 'Calculator result'"
+    message: "smart_add must use the mesh-injected calc_add, not the local fallback"
 
 post_run:
   - handler: shell

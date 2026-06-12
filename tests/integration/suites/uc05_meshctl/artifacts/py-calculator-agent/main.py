@@ -18,7 +18,7 @@ app = FastMCP("py-calculator-agent")
 
 @app.tool()
 @mesh.tool(
-    capability="calculator",
+    capability="calc_add",
     description="Add two numbers",
     tags=["math", "calculator"],
 )
@@ -29,7 +29,7 @@ def calc_add(a: int, b: int) -> int:
 
 @app.tool()
 @mesh.tool(
-    capability="calculator",
+    capability="calc_multiply",
     description="Multiply two numbers",
     tags=["math", "calculator"],
 )

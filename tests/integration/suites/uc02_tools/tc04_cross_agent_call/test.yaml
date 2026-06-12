@@ -2,9 +2,13 @@
 # Tests that Agent A can call Agent B's tools via dependency injection.
 #
 # Scenario:
-#   - py-calculator-agent provides calc_add and calc_multiply tools
-#   - py-report-agent depends on "calculator" capability
+#   - py-calculator-agent provides calc_add and calc_multiply capabilities
+#   - py-report-agent depends on "calc_add" / "calc_multiply"
 #   - Calling sum_report triggers cross-agent calls to calc_add
+#
+# The report agent appends "(local)" to its output when it falls back to
+# local computation, so the assertions below verify the result came from
+# the mesh-injected dependency, not the local fallback.
 #
 # Uses UC-level artifacts from /uc-artifacts
 
@@ -78,8 +82,8 @@ test:
       meshctl status
       echo "=== Checking dependencies ==="
       STATUS=$(meshctl status 2>&1)
-      if echo "$STATUS" | grep -q "calculator"; then
-        echo "PASS: Dependency on calculator visible"
+      if echo "$STATUS" | grep -q "calc_add"; then
+        echo "PASS: Dependency on calc_add visible"
       else
         echo "INFO: Dependency might be implicit"
         echo "PASS: Status check complete"
@@ -94,9 +98,15 @@ test:
       echo "=== Calling sum_report ==="
       RESULT=$(meshctl call sum_report '{"numbers": [1, 2, 3, 4, 5]}' 2>&1)
       echo "Result: $RESULT"
+      # The agent appends "(local)" when calc_add is NOT injected - that
+      # means the cross-agent call never happened, even if the sum is right.
+      if echo "$RESULT" | grep -q "(local)"; then
+        echo "FAIL: sum_report used local fallback - calc_add was not injected"
+        exit 1
+      fi
       # Sum of 1+2+3+4+5 = 15
       if echo "$RESULT" | grep -q "15"; then
-        echo "PASS: sum_report cross-agent call worked"
+        echo "PASS: sum_report cross-agent call worked (mesh-injected calc_add)"
       else
         echo "FAIL: Expected sum of 15"
         exit 1
@@ -111,9 +121,14 @@ test:
       echo "=== Calling product_report ==="
       RESULT=$(meshctl call product_report '{"numbers": [2, 3, 4]}' 2>&1)
       echo "Result: $RESULT"
+      # "(local)" marks the local fallback - the cross-agent call did not happen.
+      if echo "$RESULT" | grep -q "(local)"; then
+        echo "FAIL: product_report used local fallback - calc_multiply was not injected"
+        exit 1
+      fi
       # Product of 2*3*4 = 24
       if echo "$RESULT" | grep -q "24"; then
-        echo "PASS: product_report cross-agent call worked"
+        echo "PASS: product_report cross-agent call worked (mesh-injected calc_multiply)"
       else
         echo "FAIL: Expected product of 24"
         exit 1
@@ -128,8 +143,14 @@ assertions:
   - expr: "${captured.sum_report_call} contains 'PASS'"
     message: "sum_report should call calculator and return correct sum"
 
+  - expr: "${captured.sum_report_call} not contains '(local)'"
+    message: "sum_report must use the mesh-injected calc_add, not the local fallback"
+
   - expr: "${captured.product_report_call} contains 'PASS'"
     message: "product_report should call calculator and return correct product"
+
+  - expr: "${captured.product_report_call} not contains '(local)'"
+    message: "product_report must use the mesh-injected calc_multiply, not the local fallback"
 
 post_run:
   - handler: shell
