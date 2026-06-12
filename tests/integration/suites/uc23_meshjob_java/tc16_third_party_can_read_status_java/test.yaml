@@ -131,9 +131,39 @@ test:
     capture: submit_resp
     timeout: 30
 
-  - name: "Wait for completion"
-    handler: wait
-    seconds: 8
+  # Deterministic completion gate: poll job status until terminal
+  # (replaces a fixed 8s wait — the bystander reads below assert
+  # 'completed', and under CI load the job sometimes outlived the fixed
+  # wait, so the bystander observed status=working). Polls via the
+  # CONSUMER's __mesh_job_status helper so the bystander reads below
+  # remain the first third-party observations. Same transform as
+  # uc21/tc09's pre-cancel status gate (#1209).
+  - name: "Wait for job completion (status gate)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .id')
+      echo "AGENT=${AGENT} JOB=${JOB_ID}"
+      STATUS=""
+      for i in $(seq 1 45); do
+        STATUS=$(meshctl call "${AGENT}:__mesh_job_status" "{\"job_id\":\"${JOB_ID}\"}" --raw 2>/dev/null \
+          | jq -r '.content[0].text | fromjson | .status' 2>/dev/null || true)
+        if [ "$STATUS" = "completed" ]; then
+          echo "job completed after ~${i}s"
+          exit 0
+        fi
+        case "$STATUS" in
+          failed|cancelled)
+            echo "ERROR: job reached terminal status=$STATUS (expected completed)"
+            exit 1
+            ;;
+        esac
+        sleep 1
+      done
+      echo "ERROR: job not completed within 45s (last status=$STATUS)"
+      exit 1
+    timeout: 90
 
   - name: "Bystander X reads status"
     handler: shell

@@ -55,7 +55,12 @@ test:
       echo "Building meshui inside container (SPA + Go binary)..."
       # meshui needs: go.mod, go.sum, cmd/mcp-mesh-ui/, src/core/, src/ui/
       # Steps: 1) npm install + build SPA, 2) copy dist/ to embed dir, 3) go build
+      # NPM_CONFIG_FETCH_*: harden against registry.npmjs.org transients
+      # (npm defaults to 2 retries with 10s min backoff — too fragile).
       docker run --rm \
+        -e NPM_CONFIG_FETCH_RETRIES=5 \
+        -e NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=2000 \
+        -e NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=30000 \
         -v "$SOURCE_ABS:/src-host:ro" \
         -v "$OUTPUT_ABS:/out" \
         ${config.build.image} \

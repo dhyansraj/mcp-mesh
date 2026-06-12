@@ -7,6 +7,8 @@
 FROM python:3.11-slim
 
 # Install system dependencies, tini (init), and Node.js 22
+# (apt pinning is brittle for a test image; pipefail predates this change)
+# hadolint ignore=DL3008,DL3015,DL4006
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
@@ -20,6 +22,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Eclipse Temurin JDK 17 (architecture-aware)
+# (pipefail predates this change)
+# hadolint ignore=DL4006
 RUN ARCH=$(dpkg --print-architecture) && \
     case "$ARCH" in \
       amd64) JAVA_ARCH="x64" ;; \
@@ -35,6 +39,8 @@ ENV JAVA_HOME=/opt/java
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
 
 # Install Maven
+# (pipefail predates this change)
+# hadolint ignore=DL4006
 RUN curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.tar.gz | tar -xzf - -C /opt && \
     ln -s /opt/apache-maven-3.9.6 /opt/maven && \
     ln -s /opt/maven/bin/mvn /usr/local/bin/mvn
@@ -64,6 +70,19 @@ RUN mkdir -p /root/.m2 && \
       '</settings>' \
       > /root/.m2/settings.xml
 
+# Harden npm against registry transients (intermittent ETIMEDOUT / spurious
+# "notarget" from registry.npmjs.org on fresh test containers). Baking this
+# into the global npmrc means every npm invocation in test containers —
+# including those via the framework `npm-install` handler — retries fetches
+# automatically; no per-test config needed. npm's defaults (2 retries,
+# 10s min backoff) give up too easily; 5 retries starting at 2s recovers
+# faster from blips and survives longer ones.
+RUN npm config set --location=global \
+      fetch-retries=5 \
+      fetch-retry-mintimeout=2000 \
+      fetch-retry-maxtimeout=30000 && \
+    npm config get fetch-retries
+
 # Install Tempo for distributed tracing (architecture-aware)
 RUN ARCH=$(dpkg --print-architecture) && \
     curl -fsSL "https://github.com/grafana/tempo/releases/download/v2.7.1/tempo_2.7.1_linux_${ARCH}.deb" -o /tmp/tempo.deb && \
@@ -74,6 +93,8 @@ COPY tempo.yaml /etc/tempo/tempo.yaml
 RUN mkdir -p /var/tempo && chown -R root:root /var/tempo
 
 # Install HashiCorp Vault for PKI credential provider tests (architecture-aware)
+# (apt pinning of transient unzip is brittle for a test image)
+# hadolint ignore=DL3008
 RUN ARCH=$(dpkg --print-architecture) && \
     case "$ARCH" in \
       amd64) VAULT_ARCH="amd64" ;; \
@@ -113,6 +134,8 @@ RUN ARCH=$(dpkg --print-architecture) && \
     chmod +x /usr/local/bin/mc
 
 # Verify Node.js and Java installation
+# (pipefail predates this change)
+# hadolint ignore=DL4006
 RUN node --version && npm --version && java -version && mvn --version | head -1 && vault --version && spire-server --version && spire-agent --version && minio --version && mc --version
 
 # Create directories for local packages
@@ -145,6 +168,8 @@ RUN chmod +x /usr/local/bin/select-runner /usr/local/bin/tsuite-runner-linux-* 2
 RUN pip install --no-cache-dir /wheels/mcp_mesh_core-*.whl /wheels/mcp_mesh-*.whl
 
 # Verify mesh module installation
+# (separate RUN keeps install/verify layers distinct; predates this change)
+# hadolint ignore=DL3059
 RUN python -c "import mesh; print('mesh module imported successfully')"
 
 # Install meshctl CLI from local tarball (if exists) or use binary
@@ -158,9 +183,12 @@ RUN if ls /packages/mcpmesh-cli-*.tgz 1> /dev/null 2>&1; then \
 RUN meshctl --version
 
 # Install TypeScript core bindings globally (SDK depends on this)
+# (separate RUNs keep per-package layers cacheable; predates this change)
+# hadolint ignore=DL3059
 RUN npm install -g /packages/mcpmesh-core-*.tgz
 
 # Install TypeScript SDK globally from local tarball
+# hadolint ignore=DL3059
 RUN npm install -g /packages/mcpmesh-sdk-*.tgz
 
 # Verify Java SDK installation (installed via m2-repo copy above)
@@ -176,6 +204,8 @@ RUN if [ -d "/root/.m2/repository/io/mcp-mesh" ]; then \
 ENV MESH_NATIVE_LIB_PATH=/native-libs
 
 # Install tsuite dependencies for running tests inside container
+# (pip pinning is brittle for a test image)
+# hadolint ignore=DL3013
 RUN pip install --no-cache-dir click rich pyyaml jsonpath-ng requests flask docker boto3
 
 # Create mcp-mesh user for security (matching official runtime images)

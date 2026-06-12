@@ -609,7 +609,36 @@ public class LongTaskConsumerApplication {
             new LinkedHashMap<>(), null, 60, null, null);
         try (JobProxy proxy = submitter.submit(opts).get()) {
             String jobId = proxy.jobId();
-            Thread.sleep(2000);
+            // Deterministic claim gate (was a fixed 2s sleep): wait until a
+            // producer replica has CLAIMED the job before posting 'work'
+            // and cancelling below. Pull-mode rows are created with
+            // owner_instance_id = NULL; the registry sets it on
+            // /jobs/claim. The producer's idle claim poll backs off to a
+            // 5s cap, so the old fixed 2s (+1s pre-cancel) budget could
+            // fire the cancel BEFORE the claim — the producer then never
+            // ran runUntilCancel and the synthetic 'cancelled' event went
+            // unobserved (same race class as uc21's Python fixture,
+            // issue #1207). Events posted after the claim are safe: a
+            // fresh JobController's recvEvent replays from the first
+            // event in the job's event log.
+            long claimDeadline = System.currentTimeMillis() + 30_000L;
+            while (true) {
+                Map<String, Object> claimStatus = proxy.status();
+                Object owner = claimStatus != null
+                    ? claimStatus.get("owner_instance_id") : null;
+                if (owner != null && !owner.toString().isEmpty()) {
+                    break;
+                }
+                if (System.currentTimeMillis() >= claimDeadline) {
+                    Map<String, Object> err = new LinkedHashMap<>();
+                    err.put("error",
+                        "job never claimed within 30s — cannot exercise cancel-via-event");
+                    err.put("job_id", jobId);
+                    err.put("last_status", claimStatus);
+                    return err;
+                }
+                Thread.sleep(300);
+            }
             Map<String, Object> workPayload = new LinkedHashMap<>();
             workPayload.put("item", 1);
             Map<String, Object> workReceipt = MeshJobs.postEvent(jobId, "work", workPayload);

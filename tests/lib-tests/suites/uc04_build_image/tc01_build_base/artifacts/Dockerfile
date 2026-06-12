@@ -15,6 +15,9 @@ RUN if [ -z "$VERSION" ]; then echo "VERSION build arg is required" && exit 1; f
     if [ -z "$PIP_VERSION" ]; then echo "PIP_VERSION build arg is required" && exit 1; fi
 
 # Install system dependencies, tini (init), and Node.js 22
+# (apt pinning is brittle for a test image; --no-install-recommends bloat is
+# acceptable here; pipefail predates this change)
+# hadolint ignore=DL3008,DL3015,DL4006
 RUN apt-get update && apt-get install -y \
     curl \
     jq \
@@ -28,6 +31,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Eclipse Temurin JDK 17 (architecture-aware)
+# (pipefail predates this change)
+# hadolint ignore=DL4006
 RUN ARCH=$(dpkg --print-architecture) && \
     case "$ARCH" in \
       amd64) JAVA_ARCH="x64" ;; \
@@ -43,13 +48,31 @@ ENV JAVA_HOME=/opt/java
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
 
 # Install Maven 3.9.6
+# (pipefail predates this change)
+# hadolint ignore=DL4006
 RUN curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.tar.gz | tar -xzf - -C /opt && \
     ln -s /opt/apache-maven-3.9.6 /opt/maven && \
     ln -s /opt/maven/bin/mvn /usr/local/bin/mvn
 ENV MAVEN_HOME=/opt/maven
 ENV PATH="${MAVEN_HOME}/bin:${PATH}"
 
+# Harden npm against registry transients (intermittent ETIMEDOUT / spurious
+# "notarget" from registry.npmjs.org on fresh test containers). Baking this
+# into the global npmrc means every npm invocation in test containers —
+# including those via the framework `npm-install` handler — retries fetches
+# automatically; no per-test config needed. npm's defaults (2 retries,
+# 10s min backoff) give up too easily; 5 retries starting at 2s recovers
+# faster from blips and survives longer ones. Mirrors the src-tests
+# tc06_build_local_image Dockerfile.
+RUN npm config set --location=global \
+      fetch-retries=5 \
+      fetch-retry-mintimeout=2000 \
+      fetch-retry-maxtimeout=30000 && \
+    npm config get fetch-retries
+
 # Verify Node.js, Java, and Maven installation
+# (pipefail predates this change)
+# hadolint ignore=DL4006
 RUN node --version && npm --version && java -version && mvn --version | head -1
 
 # Install Tempo for distributed tracing (architecture-aware)
@@ -61,7 +84,9 @@ RUN ARCH=$(dpkg --print-architecture) && \
 COPY tempo.yaml /etc/tempo/tempo.yaml
 RUN mkdir -p /var/tempo && chown -R root:root /var/tempo
 
-# Pre-install MCP Mesh Java SDK from Maven Central
+# Pre-install MCP Mesh Java SDK from Maven Central (cd is scoped to this RUN;
+# the directory is removed at the end, so WORKDIR would be wrong here)
+# hadolint ignore=DL3003
 RUN mkdir -p /tmp/java-sdk-install && \
     printf '<?xml version="1.0" encoding="UTF-8"?>\n\
 <project xmlns="http://maven.apache.org/POM/4.0.0"\n\
@@ -103,6 +128,8 @@ RUN echo "Installing pip package mcp-mesh==${PIP_VERSION}..." && \
 RUN python -c "import mesh; print('mesh module imported successfully')"
 
 # Install tsuite dependencies for running tests inside container
+# (pip pinning is brittle for a test image; separate RUN predates this change)
+# hadolint ignore=DL3013,DL3059
 RUN pip install --no-cache-dir click rich pyyaml jsonpath-ng requests flask docker
 
 # Create mcp-mesh user for security (matching official runtime images)

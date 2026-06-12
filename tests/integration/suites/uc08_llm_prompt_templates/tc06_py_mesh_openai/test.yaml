@@ -11,7 +11,7 @@ tags:
   - context-param
   - python
   - openai
-timeout: 120
+timeout: 180 # headroom for the bounded provider-registration poll (worst case 45s)
 
 pre_run:
   - routine: global.setup_for_python_agent
@@ -45,10 +45,26 @@ test:
     workdir: /workspace
     capture: provider_start_output
 
-  # Wait for provider to register
+  # Liveness only: poll until the provider is registered (replaces a
+  # fixed 10s wait that could give up while the freshly auto-started
+  # registry was still coming up). Bounded with diagnostics per the
+  # migration conventions; LLM tool assembly is covered by the fixed
+  # wait after the consumer start below (outside settle scope).
   - name: "Wait for provider to register"
-    handler: wait
-    seconds: 10
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "openai-provider"; then
+          echo "openai-provider registered after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: openai-provider not registered within 45s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    timeout: 90
 
   # Verify provider is running
   - name: "Verify provider is running"
