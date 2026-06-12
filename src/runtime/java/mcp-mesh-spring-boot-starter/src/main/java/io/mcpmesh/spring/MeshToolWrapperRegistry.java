@@ -77,6 +77,19 @@ public class MeshToolWrapperRegistry {
         handlersByCapability.put(capability, wrapper);
         handlersByMethodName.put(methodName, wrapper);
 
+        // Settling-window grace (#1193): declare this tool's dependency
+        // slots with the process-wide settle state so the agent-level
+        // "all declared deps resolved" latch can flip eagerly. Keys are
+        // per-consumer-slot composites (funcId:dep_N) — capability-level
+        // keying would let one consumer's resolution wake another
+        // consumer's waiter before that consumer's slot is written.
+        // MeshJob-backed dependencies are excluded (submitter is wired
+        // locally; no resolution event ever lands for the slot).
+        MeshSettleState settleState = MeshSettleState.getInstance();
+        for (int depIndex : wrapper.getSettleDepIndices()) {
+            settleState.registerDeclared(buildDependencyKey(funcId, depIndex));
+        }
+
         log.info("Registered wrapper: {} (capability: {}, deps: {}, llm: {})",
             funcId, capability, wrapper.getDependencyCount(), wrapper.getLlmAgentCount());
     }

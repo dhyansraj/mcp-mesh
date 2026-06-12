@@ -61,6 +61,10 @@ def _build_sse_endpoint(wrapped_handler: Any, user_func: Any) -> Any:
     from fastapi.responses import StreamingResponse
 
     from ...engine.dependency_injector import _prepare_injection_kwargs
+    from ...engine.settle import (
+        collect_pending_settle_deps,
+        wait_for_settle_async,
+    )
 
     injector = get_global_injector()
     mesh_positions = list(getattr(wrapped_handler, "_mesh_positions", []) or [])
@@ -68,10 +72,27 @@ def _build_sse_endpoint(wrapped_handler: Any, user_func: Any) -> Any:
     injected_deps = getattr(
         wrapped_handler, "_mesh_injected_deps", [None] * len(dependencies)
     )
+    settle_keys = getattr(wrapped_handler, "_mesh_settle_keys", None)
+    settle_params = getattr(wrapped_handler, "_mesh_settle_params", None)
 
     @functools.wraps(user_func)
     async def sse_endpoint(*args, **kwargs):
         if mesh_positions:
+            # Settling-window grace (#1193): same bounded wait the inner
+            # DI wrapper applies — this endpoint bypasses that wrapper and
+            # reads the dependency arrays directly. Caller-supplied slots
+            # (mock contract) are skipped via the kwargs consult.
+            pending_settle = collect_pending_settle_deps(
+                settle_keys,
+                dependencies,
+                injected_deps,
+                injector.get_dependency,
+                kwargs,
+                settle_params,
+            )
+            if pending_settle:
+                await wait_for_settle_async(pending_settle, logger)
+
             final_kwargs, _ = _prepare_injection_kwargs(
                 user_func,
                 kwargs,

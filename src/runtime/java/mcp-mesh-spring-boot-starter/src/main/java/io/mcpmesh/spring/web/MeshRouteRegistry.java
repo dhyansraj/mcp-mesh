@@ -52,6 +52,19 @@ public class MeshRouteRegistry {
         routesByPath.put(routeId, metadata);
         routesByHandler.put(metadata.getHandlerMethodId(), metadata);
 
+        // Settling-window grace (#1193): declare this route's dependency
+        // capabilities with the process-wide settle state so the
+        // agent-level "all declared deps resolved" latch can flip eagerly.
+        // Capability keying is correct for routes (unlike tool wrappers'
+        // per-slot composite keys): every route resolves through the
+        // injector's shared per-capability proxy, updated before its
+        // countdown — see MeshRouteHandlerInterceptor.
+        io.mcpmesh.spring.MeshSettleState settleState =
+            io.mcpmesh.spring.MeshSettleState.getInstance();
+        for (DependencySpec dep : metadata.getDependencies()) {
+            settleState.registerDeclared(dep.getCapability());
+        }
+
         log.info("Registered @MeshRoute: {} {} with {} dependencies",
             httpMethod, path, metadata.getDependencies().size());
     }
