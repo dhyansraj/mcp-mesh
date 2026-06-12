@@ -2,6 +2,7 @@ import functools
 import inspect
 import json
 import logging
+import os
 from typing import Any
 
 from ...engine.decorator_registry import DecoratorRegistry
@@ -41,6 +42,83 @@ def _frame_chunk_as_sse(chunk: str) -> str:
     return "".join(f"data: {line}\n" for line in lines) + "\n"
 
 
+def _converge_to_preferred_wrapper(wrapper: Any) -> Any:
+    """Multi-wrapper convergence for the dual-import scenario.
+
+    ``python main.py`` plus a sibling ``from main import X`` evaluates the
+    entry script twice as distinct modules (``__main__`` and ``main``), so
+    @mesh.route decoration fires twice and registers two independent DI
+    wrapper instances in the injector's function registry — one under
+    ``__main__.<qualname>``, one under ``<module>.<qualname>``. Heartbeat
+    dependency updates land on only one of them, so route integration must
+    serve/register the instance updates actually reach. This preserves the
+    preference the legacy "CRITICAL FIX" convergence applied: among multiple
+    instances of the same source function, prefer the non-``__main__`` one.
+
+    Matching is conservative (mirrors ``dual_module_detection``): a candidate
+    counts only when its original function has the SAME qualname and the SAME
+    code location (file + first line) — i.e., it is literally the same source
+    function evaluated under another module name.
+
+    Side effect: any abandoned ``__main__`` instance has its settle keys
+    retired. Both decoration passes declared func_id-scoped settle keys, but
+    no update path targets the abandoned instance — leaving its keys declared
+    would pin the eager settle latch open for the full window (#1193).
+
+    Returns the preferred wrapper (possibly ``wrapper`` itself, unchanged).
+    """
+    from ...engine.settle import get_settle_state
+
+    injector = get_global_injector()
+    original = getattr(wrapper, "_mesh_original_func", wrapper)
+    qualname = getattr(original, "__qualname__", "") or ""
+    code = getattr(original, "__code__", None)
+    if not qualname or code is None:
+        return wrapper
+    is_main_instance = getattr(original, "__module__", "") == "__main__"
+    source_location = (os.path.abspath(code.co_filename), code.co_firstlineno)
+
+    def _same_source(candidate: Any) -> bool:
+        cand_orig = getattr(candidate, "_mesh_original_func", candidate)
+        if getattr(cand_orig, "__qualname__", "") != qualname:
+            return False
+        cand_code = getattr(cand_orig, "__code__", None)
+        if cand_code is None:
+            return False
+        return (
+            os.path.abspath(cand_code.co_filename),
+            cand_code.co_firstlineno,
+        ) == source_location
+
+    preferred = wrapper
+    abandoned: list[Any] = []
+    for func_id, candidate in list(injector._function_registry.items()):
+        if candidate is wrapper or not _same_source(candidate):
+            continue
+        if func_id.startswith("__main__."):
+            # A __main__-registered twin that heartbeat updates will never
+            # target once registration converges on the named-module form.
+            abandoned.append(candidate)
+        elif is_main_instance and preferred is wrapper:
+            preferred = candidate
+
+    if preferred is not wrapper:
+        abandoned.append(wrapper)
+        logger.info(
+            f"🔀 Converging route wrapper for '{qualname}' from its __main__ "
+            f"instance to the preferred module instance — heartbeat "
+            f"dependency updates land on the latter"
+        )
+
+    settle_state = get_settle_state()
+    for instance in abandoned:
+        for key in getattr(instance, "_mesh_settle_keys", None) or []:
+            if key is not None:
+                settle_state.retire_declared(key)
+
+    return preferred
+
+
 def _build_sse_endpoint(wrapped_handler: Any, user_func: Any) -> Any:
     """Wrap a streaming route handler so FastAPI emits Server-Sent Events.
 
@@ -67,16 +145,28 @@ def _build_sse_endpoint(wrapped_handler: Any, user_func: Any) -> Any:
     )
 
     injector = get_global_injector()
-    mesh_positions = list(getattr(wrapped_handler, "_mesh_positions", []) or [])
-    dependencies = list(getattr(wrapped_handler, "_mesh_dependencies", []) or [])
-    injected_deps = getattr(
-        wrapped_handler, "_mesh_injected_deps", [None] * len(dependencies)
-    )
-    settle_keys = getattr(wrapped_handler, "_mesh_settle_keys", None)
-    settle_params = getattr(wrapped_handler, "_mesh_settle_params", None)
 
     @functools.wraps(user_func)
     async def sse_endpoint(*args, **kwargs):
+        # Resolve the inner DI wrapper DYNAMICALLY through the endpoint's own
+        # ``_mesh_inner_wrapper`` attribute rather than the decoration-time
+        # closure. In the dual-import scenario (``python main.py`` + a sibling
+        # ``from main import X``) decoration fires twice, producing two wrapper
+        # instances — and the route-integration step converges heartbeat
+        # registration onto the preferred (non-__main__) one by re-pointing
+        # this attribute. A closure-captured wrapper would keep reading the
+        # abandoned copy's dependency arrays (which heartbeats never update)
+        # forever: the served endpoint would eat the full settle budget per
+        # request and then inject None.
+        inner = getattr(sse_endpoint, "_mesh_inner_wrapper", wrapped_handler)
+        mesh_positions = list(getattr(inner, "_mesh_positions", []) or [])
+        dependencies = list(getattr(inner, "_mesh_dependencies", []) or [])
+        injected_deps = getattr(
+            inner, "_mesh_injected_deps", [None] * len(dependencies)
+        )
+        settle_keys = getattr(inner, "_mesh_settle_keys", None)
+        settle_params = getattr(inner, "_mesh_settle_params", None)
+
         if mesh_positions:
             # Settling-window grace (#1193): same bounded wait the inner
             # DI wrapper applies — this endpoint bypasses that wrapper and
@@ -360,6 +450,66 @@ class RouteIntegrationStep(PipelineStep):
             f"with dependencies: {dependency_names}"
         )
 
+        # Issue #1206: streaming routes decorated by @mesh.route have their
+        # SSE endpoint built at DECORATION time — FastAPI registered the
+        # correct streaming endpoint at @app.post() time, so there is no
+        # handler to swap (and no window between server bind and pipeline
+        # execution where a request — possibly HELD by the #1193 settling
+        # grace — lands in the plain DI wrapper and 500s on its raw
+        # async-generator return). All that remains here is registering the
+        # INNER DI wrapper for heartbeat dependency updates: the SSE endpoint
+        # resolves that wrapper dynamically through its own
+        # ``_mesh_inner_wrapper`` attribute at call time, so re-pointing the
+        # attribute below converges the served endpoint and the heartbeat
+        # funnel onto the same instance.
+        if getattr(original_handler, "_mesh_is_sse_endpoint", False):
+            inner_wrapper = getattr(original_handler, "_mesh_inner_wrapper", None)
+            if inner_wrapper is None:
+                # Defensive only — _build_sse_endpoint always sets the
+                # attribute. Registering the SSE endpoint itself keeps the
+                # route entry present, but the endpoint has no
+                # _mesh_update_dependency, so the heartbeat funnel will
+                # silently skip it: dependencies will NEVER resolve for this
+                # route.
+                self.logger.warning(
+                    f"⚠️ SSE route {methods} {path} -> {endpoint_name}() is "
+                    f"missing its inner DI wrapper; registering the SSE "
+                    f"endpoint itself, which lacks _mesh_update_dependency — "
+                    f"heartbeat updates will silently skip this route and its "
+                    f"mesh dependencies will never resolve"
+                )
+                inner_wrapper = original_handler
+            else:
+                # Dual-import convergence: if decoration fired twice
+                # (__main__ + named module), heartbeat updates land on the
+                # preferred non-__main__ wrapper — re-point the endpoint's
+                # dynamic inner-wrapper reference and register THAT instance,
+                # so the served endpoint and the update funnel agree.
+                converged = _converge_to_preferred_wrapper(inner_wrapper)
+                if converged is not inner_wrapper:
+                    original_handler._mesh_inner_wrapper = converged
+                    inner_wrapper = converged
+            for method in methods:
+                DecoratorRegistry.register_route_wrapper(
+                    method=method,
+                    path=path,
+                    wrapper=inner_wrapper,
+                    dependencies=dependency_names,
+                )
+            self.logger.info(
+                f"📡 Route {methods} {path} -> {endpoint_name}() already "
+                f"SSE-wrapped at decoration time; registered for dependency "
+                f"updates"
+            )
+            return {
+                "status": "integrated",
+                "dependency_count": len(dependency_names),
+                "dependencies": dependency_names,
+                "original_handler": original_handler,
+                "wrapped_handler": original_handler,
+                "sse": True,
+            }
+
         user_func = _resolve_user_function(original_handler)
         try:
             stream_type = detect_stream_type(user_func)
@@ -431,32 +581,11 @@ class RouteIntegrationStep(PipelineStep):
             # Streaming route with no mesh dependencies — SSE wrapping only.
             wrapped_handler = original_handler
 
-        # CRITICAL FIX: Check if there are multiple wrapper instances for this function
-        # If so, use the one that actually receives dependency updates
-        from ...engine.dependency_injector import get_global_injector
-
-        injector = get_global_injector()
-
-        # Find all functions that depend on the first dependency of this route
+        # Multi-wrapper convergence (dual-import scenario): if decoration
+        # fired under both __main__ and the named module, prefer the wrapper
+        # instance that actually receives dependency updates.
         if dependency_names:
-            first_dep = dependency_names[
-                0
-            ]  # Use first dependency to find all instances
-            affected_functions = injector._dependency_mapping.get(first_dep, set())
-
-            # Check if there are multiple instances and if so, prefer the one that's NOT __main__
-            if len(affected_functions) > 1:
-                non_main_functions = [
-                    f for f in affected_functions if not f.startswith("__main__.")
-                ]
-                if non_main_functions:
-                    # Found a non-main instance, try to get that wrapper instead
-                    preferred_func_id = non_main_functions[0]  # Take first non-main
-                    preferred_wrapper = injector._function_registry.get(
-                        preferred_func_id
-                    )
-                    if preferred_wrapper:
-                        wrapped_handler = preferred_wrapper
+            wrapped_handler = _converge_to_preferred_wrapper(wrapped_handler)
 
         # Register the route wrapper in DecoratorRegistry for path-based dependency resolution
         # This creates a mapping from METHOD:path -> wrapper function
