@@ -271,6 +271,11 @@ registry:
   observability:
     distributedTracing:
       enabled: true
+      # How long span events stay in the mesh:trace Redis stream before the
+      # registry trims them (XTRIM MINID on connect and every 5m). The stream
+      # is a transport buffer — long-term trace history lives in Tempo. Go
+      # duration string; "0" disables trimming entirely.
+      retention: "24h"
     telemetryEndpoint: "mcp-core-mcp-mesh-tempo:4317"
     # Exporter type: console (default), otlp (for Tempo/Jaeger), json
     exporterType: "otlp"

@@ -52,7 +52,12 @@ data:
   REGISTRY_NAME: {{ .Values.registry.name | default "mcp-mesh-registry" | quote }}
 
   # Observability configuration - matches Docker setup
-  MCP_MESH_DISTRIBUTED_TRACING_ENABLED: {{ .Values.registry.observability.distributedTracing.enabled | default "true" | quote }}
+  {{- /* hasKey instead of `default`: Sprig `default` treats false and 0 as
+         unset, so `enabled: false` would render "true" and `retention: 0`
+         (unquoted) would render "24h". */}}
+  {{- $dt := ((.Values.registry.observability).distributedTracing) | default dict }}
+  MCP_MESH_DISTRIBUTED_TRACING_ENABLED: {{ hasKey $dt "enabled" | ternary $dt.enabled true | toString | quote }}
+  MCP_MESH_TRACE_RETENTION: {{ hasKey $dt "retention" | ternary $dt.retention "24h" | toString | quote }}
   TELEMETRY_ENDPOINT: {{ .Values.registry.observability.telemetryEndpoint | default "tempo:4317" | quote }}
   # Exporter type: console (default), otlp (for Tempo/Jaeger), json
   TRACE_EXPORTER_TYPE: {{ .Values.registry.observability.exporterType | default "otlp" | quote }}

@@ -325,6 +325,10 @@ export TELEMETRY_PROTOCOL=grpc                  # OTLP protocol: grpc or http
 # Trace exporter type: otlp, console, json (default: otlp)
 export TRACE_EXPORTER_TYPE=otlp
 
+# Redis trace stream retention — registry trims mesh:trace entries older
+# than this on connect and periodically (default: 24h; 0 disables trimming)
+export MCP_MESH_TRACE_RETENTION=24h
+
 # Header propagation across agents (comma-separated prefixes)
 export MCP_MESH_PROPAGATE_HEADERS=x-request-id,x-trace
 

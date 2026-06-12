@@ -9,7 +9,24 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+)
+
+// Trace stream retention tunables.
+//
+// defaultTraceRetention bounds how long span events stay in the mesh:trace
+// Redis stream. The stream is a transport buffer, not a system of record —
+// the registry consumes and ACKs entries, but ACK never deletes them, so
+// without trimming the stream grows forever. Operators override via
+// MCP_MESH_TRACE_RETENTION (Go duration string; "0" disables trimming).
+//
+// trimTickInterval is how often the periodic trim runs. It mirrors the
+// registry sweep job's 5-minute interval convention; trims are a single
+// O(log N) XTRIM MINID call, so the cost per tick is negligible.
+const (
+	defaultTraceRetention = 24 * time.Hour
+	trimTickInterval      = 5 * time.Minute
 )
 
 // TracingManager manages the entire distributed tracing pipeline
@@ -23,6 +40,11 @@ type TracingManager struct {
 	logger            *log.Logger
 	enabled           bool
 	streamThroughMode bool
+
+	// Periodic stream-trim loop (only runs when tracing is enabled and
+	// TraceRetention > 0).
+	trimStop chan struct{}
+	trimWg   sync.WaitGroup
 }
 
 // TracingConfig holds configuration for distributed tracing
@@ -35,6 +57,7 @@ type TracingConfig struct {
 	BatchSize            int64         `json:"batch_size"`
 	BlockTimeout         time.Duration `json:"block_timeout"`
 	TraceTimeout         time.Duration `json:"trace_timeout"`
+	TraceRetention       time.Duration `json:"trace_retention"`
 	ExporterType         string        `json:"exporter_type"`
 	PrettyConsoleOutput  bool          `json:"pretty_console_output"`
 	JSONOutputDirectory  string        `json:"json_output_directory,omitempty"`
@@ -111,7 +134,7 @@ func NewTracingManager(config *TracingConfig) (*TracingManager, error) {
 		}
 
 		// Create correlator for non-Jaeger exporters
-		correlator := NewSpanCorrelator(exporter, config.TraceTimeout)
+		correlator := NewSpanCorrelator(exporter, config.TraceTimeout, config.TraceRetention)
 		manager.processor = correlator
 	}
 
@@ -124,6 +147,7 @@ func NewTracingManager(config *TracingConfig) (*TracingManager, error) {
 		BatchSize:     config.BatchSize,
 		BlockTimeout:  config.BlockTimeout,
 		Enabled:       config.Enabled,
+		Retention:     config.TraceRetention,
 	}
 
 	consumer, err := NewStreamConsumer(consumerConfig, manager.processor)
@@ -133,6 +157,12 @@ func NewTracingManager(config *TracingConfig) (*TracingManager, error) {
 	manager.consumer = consumer
 
 	manager.logger.Printf("Distributed tracing: enabled, exporter=%s, mode=%s, endpoint=%s", config.ExporterType, mode, config.TelemetryEndpoint)
+	if config.TraceRetention > 0 {
+		manager.logger.Printf("Trace stream retention: %s (XTRIM MINID on connect and every %s; override via MCP_MESH_TRACE_RETENTION)",
+			config.TraceRetention, trimTickInterval)
+	} else {
+		manager.logger.Printf("Trace stream retention disabled (MCP_MESH_TRACE_RETENTION=0); stream %s is never trimmed", config.StreamName)
+	}
 	return manager, nil
 }
 
@@ -150,7 +180,36 @@ func (tm *TracingManager) Start() error {
 		return fmt.Errorf("failed to start consumer: %w", err)
 	}
 
+	// Periodic stream trim. The startup/recovery trim happens in the
+	// consumer when its Redis connection is (re)established; this loop keeps
+	// the stream near the retention bound while the registry stays up.
+	if tm.config.TraceRetention > 0 {
+		tm.trimStop = make(chan struct{})
+		tm.trimWg.Add(1)
+		go tm.trimLoop()
+	}
+
 	return nil
+}
+
+// trimLoop periodically trims the trace stream to the retention window.
+// Errors are logged by the consumer and retried on the next tick.
+func (tm *TracingManager) trimLoop() {
+	defer tm.trimWg.Done()
+
+	ticker := time.NewTicker(trimTickInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-tm.trimStop:
+			return
+		case <-ticker.C:
+			if _, err := tm.consumer.TrimStream(); err != nil {
+				tm.logger.Printf("Warning: periodic stream trim failed: %v (will retry in %s)", err, trimTickInterval)
+			}
+		}
+	}
 }
 
 // Stop stops the tracing manager. The consumer is stopped first so that
@@ -161,6 +220,14 @@ func (tm *TracingManager) Stop() error {
 	}
 
 	var errors []string
+
+	// Stop the trim loop before the consumer so TrimStream never races a
+	// closing Redis client.
+	if tm.trimStop != nil {
+		close(tm.trimStop)
+		tm.trimWg.Wait()
+		tm.trimStop = nil
+	}
 
 	// Stop consumer first to drain in-flight spans before the accumulator shuts down
 	if tm.consumer != nil {
@@ -444,6 +511,8 @@ func DefaultTracingConfig() *TracingConfig {
 		}
 	}
 
+	traceRetention := parseTraceRetentionFromEnv()
+
 	exporterType := os.Getenv("TRACE_EXPORTER_TYPE")
 	if exporterType == "" {
 		exporterType = "otlp"
@@ -478,6 +547,7 @@ func DefaultTracingConfig() *TracingConfig {
 		BatchSize:           batchSize,
 		BlockTimeout:        5 * time.Second,
 		TraceTimeout:        traceTimeout,
+		TraceRetention:      traceRetention,
 		ExporterType:        exporterType,
 		PrettyConsoleOutput: prettyOutput,
 		JSONOutputDirectory: os.Getenv("TRACE_JSON_OUTPUT_DIR"),
@@ -486,6 +556,33 @@ func DefaultTracingConfig() *TracingConfig {
 		TelemetryProtocol:   telemetryProtocol,
 		TempoQueryURL:       tempoQueryURL,
 	}
+}
+
+// parseTraceRetentionFromEnv parses MCP_MESH_TRACE_RETENTION following the
+// same conventions as MCP_MESH_RETENTION (registry sweep):
+//   - unset / empty: defaults to 24h
+//   - any positive time.ParseDuration value (e.g. "48h", "30m"): use that value
+//   - "0" / "0s": disables stream trimming entirely
+//   - negative: warn and fall back to default (0 is the documented disable)
+//   - invalid: warn and fall back to default
+//
+// Uses the stdlib log package because it can run before the manager's
+// logger exists (mirrors readSweepIntervalFromEnv in the registry package).
+func parseTraceRetentionFromEnv() time.Duration {
+	raw := os.Getenv("MCP_MESH_TRACE_RETENTION")
+	if raw == "" {
+		return defaultTraceRetention
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		log.Printf("[TRACE-MANAGER] Invalid MCP_MESH_TRACE_RETENTION %q, using default %s: %v", raw, defaultTraceRetention, err)
+		return defaultTraceRetention
+	}
+	if d < 0 {
+		log.Printf("[TRACE-MANAGER] Invalid MCP_MESH_TRACE_RETENTION %q: negative durations are not allowed (use 0 to disable); using default %s", raw, defaultTraceRetention)
+		return defaultTraceRetention
+	}
+	return d
 }
 
 // LoadTracingConfigFromEnv loads tracing configuration from environment variables

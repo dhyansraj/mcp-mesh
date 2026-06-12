@@ -100,6 +100,7 @@ Default credentials: `admin` / `admin`
 | `TELEMETRY_ENDPOINT`                   | OTLP endpoint   | `localhost:4317`        |
 | `TELEMETRY_PROTOCOL`                   | Protocol        | `grpc`                  |
 | `TEMPO_URL`                            | Tempo query URL | `http://localhost:3200` |
+| `MCP_MESH_TRACE_RETENTION`             | Redis trace stream retention (`0` = no trimming) | `24h` |
 
 ## Troubleshooting
 
