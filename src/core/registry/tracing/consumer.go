@@ -54,6 +54,7 @@ type StreamConsumer struct {
 	logger       *log.Logger
 	batchSize    int64
 	blockTimeout time.Duration
+	retention    time.Duration // trace stream retention window (0 = trimming disabled)
 	processor    TraceEventProcessor
 	ctx          context.Context
 	cancel       context.CancelFunc
@@ -116,6 +117,10 @@ type StreamConsumerConfig struct {
 	BatchSize     int64
 	BlockTimeout  time.Duration
 	Enabled       bool
+	// Retention bounds how long entries stay in the stream; entries older
+	// than this are removed via XTRIM MINID on (re)connect and periodically
+	// by the tracing manager. 0 disables trimming.
+	Retention time.Duration
 }
 
 // NewStreamConsumer creates a new Redis Streams consumer for trace events
@@ -159,6 +164,7 @@ func NewStreamConsumer(config *StreamConsumerConfig, processor TraceEventProcess
 		logger:          logger,
 		batchSize:       config.BatchSize,
 		blockTimeout:    config.BlockTimeout,
+		retention:       config.Retention,
 		processor:       processor,
 		ctx:             ctx,
 		cancel:          cancel,
@@ -311,6 +317,54 @@ func (sc *StreamConsumer) attemptConnection() {
 		sc.logger.Printf("Warning: Failed to create consumer group: %v (will retry)", err)
 		// Don't disconnect - the group might already exist or stream not created yet
 	}
+
+	// Recovery cleanup: drop entries already past the retention window
+	// before consumption resumes. After a registry outage the stream holds
+	// the full backlog; anything older than retention is no longer worth
+	// processing and would otherwise sit in Redis until the next periodic
+	// trim. Runs on every (re)connect.
+	if _, err := sc.TrimStream(); err != nil {
+		sc.logger.Printf("Warning: startup stream trim failed: %v (periodic trim will retry)", err)
+	}
+}
+
+// TrimStream removes entries older than the configured retention window from
+// the trace stream. Stream entry IDs are millisecond timestamps, so
+// XTRIM MINID <now - retention> yields time-based trimming; the approximate
+// flag (~) lets Redis trim in whole-macro-node steps, which is cheaper and
+// more than precise enough at trace volumes. Returns the number of entries
+// removed.
+//
+// No-ops (0, nil) when trimming is disabled (retention <= 0) or the consumer
+// is not currently connected — the next periodic tick or reconnect retries.
+func (sc *StreamConsumer) TrimStream() (int64, error) {
+	if !sc.enabled || sc.retention <= 0 {
+		return 0, nil
+	}
+
+	sc.mu.RLock()
+	client := sc.client
+	state := sc.connectionState
+	sc.mu.RUnlock()
+
+	if client == nil || state != StateConnected {
+		return 0, nil
+	}
+
+	minID := strconv.FormatInt(time.Now().Add(-sc.retention).UnixMilli(), 10)
+
+	ctx, cancel := context.WithTimeout(sc.ctx, 10*time.Second)
+	defer cancel()
+
+	removed, err := client.XTrimMinIDApprox(ctx, sc.streamName, minID, 0).Result()
+	if err != nil {
+		return 0, fmt.Errorf("failed to trim stream %s: %w", sc.streamName, err)
+	}
+	if removed > 0 {
+		sc.logger.Printf("Trimmed %d entries older than %s from stream %s (XTRIM MINID ~ %s)",
+			removed, sc.retention, sc.streamName, minID)
+	}
+	return removed, nil
 }
 
 // handleConnectionError records connection failure and updates state

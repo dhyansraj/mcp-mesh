@@ -177,6 +177,10 @@ mcp-mesh-registry:
     observability:
       distributedTracing:
         enabled: true
+        # mesh:trace Redis stream retention (XTRIM MINID on connect and
+        # periodically); "0" disables trimming. The stream is a transport
+        # buffer — long-term trace history lives in Tempo.
+        retention: "24h"
       telemetryEndpoint: "mcp-core-mcp-mesh-tempo:4317"
 
     # Health check configuration

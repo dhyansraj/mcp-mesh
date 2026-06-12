@@ -20,6 +20,7 @@ type SpanCorrelator struct {
 	logger          *log.Logger
 	exporter        TraceExporter
 	traceTimeout    time.Duration
+	retention       time.Duration // age bound for stored completed traces (0 = count cap only)
 	maxStoredTraces int
 	cleanupTicker   *time.Ticker
 	ctx             context.Context
@@ -80,8 +81,12 @@ type SpanExporter interface {
 	ExportCompleteSpan(event *TraceEvent) error  // For single execution trace events
 }
 
-// NewSpanCorrelator creates a new span correlator
-func NewSpanCorrelator(exporter TraceExporter, traceTimeout time.Duration) *SpanCorrelator {
+// NewSpanCorrelator creates a new span correlator.
+//
+// retention bounds how long completed traces (full span payloads) stay in the
+// in-memory store; entries older than retention are pruned on the cleanup
+// ticker. 0 keeps the count cap (maxStoredTraces) as the only bound.
+func NewSpanCorrelator(exporter TraceExporter, traceTimeout, retention time.Duration) *SpanCorrelator {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	correlator := &SpanCorrelator{
@@ -90,6 +95,7 @@ func NewSpanCorrelator(exporter TraceExporter, traceTimeout time.Duration) *Span
 		logger:          log.New(os.Stdout, "[TRACE-CORRELATOR] ", log.LstdFlags),
 		exporter:        exporter,
 		traceTimeout:    traceTimeout,
+		retention:       retention,
 		maxStoredTraces: 1000, // Store last 1000 completed traces for querying
 		cleanupTicker:   time.NewTicker(1 * time.Minute), // Cleanup every minute
 		ctx:             ctx,
@@ -372,7 +378,36 @@ func (sc *SpanCorrelator) cleanupLoop() {
 			return
 		case <-sc.cleanupTicker.C:
 			sc.cleanupOldTraces()
+			sc.pruneExpiredCompletedTraces()
 		}
+	}
+}
+
+// pruneExpiredCompletedTraces removes completed traces older than the
+// retention window from the in-memory store. The count cap in
+// storeCompletedTrace bounds peak size; this bounds age, so full span
+// payloads don't linger indefinitely in a quiet mesh. No-op when
+// retention <= 0.
+func (sc *SpanCorrelator) pruneExpiredCompletedTraces() {
+	if sc.retention <= 0 {
+		return
+	}
+
+	cutoff := time.Now().Add(-sc.retention)
+
+	sc.completedMutex.Lock()
+	defer sc.completedMutex.Unlock()
+
+	removed := 0
+	for traceID, trace := range sc.completedTraces {
+		if trace.EndTime.Before(cutoff) {
+			delete(sc.completedTraces, traceID)
+			removed++
+		}
+	}
+
+	if removed > 0 {
+		sc.logger.Printf("🧹 Pruned %d completed traces older than %s", removed, sc.retention)
 	}
 }
 

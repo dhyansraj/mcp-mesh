@@ -240,6 +240,10 @@ them — so a values file carrying one would silently no-op while the user
 expects effect. Fail loudly with migration guidance instead. Invoked
 unconditionally from the configmap.
 
+The only consumed keys under distributedTracing are 'enabled' and
+'retention' (rendered as MCP_MESH_DISTRIBUTED_TRACING_ENABLED and
+MCP_MESH_TRACE_RETENTION); both are allowlisted below.
+
 Carve-out: the v2.4.0 mcp-mesh-core umbrella SHIPPED these keys as defaults
 (nine distributedTracing.* keys including redisUrl, and a 17-entry
 registry.environment map — see `git show v2.4.0:helm/mcp-mesh-core/values.yaml`).
@@ -273,9 +277,9 @@ DIVERGING value — user intent that would silently no-op — fails.
       "streamName" "mesh:trace"
       "consumerGroup" "mcp-mesh-registry-processors" -}}
 {{- range $key, $val := (dig "observability" "distributedTracing" (dict) .Values.registry) | default dict -}}
-{{- if eq $key "enabled" -}}
+{{- if or (eq $key "enabled") (eq $key "retention") -}}
 {{- else if not (hasKey $oldTracingDefaults $key) -}}
-{{- fail (printf "registry.observability.distributedTracing.%s was never consumed and has been removed; only 'enabled' lives under distributedTracing (telemetryEndpoint and exporterType sit directly under registry.observability). Stream tuning is set via the top-level env list: TRACE_BATCH_SIZE, TRACE_TIMEOUT, TRACE_PRETTY_OUTPUT, TRACE_ENABLE_STATS, TELEMETRY_PROTOCOL" $key) -}}
+{{- fail (printf "registry.observability.distributedTracing.%s was never consumed and has been removed; only 'enabled' and 'retention' live under distributedTracing (telemetryEndpoint and exporterType sit directly under registry.observability). Stream tuning is set via the top-level env list: TRACE_BATCH_SIZE, TRACE_TIMEOUT, TRACE_PRETTY_OUTPUT, TRACE_ENABLE_STATS, TELEMETRY_PROTOCOL" $key) -}}
 {{- else if ne (toString $val) (get $oldTracingDefaults $key) -}}
 {{- if eq $key "redisUrl" -}}
 {{- fail (printf "registry.observability.distributedTracing.redisUrl was never consumed and has been removed (set to %q, diverging from the old shipped default, so it would silently no-op); configure registry.redis.{host,port,password,tls} instead — the trace stream shares that endpoint" (toString $val)) -}}

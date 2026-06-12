@@ -413,6 +413,11 @@ export TRACE_EXPORTER_TYPE=otlp
 export TRACE_BATCH_SIZE=100
 export TRACE_TIMEOUT=5m
 
+# Redis trace stream retention — registry trims mesh:trace entries older
+# than this on connect and periodically. Go duration string. Default: 24h.
+# Set to "0" to disable trimming entirely.
+export MCP_MESH_TRACE_RETENTION=24h
+
 # Trace output options
 export TRACE_PRETTY_OUTPUT=false
 export TRACE_ENABLE_STATS=true

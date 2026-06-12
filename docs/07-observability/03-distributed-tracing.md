@@ -24,22 +24,22 @@ async def generate_report(title: str) -> str:
 
 **Event Types Published:**
 - `span_start`: Operation begins
-- `span_end`: Operation completes successfully  
+- `span_end`: Operation completes successfully
 - `error`: Operation fails with error details
 
 ### 2. Redis Streams (Transport Layer)
 
-**Stream Name**: `mcp-mesh:traces`
+**Stream Name**: `mesh:trace`
 **Consumer Group**: `mcp-mesh-registry-processors`
 
 Events are published asynchronously without blocking agent operations:
 
 ```bash
 # View recent trace events
-redis-cli XREVRANGE mcp-mesh:traces + - COUNT 10
+redis-cli XREVRANGE mesh:trace + - COUNT 10
 
 # Monitor stream length
-redis-cli XLEN mcp-mesh:traces
+redis-cli XLEN mesh:trace
 ```
 
 ### 3. Go Registry (Consumer & Correlator)
@@ -63,6 +63,7 @@ The registry consumes events and correlates them into complete traces:
 | `TRACE_JSON_OUTPUT_DIR` | `/tmp` | JSON export directory |
 | `TRACE_BATCH_SIZE` | `100` | Consumer batch size |
 | `TRACE_TIMEOUT` | `5m` | Trace completion timeout |
+| `MCP_MESH_TRACE_RETENTION` | `24h` | Redis stream retention window (`0` disables trimming) |
 
 ### Enable Tracing
 
@@ -84,7 +85,7 @@ Python agents automatically detect when tracing is enabled and begin publishing 
 ```json
 {
   "trace_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "span_id": "x1y2z3w4-a5b6-c789-def0-123456789abc", 
+  "span_id": "x1y2z3w4-a5b6-c789-def0-123456789abc",
   "parent_span": "parent-span-id-if-exists",
   "agent_name": "weather-service",
   "agent_id": "weather-123",
@@ -109,7 +110,7 @@ Python agents automatically detect when tracing is enabled and begin publishing 
   "spans": [
     {
       "span_id": "x1y2z3w4-a5b6-c789-def0-123456789abc",
-      "agent_name": "weather-service", 
+      "agent_name": "weather-service",
       "operation": "tool:get_weather",
       "start_time": "2024-01-01T10:00:00Z",
       "end_time": "2024-01-01T10:00:00.150Z",
@@ -118,7 +119,7 @@ Python agents automatically detect when tracing is enabled and begin publishing 
     }
   ],
   "start_time": "2024-01-01T10:00:00Z",
-  "end_time": "2024-01-01T10:00:00.300Z", 
+  "end_time": "2024-01-01T10:00:00.300Z",
   "duration": "300ms",
   "success": true,
   "span_count": 3,
@@ -167,7 +168,7 @@ export TRACE_PRETTY_OUTPUT=true
 🔗 TRACE a1b2c3d4 (285ms) - SUCCESS (3 spans across 2 agents)
   📍 Agent: weather-service
     ✅ tool:get_weather [get_weather] (150ms)
-  📍 Agent: data-processor  
+  📍 Agent: data-processor
     ✅ tool:process_data [process_data] (100ms)
     ✅ tool:validate_result [validate_result] (35ms)
 ```
@@ -208,7 +209,7 @@ Returns tracing configuration and runtime statistics:
 {
   "enabled": true,
   "consumer": {
-    "stream_name": "mcp-mesh:traces",
+    "stream_name": "mesh:trace",
     "consumer_group": "mcp-mesh-registry-processors",
     "status": "running"
   },
@@ -323,13 +324,13 @@ Trace context automatically flows between agents:
 
 ```python
 # Parent agent
-@mesh.tool(depends_on=["child-agent"])  
+@mesh.tool(depends_on=["child-agent"])
 async def parent_operation():
     # trace_id and span_id automatically propagated
     child = await mesh.get_agent("child-agent")
     return await child.child_operation()
 
-# Child agent  
+# Child agent
 @mesh.tool()
 async def child_operation():
     # Inherits trace context from parent
@@ -369,19 +370,35 @@ User Request → Agent A → Agent B → Agent C
 ### In-Memory Storage
 
 - **Active Traces**: Stored until completion or 5-minute timeout
-- **Completed Traces**: Last 1000 traces kept for querying
+- **Completed Traces**: Last 1000 traces kept for querying, and pruned once
+  older than `MCP_MESH_TRACE_RETENTION`
 - **Automatic Cleanup**: Oldest 20% removed when limit exceeded
 
 ### Redis Stream Retention
 
-```bash
-# Configure Redis stream retention
-redis-cli CONFIG SET stream-node-max-bytes 4096
-redis-cli CONFIG SET stream-node-max-entries 100
+The registry automatically trims the `mesh:trace` stream: entries older than
+`MCP_MESH_TRACE_RETENTION` (default `24h`) are removed when the registry
+connects to Redis and periodically while it runs. Set `0` to disable trimming
+entirely.
 
-# Manual stream cleanup (if needed)
-redis-cli XTRIM mcp-mesh:traces MAXLEN ~ 10000
+```bash
+# Keep span events in Redis for 48 hours instead of the default 24
+export MCP_MESH_TRACE_RETENTION=48h
 ```
+
+The stream is a transport buffer, not a system of record — the registry
+consumes events and forwards them to your telemetry backend, so long-term
+queryable trace history is governed by Tempo's retention settings (configure
+those in Tempo, not here). The stream window only needs to cover how far the
+registry can fall behind, e.g. during an outage; on reconnect, entries older
+than the window are trimmed approximately, in batches (Redis macro-node
+granularity), so a few entries just past the cutoff may briefly survive. Note
+that the dashboard consumer group (`mcp-mesh-ui-dashboard`) reads the same
+stream and is subject to the same window if it lags.
+
+As a disaster floor for extreme cases (registry down for many hours combined
+with high span volume), set a Redis `maxmemory` limit so the stream cannot
+grow without bound before the registry comes back to trim it.
 
 ## Troubleshooting
 
@@ -394,8 +411,8 @@ curl http://localhost:8000/trace/status | jq .enabled
 
 **Verify Redis stream:**
 ```bash
-redis-cli XLEN mcp-mesh:traces
-redis-cli XINFO GROUPS mcp-mesh:traces
+redis-cli XLEN mesh:trace
+redis-cli XINFO GROUPS mesh:trace
 ```
 
 **Check agent connectivity:**
@@ -408,7 +425,7 @@ redis-cli XINFO GROUPS mcp-mesh:traces
 
 **Check for orphaned events:**
 ```bash
-redis-cli XREVRANGE mcp-mesh:traces + - COUNT 20
+redis-cli XREVRANGE mesh:trace + - COUNT 20
 ```
 
 **Monitor correlator status:**
@@ -420,7 +437,7 @@ curl http://localhost:8000/trace/status | jq .correlator
 
 **Monitor consumer lag:**
 ```bash
-redis-cli XINFO GROUPS mcp-mesh:traces
+redis-cli XINFO GROUPS mesh:trace
 # Look for "lag" field in consumer info
 ```
 
@@ -482,7 +499,7 @@ curl -s "http://localhost:8000/trace/search?success=false&limit=10" | \
 ### 1. Monitoring
 
 - Set up alerts on trace export failures
-- Monitor trace completion rates  
+- Monitor trace completion rates
 - Track trace duration trends
 - Alert on error rate spikes
 
@@ -503,7 +520,7 @@ curl -s "http://localhost:8000/trace/search?success=false&limit=10" | \
 ### 4. Production Deployment
 
 - Configure JSON export for trace persistence
-- Set up external metrics collection  
+- Set up external metrics collection
 - Implement trace sampling for high-volume systems
 - Monitor registry resource usage
 
@@ -511,7 +528,7 @@ curl -s "http://localhost:8000/trace/search?success=false&limit=10" | \
 
 - **Throughput**: 10,000+ spans/second sustained
 - **Latency**: <1ms trace event publishing (async)
-- **Memory**: ~1MB per 1000 completed traces  
+- **Memory**: ~1MB per 1000 completed traces
 - **Storage**: Configurable retention in Redis and memory
 - **Correlation**: Real-time span correlation and export
 - **Availability**: Registry failure doesn't impact agents
@@ -521,7 +538,7 @@ curl -s "http://localhost:8000/trace/search?success=false&limit=10" | \
 The distributed tracing system provides comprehensive observability out of the box. Consider extending with:
 
 1. **Custom Exporters**: Implement organization-specific backends
-2. **Trace Sampling**: Add intelligent sampling for high-volume scenarios  
+2. **Trace Sampling**: Add intelligent sampling for high-volume scenarios
 3. **SLA Monitoring**: Extract SLA metrics from trace data
 4. **Automated Alerting**: Set up proactive monitoring based on trace patterns
 
