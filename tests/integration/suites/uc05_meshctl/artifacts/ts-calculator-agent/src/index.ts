@@ -26,7 +26,7 @@ const agent = mesh(server, {
 
 agent.addTool({
   name: "calc_add",
-  capability: "calculator",
+  capability: "calc_add",
   description: "Add two numbers",
   tags: ["math", "calculator"],
   parameters: z.object({
@@ -40,7 +40,7 @@ agent.addTool({
 
 agent.addTool({
   name: "calc_multiply",
-  capability: "calculator",
+  capability: "calc_multiply",
   description: "Multiply two numbers",
   tags: ["math", "calculator"],
   parameters: z.object({

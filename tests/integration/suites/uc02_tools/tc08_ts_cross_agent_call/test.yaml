@@ -2,9 +2,13 @@
 # Tests that TypeScript Agent A can call Agent B's tools via dependency injection.
 #
 # Scenario:
-#   - ts-calculator-agent provides calc_add and calc_multiply tools
-#   - ts-report-agent depends on "calculator" capability
+#   - ts-calculator-agent provides calc_add and calc_multiply capabilities
+#   - ts-report-agent depends on "calc_add" / "calc_multiply"
 #   - Calling sum_report triggers cross-agent calls to calc_add
+#
+# The report agent appends "(local)" to its output when it falls back to
+# local computation, so the assertions below verify the result came from
+# the mesh-injected dependency, not the local fallback.
 #
 # Uses UC-level artifacts from /uc-artifacts
 
@@ -115,9 +119,15 @@ assertions:
   - expr: "${captured.sum_report_call} contains '15'"
     message: "sum_report should return sum of 15"
 
+  - expr: "${captured.sum_report_call} not contains '(local)'"
+    message: "sum_report must use the mesh-injected calc_add, not the local fallback"
+
   # Product of 2*3*4 = 24
   - expr: "${captured.product_report_call} contains '24'"
     message: "product_report should return product of 24"
+
+  - expr: "${captured.product_report_call} not contains '(local)'"
+    message: "product_report must use the mesh-injected calc_multiply, not the local fallback"
 
 post_run:
   - handler: shell
