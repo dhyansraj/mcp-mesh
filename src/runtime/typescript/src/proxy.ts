@@ -19,6 +19,9 @@ import { isTimeoutError } from "./timeout-utils.js";
 import { getDispatcher } from "./http-pool.js";
 import { currentJob } from "./job-context.js";
 import { awaitJobCancel } from "@mcpmesh/core";
+import { createDebug } from "./debug.js";
+
+const debugProxy = createDebug("proxy");
 
 /** Options for callMcpTool, derived from DependencyKwargs. */
 export interface CallOptions {
@@ -405,6 +408,10 @@ export async function callMcpTool(
   } = buildMcpRequest(endpoint, toolName, args, options, extraHeaders, DEFAULT_CALL_OPTIONS.timeout);
 
   let lastError: Error | null = null;
+  // Response size of the most recent attempt that got far enough to read a
+  // body — carried onto the post-loop aggregate error span so a failed call's
+  // span still reports payload size (per-attempt spans used to carry it).
+  let lastResponseBytes: number | undefined;
 
   for (let attempt = 0; attempt < options.maxAttempts; attempt++) {
     // Abort timer covers the WHOLE attempt — connect, headers, AND body
@@ -452,35 +459,28 @@ export async function callMcpTool(
 
       const contentType = response.headers.get("content-type") ?? "";
 
-      // Handle SSE streaming response
+      // Handle SSE streaming response.
+      //
+      // Span accounting (#1202): spans are per-call, not per-attempt. Error
+      // paths in this loop body throw WITHOUT publishing — the outer catch
+      // owns the non-retryable single-span paths (abort/timeout,
+      // ProxyTimeoutError) and the post-loop aggregate owns retried-then-
+      // exhausted errors. Publishing here too would emit multiple spans
+      // sharing one spanId.
       if (contentType.includes("text/event-stream")) {
         // Estimate response size from content-length header (exact size not available for SSE)
         const sseResponseBytes = contentLength > 0 ? contentLength : undefined;
-        let sseResult: string | MultiContentResult;
-        try {
-          sseResult = await readSSEResponseToContent(response);
-        } catch (sseErr) {
-          // Mirror the JSON path below: JSON-RPC errors and tool-level errors
-          // (CallToolResult.isError) thrown by the SSE reader record an error
-          // span instead of a success span. Aborts (timeout or job-cancel
-          // firing mid-read) and the proxy's in-band timeout marker (#1201)
-          // are deliberately NOT published here — the outer catch owns
-          // timeout accounting, and publishing in both places would emit two
-          // spans with the same spanId.
-          if (!isTimeoutError(sseErr) && !(sseErr instanceof ProxyTimeoutError)) {
-            const sseErrMsg = sseErr instanceof Error ? sseErr.message : String(sseErr);
-            publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, sseErrMsg, "error", requestBytes, sseResponseBytes);
-          }
-          throw sseErr;
-        }
+        lastResponseBytes = sseResponseBytes;
+        const sseResult = await readSSEResponseToContent(response);
         // Publish success span
-        publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, true, null, typeof sseResult, requestBytes, sseResponseBytes);
+        publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, true, null, typeof sseResult, requestBytes, sseResponseBytes, attempt + 1);
         return sseResult;
       }
 
       // Handle JSON response — read as text to measure byte size
       const responseText = await response.text();
       const responseBytes = Buffer.byteLength(responseText, "utf8");
+      lastResponseBytes = responseBytes;
       const result = JSON.parse(responseText) as {
         error?: { message?: string };
         result?: unknown;
@@ -488,8 +488,6 @@ export async function callMcpTool(
 
       if (result.error) {
         const errorMsg = result.error.message ?? JSON.stringify(result.error);
-        // Publish error span
-        publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, errorMsg, "error", requestBytes, responseBytes);
         throw new Error(`MCP error: ${errorMsg}`);
       }
 
@@ -499,21 +497,20 @@ export async function callMcpTool(
       // re-wrap it instead of returning the error text as a successful result.
       const toolErrMsg = toolErrorMessage(result.result);
       if (toolErrMsg !== null) {
-        publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, toolErrMsg, "error", requestBytes, responseBytes);
         throw new Error(`MCP tool error: ${toolErrMsg}`);
       }
 
       // Extract content from result
       const content = extractContent(result.result);
       // Publish success span
-      publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, true, null, typeof content, requestBytes, responseBytes);
+      publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, true, null, typeof content, requestBytes, responseBytes, attempt + 1);
       return content;
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
 
       // Don't retry on abort (timeout)
       if (isTimeoutError(lastError)) {
-        publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, "timeout", "error", requestBytes);
+        publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, "timeout", "error", requestBytes, undefined, attempt + 1);
         throw new Error(`MCP call timed out after ${effectiveTimeout}ms`);
       }
 
@@ -524,13 +521,17 @@ export async function callMcpTool(
       // throw — the message names the proxy budget, matching meshctl's
       // report of the same cut.
       if (lastError instanceof ProxyTimeoutError) {
-        publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, lastError.message, "error", requestBytes);
+        publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, lastError.message, "error", requestBytes, undefined, attempt + 1);
         throw lastError;
       }
 
       // Retry everything else (network, HTTP, protocol, and tool-level
       // errors) until attempts are exhausted; only the abort/timeout case
-      // above is non-retryable.
+      // above is non-retryable. No span here (#1202) — the post-loop
+      // aggregate publishes once for the whole call.
+      debugProxy(
+        `attempt ${attempt + 1}/${options.maxAttempts} failed for ${toolName} at ${endpoint}: ${lastError.message}`
+      );
       if (attempt < options.maxAttempts - 1) {
         await sleep(options.retryDelay * Math.pow(options.retryBackoff, attempt));
         continue;
@@ -540,8 +541,10 @@ export async function callMcpTool(
     }
   }
 
-  // All retries failed
-  publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, lastError?.message ?? "unknown", "error", requestBytes);
+  // All retries failed — the single aggregate error span for this call
+  // (#1202): carries the last attempt's error and response size, plus the
+  // attempts count when retries were configured.
+  publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, lastError?.message ?? "unknown", "error", requestBytes, lastResponseBytes, options.maxAttempts);
   throw lastError ?? new Error("MCP call failed");
 }
 
@@ -765,6 +768,10 @@ function generateProgressToken(): string {
 
 /**
  * Helper to publish a proxy call span (fire and forget).
+ *
+ * `attempts` is the number of call attempts this span aggregates; it is
+ * recorded on the span only when greater than 1 (i.e. retries actually
+ * happened), keeping single-attempt spans unchanged.
  */
 function publishProxySpan(
   traceCtx: TraceContext | null,
@@ -778,6 +785,7 @@ function publishProxySpan(
   resultType: string,
   requestBytes?: number,
   responseBytes?: number,
+  attempts?: number,
 ): void {
   if (!traceCtx || !spanId) return;
 
@@ -803,6 +811,7 @@ function publishProxySpan(
     meshPositions: [],
     requestBytes,
     responseBytes,
+    ...(attempts !== undefined && attempts > 1 ? { callAttempts: attempts } : {}),
   }).catch(() => {
     // Silently ignore publish errors
   });

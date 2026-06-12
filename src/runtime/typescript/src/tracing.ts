@@ -255,6 +255,12 @@ export interface SpanData {
   requestBytes?: number;
   responseBytes?: number;
 
+  // Number of call attempts this span aggregates (only set when > 1).
+  // Spans are per-call, not per-attempt (#1202): a retried call publishes
+  // exactly one span and notes how many attempts it took here (total
+  // attempts, not retries: 3 means the call was tried three times).
+  callAttempts?: number;
+
   // LLM token metadata
   llmInputTokens?: number;
   llmOutputTokens?: number;
@@ -307,6 +313,9 @@ export async function publishTraceSpan(span: SpanData): Promise<boolean> {
     }
     if (span.responseBytes !== undefined) {
       spanMap.response_bytes = String(span.responseBytes);
+    }
+    if (span.callAttempts !== undefined) {
+      spanMap.call_attempts = String(span.callAttempts);
     }
     if (span.llmInputTokens !== undefined) {
       spanMap.llm_input_tokens = String(span.llmInputTokens);
