@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestFormatMCPError_DuplicatesCollapsed covers issue #956 item #11:
@@ -513,6 +514,239 @@ func TestCallMCPToolWithHost_UserHeadersAndFrameworkPrecedence(t *testing.T) {
 	}
 	if got.Get("X-Trace-ID") != "real-framework-trace" {
 		t.Errorf("framework X-Trace-ID should win, got %q", got.Get("X-Trace-ID"))
+	}
+}
+
+// --- extractMCPResponseJSON / SSE extraction (#1201) ---
+
+const sseContentType = "text/event-stream; charset=utf-8"
+
+// TestExtractMCPResponseJSON_CommentOnlyTimeoutShaped covers the #1201
+// repro: the proxy's X-Mesh-Timeout cap cut the stream after only an
+// sse-starlette keepalive comment arrived. The result must be a
+// timeout-shaped error naming the budget and the --timeout remedy — and
+// must NOT contain the raw comment text.
+func TestExtractMCPResponseJSON_CommentOnlyTimeoutShaped(t *testing.T) {
+	body := []byte(": ping - 2026-06-09 12:00:00.000000+00:00\r\n\r\n")
+	_, _, err := extractMCPResponseJSON(body, sseContentType, 30*time.Second, 30)
+	if err == nil {
+		t.Fatal("expected error for comment-only SSE stream, got nil")
+	}
+	msg := err.Error()
+	for _, want := range []string{"timed out", "X-Mesh-Timeout", "30", "--timeout"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("timeout error missing %q:\n%s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "ping") {
+		t.Errorf("raw keepalive comment leaked into the error: %s", msg)
+	}
+}
+
+// TestExtractMCPResponseJSON_QuickEmptyStreamProtocolError distinguishes a
+// stream that ended well within the budget: that's the agent (or proxy)
+// closing early, not a timeout — the error must not claim a timeout.
+func TestExtractMCPResponseJSON_QuickEmptyStreamProtocolError(t *testing.T) {
+	body := []byte("event: message\n\n")
+	_, _, err := extractMCPResponseJSON(body, sseContentType, 2*time.Second, 30)
+	if err == nil {
+		t.Fatal("expected error for data-less SSE stream, got nil")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "timed out") {
+		t.Errorf("quick empty stream must not be reported as a timeout: %s", msg)
+	}
+	if !strings.Contains(msg, "without sending a response") {
+		t.Errorf("protocol error missing explanation: %s", msg)
+	}
+}
+
+// TestExtractMCPResponseJSON_ProxyMarkerForcesTimeout covers the registry
+// proxy's terminal `: mesh-proxy-timeout` comment frame: when present, the
+// error is timeout-shaped even if local elapsed time is below the budget
+// (e.g. the proxy's own MCP_MESH_PROXY_TIMEOUT default fired first).
+func TestExtractMCPResponseJSON_ProxyMarkerForcesTimeout(t *testing.T) {
+	body := []byte(": ping - keepalive\n\n: mesh-proxy-timeout budget=30s\n\n")
+	_, _, err := extractMCPResponseJSON(body, sseContentType, 5*time.Second, 60)
+	if err == nil {
+		t.Fatal("expected error for marker-terminated SSE stream, got nil")
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Errorf("proxy timeout marker must force a timeout-shaped error: %s", err.Error())
+	}
+}
+
+// TestExtractMCPResponseJSON_CommentsInterleavedDataWins: comment frames
+// before/after a real data frame are ignored and the data payload is
+// extracted intact.
+func TestExtractMCPResponseJSON_CommentsInterleavedDataWins(t *testing.T) {
+	body := []byte(": ping - 1\n\nevent: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\n\n: ping - 2\n\n")
+	data, _, err := extractMCPResponseJSON(body, sseContentType, 30*time.Second, 30)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var resp MCPResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		t.Fatalf("extracted data is not valid JSON-RPC: %v\ndata: %s", err, data)
+	}
+	if resp.Result == nil {
+		t.Errorf("expected result in extracted payload, got: %s", data)
+	}
+}
+
+// TestExtractMCPResponseJSON_NormalSSEUnchanged: the plain happy path —
+// event + data frame, no comments.
+func TestExtractMCPResponseJSON_NormalSSEUnchanged(t *testing.T) {
+	body := []byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"hi\"}\n\n")
+	data, _, err := extractMCPResponseJSON(body, sseContentType, time.Second, 30)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := `{"jsonrpc":"2.0","id":1,"result":"hi"}`; string(data) != want {
+		t.Errorf("got %q, want %q", data, want)
+	}
+}
+
+// TestExtractMCPResponseJSON_PlainJSONPassthrough: non-SSE bodies are
+// returned untouched regardless of elapsed time.
+func TestExtractMCPResponseJSON_PlainJSONPassthrough(t *testing.T) {
+	body := []byte(`{"jsonrpc":"2.0","id":1,"result":{"ok":true}}`)
+	data, _, err := extractMCPResponseJSON(body, "application/json", time.Minute, 30)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(data) != string(body) {
+		t.Errorf("plain JSON body altered: got %q", data)
+	}
+}
+
+// TestExtractMCPResponseJSON_SSEDetectionWithoutContentType: bodies that
+// look like SSE are handled even when Content-Type is missing (some proxies
+// strip it). Includes the comment-first body shape from sse-starlette.
+func TestExtractMCPResponseJSON_SSEDetectionWithoutContentType(t *testing.T) {
+	// data-first body, no content type
+	data, _, err := extractMCPResponseJSON([]byte("data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":1}\n\n"), "", time.Second, 30)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(string(data), `"result":1`) {
+		t.Errorf("data frame not extracted: %q", data)
+	}
+
+	// comment-only body, no content type — must still error, not pass through
+	_, _, err = extractMCPResponseJSON([]byte(": ping - ts\n\n"), "", 30*time.Second, 30)
+	if err == nil {
+		t.Fatal("comment-only body without Content-Type must error, got nil")
+	}
+}
+
+// TestCallMCPTool_CommentOnlySSEErrors wires the extraction through the full
+// callMCPTool path: an agent answering only a keepalive comment must produce
+// an error, not the comment text as a successful result.
+func TestCallMCPTool_CommentOnlySSEErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(": ping - 2026-06-09 12:00:00+00:00\r\n\r\n"))
+	}))
+	defer srv.Close()
+
+	result, err := callMCPTool(http.DefaultClient, srv.URL, "slow_tool", map[string]interface{}{}, nil, nil, 30)
+	if err == nil {
+		t.Fatalf("expected error for comment-only SSE response, got result: %+v", result)
+	}
+	if strings.Contains(err.Error(), "ping") {
+		t.Errorf("keepalive comment leaked into error: %s", err.Error())
+	}
+}
+
+// TestCallMCPTool_SSEWithCommentsStillSucceeds is the happy-path guard for
+// the full call path: keepalive comments around a real data frame don't
+// disturb the result.
+func TestCallMCPTool_SSEWithCommentsStillSucceeds(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(": ping - keepalive\n\nevent: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\n\n"))
+	}))
+	defer srv.Close()
+
+	result, err := callMCPTool(http.DefaultClient, srv.URL, "slow_tool", map[string]interface{}{}, nil, nil, 30)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(string(result.Result), `"ok":true`) {
+		t.Errorf("unexpected result payload: %s", result.Result)
+	}
+}
+
+// TestCallMCPTool_TruncatedDataFrameWithMarkerIsTimeout covers the
+// mid-data-frame cut: the proxy's X-Mesh-Timeout budget fires while the
+// result frame is in flight, leaving a partial `data:` payload followed by
+// the terminal timeout marker. The extracted frame fails to parse — that must
+// be a timeout-shaped error (the marker is in the body), NEVER the raw SSE
+// envelope returned as a successful result with exit 0.
+func TestCallMCPTool_TruncatedDataFrameWithMarkerIsTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"res\n: mesh-proxy-timeout budget=30s\n\n"))
+	}))
+	defer srv.Close()
+
+	result, err := callMCPTool(http.DefaultClient, srv.URL, "slow_tool", map[string]interface{}{}, nil, nil, 30)
+	if err == nil {
+		t.Fatalf("expected error for truncated SSE data frame, got result: %s", result.Result)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "timed out") {
+		t.Errorf("marker in body must force a timeout-shaped error: %s", msg)
+	}
+	if !strings.Contains(msg, "--timeout") {
+		t.Errorf("timeout error missing the --timeout remedy: %s", msg)
+	}
+	if strings.Contains(msg, "mesh-proxy-timeout") || strings.Contains(msg, `"jsonrpc"`) {
+		t.Errorf("raw SSE envelope leaked into the error: %s", msg)
+	}
+}
+
+// TestCallMCPTool_TruncatedDataFrameQuickCloseIsProtocolError: a partial data
+// frame with NO marker and the stream closed well within the budget is the
+// agent (or an intermediary) misbehaving — a protocol error, not a timeout,
+// and never the raw body as success.
+func TestCallMCPTool_TruncatedDataFrameQuickCloseIsProtocolError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"res"))
+	}))
+	defer srv.Close()
+
+	result, err := callMCPTool(http.DefaultClient, srv.URL, "slow_tool", map[string]interface{}{}, nil, nil, 30)
+	if err == nil {
+		t.Fatalf("expected error for truncated SSE data frame, got result: %s", result.Result)
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "timed out") {
+		t.Errorf("quick truncated frame must not be reported as a timeout: %s", msg)
+	}
+	if !strings.Contains(msg, "truncated or invalid SSE data frame") {
+		t.Errorf("protocol error missing truncation explanation: %s", msg)
+	}
+}
+
+// TestCallMCPTool_NonSSEPlainTextFallbackUnchanged: the raw-body fallback for
+// non-JSON-RPC responses survives for non-SSE bodies only (legacy plain-text
+// agents) — those still come back verbatim as a successful result.
+func TestCallMCPTool_NonSSEPlainTextFallbackUnchanged(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("hello from a legacy agent"))
+	}))
+	defer srv.Close()
+
+	result, err := callMCPTool(http.DefaultClient, srv.URL, "legacy_tool", map[string]interface{}{}, nil, nil, 30)
+	if err != nil {
+		t.Fatalf("unexpected error for plain-text body: %v", err)
+	}
+	if string(result.Result) != "hello from a legacy agent" {
+		t.Errorf("plain-text fallback altered the body: %q", result.Result)
 	}
 }
 

@@ -2600,16 +2600,11 @@ func getToolDetailsFromAgent(endpoint, toolName, registryURL string) *MCPToolInf
 		return nil
 	}
 
-	// Parse SSE if needed
-	bodyStr := string(body)
-	jsonData := body
-	if strings.HasPrefix(bodyStr, "event:") || strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
-		for _, line := range strings.Split(bodyStr, "\n") {
-			if strings.HasPrefix(line, "data:") {
-				jsonData = []byte(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
-				break
-			}
-		}
+	// Parse SSE if needed (shared comment-frame-aware extraction, #1201).
+	// This lookup is best-effort: a data-less stream just yields nil details.
+	jsonData, _, err := extractMCPResponseJSON(body, resp.Header.Get("Content-Type"), 0, 0)
+	if err != nil {
+		return nil
 	}
 
 	// Parse response

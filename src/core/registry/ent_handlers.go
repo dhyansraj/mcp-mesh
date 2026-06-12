@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -910,6 +911,7 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		client.Transport = transport
 	}
 
+	start := time.Now()
 	resp, err := client.Do(proxyReq)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, generated.ErrorResponse{
@@ -933,23 +935,89 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 	// produced. Flush after every chunk so streamed (SSE) responses aren't
 	// held back by the response writer's buffer; gin's ResponseWriter
 	// implements http.Flusher.
+	isSSE := strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream")
+	relayProxyStream(c.Writer, resp.Body, isSSE, targetURL, proxyTimeout, start)
+}
+
+// proxyTimeoutCommentMarker is the terminal SSE comment frame appended by
+// relayProxyStream when the upstream exchange is cut by the X-Mesh-Timeout
+// budget mid-stream (#1201).
+// Keep in sync with sseProxyTimeoutMarker in src/core/cli/call.go and
+// SSE_PROXY_TIMEOUT_MARKER in src/runtime/typescript/src/proxy.ts. The
+// emitted literal (`: mesh-proxy-timeout budget=<N>s`) is pinned by
+// src/core/registry/proxy_stream_test.go and matched by the consumer tests in
+// src/core/cli/call_test.go — a drift here breaks the partner's tests.
+const proxyTimeoutCommentMarker = "mesh-proxy-timeout"
+
+// streamFlusher is the slice of gin.ResponseWriter that relayProxyStream
+// needs — an interface so the relay loop is unit-testable without gin.
+type streamFlusher interface {
+	io.Writer
+	Flush()
+}
+
+// relayProxyStream copies the upstream response body to the client, flushing
+// after every chunk (preserves the #1177 streaming behavior: SSE frames reach
+// the client as they are produced and large bodies are never buffered whole).
+//
+// Terminal-signal design for timeout cuts (#1201): when the X-Mesh-Timeout
+// budget expires mid-stream, the headers (200 + chunked) are long gone, so
+// there is no HTTP-level way to report the failure. For SSE responses the
+// only spec-compliant in-band channel is a comment frame — ":"-prefixed lines
+// are ignored by conforming SSE clients, so emitting one cannot break foreign
+// consumers, while mesh clients (meshctl) detect it and report a precise
+// timeout error instead of guessing from elapsed time. HTTP trailers were
+// rejected: they require pre-declaration before the first body byte and are
+// invisible to fetch()/EventSource consumers. For non-SSE bodies no marker is
+// appended (it would corrupt the JSON payload); truncated JSON is already
+// transport-detectable client-side via parse failure.
+func relayProxyStream(w streamFlusher, upstream io.Reader, isSSE bool, targetURL string, budget time.Duration, start time.Time) {
 	buf := make([]byte, 32*1024)
 	for {
-		n, rerr := resp.Body.Read(buf)
+		n, rerr := upstream.Read(buf)
 		if n > 0 {
-			if _, werr := c.Writer.Write(buf[:n]); werr != nil {
+			if _, werr := w.Write(buf[:n]); werr != nil {
 				// Client went away — nothing useful left to do.
 				return
 			}
-			c.Writer.Flush()
+			w.Flush()
 		}
-		if rerr != nil {
-			if rerr != io.EOF {
-				log.Printf("WARNING: proxy stream from %s ended early: %v", targetURL, rerr)
-			}
+		if rerr == nil {
+			continue
+		}
+		if rerr == io.EOF {
 			return
 		}
+		if isProxyTimeoutError(rerr) {
+			log.Printf("WARNING: proxy stream from %s cut by X-Mesh-Timeout budget (%s) after %s: %v",
+				targetURL, budget, time.Since(start).Round(time.Millisecond), rerr)
+			if isSSE {
+				// Leading newline guards against a cut mid-line: it terminates
+				// any partial frame so the comment starts at a line boundary.
+				// %g keeps sub-second budgets meaningful (budget=0.5s, not
+				// budget=0s) while whole seconds stay terse (budget=30s).
+				if _, werr := fmt.Fprintf(w, "\n: %s budget=%gs\n\n", proxyTimeoutCommentMarker, budget.Seconds()); werr == nil {
+					w.Flush()
+				}
+			}
+		} else {
+			log.Printf("WARNING: proxy stream from %s ended early: %v", targetURL, rerr)
+		}
+		return
 	}
+}
+
+// isProxyTimeoutError reports whether a body-read error came from the proxy
+// http.Client's Timeout (the X-Mesh-Timeout cap) rather than a genuine
+// upstream failure. Covers both shapes Go produces: context.DeadlineExceeded
+// (and wrappers) and net.Error timeouts (http's "Client.Timeout exceeded
+// while reading body" error implements net.Error with Timeout() == true).
+func isProxyTimeoutError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var nerr net.Error
+	return errors.As(err, &nerr) && nerr.Timeout()
 }
 
 // proxyTLSCacheEntry holds the cached mTLS transport for the proxy along with
