@@ -65,36 +65,42 @@ test:
     workdir: /workspace
     command: meshctl start system-agent/main.py --env MCP_MESH_HTTP_PORT=9100 -d
 
-  - name: "Wait for system-agent registration"
-    handler: wait
-    seconds: 12
-
   - name: "Start date-a2a-agent (port 9090)"
     handler: shell
     workdir: /workspace
-    command: meshctl start date-a2a-agent/main.py -d
-
-  - name: "Wait for date_service DI resolution"
-    handler: wait
-    seconds: 18
+    command: meshctl start date-a2a-agent/main.py --env MCP_MESH_SETTLE_TIMEOUT=60 -d
 
   - name: "Start consumer-date-agent (port 9201)"
     handler: shell
     workdir: /workspace
-    command: meshctl start consumer-date-agent/main.py -d
-
-  - name: "Wait for consumer registration heartbeat"
-    handler: wait
-    seconds: 18
+    command: meshctl start consumer-date-agent/main.py --env MCP_MESH_SETTLE_TIMEOUT=60 -d
 
   - name: "Start caller-agent (port 9203)"
     handler: shell
     workdir: /workspace
-    command: meshctl start caller-agent/main.py -d
+    command: meshctl start caller-agent/main.py --env MCP_MESH_SETTLE_TIMEOUT=60 -d
 
-  - name: "Wait for caller current-date DI resolution"
-    handler: wait
-    seconds: 25
+  # Liveness only: poll until the whole fleet is registered and the A2A
+  # surface answers its card URL (replaces the serialized fixed sleeps).
+  # Each consumer's DI resolution — including the _a2a dep — is covered by
+  # its settle window (MCP_MESH_SETTLE_TIMEOUT=60 on every consumer hop).
+  - name: "Wait for fleet registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "system-agent" && echo "$AGENTS" | grep -q "date-consumer" && echo "$AGENTS" | grep -q "date-caller" && curl -fsS --max-time 2 http://localhost:9090/agents/date/.well-known/agent.json >/dev/null 2>&1; then
+          echo "fleet registered + A2A surface listening after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: fleet not up within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_ready
+    timeout: 90
 
   - name: "Verify all 4 agents registered"
     handler: shell

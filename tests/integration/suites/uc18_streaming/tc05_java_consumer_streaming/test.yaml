@@ -96,7 +96,7 @@ test:
   - name: "Start java-stream-gateway (port 8091)"
     handler: shell
     workdir: /workspace
-    command: "meshctl start /workspace/streaming/java-stream-gateway --env PORT=8091 -d"
+    command: "meshctl start /workspace/streaming/java-stream-gateway --env PORT=8091 --env MCP_MESH_SETTLE_TIMEOUT=60 -d"
     capture: start_gateway
 
   # Java gateway uses @MeshRoute without @MeshAgent, so it registers as
@@ -126,12 +126,6 @@ test:
       exit 1
     capture: wait_gateway
     timeout: 150
-
-  # Brief settle so the @MeshRoute dep has a chance to resolve before the
-  # first /plan call (the dep-resolution loop runs on a heartbeat tick).
-  - name: "Brief settle for gateway dep resolution"
-    handler: wait
-    seconds: 5
 
   # ===== STAGE 5: Hit the gateway and capture the SSE body =====
   - name: "List agents (sanity)"

@@ -55,29 +55,39 @@ test:
     workdir: /workspace
     capture: start_py_math
 
-  - name: "Wait for py-math-agent to register"
-    handler: wait
-    seconds: 8
-
   - name: "Test 1: Start ts-math-agent (fallback)"
     handler: shell
     command: "meshctl start ts-math-agent/src/index.ts -d"
     workdir: /workspace
     capture: start_ts_math
 
-  - name: "Wait for ts-math-agent to register"
-    handler: wait
-    seconds: 10
-
   - name: "Test 1: Start py-calculator-agent (consumer)"
     handler: shell
-    command: "meshctl start py-calculator-agent/main.py -d"
+    command: "meshctl start py-calculator-agent/main.py --env MCP_MESH_SETTLE_TIMEOUT=60 -d"
     workdir: /workspace
     capture: start_calculator_1
 
-  - name: "Wait for calculator to wire"
-    handler: wait
-    seconds: 10
+  # Liveness only: poll for all three registrations (replaces fixed sleeps).
+  # Dependency resolution is covered by the settle window
+  # (MCP_MESH_SETTLE_TIMEOUT=60 on the calculator start).
+
+  - name: "Wait for all three agents to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "py-math-agent" && echo "$AGENTS" | grep -q "ts-math-agent" && echo "$AGENTS" | grep -q "py-calculator-agent"; then
+          echo "Registered after $((i*1))s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: not registered within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_registration_1
+    timeout: 90
 
   - name: "Test 1: Verify all agents registered"
     handler: shell
@@ -136,13 +146,31 @@ test:
 
   - name: "Test 2: Re-start py-calculator-agent (will wire to ts-math-agent)"
     handler: shell
-    command: "meshctl start py-calculator-agent/main.py -d"
+    command: "meshctl start py-calculator-agent/main.py --env MCP_MESH_SETTLE_TIMEOUT=60 -d"
     workdir: /workspace
     capture: start_calculator_2
 
-  - name: "Wait for calculator to re-wire"
-    handler: wait
-    seconds: 10
+  # The calculator is freshly started here, so this is plain startup
+  # resolution, not live re-wiring: the settle window covers it. Poll for
+  # registration only.
+
+  - name: "Wait for calculator to register (fresh start)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "py-calculator-agent"; then
+          echo "Registered after $((i*1))s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: not registered within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_calculator_2
+    timeout: 90
 
   - name: "Test 2: Verify calculator is registered"
     handler: shell

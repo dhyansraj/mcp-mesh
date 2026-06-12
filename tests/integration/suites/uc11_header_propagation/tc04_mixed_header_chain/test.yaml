@@ -67,7 +67,7 @@ test:
   - name: "Start header-relay-py agent"
     handler: shell
     workdir: /workspace
-    command: "meshctl start header-relay-py/main.py --env MCP_MESH_HTTP_PORT=3025 --env MCP_MESH_PROPAGATE_HEADERS=x-custom-auth,x-tenant-id -d"
+    command: "meshctl start header-relay-py/main.py --env MCP_MESH_HTTP_PORT=3025 --env MCP_MESH_PROPAGATE_HEADERS=x-custom-auth,x-tenant-id --env MCP_MESH_SETTLE_TIMEOUT=60 -d"
     capture: start_relay
 
   # Wait for relay agent to register
@@ -87,11 +87,6 @@ test:
       exit 1
     capture: wait_relay
     timeout: 60
-
-  # Wait for dependency wiring
-  - name: "Wait for dependency wiring"
-    handler: wait
-    seconds: 10
 
   # Verify both agents are running
   - name: "Verify both agents registered"

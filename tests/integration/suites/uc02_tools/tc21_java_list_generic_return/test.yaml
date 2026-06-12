@@ -47,7 +47,10 @@ test:
     path: /workspace/java-greeter-agent
     timeout: 600
 
-  # Start employee service first (provider)
+  # Start both agents back-to-back. The old serialized ordering (provider
+  # fully registered BEFORE starting the consumer) existed only so the
+  # consumer's dependencies could resolve before any call — the
+  # settling-window grace (PR #1200) covers that now.
   - name: "Start Java employee service (provider)"
     handler: shell
     workdir: /workspace
@@ -56,51 +59,39 @@ test:
       echo "Java employee service starting via meshctl"
     capture: start_employee
 
-  # Wait for employee service to register
-  - name: "Wait for employee service registration"
-    handler: shell
-    workdir: /workspace
-    command: |
-      echo "Waiting for employee-service..."
-      for i in $(seq 1 45); do
-        if meshctl list 2>/dev/null | grep -q "employee"; then
-          echo "Employee service registered after ${i} iterations"
-          exit 0
-        fi
-        sleep 2
-      done
-      echo "ERROR: Employee service did not register within 90s"
-      meshctl logs employee-service 2>/dev/null | tail -30 || true
-      exit 1
-    capture: wait_employee
-    timeout: 120
-
-  # Start greeter agent (consumer with list_employees dependency)
+  # Start consumer.
+  # MCP_MESH_SETTLE_TIMEOUT=60: calls arriving before
+  # the list_employees dependency resolve are held until resolution lands.
   - name: "Start Java greeter agent (consumer)"
     handler: shell
     workdir: /workspace
     command: |
-      meshctl start /workspace/java-greeter-agent -d
+      meshctl start /workspace/java-greeter-agent --env MCP_MESH_SETTLE_TIMEOUT=60 -d
       echo "Java greeter agent starting via meshctl"
     capture: start_greeter
 
-  # Wait for greeter to register
-  - name: "Wait for greeter registration"
+  # Liveness only: wait for both agents to REGISTER (meshctl call routes via
+  # the registry). No dep-resolution wait — the settle window covers
+  # dependency arrival order.
+  - name: "Wait for both agents to register"
     handler: shell
     workdir: /workspace
     command: |
-      echo "Waiting for greeter..."
+      echo "Waiting for both agents to register..."
       for i in $(seq 1 45); do
-        if meshctl list 2>/dev/null | grep -q "greeter"; then
-          echo "Greeter registered after ${i} iterations"
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "employee" && echo "$AGENTS" | grep -q "greeter"; then
+          echo "Both agents registered after $((i*2))s"
           exit 0
         fi
         sleep 2
       done
-      echo "ERROR: Greeter did not register within 90s"
-      meshctl logs greeter 2>/dev/null | tail -30 || true
+      echo "ERROR: agents did not register within 90s"
+      echo "=== Agent logs ==="
+      meshctl logs employee-service 2>/dev/null | tail -50 || true
+      meshctl logs greeter 2>/dev/null | tail -50 || true
       exit 1
-    capture: wait_greeter
+    capture: wait_registration
     timeout: 120
 
   # Verify both agents registered

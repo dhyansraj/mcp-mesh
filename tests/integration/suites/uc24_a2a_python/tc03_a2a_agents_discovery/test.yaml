@@ -83,16 +83,12 @@ test:
   - name: "Start date-a2a-agent (port 9090)"
     handler: shell
     workdir: /workspace
-    command: meshctl start date-a2a-agent/main.py -d
-
-  - name: "Wait for date_service DI resolution"
-    handler: wait
-    seconds: 8
+    command: meshctl start date-a2a-agent/main.py --env MCP_MESH_SETTLE_TIMEOUT=60 -d
 
   - name: "Start report-a2a-agent (port 9091)"
     handler: shell
     workdir: /workspace
-    command: meshctl start report-a2a-agent/main.py -d
+    command: meshctl start report-a2a-agent/main.py --env MCP_MESH_SETTLE_TIMEOUT=60 -d
 
   - name: "Wait for full fleet heartbeat + card cache"
     handler: wait

@@ -52,38 +52,27 @@ test:
 
   - name: "Phase A: start orchestrator agent (default workers)"
     handler: shell
-    command: "meshctl start py-parallel-orchestrator-agent/main.py --env MCP_MESH_HTTP_PORT=3151 -d"
+    command: "meshctl start py-parallel-orchestrator-agent/main.py --env MCP_MESH_HTTP_PORT=3151 --env MCP_MESH_SETTLE_TIMEOUT=60 -d"
     workdir: /workspace
     capture: start_orch_a
 
-  - name: "Phase A: wait for both agents to register and resolve dependencies"
+  # Liveness only: wait for both agents to REGISTER. The old DEPS-column
+  # (resolved/total) parsing is gone — the settle window
+  # (MCP_MESH_SETTLE_TIMEOUT=60 on the orchestrator) covers dep resolution.
+  - name: "Phase A: wait for both agents to register"
     handler: shell
     workdir: /workspace
     command: |
-      EXPECTED="slow-leaf-agent parallel-orchestrator-agent"
-      EXPECTED_COUNT=2
       for i in $(seq 1 30); do
         AGENTS=$(meshctl list 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' || true)
-        READY_COUNT=0
-        for agent in $EXPECTED; do
-          LINE=$(echo "$AGENTS" | grep -E "^${agent}" || true)
-          if [ -n "$LINE" ]; then
-            DEPS=$(echo "$LINE" | awk '{print $5}')
-            RESOLVED=$(echo "$DEPS" | cut -d/ -f1)
-            TOTAL=$(echo "$DEPS" | cut -d/ -f2)
-            if [ "$RESOLVED" = "$TOTAL" ]; then
-              READY_COUNT=$((READY_COUNT + 1))
-            fi
-          fi
-        done
-        if [ "$READY_COUNT" -ge "$EXPECTED_COUNT" ]; then
+        if echo "$AGENTS" | grep -q "slow-leaf-agent" && echo "$AGENTS" | grep -q "parallel-orchestrator-agent"; then
           echo "READY_PHASE_A after $((i * 2))s"
           meshctl list
           exit 0
         fi
         sleep 2
       done
-      echo "ERROR_PHASE_A: only $READY_COUNT/$EXPECTED_COUNT agents ready"
+      echo "ERROR_PHASE_A: agents did not register"
       meshctl list 2>/dev/null || true
       exit 1
     capture: wait_phase_a
@@ -121,38 +110,27 @@ test:
 
   - name: "Phase B: start orchestrator agent with TOOL_WORKERS=8"
     handler: shell
-    command: "meshctl start py-parallel-orchestrator-agent/main.py --env MCP_MESH_HTTP_PORT=3153 --env MCP_MESH_TOOL_WORKERS=8 -d"
+    command: "meshctl start py-parallel-orchestrator-agent/main.py --env MCP_MESH_HTTP_PORT=3153 --env MCP_MESH_TOOL_WORKERS=8 --env MCP_MESH_SETTLE_TIMEOUT=60 -d"
     workdir: /workspace
     capture: start_orch_b
 
-  - name: "Phase B: wait for both agents to register and resolve dependencies"
+  # Liveness only: wait for both agents to REGISTER. The old DEPS-column
+  # (resolved/total) parsing is gone — the settle window
+  # (MCP_MESH_SETTLE_TIMEOUT=60 on the orchestrator) covers dep resolution.
+  - name: "Phase B: wait for both agents to register"
     handler: shell
     workdir: /workspace
     command: |
-      EXPECTED="slow-leaf-agent parallel-orchestrator-agent"
-      EXPECTED_COUNT=2
       for i in $(seq 1 30); do
         AGENTS=$(meshctl list 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' || true)
-        READY_COUNT=0
-        for agent in $EXPECTED; do
-          LINE=$(echo "$AGENTS" | grep -E "^${agent}" || true)
-          if [ -n "$LINE" ]; then
-            DEPS=$(echo "$LINE" | awk '{print $5}')
-            RESOLVED=$(echo "$DEPS" | cut -d/ -f1)
-            TOTAL=$(echo "$DEPS" | cut -d/ -f2)
-            if [ "$RESOLVED" = "$TOTAL" ]; then
-              READY_COUNT=$((READY_COUNT + 1))
-            fi
-          fi
-        done
-        if [ "$READY_COUNT" -ge "$EXPECTED_COUNT" ]; then
+        if echo "$AGENTS" | grep -q "slow-leaf-agent" && echo "$AGENTS" | grep -q "parallel-orchestrator-agent"; then
           echo "READY_PHASE_B after $((i * 2))s"
           meshctl list
           exit 0
         fi
         sleep 2
       done
-      echo "ERROR_PHASE_B: only $READY_COUNT/$EXPECTED_COUNT agents ready"
+      echo "ERROR_PHASE_B: agents did not register"
       meshctl list 2>/dev/null || true
       exit 1
     capture: wait_phase_b

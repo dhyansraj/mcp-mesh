@@ -46,14 +46,10 @@ test:
     workdir: /workspace
     command: meshctl start long-task-provider/main.py -d
 
-  - name: "Wait for provider registration"
-    handler: wait
-    seconds: 12
-
   - name: "Start report-a2a-agent (port 9091)"
     handler: shell
     workdir: /workspace
-    command: meshctl start report-a2a-agent/main.py -d
+    command: meshctl start report-a2a-agent/main.py --env MCP_MESH_SETTLE_TIMEOUT=60 -d
 
   - name: "Wait for A2A surface heartbeat + card cache"
     handler: wait

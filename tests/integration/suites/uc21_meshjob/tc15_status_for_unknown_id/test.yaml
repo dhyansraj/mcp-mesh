@@ -45,9 +45,25 @@ test:
     workdir: /workspace
     command: meshctl start orchestrator-agent/main.py --env MCP_MESH_HTTP_PORT=9103 -d
 
+  # Liveness only: poll for registration (replaces the fixed sleep).
+
   - name: "Wait for registration"
-    handler: wait
-    seconds: 14
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "orchestrator-agent"; then
+          echo "Registered after $((i*1))s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: not registered within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_registration
+    timeout: 90
 
   - name: "Direct registry GET — confirm 404 shape"
     handler: shell

@@ -73,7 +73,7 @@ test:
     workdir: /workspace
     command: |
       cd /workspace/header-api
-      MCP_MESH_PROPAGATE_HEADERS=x-custom-auth,x-tenant-id nohup mvn spring-boot:run -q > /workspace/header-api.log 2>&1 &
+      MCP_MESH_PROPAGATE_HEADERS=x-custom-auth,x-tenant-id MCP_MESH_SETTLE_TIMEOUT=60 nohup mvn spring-boot:run -q > /workspace/header-api.log 2>&1 &
       echo $! > /workspace/header-api.pid
       echo "header-api starting with PID $(cat /workspace/header-api.pid)"
     capture: start_api
@@ -95,11 +95,6 @@ test:
       exit 1
     capture: wait_api
     timeout: 120
-
-  # Wait for @MeshRoute dependency wiring
-  - name: "Wait for dependency wiring"
-    handler: wait
-    seconds: 10
 
   # Verify agents registered
   - name: "Verify agents registered"

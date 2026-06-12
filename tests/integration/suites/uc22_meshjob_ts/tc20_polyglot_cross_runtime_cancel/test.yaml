@@ -61,23 +61,36 @@ test:
     workdir: /workspace
     command: meshctl start long-task-provider-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9110 -d
 
-  - name: "Wait for TS provider"
-    handler: wait
-    seconds: 15
-
   - name: "Start TS consumer (port 9111)"
     handler: shell
     workdir: /workspace
-    command: meshctl start long-task-consumer-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9111 -d
+    command: meshctl start long-task-consumer-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9111 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
 
   - name: "Start Python orchestrator (port 9103)"
     handler: shell
     workdir: /workspace
     command: meshctl start orchestrator-agent/main.py --env MCP_MESH_HTTP_PORT=9103 -d
 
-  - name: "Wait for all 3 + DI"
-    handler: wait
-    seconds: 28
+  # Liveness only: poll for registration (replaces fixed sleeps). Dependency
+  # resolution is covered by the settle window (MCP_MESH_SETTLE_TIMEOUT=60).
+
+  - name: "Wait for all 3 to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "long-task-provider-ts" && echo "$AGENTS" | grep -q "long-task-consumer-ts" && echo "$AGENTS" | grep -q "orchestrator-agent"; then
+          echo "Registered after $((i*1))s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: not registered within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_registration
+    timeout: 90
 
   - name: "Submit 30-second overlong job via TS consumer"
     handler: shell

@@ -111,7 +111,7 @@ test:
   # Start the bonus streaming gateway (port 8080).
   - name: "Start bonus streaming gateway"
     handler: shell
-    command: "meshctl start gateway/main.py --env-file .env -d"
+    command: "meshctl start gateway/main.py --env-file .env --env MCP_MESH_SETTLE_TIMEOUT=60 -d"
     workdir: /workspace
     capture: start_gateway_output
 
@@ -135,12 +135,6 @@ test:
       exit 1
     capture: wait_gateway_output
     timeout: 90
-
-  # Brief settle so the gateway's `trip_planning` dep resolves before the SSE
-  # POST fires (mirrors the uc18/tc01 pattern).
-  - name: "Brief settle for gateway trip_planning dep resolution"
-    handler: wait
-    seconds: 5
 
   # Verify all 13 agents are registered.
   - name: "Verify all agents are registered"

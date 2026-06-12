@@ -71,26 +71,28 @@ test:
   # Start py-mesh-api (API route agent)
   - name: "Start py-mesh-api"
     handler: shell
-    command: "meshctl start py-mesh-api/main.py --env-file .env -d"
+    command: "meshctl start py-mesh-api/main.py --env-file .env --env MCP_MESH_SETTLE_TIMEOUT=60 -d"
     workdir: /workspace
     capture: start_api
 
-  # Wait for both agents to register
+  # Liveness only: wait for both agents to REGISTER. The old "1/1 deps
+  # resolved" grep on the API row is gone — the settle window
+  # (MCP_MESH_SETTLE_TIMEOUT=60 on py-mesh-api) covers route dep resolution.
   - name: "Wait for tool and API agents"
     handler: shell
     workdir: /workspace
     command: |
-      echo "Waiting for py-math-agent and API agent (with deps resolved)..."
+      echo "Waiting for py-math-agent and API agent..."
       for i in $(seq 1 20); do
         AGENTS=$(meshctl list 2>/dev/null || true)
-        if echo "$AGENTS" | grep -q "py-math-agent" && echo "$AGENTS" | grep -q "API" && echo "$AGENTS" | grep "API" | grep -q "1/1"; then
-          echo "Both agents registered and deps resolved after ${i} iterations"
+        if echo "$AGENTS" | grep -q "py-math-agent" && echo "$AGENTS" | grep -q "API"; then
+          echo "Both agents registered after ${i} iterations"
           echo "$AGENTS"
           exit 0
         fi
         sleep 2
       done
-      echo "ERROR: Agents did not register or deps not resolved within 40s"
+      echo "ERROR: Agents did not register within 40s"
       meshctl list 2>/dev/null || true
       exit 1
     capture: wait_agents

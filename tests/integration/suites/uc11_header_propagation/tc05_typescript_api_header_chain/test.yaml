@@ -71,7 +71,7 @@ test:
     workdir: /workspace
     command: |
       cd /workspace/header-api
-      MCP_MESH_PROPAGATE_HEADERS=x-custom-auth,x-tenant-id PORT=3031 nohup npx tsx index.ts > /workspace/header-api.log 2>&1 &
+      MCP_MESH_PROPAGATE_HEADERS=x-custom-auth,x-tenant-id PORT=3031 MCP_MESH_SETTLE_TIMEOUT=60 nohup npx tsx index.ts > /workspace/header-api.log 2>&1 &
       echo $! > /workspace/header-api.pid
       echo "header-api starting with PID $(cat /workspace/header-api.pid)"
     capture: start_api
@@ -93,11 +93,6 @@ test:
       exit 1
     capture: wait_api
     timeout: 90
-
-  # Wait for mesh.route() dependency wiring
-  - name: "Wait for dependency wiring"
-    handler: wait
-    seconds: 10
 
   # Verify echo agent is registered
   - name: "Verify agents registered"

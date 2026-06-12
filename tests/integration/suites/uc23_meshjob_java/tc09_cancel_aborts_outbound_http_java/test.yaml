@@ -115,7 +115,7 @@ test:
   - name: "Start provider (port 9120)"
     handler: shell
     workdir: /workspace
-    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
+    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
 
   - name: "Wait for provider healthy"
     handler: shell
@@ -130,17 +130,37 @@ test:
   - name: "Start consumer (port 9121)"
     handler: shell
     workdir: /workspace
-    command: meshctl start long-task-consumer-java --env MCP_MESH_HTTP_PORT=9121 -d
+    command: meshctl start long-task-consumer-java --env MCP_MESH_HTTP_PORT=9121 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
 
-  - name: "Wait for consumer + DI"
+  # Liveness only: wait until all named agents are registered AND healthy
+  # (Java startup is slow and can flap). The old dependencies_resolved ==
+  # total_dependencies condition is gone — the settle window
+  # (MCP_MESH_SETTLE_TIMEOUT=60 on provider + consumer) covers DI resolution.
+  - name: "Wait for all three agents healthy"
     handler: shell
     workdir: /workspace
     command: |
       for i in $(seq 1 60); do
-        ROW=$(curl -s http://localhost:8000/agents | jq -c '.agents[] | select(.name=="long-task-consumer-java")')
-        S=$(echo "$ROW" | jq -r '.status'); R=$(echo "$ROW" | jq -r '.dependencies_resolved'); T=$(echo "$ROW" | jq -r '.total_dependencies')
-        [ "$S" = "healthy" ] && [ "$R" = "$T" ] && [ "$T" != "0" ] && [ "$T" != "null" ] && exit 0; sleep 2
-      done; exit 1
+        AGENTS=$(curl -s http://localhost:8000/agents)
+        OK=1
+        S=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="downstream-sleeper-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] || OK=0
+        S=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] || OK=0
+        S=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] || OK=0
+        if [ "$OK" = "1" ]; then
+          echo "all agents healthy after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: agents not healthy within 120s"
+      meshctl logs downstream-sleeper-java 2>&1 | tail -50 || true
+      meshctl logs long-task-provider-java 2>&1 | tail -50 || true
+      meshctl logs long-task-consumer-java 2>&1 | tail -50 || true
+      curl -s http://localhost:8000/agents | jq '.agents[] | {name, status, last_seen}'
+      exit 1
     timeout: 150
 
   - name: "Submit job that calls downstream"

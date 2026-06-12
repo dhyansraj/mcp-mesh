@@ -69,7 +69,7 @@ test:
   - name: "Start header-relay-java agent"
     handler: shell
     workdir: /workspace
-    command: "meshctl start /workspace/header-relay-java --env 'MCP_MESH_PROPAGATE_HEADERS=x-audit-*' -d"
+    command: "meshctl start /workspace/header-relay-java --env 'MCP_MESH_PROPAGATE_HEADERS=x-audit-*' --env MCP_MESH_SETTLE_TIMEOUT=60 -d"
     capture: start_relay
 
   # Wait for relay agent to register
@@ -89,11 +89,6 @@ test:
       exit 1
     capture: wait_relay
     timeout: 120
-
-  # Wait for dependency wiring
-  - name: "Wait for dependency wiring"
-    handler: wait
-    seconds: 10
 
   # Verify both agents are running
   - name: "Verify both agents registered"

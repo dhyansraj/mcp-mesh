@@ -48,14 +48,10 @@ test:
     workdir: /workspace
     command: meshctl start long-task-provider/main.py -d
 
-  - name: "Wait for provider registration"
-    handler: wait
-    seconds: 12
-
   - name: "Start producer-report-agent-ts (port 9091)"
     handler: shell
     workdir: /workspace
-    command: meshctl start producer-report-agent-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9091 -d
+    command: meshctl start producer-report-agent-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9091 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
 
   - name: "Wait for TS producer to be healthy + a2a"
     handler: shell

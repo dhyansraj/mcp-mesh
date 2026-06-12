@@ -61,14 +61,10 @@ test:
     workdir: /workspace
     command: meshctl start system-agent/main.py --env MCP_MESH_HTTP_PORT=9100 -d
 
-  - name: "Wait for system-agent registration"
-    handler: wait
-    seconds: 12
-
   - name: "Start producer-date-agent-java (port 9090)"
     handler: shell
     workdir: /workspace
-    command: meshctl start producer-date-agent-java --env MCP_MESH_HTTP_PORT=9090 -d
+    command: meshctl start producer-date-agent-java --env MCP_MESH_HTTP_PORT=9090 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
 
   - name: "Wait for Java producer to be healthy + a2a"
     handler: shell
@@ -92,11 +88,28 @@ test:
   - name: "Start consumer-date-agent (port 9201)"
     handler: shell
     workdir: /workspace
-    command: meshctl start consumer-date-agent/main.py -d
+    command: meshctl start consumer-date-agent/main.py --env MCP_MESH_SETTLE_TIMEOUT=60 -d
 
-  - name: "Wait for consumer registration + DI resolution"
-    handler: wait
-    seconds: 18
+  # Liveness only: poll for consumer registration (replaces the fixed sleep).
+  # DI resolution is covered by the settle window (MCP_MESH_SETTLE_TIMEOUT=60).
+
+  - name: "Wait for consumer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "date-consumer"; then
+          echo "Registered after $((i*1))s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: not registered within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_consumer
+    timeout: 90
 
   - name: "Verify all 3 agents registered"
     handler: shell

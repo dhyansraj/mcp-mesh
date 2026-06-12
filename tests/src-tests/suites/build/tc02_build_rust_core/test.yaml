@@ -51,7 +51,12 @@ test:
       echo "Building with maturin inside container (clean build)..."
       # Optimized: Only copy required files instead of entire repo
       # Rust core (Python) needs: Cargo.toml, Cargo.lock, src/, pyproject.toml, python/, build.rs
+      # CARGO_HTTP_MULTIPLEXING=false + CARGO_NET_RETRY: crates.io downloads
+      # from this host intermittently die mid-transfer; disabling HTTP/2
+      # multiplexing is the canonical cargo remedy (see tc04a for history).
       docker run --rm \
+        -e CARGO_HTTP_MULTIPLEXING=false \
+        -e CARGO_NET_RETRY=10 \
         -v "$SOURCE_ABS:/src-host:ro" \
         -v "$OUTPUT_ABS:/out" \
         ${config.build.image} \

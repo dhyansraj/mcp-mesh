@@ -33,29 +33,45 @@ test:
       cp -r /uc-artifacts/py-calculator-agent /workspace/
     capture: copy_output
 
-  # Start math agent first (provider of add, subtract, multiply, divide)
+  # Start math agent (provider of add, subtract, multiply, divide). No
+  # registration wait before starting the consumer: the consumer's settle
+  # window covers dependency arrival order.
   - name: "Start math agent (provider)"
     handler: shell
     command: "meshctl start py-math-agent/main.py -d"
     workdir: /workspace
     capture: start_math
 
-  # Wait for math agent to register
-  - name: "Wait for math agent to register"
-    handler: wait
-    seconds: 8
-
-  # Start calculator agent (consumer with 4 dependencies)
+  # Start calculator agent (consumer with 4 dependencies).
+  # MCP_MESH_SETTLE_TIMEOUT=60 (settling-window dependency grace, PR #1200):
+  # calls arriving before the 4 math_operations deps resolve are held until
+  # resolution lands — the fixed 8s+10s sleeps are gone.
   - name: "Start calculator agent (consumer)"
     handler: shell
-    command: "meshctl start py-calculator-agent/main.py -d"
+    command: "meshctl start py-calculator-agent/main.py --env MCP_MESH_SETTLE_TIMEOUT=60 -d"
     workdir: /workspace
     capture: start_calculator
 
-  # Wait for calculator to register and wire
-  - name: "Wait for calculator to wire"
-    handler: wait
-    seconds: 10
+  # Liveness only: wait for both agents to REGISTER (meshctl call routes via
+  # the registry). No dep-resolution wait.
+  - name: "Wait for both agents to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for both agents to register..."
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "py-math-agent" && echo "$AGENTS" | grep -q "py-calculator-agent"; then
+          echo "Both agents registered after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: agents did not register within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_registration
+    timeout: 90
 
   # Verify both agents are registered
   - name: "List agents"

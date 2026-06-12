@@ -48,14 +48,10 @@ test:
     workdir: /workspace
     command: meshctl start system-agent/main.py --env MCP_MESH_HTTP_PORT=9100 -d
 
-  - name: "Wait for system-agent registration"
-    handler: wait
-    seconds: 12
-
   - name: "Start producer-date-agent-ts (port 9090)"
     handler: shell
     workdir: /workspace
-    command: meshctl start producer-date-agent-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9090 -d
+    command: meshctl start producer-date-agent-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9090 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
 
   # TS cold-start ~5-10s for tsx; the fast-sweep registry could mark
   # the agent unhealthy if the first heartbeat is delayed past
@@ -71,13 +67,14 @@ test:
         RESP=$(curl -fsS --max-time 10 http://localhost:8000/agents 2>/dev/null || echo "")
         STATUS=$(echo "$RESP" | jq -r '.agents[] | select(.name=="date-a2a-agent") | .status' 2>/dev/null || echo "")
         TYPE=$(echo "$RESP" | jq -r '.agents[] | select(.name=="date-a2a-agent") | .agent_type' 2>/dev/null || echo "")
-        if [ "$STATUS" = "healthy" ] && [ "$TYPE" = "a2a" ]; then
+        SYS=$(echo "$RESP" | jq -r '.agents[] | select(.name=="system-agent") | .status' 2>/dev/null || echo "")
+        if [ "$STATUS" = "healthy" ] && [ "$TYPE" = "a2a" ] && [ -n "$SYS" ]; then
           echo "TS producer healthy after ${i}x2s (agent_type=a2a)"
           exit 0
         fi
         sleep 2
       done
-      echo "ERROR: TS producer not healthy as agent_type=a2a within 120s (last status='$STATUS' type='$TYPE')"
+      echo "ERROR: TS producer not healthy as agent_type=a2a within 120s (last status='$STATUS' type='$TYPE' system-agent='$SYS')"
       meshctl logs producer-date-agent-ts 2>&1 | tail -120 || true
       exit 1
     timeout: 150

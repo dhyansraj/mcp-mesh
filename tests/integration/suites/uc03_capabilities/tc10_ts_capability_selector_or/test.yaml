@@ -44,17 +44,31 @@ test:
     command: "meshctl start ts-fast-provider/src/index.ts -d"
     workdir: /workspace
     capture: start_fast_only
-  - name: "Wait for fast provider registration"
-    handler: wait
-    seconds: 15
   - name: "Test 1: Start consumer"
     handler: shell
-    command: "meshctl start ts-tag-consumer/src/index.ts -d"
+    command: "meshctl start ts-tag-consumer/src/index.ts --env MCP_MESH_SETTLE_TIMEOUT=60 -d"
     workdir: /workspace
     capture: start_consumer_1
+  # Liveness only: poll for registration (replaces fixed sleeps). Dependency
+  # resolution is covered by the settle window (MCP_MESH_SETTLE_TIMEOUT=60).
+
   - name: "Wait for consumer registration"
-    handler: wait
-    seconds: 15
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "ts-fast-provider" && echo "$AGENTS" | grep -q "ts-tag-consumer"; then
+          echo "Registered after $((i*1))s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: not registered within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_consumer_1
+    timeout: 90
   - name: "Test 1: Call fetch_required with only fast available"
     handler: shell
     command: |
@@ -83,17 +97,31 @@ test:
     command: "meshctl start ts-accurate-provider/src/index.ts -d"
     workdir: /workspace
     capture: start_accurate_only
-  - name: "Wait for accurate provider registration"
-    handler: wait
-    seconds: 15
   - name: "Test 2: Start consumer"
     handler: shell
-    command: "meshctl start ts-tag-consumer/src/index.ts -d"
+    command: "meshctl start ts-tag-consumer/src/index.ts --env MCP_MESH_SETTLE_TIMEOUT=60 -d"
     workdir: /workspace
     capture: start_consumer_2
+  # Liveness only: poll for registration (replaces fixed sleeps). Dependency
+  # resolution is covered by the settle window (MCP_MESH_SETTLE_TIMEOUT=60).
+
   - name: "Wait for consumer registration"
-    handler: wait
-    seconds: 15
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "ts-accurate-provider" && echo "$AGENTS" | grep -q "ts-tag-consumer"; then
+          echo "Registered after $((i*1))s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: not registered within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_consumer_2
+    timeout: 90
   - name: "Test 2: Call fetch_required with only accurate available"
     handler: shell
     command: |
@@ -122,17 +150,31 @@ test:
     command: "meshctl start ts-fast-provider/src/index.ts ts-accurate-provider/src/index.ts -d"
     workdir: /workspace
     capture: start_both
-  - name: "Wait for providers registration"
-    handler: wait
-    seconds: 15
   - name: "Test 3: Start consumer"
     handler: shell
-    command: "meshctl start ts-tag-consumer/src/index.ts -d"
+    command: "meshctl start ts-tag-consumer/src/index.ts --env MCP_MESH_SETTLE_TIMEOUT=60 -d"
     workdir: /workspace
     capture: start_consumer_3
+  # Liveness only: poll for registration (replaces fixed sleeps). Dependency
+  # resolution is covered by the settle window (MCP_MESH_SETTLE_TIMEOUT=60).
+
   - name: "Wait for consumer registration"
-    handler: wait
-    seconds: 15
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "ts-fast-provider" && echo "$AGENTS" | grep -q "ts-accurate-provider" && echo "$AGENTS" | grep -q "ts-tag-consumer"; then
+          echo "Registered after $((i*1))s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: not registered within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_consumer_3
+    timeout: 90
   - name: "Test 3: Call fetch_required with both available"
     handler: shell
     command: |

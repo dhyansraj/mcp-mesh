@@ -57,25 +57,6 @@ test:
       echo "Java greeter starting"
     capture: start_greeter
 
-  # Wait for greeter to register
-  - name: "Wait for greeter registration"
-    handler: shell
-    workdir: /workspace
-    command: |
-      echo "Waiting for Java greeter..."
-      for i in $(seq 1 30); do
-        if meshctl list 2>/dev/null | grep -q "greeter"; then
-          echo "Greeter registered after $((i*3))s"
-          exit 0
-        fi
-        sleep 3
-      done
-      echo "ERROR: Greeter did not register within 90s"
-      meshctl logs greeter 2>/dev/null | tail -30 || true
-      exit 1
-    capture: wait_greeter
-    timeout: 120
-
   # Start Java employee service (provides get_employee + employee_count capabilities)
   - name: "Start Java employee service"
     handler: shell
@@ -85,51 +66,36 @@ test:
       echo "Java employee service starting"
     capture: start_employee
 
-  # Wait for employee service to register
-  - name: "Wait for employee service registration"
-    handler: shell
-    workdir: /workspace
-    command: |
-      echo "Waiting for Java employee service..."
-      for i in $(seq 1 30); do
-        if meshctl list 2>/dev/null | grep -q "employee"; then
-          echo "Employee service registered after $((i*3))s"
-          exit 0
-        fi
-        sleep 3
-      done
-      echo "ERROR: Employee service did not register within 90s"
-      meshctl logs employee 2>/dev/null | tail -30 || true
-      exit 1
-    capture: wait_employee
-    timeout: 120
-
   # Start REST API consumer
   - name: "Start REST API consumer"
     handler: shell
     workdir: /workspace
     command: |
-      meshctl start /workspace/java-rest-api -d
+      meshctl start /workspace/java-rest-api --env MCP_MESH_SETTLE_TIMEOUT=60 -d
       echo "REST API consumer starting"
     capture: start_rest_api
 
-  # Wait for REST API to register as API type
-  - name: "Wait for REST API registration"
+  # Liveness only: wait for all three agents to REGISTER (the REST API
+  # registers as API type). The old serialized start ordering existed only
+  # for dependency resolution — the settle window (MCP_MESH_SETTLE_TIMEOUT=60
+  # on the REST API) covers that now.
+  - name: "Wait for all agents to register"
     handler: shell
     workdir: /workspace
     command: |
-      echo "Waiting for REST API consumer (API type)..."
+      echo "Waiting for greeter, employee service and REST API (API type)..."
       for i in $(seq 1 30); do
-        if meshctl list 2>/dev/null | grep -q "API"; then
-          echo "REST API registered as API type after $((i*3))s"
+        LIST=$(meshctl list 2>/dev/null || true)
+        if echo "$LIST" | grep -q "greeter" && echo "$LIST" | grep -q "employee" && echo "$LIST" | grep -q "API"; then
+          echo "All agents registered after $((i*3))s"
           exit 0
         fi
         sleep 3
       done
-      echo "ERROR: REST API consumer did not register as API type within 90s"
+      echo "ERROR: agents did not register within 90s"
       meshctl logs 2>/dev/null | tail -30 || true
       exit 1
-    capture: wait_rest_api
+    capture: wait_registration
     timeout: 120
 
   # Wait for Spring Boot to fully start serving HTTP
