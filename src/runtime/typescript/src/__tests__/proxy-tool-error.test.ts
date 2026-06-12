@@ -238,12 +238,11 @@ describe("callMcpTool abort mid-SSE-read span accounting", () => {
     });
   });
 
-  it("still publishes the SSE-reader error span for genuine tool errors", async () => {
+  it("still publishes exactly one error span for genuine SSE tool errors", async () => {
     // Counterpart guard: the abort fix must not stop non-abort SSE-reader
-    // errors from publishing their error span. The first published span
-    // carries the precise tool-error message, and nothing is mislabeled
-    // "timeout". (A generic post-loop span on exhausted retries is
-    // pre-existing JSON-path behavior, deliberately not asserted on.)
+    // errors from being accounted. Since #1202, the post-loop aggregate is
+    // the single publisher: one span, carrying the precise tool-error
+    // message, nothing mislabeled "timeout".
     mockFetch(() => sseResponse([{ result: TOOL_ERROR_RESULT }]));
 
     await expect(
@@ -253,11 +252,193 @@ describe("callMcpTool abort mid-SSE-read span accounting", () => {
     ).rejects.toThrow("MCP tool error: boom: division by zero");
 
     const calls = vi.mocked(publishTraceSpan).mock.calls;
-    expect(calls.length).toBeGreaterThanOrEqual(1);
+    expect(calls.length).toBe(1);
     expect(calls[0][0]).toMatchObject({
       success: false,
       error: "MCP tool error: boom: division by zero",
     });
     expect(calls.some((c) => c[0].error === "timeout")).toBe(false);
+  });
+});
+
+describe("callMcpTool per-call span accounting (#1202)", () => {
+  let originalFetch: typeof fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    vi.mocked(publishTraceSpan).mockClear();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it("single failed call (maxAttempts=1) publishes exactly ONE error span", async () => {
+    // Regression: the JSON-RPC error branch used to publish a per-attempt
+    // error span AND the post-loop aggregate published a second one — two
+    // span records sharing one spanId for a single failed call.
+    mockFetch(() => jsonResponse({ error: { code: -32603, message: "internal failure" } }));
+
+    await expect(
+      runWithTraceContext({ traceId: "trace-1202-a", parentSpanId: null }, () =>
+        callMcpTool(ENDPOINT, TOOL, { a: 1 }, DEFAULT_CALL_OPTIONS, CAPABILITY)
+      )
+    ).rejects.toThrow("MCP error: internal failure");
+
+    expect(publishTraceSpan).toHaveBeenCalledTimes(1);
+    const span = vi.mocked(publishTraceSpan).mock.calls[0][0];
+    expect(span).toMatchObject({
+      spanId: "span-mock",
+      success: false,
+      error: "MCP error: internal failure",
+    });
+    // Single-attempt spans don't carry attempts info
+    expect(span.callAttempts).toBeUndefined();
+    // The response body size (formerly only on the per-attempt span) is
+    // folded into the aggregate.
+    expect(span.responseBytes).toBeGreaterThan(0);
+  });
+
+  it("exhausted retries (maxAttempts=3) publish exactly ONE error span carrying attempts info", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ result: TOOL_ERROR_RESULT }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(
+      runWithTraceContext({ traceId: "trace-1202-b", parentSpanId: null }, () =>
+        callMcpTool(
+          ENDPOINT,
+          TOOL,
+          { a: 1 },
+          { ...DEFAULT_CALL_OPTIONS, maxAttempts: 3, retryDelay: 1 },
+          CAPABILITY
+        )
+      )
+    ).rejects.toThrow("MCP tool error: boom: division by zero");
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(publishTraceSpan).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(publishTraceSpan).mock.calls[0][0]).toMatchObject({
+      success: false,
+      error: "MCP tool error: boom: division by zero",
+      callAttempts: 3,
+    });
+  });
+
+  it("success after retry publishes exactly ONE success span (attempts noted, no error spans)", async () => {
+    let call = 0;
+    const fetchMock = vi.fn(async () => {
+      call += 1;
+      return call === 1
+        ? jsonResponse({ error: { code: -32603, message: "transient failure" } })
+        : jsonResponse({ result: { content: [{ type: "text", text: "fine" }] } });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const value = await runWithTraceContext(
+      { traceId: "trace-1202-c", parentSpanId: null },
+      () =>
+        callMcpTool(
+          ENDPOINT,
+          TOOL,
+          { a: 1 },
+          { ...DEFAULT_CALL_OPTIONS, maxAttempts: 2, retryDelay: 1 },
+          CAPABILITY
+        )
+    );
+
+    expect(value).toBe("fine");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(publishTraceSpan).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(publishTraceSpan).mock.calls[0][0]).toMatchObject({
+      success: true,
+      error: null,
+      callAttempts: 2,
+    });
+  });
+
+  it("first-attempt success publishes one success span without attempts info", async () => {
+    mockFetch(() => jsonResponse({ result: { content: [{ type: "text", text: "fine" }] } }));
+
+    const value = await runWithTraceContext(
+      { traceId: "trace-1202-d", parentSpanId: null },
+      () => callMcpTool(ENDPOINT, TOOL, { a: 1 }, DEFAULT_CALL_OPTIONS, CAPABILITY)
+    );
+
+    expect(value).toBe("fine");
+    expect(publishTraceSpan).toHaveBeenCalledTimes(1);
+    const span = vi.mocked(publishTraceSpan).mock.calls[0][0];
+    expect(span).toMatchObject({ success: true, error: null });
+    expect(span.callAttempts).toBeUndefined();
+  });
+
+  it("timeout on attempt 2 (after a retried generic failure) publishes ONE timeout span with callAttempts: 2", async () => {
+    // The abort/timeout path is non-retryable and publishes immediately from
+    // the catch — but when it strikes on a later attempt, its span must still
+    // carry the total attempts the call burned, not look like a first-try
+    // timeout.
+    let call = 0;
+    const fetchMock = vi.fn(async () => {
+      call += 1;
+      if (call === 1) {
+        return jsonResponse({ error: { code: -32603, message: "transient failure" } });
+      }
+      throw new DOMException("This operation was aborted", "AbortError");
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(
+      runWithTraceContext({ traceId: "trace-1202-e", parentSpanId: null }, () =>
+        callMcpTool(
+          ENDPOINT,
+          TOOL,
+          { a: 1 },
+          { ...DEFAULT_CALL_OPTIONS, maxAttempts: 3, retryDelay: 1 },
+          CAPABILITY
+        )
+      )
+    ).rejects.toThrow(`MCP call timed out after ${DEFAULT_CALL_OPTIONS.timeout}ms`);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(publishTraceSpan).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(publishTraceSpan).mock.calls[0][0]).toMatchObject({
+      success: false,
+      error: "timeout",
+      callAttempts: 2,
+    });
+  });
+
+  it("SSE success after retry publishes exactly ONE success span with callAttempts: 2", async () => {
+    // The SSE success branch has its own publish site; it must carry the
+    // same attempts accounting as the JSON branch.
+    let call = 0;
+    const fetchMock = vi.fn(async () => {
+      call += 1;
+      return call === 1
+        ? jsonResponse({ error: { code: -32603, message: "transient failure" } })
+        : sseResponse([{ result: { content: [{ type: "text", text: "fine" }] } }]);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const value = await runWithTraceContext(
+      { traceId: "trace-1202-f", parentSpanId: null },
+      () =>
+        callMcpTool(
+          ENDPOINT,
+          TOOL,
+          { a: 1 },
+          { ...DEFAULT_CALL_OPTIONS, maxAttempts: 2, retryDelay: 1 },
+          CAPABILITY
+        )
+    );
+
+    expect(value).toBe("fine");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(publishTraceSpan).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(publishTraceSpan).mock.calls[0][0]).toMatchObject({
+      success: true,
+      error: null,
+      callAttempts: 2,
+    });
   });
 });
