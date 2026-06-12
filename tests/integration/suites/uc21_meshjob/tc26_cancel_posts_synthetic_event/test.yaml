@@ -6,9 +6,13 @@
 # ["work", "cancelled"], ...)``. Consumer:
 #
 #   1. submits the job
-#   2. posts a 'work' event with payload ``{"item": 1}``
-#   3. sleeps so producer consumes it
-#   4. calls ``proxy.cancel(reason="external_stop_requested")``
+#   2. polls proxy.status() until owner_instance_id is set — i.e. a
+#      producer replica has CLAIMED the job (deterministic gate; a
+#      fixed 2s sleep here used to race the producer's claim poll,
+#      whose idle backoff caps at 5s — issue #1207)
+#   3. posts a 'work' event with payload ``{"item": 1}``
+#   4. sleeps so producer consumes it
+#   5. calls ``proxy.cancel(reason="external_stop_requested")``
 #
 # Inside the registry's ``CancelJob`` handler the row transitions to
 # ``status=cancelled`` AND the handler then posts a synthetic
@@ -69,18 +73,35 @@ test:
     workdir: /workspace
     command: meshctl start long-task-provider/main.py --env MCP_MESH_HTTP_PORT=9100 -d
 
-  - name: "Wait for provider registration"
-    handler: wait
-    seconds: 12
-
   - name: "Start consumer (port 9101)"
     handler: shell
     workdir: /workspace
-    command: meshctl start long-task-consumer/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+    command: meshctl start long-task-consumer/main.py --env MCP_MESH_HTTP_PORT=9101 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
 
-  - name: "Wait for consumer + DI resolution"
-    handler: wait
-    seconds: 18
+  # Liveness only: wait for both agents to REGISTER (meshctl call routes via
+  # the registry). Dependency resolution is covered by the settle window —
+  # no fixed dep-resolution sleep needed. (This migration was reverted once
+  # in #1209 because the fixture's fixed 2s pre-cancel wait raced the
+  # producer's claim tick — #1207; the fixture now gates on
+  # owner_instance_id, so the warm-up sleeps are safe to drop.)
+  - name: "Wait for both agents to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for both agents to register..."
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "long-task-provider" && echo "$AGENTS" | grep -q "long-task-consumer"; then
+          echo "Both agents registered after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: agents did not register within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_registration
+    timeout: 90
 
   - name: "Call commission_cancel_via_event — submit, post work, cancel"
     handler: shell

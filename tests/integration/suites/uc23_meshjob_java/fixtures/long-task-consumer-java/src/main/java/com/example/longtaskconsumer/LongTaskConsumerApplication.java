@@ -623,7 +623,14 @@ public class LongTaskConsumerApplication {
             // event in the job's event log.
             long claimDeadline = System.currentTimeMillis() + 30_000L;
             while (true) {
-                Map<String, Object> claimStatus = proxy.status();
+                Map<String, Object> claimStatus;
+                try {
+                    claimStatus = proxy.status();
+                } catch (RuntimeException e) {
+                    // Transient status-read failures (registry hiccup) are
+                    // tolerated within the budget — keep polling.
+                    claimStatus = null;
+                }
                 Object owner = claimStatus != null
                     ? claimStatus.get("owner_instance_id") : null;
                 if (owner != null && !owner.toString().isEmpty()) {

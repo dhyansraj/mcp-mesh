@@ -156,12 +156,16 @@ test:
         case "$STATUS" in
           failed|cancelled)
             echo "ERROR: job reached terminal status=$STATUS (expected completed)"
+            echo "=== full status JSON ==="
+            meshctl call "${AGENT}:__mesh_job_status" "{\"job_id\":\"${JOB_ID}\"}" --raw 2>&1 || true
             exit 1
             ;;
         esac
         sleep 1
       done
       echo "ERROR: job not completed within 45s (last status=$STATUS)"
+      echo "=== full status JSON ==="
+      meshctl call "${AGENT}:__mesh_job_status" "{\"job_id\":\"${JOB_ID}\"}" --raw 2>&1 || true
       exit 1
     timeout: 90
 

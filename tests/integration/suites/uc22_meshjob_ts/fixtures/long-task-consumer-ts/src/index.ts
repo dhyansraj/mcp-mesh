@@ -545,7 +545,43 @@ agent.addTool({
     }
     const proxy = await runUntilCancel.submit({}, { maxDuration: 60 });
     const jobId = (proxy as { jobId?: string }).jobId ?? "";
-    await sleepMs(2000);
+    if (!proxy.status) {
+      return { error: "submitter returned a proxy without .status()" };
+    }
+    // Deterministic claim gate (was a fixed 2s sleep): wait until a
+    // producer replica has CLAIMED the job before posting 'work' and
+    // cancelling below. Pull-mode rows are created with
+    // owner_instance_id = NULL; the registry sets it on /jobs/claim.
+    // The producer's idle claim poll backs off to a 5s cap, so the old
+    // fixed 2s (+1s pre-cancel) budget could fire the cancel BEFORE the
+    // claim — the producer then never ran run_until_cancel and the
+    // synthetic 'cancelled' event went unobserved (issue #1207). Events
+    // posted after the claim are safe: a fresh JobController's
+    // recvEvent replays from the first event in the job's event log.
+    const claimDeadline = Date.now() + 30_000;
+    for (;;) {
+      let claimStatus: Record<string, unknown> | null = null;
+      try {
+        claimStatus = (await proxy.status()) as Record<string, unknown>;
+      } catch {
+        // Transient status-read failures (registry hiccup) are
+        // tolerated within the budget — keep polling.
+        claimStatus = null;
+      }
+      const owner = claimStatus?.owner_instance_id;
+      if (owner !== null && owner !== undefined && owner !== "") {
+        break;
+      }
+      if (Date.now() >= claimDeadline) {
+        return {
+          error:
+            "job never claimed within 30s — cannot exercise cancel-via-event",
+          job_id: jobId,
+          last_status: claimStatus,
+        };
+      }
+      await sleepMs(300);
+    }
     const workReceipt = await mesh.jobs.postEvent(jobId, "work", { item: 1 });
     // Give the producer a moment to consume the 'work' event before we
     // fire the cancel. This makes the two events strictly ordered in
