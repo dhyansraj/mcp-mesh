@@ -1,6 +1,98 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.4.0...HEAD)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.5.0...HEAD)
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.4.0...v2.5.0)
+
+## v2.5.0 (2026-06-12)
+
+Operational hardening across the whole stack — settling-window dependency grace, a coordinated five-codebase audit, and Helm chart maturity.
+
+v2.4 matured the `@mesh.llm` contract; v2.5 hardens the platform around it. The headline is the settling-window dependency grace: calls arriving during agent startup wait for topology to settle instead of failing instantly on a not-yet-resolved dependency — across all three runtimes. Around it, a coordinated audit of all five codebases (Python, TypeScript, Java, Rust core, Go registry/CLI) closed a long tail of concurrency, lifecycle, and observability holes, and a five-part Helm batch brings the charts to a production baseline: generated credentials, Pod Security Standards `restricted`, global datastore config, and air-gapped installs.
+
+### ⏳ Settling-window dependency grace (#1200, #1212)
+
+A call arriving while an agent's topology is still settling no longer fails instantly on a declared-but-unresolved dependency. The DI wrapper waits — event-driven, bounded by the remaining settle window — for the dependency to resolve, then proceeds with the real proxy; on budget expiry it proceeds with `None`/null **exactly as before**. User code never observes a pending state: parameters stay binary (real proxy or `None`), so the defensive `if dep:` idiom is untouched.
+
+- **`MCP_MESH_SETTLE_TIMEOUT`** (float seconds, default `20`, `0` disables) bounds the window. The agent is unsettled from the first dependency declaration until all declared deps have resolved once or the window expires — then permanently settled: zero steady-state overhead and byte-identical fail-fast behavior after startup.
+- **All three runtimes**, each in native idiom: Python per-dep `threading.Event` + loop-native `asyncio.Event` mirrors; TypeScript per-dep deferred promises with unref'd timers across tool, route, and claim-handler paths; Java per-consumer-slot latches.
+- **Streaming paths hold the grace too** (#1212): Python `@mesh.route` streaming routes now build their SSE endpoint at decoration time (like non-streaming routes always did), eliminating a startup-ordering window where an early request could hit the plain wrapper and 500. Unsupported stream element annotations (e.g. `Stream[bytes]` — async iterators over non-`str`) now fail at decoration with a clear error instead of silently becoming a buffered non-streaming route.
+- **Caller-supplied deps never wait** (the documented mock contract) — and TypeScript's `setMockDependency` is now actually implemented (it had been documented but absent from the SDK).
+- Also fixed en route (#1200): a pre-existing Java injection corruption where a MeshJob-first dependency list wrote the job proxy into the wrong slot.
+
+### 🔬 Prescriptive DI diagnostics + opt-in strict mode (#1199, Python)
+
+DI keeps its permissive posture (soft-fail, warn, life goes on) — but the warnings now teach: every ambiguous or skipped injection configuration warns with what positional pairing selected, each skipped parameter with its resolved-type reason, and a copy-pasteable fix. **`MCP_MESH_STRICT_DI=true`** promotes exactly that ambiguity/skip class to a `StrictDIError` at decoration/startup time for teams that want rigor. Injection semantics are byte-identical in both modes — pairing is by declaration order, never by parameter name.
+
+### 🧹 Automatic trace retention (#1216)
+
+The `mesh:trace` Redis stream no longer grows unboundedly (the docs previously told operators to run manual `XTRIM`). **`MCP_MESH_TRACE_RETENTION`** (duration, default `24h`, `0` disables) drives a time-based trim on every consumer (re)connect — a registry returning from an outage immediately shears the backlog — and every 5 minutes thereafter. The correlator's completed-trace buffer is now age-bounded with the same duration. Exposed in Helm as `registry.observability.distributedTracing.retention`. The stream is a transport buffer; long-term queryable history remains Tempo's retention.
+
+### 📋 `meshctl list` supersession view (#1198)
+
+Watch-driven dev loops re-register agents under new instance ids, and the lingering prior instances read as alarming noise. `meshctl list` now shows one row per declared agent name: superseded instances collapse into a dim `(+N superseded)` suffix, the registry header splits its count (`3 healthy, 1 unhealthy, 2 superseded`), and genuinely-down agents surface via a red footer clause (`1 agent down (use --all)`). A down instance whose capability blocks a live agent's unresolved dependency is promoted to a named red row. The grep contract is preserved — default rows remain healthy-only — and `--json` output is unchanged in both modes.
+
+### ⎈ Helm chart maturity (#1184, #1185, #1187–#1190, #1192)
+
+A five-part batch bringing all nine charts to a production baseline. Default renders are byte-identical except where called out in the upgrade notes.
+
+- **Single registry Redis endpoint + external-datastore TLS/auth** (#1184): `registry.redis.{host,port,password,existingSecret,tls}` is the one source (the trace stream shares it by construction); `registry.database.sslmode` with optional CA secret, URL-encoded DSN userinfo, `rediss://` with auth. Also fixes `registry.database.existingSecret`, which previously set env vars the binary never read and silently fell back to ephemeral sqlite.
+- **Global datastores** (#1185): `global.postgres.*` / `global.redis.*` declared once, inherited by registry, UI, and agent charts with explicit > global > default precedence; template-time guards reject impossible combos (e.g. credentials on the bundled no-AUTH redis).
+- **Generated credentials** (#1187): no chart renders a known weak password by default. Bundled postgres generates a `<fullname>-credentials` secret (lookup-reuse across upgrades, kept on uninstall); Grafana gets a chart-owned generated admin secret; `existingSecret` is supported everywhere; NOTES print the retrieval commands.
+- **Pod Security Standards `restricted`** (#1188): all charts pass `restricted` by default, validated against a live enforcing namespace — non-root postgres, `readOnlyRootFilesystem` wherever feasible, seccomp + dropped capabilities. Enforced going forward by `scripts/check_helm_pss.py` in CI. Also fixes the agent's pod `securityContext`, which was gated behind the long-removed PSP flag and never rendered.
+- **Air-gap + registry HA** (#1189): `global.imageRegistry` prefixes all 8 image references (including the previously hardcoded busybox init image); `global.imagePullSecrets` merges into every pod spec; registry gains topology spread defaults and a render-gated PodDisruptionBudget; HPA or `replicaCount > 1` with sqlite fails at template time.
+- **Dead-config cleanup with guarded removals** (#1190, #1192): keys that silently no-op'd are removed; user-set values for removed keys fail the render with a migration message, while values files copied from old shipped defaults render clean. The registry TLS example's values nesting is fixed (it was silently ignored by the umbrella) and `security.tls.secretName` is the consumed key.
+
+### 🛡️ Cross-runtime audit fixes
+
+A coordinated audit across all five codebases (#1162–#1166), each area closed by an independently reviewed PR, plus adjacent fixes from the same campaign.
+
+- **MeshJob lease enforcement** (#1168, registry): `lease_expires_at` was written at claim time but never read — a wedged handler kept a job in `working` forever. Expired-lease jobs are now reclaimed (reset while attempts remain, else failed), and every accepted non-terminal delta extends the lease by the claim window, with guarded updates so a delta racing a reclaim cannot extend a lease the instance no longer holds.
+- **Phantom ports eliminated** (#1197, all runtimes): no runtime registers a port it did not bind and prove it can serve. Python pre-binds the server socket before the heartbeat starts and falls back to a kernel-assigned port on conflict (previously a port conflict produced a permanently-registered phantom endpoint); TypeScript resolves a bindable port before registration; Java's already-correct convergence is pinned by test.
+- **Go registry/CLI** (#1177): health-monitor unhealthy transitions use guarded conditional updates so a concurrent heartbeat wins instead of being overwritten; dependency-resolution rows flip to `unavailable` immediately on provider unregister/unhealthy (previously up to 1h stale); the registry `/proxy/*` now streams bodies with per-chunk flush — **SSE through the registry proxy works**; `meshctl logs -f` survives log rotation.
+- **Python** (#1171, #1172): positional injection reads the original-function signature consistently, fixing `IndexError`/wrong-parameter injection under decorators that hide params via `__signature__` rewrite; `@mesh.llm` `max_iterations` is call-local (concurrent calls no longer reset each other's counter); one rich `ResponseParseError` class; claim dispatchers drain concurrently under a shared 30s budget and a drain timeout can never skip registry cleanup.
+- **TypeScript** (#1169, #1170, #1174, #1182, #1214): AI SDK v6 removed `maxSteps`, silently capping mesh-delegated tool loops at one step — `stopWhen(stepCountIs(n))` restores `max_iterations`; producer tool failures on SSE and streaming transports now surface as errors instead of arriving as successful string results; mesh event loops survive transient errors with bounded backoff instead of freezing topology on first failure; SIGINT/SIGTERM run full shutdown under one shared drain budget; `vertex_ai` providers honor the canonical `GOOGLE_CLOUD_PROJECT`/`GOOGLE_CLOUD_LOCATION` contract; `callMcpTool` publishes one span per call (was N+1 across retries), with a `call_attempts` field on retried calls.
+- **Java** (#1157, #1167, #1175, #1183): dependency tags serialize as a JSON array in the route/A2A/`@MeshDependsOn` paths — the comma-joined form silently dropped all tag constraints; heartbeat and MCP-served schemas build through one shared path, so structured params publish full schemas instead of bare `{"type":"object"}` stubs; AOP-proxied (`@Transactional`/`@Async`) `@MeshLlm` beans no longer lose their provider binding; async tools honor the propagated `X-Mesh-Timeout` budget and carry trace context to pool threads; named `@MeshRoute` agents report `agent_type=api`; `MeshHandle` drains in-flight native calls before freeing.
+- **Rust core** (#1178): shutdown can no longer be swallowed during reconnect backoff (a signal arriving mid-backoff previously left the agent re-registered and running forever); the trace publisher pools its Redis connection and the C-ABI publish honors its non-blocking contract with a final flush on clean shutdown; the cancel registry is redesigned as generation-tagged frames per job id, fixing waiter wake-loss on re-registration; four pyo3 paths that ran I/O with the GIL held are fixed.
+
+### 📡 SSE timeout surfacing (#1203)
+
+A `meshctl call` cut by its `X-Mesh-Timeout` budget mid-SSE previously printed a bare keepalive comment as the result with exit 0. meshctl now skips comment frames and errors structurally — timeout-shaped (naming the budget and the `--timeout` remedy) or protocol-shaped. The registry proxy appends a spec-compliant `: mesh-proxy-timeout budget=Ns` comment frame to SSE streams it cuts — the only in-band terminal signal possible once chunked headers are out — and the TypeScript runtime recognizes the marker, throwing a dedicated non-retried `ProxyTimeoutError`. Python's Rust-backed parser was verified already safe.
+
+### ⚠️ Upgrade notes
+
+**Helm:**
+
+- **≤2.4.0 default installs with bundled postgres** (#1187): PGDATA was initialized with the old default password; upgrading with defaults generates a non-matching secret. Migration is documented in the core chart README — pin `global.postgres.password` to the old value then rotate, or reset the volume.
+- **Grafana with persistence** (default on, #1187): the old `admin` password stays live after upgrade (Grafana applies the env only at first start); reset via `grafana-cli admin reset-admin-password` — NOTES carry the caveat.
+- `helm template | kubectl apply` pipelines regenerate the random secrets on each render — `helm install/upgrade` is the supported path (#1187).
+- Setting `distributedTracing.redisUrl` (previously inert — no template ever consumed it) now fails the render with a migration message pointing at `registry.redis.*` (#1184).
+- Removed keys are guarded with shipped-default tolerance (#1190): values files copied from old shipped defaults render clean; a user-set divergent value fails loudly naming the key. Grafana/tempo `securityContext` overrides carrying pod-level fields fail with a `podSecurityContext` rename message (#1188); `security.tls.existingSecret` fails pointing at the consumed `secretName` key (#1192).
+- `registry.database.existingSecret` installs that were silently running sqlite will connect to the configured Postgres after upgrade (#1184).
+- `distributedTracing.enabled: false` now actually renders `"false"` — a falsy-default bug previously inverted it to `"true"` (#1216).
+- `replicaCount > 1` registries gain a PodDisruptionBudget on upgrade; already-broken sqlite + multi-replica topologies now fail at template time instead of corrupting silently (#1189).
+
+**Runtime / registry:**
+
+- **Trace stream entries older than 24h are trimmed by default** (#1216). Set `MCP_MESH_TRACE_RETENTION=0` (or Helm `retention: "0"`) for the previous keep-forever behavior.
+- **MeshJob silent handlers are reclaimed** (#1168): a handler that posts no progress within the lease window (default 300s when no `max_duration` is set) is reclaimed and re-executed where it previously ran unbounded. Post progress within the window or size `max_duration` accordingly.
+- **Calls during agent startup may wait** (#1200): up to the 20s settle window before degrading to `None`. `MCP_MESH_SETTLE_TIMEOUT=0` restores instant fail-fast.
+- **TypeScript call timeout is end-to-end** (#1174): `callMcpTool`'s deadline now includes the body read (previously it effectively covered only time-to-headers). Tools needing longer than the 30s default should pass an explicit timeout / `X-Mesh-Timeout`.
+- **Streamed exchanges through the registry proxy are bounded** by `X-Mesh-Timeout` / the 60s default (#1177) — previously long streams were buffered then failed entirely, so this is strictly better, but the cap is newly visible. Timeout-cut `meshctl call` SSE streams now exit non-zero (#1203).
+- **Java `input_schema_hash` changes** for every tool with structured/collection params on next deploy — the schemas now represent what is actually served (#1175). Pipelines snapshotting heartbeat hashes need a refresh.
+- **Duplicate `@MeshTool` capability is a boot error** (Java, #1175) instead of silent last-wins; inheritance/interface/bridge patterns register exactly once and are unaffected.
+- **Python streaming routes validate at decoration** (#1212): async-iterator return annotations over a non-`str` element type (e.g. `Stream[bytes]`) fail decoration instead of silently becoming buffered non-streaming routes.
+- **Hidden-wrapper untyped params no longer receive injection** (Python, #1171): a `@mesh.a2a_consumer` over a single untyped user param previously received the proxy via a heuristic that only worked by accident. Injection eligibility requires the `McpMeshTool` annotation; pairing stays positional.
+- **`meshctl list` default view changes** (#1198): superseded-instance suffix, down-agent footer, split header counts. `--json` output is unchanged.
+
+### 🧪 Tests & infrastructure
+
+- **Integration suites migrated to settle-window reliance** (#1205, #1209, #1211, #1212): 276 dependency-resolution wait steps removed across ~174 files; every integration test now exercises the cold-start DI path production actually sees, with per-UC runtimes dropping 30–45% where dep-sleeps dominated. Shared calculator fixtures now publish the capabilities consumers declare (one suite's "cross-agent call" test had never actually crossed agents).
+- **Image build hardening** (#1209, #1211): transient cargo failures during the Java FFI build could ship an image with an empty native-libs dir on a green run — the build now fails loudly; npm installs gain retry config baked into the test image.
+- **PSS CI gate** (#1188): `scripts/check_helm_pss.py` runs next to helm lint in the release workflow.
+- **Deflaked** kill-verify reap races and a claim-dispatcher DNS dependency (#1180); a cross-runtime cancel-claim fixture race fixed in all three runtimes (#1211).
+
+---
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.3.0...v2.4.0)
 
