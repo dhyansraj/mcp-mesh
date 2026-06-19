@@ -13,9 +13,9 @@ When a consumer asks the registry to resolve a dependency, candidates flow throu
 1. **`health`** — drop unhealthy or deregistering candidates first. Running this stage first keeps the downstream stage tables clean (no stale agents listed in the tag-eviction trace).
 2. **`capability_match`** — survivors from the indexed query for `capability=X`. This stage records the universe the rest of the pipeline operates on.
 3. **`tags`** — apply required / preferred / excluded tag filters and compute scores. See `meshctl man tags`.
-4. **`version`** — apply semver constraint (`>=2.0.0`, `^1.4`, etc.).
+4. **`version`** — apply semver constraint (bare `4.6.0` = exact; `>=2.0.0`, `^1.4`, etc.).
 5. **`schema`** — apply the opt-in schema check (issue #547). When the consumer didn't ask for schema matching, this stage is a pass-through and `spec.schema_mode` reads `"none"`. See `meshctl man schema-matching`.
-6. **`tiebreaker`** — pick the winner from the surviving set. Currently `HighestScoreFirst` (highest tag-match score, first encountered if tied).
+6. **`tiebreaker`** — pick the winner from the surviving set: highest tag-match score first, then **highest version**, then agent ID for determinism (the newest satisfying version wins).
 
 Each stage records `kept` (survivors) and `evicted` (with a typed reason). The chosen producer is recorded on the `tiebreaker` stage and at the top level of the trace.
 
@@ -88,7 +88,7 @@ Each event's `data` field is an `AuditTrace`:
     },
     { "stage": "schema",     "kept": ["hr-v2:lookup"] },
     { "stage": "tiebreaker", "kept": ["hr-v2:lookup"],
-      "chosen": "hr-v2:lookup", "reason": "HighestScoreFirst" }
+      "chosen": "hr-v2:lookup", "reason": "HighestScoreThenVersion" }
   ],
   "chosen": {
     "agent_id":      "hr-v2",
@@ -136,7 +136,7 @@ Reasons are typed (not freeform strings) so audit consumers can pattern-match. T
 
 ## Tiebreaker
 
-After all filter stages, the surviving candidates are ordered by tag-match score (descending) and the first one wins. The audit records this as `reason: "HighestScoreFirst"` on the tiebreaker stage.
+After all filter stages, the surviving candidates are ordered by tag-match score (descending), then by version (highest first), then by agent ID for determinism — the first one wins. So among providers of the same capability and tags, the newest satisfying version is chosen. The audit records this as `reason: "HighestScoreThenVersion"` on the tiebreaker stage.
 
 Configurable tiebreakers (round-robin, latency-aware, etc.) are out of scope for v1 — the audit trail is forward-compatible: future tiebreakers will record their own name in the same `reason` field.
 

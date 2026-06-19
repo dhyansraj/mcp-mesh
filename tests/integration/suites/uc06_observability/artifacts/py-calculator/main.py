@@ -23,7 +23,7 @@ app = FastMCP("PyCalculator Service")
     description="Multiply two numbers using both repeated addition and direct multiplication",
     tags=["calculator", "math"],
     dependencies=[
-        {"capability": "add", "tags": ["+math"]},
+        {"capability": "add", "tags": ["+math", "+add"]},
         {"capability": "multiply", "tags": ["+math"]},
     ],
 )

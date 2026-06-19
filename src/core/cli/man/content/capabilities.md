@@ -16,7 +16,7 @@ MCP Mesh uses a unified syntax for selecting capabilities throughout the framewo
 | ------------ | -------- | ---------------------------------------------------------------- |
 | `capability` | Yes\*    | Capability name to match                                         |
 | `tags`       | No       | Tag filters. Optional `+` (preferred) / `-` (excluded) operators |
-| `version`    | No       | Semantic version constraint (e.g., `>=2.0.0`)                    |
+| `version`    | No       | Semver constraint (bare `4.6.0` = exact; `>=2.0.0`, `^1.4`, ...) |
 
 \*When filtering by tags only (e.g., LLM tool filter), `capability` can be omitted.
 
@@ -105,9 +105,11 @@ def get_weather(city: str) -> dict:
 When an agent requests a dependency, the registry resolves it by:
 
 1. **Name matching**: Find agents providing the requested capability
-2. **Tag filtering**: Apply tag constraints (if specified)
-3. **Version constraints**: Check semantic version compatibility
-4. **Load balancing**: Select from multiple matching providers
+2. **Tag filtering**: Apply tag constraints (if specified) and compute a tag-match score
+3. **Version constraints**: Drop providers whose version doesn't satisfy the semver constraint
+4. **Selection**: Among the survivors, pick the best match — highest tag-match score first, then **highest version**, then agent ID for determinism
+
+So when several providers share the same capability and tags, the one with the **newest version wins**.
 
 ## Multiple Implementations
 
@@ -174,7 +176,7 @@ def my_tool(date: mesh.McpMeshTool = None, weather: mesh.McpMeshTool = None):
 
 ## Versioning
 
-Capabilities support semantic versioning:
+Providers declare a concrete version on `@mesh.tool` / `@mesh.llm_provider` (default `"1.0.0"` if unset):
 
 ```python
 @mesh.tool(
@@ -184,11 +186,21 @@ Capabilities support semantic versioning:
 def api_v2(): ...
 ```
 
-Consumers can specify version constraints:
+Consumers specify a **semver constraint** (Masterminds/semver syntax) in the dependency selector. The constraint is a hard filter applied before selection; among the providers that satisfy it, the registry picks the **highest version**:
 
 ```python
 dependencies=[{"capability": "api_client", "version": ">=2.0.0"}]
 ```
+
+| Constraint     | Matches                          | Selected                          |
+| -------------- | -------------------------------- | --------------------------------- |
+| `"4.6.0"`      | exactly `4.6.0`                  | `4.6.0`                           |
+| `">=4.6.0"`    | any version ≥ `4.6.0`            | highest available (may cross major) |
+| `"^4.6.0"`     | `>=4.6.0 <5.0.0` (same major)    | highest within major `4`          |
+| `"~4.6.0"`     | `>=4.6.0 <4.7.0` (same minor)    | highest within minor `4.6`        |
+| omitted        | any version                      | highest available                 |
+
+A **bare** version like `"4.6.0"` means an **exact** match, consistent with `capability=` and `tags=` being exact matches. A provider with no/empty version cannot satisfy a non-empty constraint.
 
 Beyond name + tags + version, dependencies can opt into schema-based resolution via `expected_type` (Python) / `expectedSchema` (TypeScript) / `expectedType` (Java). The registry then matches producers by the canonical shape of their `outputSchema`, evicting candidates whose response shape doesn't satisfy the consumer's expectation. See `meshctl man schema-matching` for the full opt-in mechanism, modes (`subset` vs `strict`), and verdict tiers.
 

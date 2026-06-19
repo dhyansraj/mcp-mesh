@@ -448,17 +448,26 @@ func (s *EntService) findHealthyProviderWithTrace(dep Dependency) (*DependencyRe
 		return nil, trace
 	}
 
-	// Stage 6: tiebreaker — sort by score DESC then take the head. Document
-	// the algorithm name in the audit so changes are visible.
+	// Stage 6: tiebreaker — sort by tag score DESC, then highest semver version
+	// DESC, then agent ID ASC for determinism. Tag score stays primary (a
+	// +preferred tag still beats a higher version); version picks the newest
+	// within an equal-score family. Document the algorithm name in the audit so
+	// changes are visible.
 	sort.SliceStable(afterSchema, func(i, j int) bool {
-		return afterSchema[i].Score > afterSchema[j].Score
+		if afterSchema[i].Score != afterSchema[j].Score {
+			return afterSchema[i].Score > afterSchema[j].Score
+		}
+		if vc := s.matcher.CompareVersion(afterSchema[i].Version, afterSchema[j].Version); vc != 0 {
+			return vc > 0
+		}
+		return afterSchema[i].AgentID < afterSchema[j].AgentID
 	})
 	winner := afterSchema[0]
 	trace.Stages = append(trace.Stages, AuditStage{
 		Stage:  StageTiebreaker,
 		Kept:   idsFromScored(afterSchema),
 		Chosen: candidateID(winner.AgentID, winner.FunctionName),
-		Reason: TiebreakerHighestScoreFirst,
+		Reason: TiebreakerScoreThenVersion,
 	})
 
 	endpoint := "stdio://" + winner.AgentID
