@@ -101,9 +101,23 @@ func filterProviderByEnhancedTags(caps []*ent.Capability, requestedTags interfac
 		}
 	}
 
-	// Sort by score descending (highest score first)
-	sort.Slice(scored, func(i, j int) bool {
-		return scored[i].score > scored[j].score
+	// Sort by score DESC, then highest semver version DESC, then agent ID ASC
+	// for determinism. Mirrors the mesh.tool tiebreaker so the highest-version
+	// provider wins within an equal-score family.
+	agentIDOf := func(c *ent.Capability) string {
+		if c.Edges.Agent == nil {
+			return ""
+		}
+		return c.Edges.Agent.ID
+	}
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].score != scored[j].score {
+			return scored[i].score > scored[j].score
+		}
+		if vc := compareVersion(scored[i].cap.Version, scored[j].cap.Version); vc != 0 {
+			return vc > 0
+		}
+		return agentIDOf(scored[i].cap) < agentIDOf(scored[j].cap)
 	})
 
 	// Extract capabilities in score order

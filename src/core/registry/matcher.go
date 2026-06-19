@@ -1,6 +1,8 @@
 package registry
 
 import (
+	"strings"
+
 	"github.com/Masterminds/semver/v3"
 	"mcp-mesh/src/core/logger"
 )
@@ -87,6 +89,27 @@ func (m *Matcher) MatchVersion(version, constraint string) bool {
 
 	// Check if version satisfies constraint
 	return c.Check(v)
+}
+
+// CompareVersion orders two version strings for "highest wins" selection.
+// Returns >0 if a is newer than b, <0 if older, 0 if equal.
+// Valid semver always ranks above unparseable/empty; two unparseable
+// versions fall back to deterministic string comparison so selection is
+// never nondeterministic.
+func (m *Matcher) CompareVersion(a, b string) int {
+	va, errA := semver.NewVersion(a)
+	vb, errB := semver.NewVersion(b)
+
+	switch {
+	case errA == nil && errB == nil:
+		return va.Compare(vb)
+	case errA == nil:
+		return 1
+	case errB == nil:
+		return -1
+	default:
+		return strings.Compare(a, b)
+	}
 }
 
 // MatchTags implements enhanced tag matching with +/- operators and OR alternatives.
@@ -245,6 +268,12 @@ func hasAllTags(available, required []string) bool {
 // Used by llm_filtering.go and llm_provider_resolver.go.
 func matchesVersion(version, constraint string) bool {
 	return (&Matcher{}).MatchVersion(version, constraint)
+}
+
+// compareVersion is a package-level convenience function for version ordering.
+// Used by llm_provider_resolver.go for highest-version selection.
+func compareVersion(a, b string) int {
+	return (&Matcher{}).CompareVersion(a, b)
 }
 
 // matchesEnhancedTags is a package-level convenience function for tag matching.

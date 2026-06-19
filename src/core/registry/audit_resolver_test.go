@@ -202,7 +202,7 @@ func TestAudit_FourCandidatesMixed(t *testing.T) {
 	// tr.Chosen.FunctionName.
 	tieb := tr.Stages[5]
 	assert.NotEmpty(t, tieb.Chosen)
-	assert.Equal(t, TiebreakerHighestScoreFirst, tieb.Reason)
+	assert.Equal(t, TiebreakerScoreThenVersion, tieb.Reason)
 	assert.Equal(t, tr.Chosen.AgentID+":"+tr.Chosen.FunctionName, tieb.Chosen)
 }
 
@@ -416,7 +416,7 @@ func TestAuditTrace_RoundTrip(t *testing.T) {
 				Stage:  StageTiebreaker,
 				Kept:   []string{"a", "b"},
 				Chosen: "a",
-				Reason: TiebreakerHighestScoreFirst,
+				Reason: TiebreakerScoreThenVersion,
 			},
 		},
 		Chosen: &AuditChosen{
@@ -521,7 +521,7 @@ func makeBaseTrace() AuditTrace {
 				Stage:  StageTiebreaker,
 				Kept:   []string{"hr-v2:do_thing", "legacy-emp:do_thing"},
 				Chosen: "hr-v2:do_thing",
-				Reason: TiebreakerHighestScoreFirst,
+				Reason: TiebreakerScoreThenVersion,
 			},
 		},
 		Chosen: &AuditChosen{

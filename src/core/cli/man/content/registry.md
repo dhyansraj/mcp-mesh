@@ -82,9 +82,10 @@ export MCP_MESH_DEBUG_MODE=false
 When an agent requests dependencies, the registry:
 
 1. **Finds providers**: Agents with matching capability
-2. **Applies filters**: Tag and version constraints
+2. **Applies filters**: Tag and version constraints (the `version` field is a semver constraint; bare `4.6.0` = exact match)
 3. **Scores matches**: Preferred tags add points
-4. **Returns topology**: Selected providers for each dependency
+4. **Selects winner**: Among matches, highest tag-match score first, then **highest version**, then agent ID for determinism — the newest satisfying version wins
+5. **Returns topology**: Selected providers for each dependency
 
 ### Resolution Request
 

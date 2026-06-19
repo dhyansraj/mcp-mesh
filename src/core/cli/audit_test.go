@@ -75,7 +75,7 @@ func makeFlippedEvent() AuditEvent {
 				"stage":  "tiebreaker",
 				"kept":   []interface{}{"hr-v2", "legacy-emp"},
 				"chosen": "hr-v2",
-				"reason": "HighestScoreFirst",
+				"reason": "HighestScoreThenVersion",
 			},
 		},
 		"chosen": map[string]interface{}{

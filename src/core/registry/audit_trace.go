@@ -39,11 +39,12 @@ const (
 	StageTiebreaker      = "tiebreaker"
 )
 
-// TiebreakerHighestScoreFirst names the current resolver's tiebreaker logic:
-// candidates are sorted by tag-match score (descending) and the first is picked.
+// TiebreakerScoreThenVersion names the current resolver's tiebreaker logic:
+// candidates are sorted by tag-match score (descending), then by highest semver
+// version (descending), then by agent ID (ascending) for determinism.
 // Documenting this in the audit makes it explicit; configurable tiebreakers
 // are out of scope for v1.
-const TiebreakerHighestScoreFirst = "HighestScoreFirst"
+const TiebreakerScoreThenVersion = "HighestScoreThenVersion"
 
 // AuditTrace is the JSON payload stored in RegistryEvent.data for
 // dependency_resolved / dependency_unresolved events.
@@ -79,7 +80,7 @@ type AuditStage struct {
 	Kept    []string       `json:"kept"`
 	Evicted []AuditEvicted `json:"evicted,omitempty"`
 	Chosen  string         `json:"chosen,omitempty"` // only set on the tiebreaker stage; format "<agent_id>:<function_name>"
-	Reason  string         `json:"reason,omitempty"` // only set on the tiebreaker stage (e.g., "HighestScoreFirst")
+	Reason  string         `json:"reason,omitempty"` // only set on the tiebreaker stage (e.g., "HighestScoreThenVersion")
 }
 
 // AuditEvicted records a single dropped candidate with a typed reason and

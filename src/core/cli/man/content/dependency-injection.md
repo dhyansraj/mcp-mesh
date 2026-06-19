@@ -29,9 +29,9 @@ health → capability_match → tags → version → schema → tiebreaker
 | `health`           | Drops unhealthy / deregistering candidates first                            |
 | `capability_match` | Indexed query on the capability name                                        |
 | `tags`             | Required / preferred / excluded tag filter (with scoring)                   |
-| `version`          | Semver constraint (`>=2.0.0`, `^1.4`, ...)                                  |
+| `version`          | Semver constraint (bare `4.6.0` = exact; `>=2.0.0`, `^1.4`, ...)            |
 | `schema`           | Opt-in schema check (issue #547) — see below                                |
-| `tiebreaker`       | `HighestScoreFirst` from the surviving set                                  |
+| `tiebreaker`       | Highest tag-match score, then **highest version**, then agent ID            |
 
 Every decision the registry makes is recorded as a `dependency_resolved` (or `dependency_unresolved`) event. Use `meshctl audit <agent>` to read them back — see `meshctl man audit`.
 
