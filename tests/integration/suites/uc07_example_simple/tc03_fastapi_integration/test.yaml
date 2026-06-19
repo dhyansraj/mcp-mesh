@@ -95,6 +95,20 @@ test:
     workdir: /workspace
     capture: health_result
 
+  - name: "Wait for FastAPI route dependencies to settle"
+    handler: shell
+    command: |
+      for i in $(seq 1 70); do
+        RESULT=$(curl -s --max-time 5 http://localhost:8080/api/v1/time 2>/dev/null || true)
+        if echo "$RESULT" | grep -q 'time'; then
+          echo "time_service resolved after ${i}s"; exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: time_service not resolved within ~70s"; exit 1
+    workdir: /workspace
+    timeout: 90
+
   - name: "Test time endpoint (uses time_service dependency)"
     handler: shell
     command: "curl -s --max-time 10 http://localhost:8080/api/v1/time"

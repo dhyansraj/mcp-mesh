@@ -198,6 +198,13 @@ test:
     capture: deregister_output
     timeout: 60
 
+  # Give the planner's in-process MeshLlmAgent proxy time to re-resolve from
+  # claude to openai. Registry-list removal != proxy re-resolution; that needs
+  # a heartbeat cycle (~5s) to propagate. 15s = 3x heartbeat interval.
+  - name: "Wait for planner to re-resolve LLM provider to openai"
+    handler: wait
+    seconds: 15
+
   # Call plan_trip again — should auto-route to OpenAI
   - name: "Call plan_trip with failover to OpenAI"
     handler: shell

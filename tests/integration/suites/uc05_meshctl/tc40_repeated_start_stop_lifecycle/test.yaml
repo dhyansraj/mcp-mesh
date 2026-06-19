@@ -61,6 +61,7 @@ test:
       done
       echo "LOOP_COMPLETED=true"
     capture: loop_output
+    timeout: 200
 
   - name: "Verify meshctl still responsive after loop"
     handler: shell
