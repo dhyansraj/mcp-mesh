@@ -125,6 +125,20 @@ public class MeshToolWrapper implements McpToolHandler {
     private final int[] depIndexToSlot;
     /** McpMeshTool slot ordinal → declared dep index; -1 = no declared dependency backs the slot. */
     private final int[] slotToDepIndex;
+    /**
+     * Declared dependency index paired with the {@code MeshJob} parameter
+     * position, or -1 when this method has no MeshJob slot OR the slot has no
+     * declared dependency backing it. The MeshJob param consumes one declared
+     * dependency index via the SAME positional pairing the McpMeshTool slots
+     * use (eligible positions = McpMeshTool + MeshJob, sorted, paired to the
+     * declared dependency list). This lets the consumer-side
+     * {@link JobsRuntimeManager} wiring bind the {@link MeshJobSubmitter} to
+     * the EXACT declared capability the user typed {@code MeshJob} for —
+     * mirroring Python, which keys the submitter off the declared dependency
+     * capability at the MeshJob param's dep_index rather than a local
+     * {@code task()} registry probe.
+     */
+    private final int meshJobDepIndex;
 
     // Consumer-side: MeshJobSubmitter to inject when MeshJob slot is present
     // and this method depends on a task=true capability. Set by the runtime
@@ -254,18 +268,24 @@ public class MeshToolWrapper implements McpToolHandler {
             eligiblePositions.add(meshJobParamIndex);
             Collections.sort(eligiblePositions);
         }
+        int meshJobDep = -1;
         for (int k = 0; k < eligiblePositions.size() && k < this.dependencyNames.size(); k++) {
             int paramPos = eligiblePositions.get(k);
             if (meshJobParamIndex != null && paramPos == meshJobParamIndex) {
                 // MeshJob-backed dependency: the submitter is wired
                 // locally (JobsRuntimeManager), never by a proxy event —
-                // no slot, no settle key.
+                // no slot, no settle key. Capture the declared dependency
+                // index paired with the MeshJob param so the consumer-side
+                // wiring can bind the submitter to the EXACT declared
+                // capability (mirrors Python's positional MeshJob→dep_index).
+                meshJobDep = k;
                 continue;
             }
             int slot = meshToolPositions.indexOf(paramPos);
             this.depIndexToSlot[k] = slot;
             this.slotToDepIndex[slot] = k;
         }
+        this.meshJobDepIndex = meshJobDep;
 
         // Generate input schema (excluding injected params)
         this.inputSchema = generateInputSchema();
@@ -471,6 +491,17 @@ public class MeshToolWrapper implements McpToolHandler {
         this.jobSubmitter.set(submitter);
     }
 
+    /**
+     * The currently-wired consumer-side {@link MeshJobSubmitter}, or
+     * {@code null} when none has been wired. Package-private — exposed for
+     * the {@link JobsRuntimeManager} consumer-wiring unit tests to assert the
+     * submitter is bound (and targets the declared capability) without
+     * driving a full invocation.
+     */
+    MeshJobSubmitter getJobSubmitter() {
+        return this.jobSubmitter.get();
+    }
+
     /** Whether this tool is registered with {@code task=true}. */
     public boolean isTask() {
         return task;
@@ -479,6 +510,26 @@ public class MeshToolWrapper implements McpToolHandler {
     /** The position of the MeshJob param in the method signature, or null. */
     public Integer getMeshJobParamIndex() {
         return meshJobParamIndex;
+    }
+
+    /**
+     * The DECLARED dependency capability paired with this method's
+     * {@code MeshJob} parameter via positional pairing, or {@code null} when
+     * the method has no MeshJob slot OR no declared dependency backs it.
+     *
+     * <p>Used by the consumer-side {@link JobsRuntimeManager} wiring to bind
+     * the {@link MeshJobSubmitter} to the exact capability the user declared
+     * for the MeshJob slot — independent of whether the producer is local or
+     * remote, and regardless of how many other dependencies the method
+     * declares. This mirrors Python's {@code dependency_injector}, which wires
+     * the submitter off the declared dependency capability at the MeshJob
+     * param's dep_index rather than a local {@code task()} registry probe.
+     */
+    public String getMeshJobDependencyCapability() {
+        if (meshJobDepIndex < 0 || meshJobDepIndex >= dependencyNames.size()) {
+            return null;
+        }
+        return dependencyNames.get(meshJobDepIndex);
     }
 
     /**
@@ -812,6 +863,73 @@ public class MeshToolWrapper implements McpToolHandler {
         }
 
         return fullArgs;
+    }
+
+    /**
+     * Claim-path entry point: build the user method's full argument array
+     * (the SAME shaping the inbound path uses — {@code @Param} coercion,
+     * McpMeshTool / MeshLlmAgent dependency slots WITH settle-grace, and the
+     * {@code @A2AConsumer}-injected A2AClient slot), place the producer
+     * {@link JobController} at the MeshJob slot, invoke the method, and await
+     * a {@link CompletableFuture} result on the JOB budget.
+     *
+     * <p>This replaces the old thin reflection invoker in
+     * {@link JobsRuntimeManager} so claim-dispatched {@code task=true}
+     * producers resolve their dependency proxies exactly like the inbound
+     * (push-mode) path does — mirroring Python, whose claim path re-runs the
+     * same DI-wrapped handler. The wrapper already holds the heartbeat-
+     * resolved proxies and the settle latches, so delegating here is what
+     * makes a {@code task=true} producer with {@code McpMeshTool} /
+     * {@code MeshLlmAgent} dependencies work.
+     *
+     * <p>Runs synchronously on the dispatch thread so the injected proxies'
+     * outbound calls inherit the {@code X-Mesh-Job-Id} header and cancel
+     * binding that {@link ClaimDispatcher} established around this call
+     * (via {@code runAsJobWithRegistryBinding} + {@code JobContext.withJob}).
+     * No new thread hops are introduced.
+     *
+     * <p>The await uses {@link JobsRuntimeManager#awaitFutureWithJobBudget}
+     * (24h {@code NO_DEADLINE_AWAIT_CEILING_SECS} ceiling, or the job's
+     * {@code max_duration} when present via the bound {@link JobContext}),
+     * NOT the wrapper's 30s inbound default — a long-running job must not be
+     * strangled by the push-path timeout.
+     *
+     * @param payload      The {@code submitted_payload} from the claim
+     * @param controller   The producer controller bound to the claimed job
+     * @param deadlineSecs The job's {@code max_duration} budget (or null);
+     *                     the await reads it from the bound {@link JobContext}
+     *                     that the dispatcher established, so this is carried
+     *                     for symmetry with the inbound path's signature.
+     * @return The user method's (await-unwrapped) result
+     * @throws Exception the user exception, unwrapped from
+     *                   {@link InvocationTargetException} so
+     *                   {@link ClaimDispatcher}'s {@code retryOn} matching works
+     */
+    Object invokeForClaim(Map<String, Object> payload, JobController controller, Long deadlineSecs)
+            throws Exception {
+        Object[] fullArgs = buildFullArgs(payload != null ? payload : Map.of());
+        if (meshJobParamIndex != null) {
+            fullArgs[meshJobParamIndex] = controller;
+        }
+        Object result;
+        try {
+            result = method.invoke(bean, fullArgs);
+        } catch (InvocationTargetException e) {
+            // Unwrap to the user exception so ClaimDispatcher's retryOn
+            // matching (cls.isInstance(cause)) still works — a wrapped
+            // InvocationTargetException would never match the user's
+            // declared exception types.
+            Throwable cause = e.getCause();
+            if (cause instanceof Exception ex) throw ex;
+            throw new RuntimeException(cause);
+        } catch (IllegalAccessException e) {
+            throw new RuntimeException("Method access denied: " + e.getMessage(), e);
+        }
+        if (result instanceof CompletableFuture<?> cf) {
+            // Job budget, NOT the wrapper's 30s inbound default.
+            result = JobsRuntimeManager.awaitFutureWithJobBudget(cf, capability);
+        }
+        return result;
     }
 
     /**

@@ -105,6 +105,20 @@ public class MeshCapabilityBeanRegistrar implements BeanDefinitionRegistryPostPr
             return;
         }
 
+        // Settling-window grace (#1193): declare each capability key with the
+        // process-wide settle state so the bean-injected proxy path
+        // (McpMeshTool.call) can perform a bounded, capability-keyed wait
+        // before failing fast at startup — mirroring the @MeshRoute path.
+        // The per-capability latch is counted down by
+        // MeshDependencyInjector.updateToolDependency (markResolved) the
+        // moment the endpoint lands. Declaring the keys here (registration
+        // time) means the agent-level "all declared deps resolved" latch can
+        // also flip eagerly off these @MeshDependsOn capabilities.
+        MeshSettleState settleState = MeshSettleState.getInstance();
+        for (String capability : capabilities.keySet()) {
+            settleState.registerDeclared(capability);
+        }
+
         int added = 0;
         int conflicts = 0;
         for (Map.Entry<String, CapabilityDeclaration> entry : capabilities.entrySet()) {

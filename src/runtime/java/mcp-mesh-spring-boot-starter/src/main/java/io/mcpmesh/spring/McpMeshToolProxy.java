@@ -90,7 +90,7 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
 
     @Override
     public T call(Map<String, Object> params) {
-        EndpointInfo info = endpointRef.get();
+        EndpointInfo info = awaitSettleIfUnavailable(endpointRef.get());
         if (info == null || !info.available()) {
             throw new MeshToolUnavailableException(capability);
         }
@@ -121,7 +121,7 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
 
     @Override
     public T call(Map<String, Object> params, Map<String, String> headers) {
-        EndpointInfo info = endpointRef.get();
+        EndpointInfo info = awaitSettleIfUnavailable(endpointRef.get());
         if (info == null || !info.available()) {
             throw new MeshToolUnavailableException(capability);
         }
@@ -228,7 +228,7 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
 
     @Override
     public Flow.Publisher<String> stream(Map<String, Object> params) {
-        EndpointInfo info = endpointRef.get();
+        EndpointInfo info = awaitSettleIfUnavailable(endpointRef.get());
         if (info == null || !info.available()) {
             throw new MeshToolUnavailableException(capability);
         }
@@ -239,6 +239,46 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
     @Override
     public Flow.Publisher<String> stream() {
         return stream(Map.of());
+    }
+
+    /**
+     * Settling-window grace (#1193) for the {@code @MeshDependsOn}
+     * bean-injected proxy path. A {@code @Service}/{@code @Component} whose
+     * constructor- or field-injected {@code McpMeshTool} (registered by
+     * {@link MeshCapabilityBeanRegistrar}) makes its first {@code .call()}
+     * during the startup settling window would otherwise see the
+     * not-yet-resolved proxy as unavailable and throw
+     * {@link MeshToolUnavailableException} immediately — unlike the
+     * {@code @MeshRoute} / {@code @MeshTool} paths, which already wait out the
+     * settle budget. This gives the bean-injected path the SAME bounded,
+     * capability-keyed wait: when the proxy is unavailable AND the agent is
+     * still settling, block (bounded by the remaining settle budget) on the
+     * per-capability latch that {@link MeshDependencyInjector#updateToolDependency}
+     * counts down via {@link MeshSettleState#markResolved(String)} the moment
+     * the endpoint lands, then re-read the endpoint. Capability keying is
+     * correct here for the same reason it is for routes: every
+     * {@code @MeshDependsOn} consumer resolves through the injector's SHARED
+     * per-capability proxy ({@code this}), which {@code updateEndpoint} makes
+     * live before the countdown.
+     *
+     * <p>Bounded and one-shot: once settled the call is a single latch check
+     * and falls through to today's fail-fast behavior. Blocking is safe — the
+     * bean-injected proxy's {@code .call()} runs on a Spring service/request
+     * thread, the same thread class the route path already blocks on.
+     *
+     * @param info the current endpoint snapshot (may be {@code null})
+     * @return the (possibly refreshed) endpoint snapshot to act on
+     */
+    private EndpointInfo awaitSettleIfUnavailable(EndpointInfo info) {
+        if (info != null && info.available()) {
+            return info;
+        }
+        MeshSettleState settleState = MeshSettleState.getInstance();
+        if (settleState.isSettled()) {
+            return info;
+        }
+        settleState.awaitDependency(capability, capability);
+        return endpointRef.get();
     }
 
     /**
