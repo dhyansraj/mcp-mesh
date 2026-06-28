@@ -1,63 +1,44 @@
-# tc09_cancel_aborts_outbound_http_java — Java port of uc21/tc09 + uc22/tc09.
+# tc09_cancel_aborts_outbound_http_java — Java port of uc21/tc09.
 #
 # Three-agent chain (all Java):
 #   consumer (commission_downstream)
-#     -> provider.report_with_downstream_call (task=true)
+#     -> provider.report_with_downstream_call (task=true, injects
+#        slow_downstream McpMeshTool dependency)
 #         -> downstream-sleeper-java.slow_downstream (sleeps 30s)
 #
-# After submit, wait briefly then cancel.
+# After submit, wait until the producer has flushed its first progress
+# update ("calling downstream") — i.e. it is mid-downstream-call — then
+# cancel. The producer's JobController cancel token fires (#889 Phase A)
+# and aborts the in-flight McpHttpClient request to slow_downstream
+# (#900), so the job reaches status=cancelled in well under the 30s the
+# sleeper would otherwise sleep.
 #
-# IMPORTANT — outbound-HTTP cancel propagation, post-#900:
+# Wave 1 (feat/java-claim-path-parity) brought the Java claim path to
+# parity with Python: a task=true producer may now declare McpMeshTool /
+# @Selector dependencies and have them resolved + injected on the claim
+# path. The fixture's report_with_downstream_call therefore takes a real
+# injected `slow_downstream` McpMeshTool dependency and calls it via the
+# SDK's McpHttpClient proxy path — the same surface #900's outbound
+# abort hook instruments — instead of hand-rolling a java.net.http call.
+# This mirrors Python's uc21/tc09 (slow_downstream McpMeshAgent dep)
+# exactly, so the assertions are now the producer-side correctness ones:
+#   (1) cancel ack ok
+#   (2) final status == cancelled
+#   (3) status is NOT completed (proves the in-flight downstream call
+#       was aborted, not awaited to natural finish)
+#   (4) progress frozen at "calling downstream" (cancel landed while the
+#       producer was still inside the downstream call)
 #
-# #889 (Phase A) fixed the producer-local cancel-registry binding —
-# the Java handler's cancel token now DOES fire when the registry
-# forwards a cancel (see tc06 / tc22 which assert this directly).
-#
-# #900 (this PR) wires the producer-side outbound abort hook into
-# {@link io.mcpmesh.spring.McpHttpClient}: a daemon watcher thread
-# blocks on {@code mesh_await_job_cancel} for the duration of each
-# OkHttp Call.execute() and aborts the call when the producer's
-# cancel token fires. Mirror of TypeScript PR #897. So when a Java
-# task=true handler issues outbound work via the SDK's McpHttpClient
-# (the McpMeshTool proxy path), cancel now propagates end-to-end on
-# the producer side.
-#
-# This test, however, exercises a DIFFERENT outbound surface:
-# producer fixture's report_with_downstream_call can't use a
-# McpMeshTool dependency (Java SDK rejects task=true producers with
-# Selector deps; see provider source comment), so it falls back to a
-# plain {@code java.net.http.HttpClient} send() against the sleeper's
-# /mcp endpoint. The #900 wiring is bound to OkHttp Calls inside
-# McpHttpClient — it does NOT instrument the JDK's java.net.http
-# HttpClient. So tc09 still does NOT observe a producer-side outbound
-# abort here (the substrate IS fixed for the McpHttpClient code path
-# — uc23/tc06 / tc22 cover the registry-side flip; a follow-up
-# fixture variant could exercise the McpHttpClient path with a
-# regular-tool dep on the consumer side to drive the abort end-to-end).
-#
-# Downstream-side observability (sleeper's slowDownstream waking up
-# mid-sleep) requires the downstream handler to poll isCancelled() the
-# same way runsOverlong does — that's a downstream-side concern
-# orthogonal to #900 (#886-style cross-runtime gap). Not asserted here.
-#
-# What DOES work for Java today (post-#889 + post-#900):
-#   - registry-side row flips to status=cancelled (registry route works)
-#   - producer's local cancel token fires (#889 Phase A — see tc06/tc22)
-#   - producer's McpHttpClient outbound calls abort on cancel (#900)
-#
-# What still does NOT propagate in tc09 specifically:
-#   - producer fixture uses java.net.http.HttpClient (not McpHttpClient),
-#     so the #900 wiring doesn't apply — this is a fixture-level gap,
-#     not a substrate gap. A follow-up fixture variant using the
-#     McpHttpClient code path would close this.
-#   - downstream sleeper's slowDownstream handler doesn't poll
-#     isCancelled(), so it sleeps to natural completion (#886-style).
-#
-# This test asserts the registry-side row flip + cancel-elapsed wall
-# clock guard (parity with tc06's <10s threshold).
+# NOTE on the downstream `sleep CANCELLED` marker: as in Python's
+# uc21/tc09, the sleeper writes that line from its interrupt handler,
+# but inbound client-disconnect is not currently surfaced to the
+# downstream handler — so the sleeper keeps running past the
+# producer-side cancel and the marker never lands. The producer-side
+# correctness is still fully proven by (1)-(4) above. The downstream
+# propagation gap is tracked separately (#886-style).
 
-name: "MeshJob Java: cancel registers as cancelled in registry (#900 wires McpHttpClient abort; tc09 fixture uses java.net.http so still asserts registry-side only)"
-description: "Java — provider calls slow_downstream(30s) via HTTP; cancel must result in cancelled status in registry within <10s. McpHttpClient outbound abort wired by #900 but tc09 fixture uses java.net.http (orthogonal surface)."
+name: "MeshJob Java: cancel aborts in-flight downstream HTTP call"
+description: "Java — provider injects slow_downstream and calls it (30s); cancel must abort the in-flight McpHttpClient call and finish cancelled, not completed"
 tags:
   - meshjob
   - java
@@ -133,9 +114,9 @@ test:
     command: meshctl start long-task-consumer-java --env MCP_MESH_HTTP_PORT=9121 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
 
   # Liveness only: wait until all named agents are registered AND healthy
-  # (Java startup is slow and can flap). The old dependencies_resolved ==
-  # total_dependencies condition is gone — the settle window
-  # (MCP_MESH_SETTLE_TIMEOUT=60 on provider + consumer) covers DI resolution.
+  # (Java startup is slow and can flap). DI resolution — including the
+  # provider's slow_downstream dep on the claim path — is covered by the
+  # settle window (MCP_MESH_SETTLE_TIMEOUT=60 on provider + consumer).
   - name: "Wait for all three agents healthy"
     handler: shell
     workdir: /workspace
@@ -171,39 +152,34 @@ test:
     capture: submit_resp
     timeout: 30
 
-  - name: "Wait 6s — let producer pick up + flush first progress + enter downstream"
-    handler: wait
-    seconds: 6
-
-  # Per #889 the registry-side cancel handler always succeeds, so
-  # without a pre-cancel progress check this test could pass even if
-  # the producer never claimed the job or never reached the downstream
-  # call. Confirm the row recorded at least one progress emission
-  # before we cancel — proves the producer is genuinely in flight.
-  - name: "Confirm producer is in flight (progress > 0 before cancel)"
+  # Deterministic pre-cancel gate (mirror of Python uc21/tc09): poll the
+  # job status until the producer has claimed AND flushed the 0.1 /
+  # "calling downstream" progress update — i.e. it is mid-downstream
+  # call. The downstream sleeper sleeps 30s, so cancelling any time
+  # inside this window preserves the test's semantics. Per #889 the
+  # registry-side cancel handler always succeeds, so this gate also
+  # guards against a false pass where the producer never reached the
+  # downstream call.
+  - name: "Wait until producer is mid-downstream call"
     handler: shell
     workdir: /workspace
     command: |
       JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
-      for i in $(seq 1 20); do
-        PROG=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.progress // 0')
-        # Bash's [[ ]] doesn't compare floats; use awk for a numeric > 0 check.
-        if awk "BEGIN{exit !(${PROG} > 0)}"; then
-          echo "[pre-cancel] progress=${PROG} after ${i}s — producer is in flight"
+      echo "JOB_ID=${JOB_ID}"
+      for i in $(seq 1 30); do
+        STATUS=$(meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}" 2>/dev/null || true)
+        if echo "$STATUS" | grep -q "calling downstream"; then
+          echo "producer is mid-downstream after ~${i}s"
           exit 0
         fi
         sleep 1
       done
-      echo "ERROR: producer never recorded progress > 0 — cancel scenario invalid"
+      echo "ERROR: producer never reached 'calling downstream' within 30s"
+      echo "$STATUS"
       curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq .
       exit 1
-    timeout: 30
-
-  - name: "Capture wall-clock just before cancel"
-    handler: shell
-    workdir: /workspace
-    command: date +%s
-    capture: ts_cancel_start
+    capture: wait_middownstream
+    timeout: 45
 
   - name: "Cancel the job"
     handler: shell
@@ -215,66 +191,39 @@ test:
     capture: cancel_response
     timeout: 15
 
-  # Poll until status flips to cancelled, capture elapsed time. Same
-  # pattern as tc06 — registry-side row flip happens synchronously
-  # inside CancelJob; <10s threshold leaves slack for slow CI.
-  - name: "Poll until status=cancelled, capture elapsed time"
-    handler: shell
-    workdir: /workspace
-    command: |
-      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
-      START='${captured.ts_cancel_start}'
-      START_NUM=$(echo "$START" | tr -d -c '0-9')
-      for i in $(seq 1 15); do
-        S=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.status' 2>/dev/null)
-        if [ "$S" = "cancelled" ]; then
-          NOW=$(date +%s)
-          echo "cancel_elapsed=$((NOW - START_NUM))"
-          exit 0
-        fi
-        sleep 1
-      done
-      echo "ERROR: status never flipped to cancelled within 15s (last=$S)"
-      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq .
-      exit 1
-    capture: cancel_elapsed
-    timeout: 30
+  # Should propagate within a few seconds — definitely well below the
+  # 30s sleep that's still running on the sleeper.
+  - name: "Wait for cancel to propagate"
+    handler: wait
+    seconds: 8
 
-  - name: "Read final status"
+  - name: "Read final status + sleeper log"
     handler: shell
     workdir: /workspace
     command: |
       JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      echo "=== final status ==="
       meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}"
-    capture: final_status
-
-  # Wall-clock guard — registry-side cancel forwarding completes <10s
-  # typical (parity with tc06). Larger elapsed values indicate a
-  # regression to the slow path (sweep-driven recovery).
-  - name: "Assert cancel-to-cancelled elapsed < 10s (registry-side fast path)"
-    handler: shell
-    workdir: /workspace
-    command: |
-      ELAPSED=$(echo '${captured.cancel_elapsed}' | grep -oE 'cancel_elapsed=[0-9]+' | sed 's/cancel_elapsed=//')
-      if [ -z "$ELAPSED" ]; then
-        echo "ERROR: could not extract cancel_elapsed from: ${captured.cancel_elapsed}"
-        exit 1
-      fi
-      if [ "$ELAPSED" -ge 10 ]; then
-        echo "ERROR: cancel_elapsed=${ELAPSED}s >= 10s — cancel forwarding may have regressed"
-        exit 1
-      fi
-      echo "OK: cancel_elapsed=${ELAPSED}s < 10s (fast cancel path active)"
+      echo
+      echo "=== downstream-sleeper-java log tail ==="
+      meshctl logs downstream-sleeper-java 2>&1 | tail -30
+    capture: final_check
 
 assertions:
   - expr: "${captured.cancel_response} contains '\\\"ok\\\":true'"
     message: "cancel should ack with ok:true"
-  # Per #889 + #900 — registry-side row flips to cancelled. The
-  # producer-side McpHttpClient outbound abort (#900) is wired but
-  # not exercised here because the fixture uses java.net.http
-  # directly; see header comment for the orthogonal-fixture rationale.
-  - expr: "${captured.final_status} contains '\\\"status\\\":\\\"cancelled\\\"'"
-    message: "registry-side status should be cancelled (#900 producer-side abort wired for McpHttpClient; tc09 fixture uses java.net.http, so registry-side flip is the substantive signal asserted here)"
+  - expr: "${captured.final_check} contains '\\\"status\\\":\\\"cancelled\\\"'"
+    message: "job status should be cancelled"
+  # The progress at cancel time should still reflect the producer being
+  # mid-downstream-call (progress=0.1, message="calling downstream"). If
+  # the cancel had not propagated through the downstream call, the
+  # producer would have continued past updateProgress(0.1, "calling
+  # downstream") and either reached complete() or hung — neither of
+  # which leaves the row cancelled with that exact mid-call progress.
+  - expr: "${captured.final_check} contains 'calling downstream'"
+    message: "cancel should land while producer is still in the downstream call (progress message frozen at 'calling downstream')"
+  - expr: "${captured.final_check} not contains '\\\"status\\\":\\\"completed\\\"'"
+    message: "the producer should NOT have reached complete() — the downstream HTTP must have been aborted, not awaited to natural finish"
 
 post_run:
   - routine: stop_all

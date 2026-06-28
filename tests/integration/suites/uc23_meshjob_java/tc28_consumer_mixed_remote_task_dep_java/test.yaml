@@ -1,0 +1,165 @@
+# tc28_consumer_mixed_remote_task_dep_java — Java-specific A2 regression guard.
+#
+# There is NO exact Python twin: Python binds a MeshJob submitter
+# unconditionally, so the asymmetry this guards is Java-specific. Before
+# the Wave 1 claim-path parity fix (A2), the Java SDK silently bound a
+# MeshJob slot to null whenever it was NOT the first / sole injected
+# dependency — a consumer that MIXED an ordinary McpMeshTool dep with a
+# remote task=true MeshJob submitter (in that declaration order) lost the
+# submitter.
+#
+# Three-agent chain (all Java):
+#   consumer (commission_report_with_lookup)
+#     declares TWO deps, MeshJob declared SECOND:
+#       1. ordinary McpMeshTool  slow_downstream  (downstream-sleeper-java)
+#       2. remote task=true MeshJob generate_report (long-task-provider-java)
+#     -> submits generate_report via the injected submitter and awaits it
+#
+# Asserts the MeshJob slot was wired (submitter_wired==true) and the
+# submission reached a terminal/working state (a job_id was returned and
+# the await resolved or raised a structured envelope — both prove the
+# submitter slot was non-null). Scaffolded on tc01 (single submit + await)
+# plus the sleeper start that the ordinary dep needs.
+
+name: "MeshJob Java: consumer with mixed ordinary + remote task (MeshJob 2nd) deps wires the submitter (A2)"
+description: "Java A2 regression guard — consumer mixes an McpMeshTool dep with a MeshJob submitter declared SECOND; the MeshJob slot must resolve non-null and submit"
+tags:
+  - meshjob
+  - java
+  - issue-890
+  - regression
+timeout: 360
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-java /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-java /workspace/
+      cp -rL /uc-artifacts/downstream-sleeper-java /workspace/
+
+  - name: "Install provider deps"
+    handler: maven-install
+    path: /workspace/long-task-provider-java
+    timeout: 600
+
+  - name: "Install consumer deps"
+    handler: maven-install
+    path: /workspace/long-task-consumer-java
+    timeout: 600
+
+  - name: "Install sleeper deps"
+    handler: maven-install
+    path: /workspace/downstream-sleeper-java
+    timeout: 600
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start downstream-sleeper-java (port 9122) — ordinary dep provider"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start downstream-sleeper-java --env MCP_MESH_HTTP_PORT=9122 -d
+
+  - name: "Wait for sleeper healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="downstream-sleeper-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] && exit 0; sleep 2
+      done; exit 1
+    timeout: 150
+
+  - name: "Start provider (port 9120) — task=true generate_report provider"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  - name: "Wait for provider healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] && exit 0; sleep 2
+      done; exit 1
+    timeout: 150
+
+  - name: "Start consumer (port 9121)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-java --env MCP_MESH_HTTP_PORT=9121 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  # Liveness only: wait until all three agents are registered AND healthy.
+  # The consumer's mixed deps (slow_downstream + generate_report) resolve
+  # on the claim path within the settle window (MCP_MESH_SETTLE_TIMEOUT=60).
+  - name: "Wait for all three agents healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(curl -s http://localhost:8000/agents)
+        OK=1
+        S=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="downstream-sleeper-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] || OK=0
+        S=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] || OK=0
+        S=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] || OK=0
+        if [ "$OK" = "1" ]; then
+          echo "all agents healthy after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: agents not healthy within 120s"
+      meshctl logs downstream-sleeper-java 2>&1 | tail -50 || true
+      meshctl logs long-task-provider-java 2>&1 | tail -50 || true
+      meshctl logs long-task-consumer-java 2>&1 | tail -50 || true
+      curl -s http://localhost:8000/agents | jq '.agents[] | {name, status, last_seen}'
+      exit 1
+    timeout: 150
+
+  - name: "Verify all three agents registered"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list
+    capture: agent_list
+
+  - name: "Call commission_report_with_lookup — submit via mixed-dep submitter"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_report_with_lookup '{"user_id": "alice", "sections": ["intro", "summary"]}'
+    capture: commission_response
+    timeout: 120
+
+assertions:
+  - expr: "${captured.agent_list} contains 'long-task-provider-java'"
+    message: "Java provider should be registered"
+  - expr: "${captured.agent_list} contains 'long-task-consumer-java'"
+    message: "Java consumer should be registered"
+  - expr: "${captured.agent_list} contains 'downstream-sleeper-java'"
+    message: "Java sleeper (ordinary-dep provider) should be registered"
+  - expr: "${captured.commission_response} not contains '\"isError\":true'"
+    message: "commission_report_with_lookup should NOT return an MCP error envelope"
+  # A2 regression core: the MeshJob slot declared SECOND (mixed with the
+  # ordinary McpMeshTool dep) must resolve to a real submitter, not null.
+  - expr: "${captured.commission_response} contains 'submitter_wired'"
+    message: "response should report the submitter wiring flag"
+  - expr: "${captured.commission_response} contains 'submitter_wired\\\":true'"
+    message: "the MeshJob submitter slot must be non-null (submitter_wired=true) — A2 regression guard"
+  - expr: "${captured.commission_response} not contains 'A2 regression'"
+    message: "the pre-A2 null-submitter error path must NOT fire"
+  # Submission reached the substrate: a job_id was returned, proving the
+  # submitter was wired end-to-end (not merely non-null).
+  - expr: "${captured.commission_response} contains 'job_id'"
+    message: "submit via the mixed-dep MeshJob submitter should return a job_id"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

@@ -1,22 +1,17 @@
 package com.example.longtaskprovider;
 
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.ObjectMapper;
-import tools.jackson.databind.node.ObjectNode;
 import io.mcpmesh.JobController;
 import io.mcpmesh.MeshAgent;
 import io.mcpmesh.MeshJob;
 import io.mcpmesh.MeshTool;
 import io.mcpmesh.Param;
+import io.mcpmesh.Selector;
+import io.mcpmesh.types.McpMeshTool;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.charset.StandardCharsets;
@@ -47,19 +42,10 @@ import java.util.Map;
  *   <li>{@code report_with_explicit_fail}     — calls fail("reason")</li>
  *   <li>{@code report_that_crashes}            — raises mid-attempt</li>
  *   <li>{@code runs_overlong}                  — long sleep loop for cancel tests</li>
- *   <li>{@code report_with_downstream_call}    — calls slow_downstream regular tool</li>
+ *   <li>{@code report_with_downstream_call}    — injects an McpMeshTool
+ *       {@code slow_downstream} dependency and calls it (task=true +
+ *       Selector deps; parity with Python's slow_downstream McpMeshAgent dep)</li>
  * </ul>
- *
- * <h2>Cancel limitation (#889)</h2>
- *
- * <p>Java's sync JNR-FFI bindings cannot bind the per-job cancel
- * registry (would require a nested Tokio runtime which Tokio rejects).
- * Tests that exercise mid-flight cancellation (tc06, tc09, tc22)
- * therefore assert only the registry-side correctness — the row's
- * {@code status} field flips to {@code cancelled} via the registry's
- * route + sweep — but the producer's task body does NOT abort
- * mid-flight; the loop runs to natural completion or until orphaned by
- * the sweep. See {@code MeshToolWrapper.dispatchAsJob} javadoc.
  */
 @MeshAgent(
     name = "long-task-provider-java",
@@ -69,8 +55,6 @@ import java.util.Map;
 )
 @SpringBootApplication
 public class LongTaskProviderApplication {
-
-    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     public static void main(String[] args) {
         SpringApplication.run(LongTaskProviderApplication.class, args);
@@ -357,140 +341,52 @@ public class LongTaskProviderApplication {
     // -------------------------------------------------------------------
     // Job that calls a downstream regular tool (tc09)
     //
-    // NOTE: Java's JobsRuntimeManager rejects task=true methods with
-    // McpMeshTool / @Selector dependencies (see exception in
-    // JobsRuntimeManager.validateProducerParams) — the claim path
-    // doesn't resolve those for task tools. Python and TS allow it.
-    // We work around by issuing the downstream HTTP call DIRECTLY via
-    // the mesh registry's proxy (registry forwards /proxy/{ip}:{port}
-    // to the agent's /mcp endpoint), exercising the same outbound HTTP
-    // path that the McpMeshTool wrapper would use, just minus the
-    // resolution layer. From the substrate's POV the cancel-propagation
-    // surface is identical (both go through the JVM's HTTP client).
+    // Parity target: uc21_meshjob/fixtures/long-task-provider/main.py's
+    // report_with_downstream_call, which declares a `slow_downstream`
+    // McpMeshAgent dependency on a task=true producer and awaits it.
+    //
+    // Wave 1 (this branch) brought Java's claim path to parity: a
+    // task=true producer may now declare McpMeshTool / @Selector
+    // dependencies and have them resolved + injected on the claim path
+    // (the old JobsRuntimeManager.validateProducerParams rejection is
+    // gone). So this fixture now mirrors Python exactly — it takes a
+    // real injected McpMeshTool slow_downstream dependency and calls it
+    // via the SDK's McpHttpClient proxy path rather than hand-rolling a
+    // java.net.http request. Cancel propagation through that outbound
+    // call is wired by #900 (McpHttpClient abort hook).
     // -------------------------------------------------------------------
     @MeshTool(
         capability = "report_with_downstream_call",
         task = true,
+        dependencies = @Selector(capability = "slow_downstream"),
         description = "Calls a downstream regular tool that sleeps; cancel must abort the in-flight HTTP."
     )
     public Object reportWithDownstreamCall(
             @Param("user_id") String userId,
+            McpMeshTool slowDownstream,
             MeshJob job) {
         JobController controller = job instanceof JobController c ? c : null;
         if (controller != null) {
             controller.updateProgress(0.1, "calling downstream");
         }
-        // Resolve the downstream agent via the registry's /agents API
-        // and call its /mcp endpoint directly. The registry proxy URL
-        // shape is /proxy/{host}:{port}/mcp.
-        String registryUrl = System.getenv().getOrDefault(
-            "MCP_MESH_REGISTRY_URL", "http://localhost:8000");
-        try {
-            HttpClient client = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(5))
-                .build();
-
-            // Discover the slow_downstream provider's instance.
-            HttpRequest agentsReq = HttpRequest.newBuilder()
-                .uri(URI.create(registryUrl + "/agents"))
-                .timeout(Duration.ofSeconds(5))
-                .GET()
-                .build();
-            HttpResponse<String> agentsResp = client.send(
-                agentsReq, HttpResponse.BodyHandlers.ofString());
-            // Parse the /agents response with Jackson — string-based
-            // indexOf scanning was brittle once the JSON object grew
-            // past the lookback window or agent ordering shifted, and
-            // could attribute the wrong endpoint to the matched name.
-            String agentEndpoint = null;
-            for (String candidate : List.of(
-                    "downstream-sleeper-java",
-                    "downstream-sleeper",
-                    "downstream-sleeper-ts")) {
-                agentEndpoint = findEndpointForAgentName(agentsResp.body(), candidate);
-                if (agentEndpoint != null) break;
-            }
-            if (agentEndpoint == null) {
-                if (controller != null) {
-                    controller.fail("slow_downstream provider not registered");
-                }
-                return null;
-            }
-
-            // Call /mcp on that endpoint with a tools/call request.
-            //
-            // MCP tool name registration differs across runtimes:
-            //   - Python: capability == tool name (snake_case)
-            //   - TS:     capability == tool name (snake_case)
-            //   - Java:   tool name == @MeshTool method name (camelCase)
-            //
-            // To survive any of those, try the snake_case shape first
-            // (matches Python/TS), and if the agent reports "Unknown
-            // tool" / "Tool not found", retry with camelCase. This
-            // makes the provider portable across uc21/uc22/uc23
-            // sleepers without baking in the choice.
-            HttpResponse<String> callResp = invokeDownstream(
-                client, agentEndpoint, "slow_downstream", userId);
-            String respBody = callResp.body();
-            if (callResp.statusCode() == 200
-                && (respBody.contains("Unknown tool") || respBody.contains("Tool not found"))) {
-                // Java sleeper — retry with camelCase method name.
-                callResp = invokeDownstream(
-                    client, agentEndpoint, "slowDownstream", userId);
-            }
-            Map<String, Object> result = new LinkedHashMap<>();
-            result.put("status_code", callResp.statusCode());
-            result.put("body", callResp.body());
+        if (slowDownstream == null) {
+            // Mirror Python's missing-dep branch: surface the unresolved
+            // dependency as an explicit terminal failure rather than
+            // letting a returned error dict trip auto-complete.
             if (controller != null) {
-                controller.complete(result);
-            }
-            return result;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            if (controller != null) {
-                controller.fail("downstream call failed: " + e.getMessage());
-            }
-            return null;
-        } catch (IOException e) {
-            if (controller != null) {
-                controller.fail("downstream call failed: " + e.getMessage());
+                controller.fail("slow_downstream dependency not injected");
             }
             return null;
         }
-    }
-
-    /**
-     * Issue a tools/call POST to the given agent endpoint with the
-     * specified tool name. Used by reportWithDownstreamCall to call
-     * slow_downstream / slowDownstream regardless of the downstream
-     * runtime's tool-naming convention.
-     */
-    private static HttpResponse<String> invokeDownstream(
-            HttpClient client,
-            String agentEndpoint,
-            String toolName,
-            String userId) throws IOException, InterruptedException {
-        // Build the JSON-RPC body via Jackson rather than string concat
-        // so the embedded user_id / tool name get properly escaped if
-        // they ever contain a quote, backslash, or control char.
-        ObjectNode root = MAPPER.createObjectNode();
-        root.put("jsonrpc", "2.0");
-        root.put("id", 1);
-        root.put("method", "tools/call");
-        ObjectNode params = root.putObject("params");
-        params.put("name", toolName);
-        ObjectNode args = params.putObject("arguments");
-        args.put("user_id", userId);
-        args.put("seconds", 30);
-        String mcpBody = MAPPER.writeValueAsString(root);
-        HttpRequest req = HttpRequest.newBuilder()
-            .uri(URI.create(agentEndpoint + "/mcp"))
-            .timeout(Duration.ofSeconds(60))
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json, text/event-stream")
-            .POST(HttpRequest.BodyPublishers.ofString(mcpBody))
-            .build();
-        return client.send(req, HttpResponse.BodyHandlers.ofString());
+        // The downstream tool sleeps 30s. With cancel propagation
+        // working, the producer's cancel token aborts the in-flight
+        // McpHttpClient request well before the 30s timer elapses.
+        Object result = slowDownstream.call(
+            Map.of("user_id", userId, "seconds", 30));
+        if (controller != null) {
+            controller.complete(result);
+        }
+        return result;
     }
 
     // -------------------------------------------------------------------
@@ -675,34 +571,5 @@ public class LongTaskProviderApplication {
         exhausted.put("status", "loop_exhausted");
         exhausted.put("events_seen", eventsSeen);
         return exhausted;
-    }
-
-    /**
-     * Find the {@code endpoint} field for the named agent in a
-     * registry {@code GET /agents} response body. Returns {@code null}
-     * if the agent isn't present or the response shape doesn't match.
-     *
-     * <p>Replaces an earlier indexOf-based scanner that could land on
-     * the wrong agent's endpoint when the JSON exceeded an 800-char
-     * lookback window or agent ordering shifted between requests.
-     */
-    private static String findEndpointForAgentName(String body, String agentName) {
-        try {
-            JsonNode root = MAPPER.readTree(body);
-            JsonNode agents = root.has("agents") ? root.get("agents") : root;
-            if (agents == null || !agents.isArray()) return null;
-            for (JsonNode agent : agents) {
-                JsonNode name = agent.get("name");
-                if (name != null && agentName.equals(name.asText())) {
-                    JsonNode endpoint = agent.get("endpoint");
-                    return endpoint != null && !endpoint.isNull() ? endpoint.asText() : null;
-                }
-            }
-            return null;
-        } catch (RuntimeException e) {
-            // Jackson 3.x throws unchecked JacksonException — return
-            // null so the caller falls through to controller.fail().
-            return null;
-        }
     }
 }

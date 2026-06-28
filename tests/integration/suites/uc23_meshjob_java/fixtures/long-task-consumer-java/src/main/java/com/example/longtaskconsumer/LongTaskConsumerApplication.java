@@ -10,6 +10,7 @@ import io.mcpmesh.MeshTool;
 import io.mcpmesh.Param;
 import io.mcpmesh.Selector;
 import io.mcpmesh.SubscribeOptions;
+import io.mcpmesh.types.McpMeshTool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
@@ -43,6 +44,12 @@ import java.util.Map;
  *   <li>{@code commission_crash}          — submits report_that_crashes</li>
  *   <li>{@code commission_overlong}       — submits runs_overlong</li>
  *   <li>{@code commission_downstream}     — submits report_with_downstream_call</li>
+ *   <li>{@code commission_report_with_lookup} — Java-specific A2 regression
+ *                                          guard: declares an ordinary
+ *                                          McpMeshTool dep AND a remote
+ *                                          task=true MeshJob dep (MeshJob
+ *                                          declared SECOND, mixed) — proves
+ *                                          the MeshJob slot resolves non-null</li>
  * </ul>
  */
 @MeshAgent(
@@ -702,6 +709,82 @@ public class LongTaskConsumerApplication {
         try (JobProxy proxy = submitter.submit(opts).get()) {
             Map<String, Object> response = new LinkedHashMap<>();
             response.put("job_id", proxy.jobId());
+            return response;
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Mixed-dependency submitter (tc28) — Java-specific A2 regression guard
+    // -------------------------------------------------------------------
+    //
+    // This capability declares TWO dependencies in one @MeshTool:
+    //   1. an ordinary McpMeshTool dep (slow_downstream)
+    //   2. a remote task=true capability typed MeshJob (generate_report),
+    //      declared SECOND, mixed with the ordinary one.
+    //
+    // Before the Wave 1 claim-path parity fix (A2), the Java SDK silently
+    // bound the MeshJob slot to null whenever it was NOT the first /
+    // sole injected dependency — a consumer that mixed an ordinary
+    // McpMeshTool dep with a MeshJob submitter (in that order) lost the
+    // submitter. There is no exact Python twin: Python binds the
+    // submitter unconditionally, so this asymmetry is Java-specific.
+    //
+    // The body optionally pokes the ordinary dep (best-effort — its
+    // availability is not what's under test), then submits via the
+    // MeshJob submitter and returns the job_id. The test (tc28) asserts
+    // the submit succeeded — i.e. the MeshJob slot was non-null — which
+    // is the regression A2 fixed.
+    @MeshTool(
+        capability = "commission_report_with_lookup",
+        description = "Java A2 regression guard: ordinary McpMeshTool dep + remote task=true MeshJob dep (MeshJob declared SECOND).",
+        dependencies = {
+            @Selector(capability = "slow_downstream"),
+            @Selector(capability = "generate_report")
+        }
+    )
+    public Map<String, Object> commissionReportWithLookup(
+            @Param("user_id") String userId,
+            @Param(value = "sections", required = false) List<String> sections,
+            McpMeshTool slowDownstream,
+            MeshJob generateReport) throws Exception {
+        Map<String, Object> response = new LinkedHashMap<>();
+
+        // The MeshJob slot is the regression surface — capture whether it
+        // resolved to a real submitter so the test can assert non-null.
+        boolean submitterWired = generateReport instanceof MeshJobSubmitter;
+        response.put("submitter_wired", submitterWired);
+        response.put("lookup_wired", slowDownstream != null);
+
+        if (!submitterWired) {
+            // Pre-A2 behaviour: the mixed MeshJob slot would land here null.
+            response.put("error", "generate_report submitter not injected (A2 regression)");
+            return response;
+        }
+        MeshJobSubmitter submitter = (MeshJobSubmitter) generateReport;
+
+        if (sections == null) {
+            sections = List.of("intro", "summary");
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("user_id", userId);
+        payload.put("sections", sections);
+        MeshJobSubmitter.SubmitOptions opts = new MeshJobSubmitter.SubmitOptions(
+            payload, null, 60, null, null);
+        try (JobProxy proxy = submitter.submit(opts).get()) {
+            response.put("job_id", proxy.jobId());
+            // Confirm the submission reached a working/terminal state —
+            // i.e. the submitter was genuinely wired end-to-end, not just
+            // a non-null proxy. await() returns the structured payload on
+            // completion; a wait_raised envelope still proves the job was
+            // submitted (the submitter slot was non-null).
+            try {
+                Object result = proxy.await(60.0);
+                response.put("status", "completed");
+                response.put("result", result);
+            } catch (Exception e) {
+                response.put("status", "wait_raised");
+                response.put("error", e.getMessage());
+            }
             return response;
         }
     }
