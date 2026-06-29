@@ -899,6 +899,12 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                     String providerName = provider.provider() != null ? provider.provider() : "";
                     TraceContext.setLlmMetadata(providerName, effectiveModel,
                         accumulatedInputTokens, accumulatedOutputTokens);
+                } else {
+                    // No usage reported: clear the per-thread sink so stale
+                    // llm_* metadata from a prior call on a pooled thread can't
+                    // leak into a later span. Always leave the sink in a known
+                    // state after the loop — set when accumulated, cleared otherwise.
+                    TraceContext.clearLlmMetadata();
                 }
             }
         }
