@@ -72,6 +72,18 @@ public class TraceContext {
         ThreadLocal.withInitial(Collections::emptyMap);
 
     /**
+     * Thread-local sink for LLM token-usage metadata produced by a {@code @MeshLlm}
+     * agentic loop. Mirrors the Python {@code _llm_metadata} contextvar: the
+     * {@code MeshLlmAgentProxy} accumulates per-iteration usage and writes the totals
+     * here; {@code ExecutionTracer.endSpan} reads and clears it when finalizing the
+     * consumer span so the dashboard can attribute tokens to that span.
+     */
+    private static final ThreadLocal<LlmMetadata> LLM_METADATA = new ThreadLocal<>();
+
+    /** Accumulated LLM token-usage metadata for the active consumer span. */
+    public record LlmMetadata(String provider, String model, long inputTokens, long outputTokens) {}
+
+    /**
      * Thread-local storage for trace context.
      * Use {@link #wrap(Runnable)} or {@link #wrap(Callable)} for async propagation.
      */
@@ -147,6 +159,26 @@ public class TraceContext {
 
     public static void clearPropagatedHeaders() {
         PROPAGATED_HEADERS.set(Collections.emptyMap());
+    }
+
+    /**
+     * Publish accumulated LLM token-usage metadata for the active consumer span.
+     *
+     * <p>Called by {@code MeshLlmAgentProxy} after the agentic loop completes; read and
+     * cleared by {@code ExecutionTracer.endSpan}. Mirrors Python's {@code set_llm_metadata}.
+     */
+    public static void setLlmMetadata(String provider, String model, long inputTokens, long outputTokens) {
+        LLM_METADATA.set(new LlmMetadata(provider, model, inputTokens, outputTokens));
+    }
+
+    /** Get the current LLM token-usage metadata, or null if none was set on this thread. */
+    public static LlmMetadata getLlmMetadata() {
+        return LLM_METADATA.get();
+    }
+
+    /** Clear the current LLM token-usage metadata. */
+    public static void clearLlmMetadata() {
+        LLM_METADATA.remove();
     }
 
     /**
