@@ -41,7 +41,7 @@ async def passthrough(prompt: str, chat: mesh.McpMeshTool = None) -> mesh.Stream
 
 This bridges incoming `notifications/progress` messages into an `AsyncIterator[str]`. Multi-hop streaming composes by re-yielding chunks at each layer.
 
-> Note: TypeScript and Java SDKs do not yet expose `proxy.stream()`. Wire-level streaming still works (a TS or Java client receives the buffered final result), but per-chunk delivery requires Python on the consumer side. Cross-runtime parity is on the roadmap.
+> Note: The Java consumer SDK exposes per-chunk streaming via `proxy.stream(List<Message>)` and `MeshLlmAgentProxy.streamGenerate()`, returning a `Flow.Publisher<String>` of chunks. TypeScript does not yet expose `proxy.stream()` (a TS client receives the buffered final result). Producing a stream is not yet supported on the Java side — there is no streaming `@MeshTool` or streaming `@MeshLlmProvider`, so a Java agent can consume streams but cannot yet originate them.
 
 ## Browser via `mesh.route` auto-SSE
 
@@ -83,7 +83,7 @@ Server ← {result: {content: [{type: "text", text: "Hello world"}]}}
 - **`MeshLlmAgent.stream()` is `str`-output only.** Mesh-delegated streaming is the default and only mode in v2.x. The constraint is on the return type: `MeshLlmAgent.stream()` supports `output_type=str` (token-by-token text chunks). For typed structured output, use `MeshLlmAgent.__call__()` with a Pydantic return type — typed structured streaming raises `NotImplementedError` by design.
 - **`Stream[str]` only** — typed Pydantic streaming is intentionally unsupported (consumer needs complete JSON for schema validation).
 - **Final iteration only** — in agentic loops, only the LAST iteration (text-only, no tool calls) streams. Intermediate tool-calling iterations are buffered.
-- **Python only for `proxy.stream()`** — TS/Java consumer parity pending.
+- **Consumer streaming: Python and Java** — `proxy.stream()` (Python) and `proxy.stream()` / `streamGenerate()` (Java) deliver per-chunk; TypeScript consumer parity is pending. Producing a stream is Python-only — a streaming `@MeshTool`/`@MeshLlmProvider` is not yet supported on the Java producer side.
 - **Short responses may not appear streamed** — Anthropic batches small responses, so a 1-token answer can land in a single SSE event.
 
 See `meshctl man llm` for `MeshLlmAgent` details. See the [streaming concept doc](https://github.com/dhyansraj/mcp-mesh/blob/main/docs/concepts/streaming.md) for design rationale and the full wire-protocol walkthrough.

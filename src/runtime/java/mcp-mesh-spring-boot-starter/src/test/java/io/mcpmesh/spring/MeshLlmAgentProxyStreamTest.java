@@ -325,7 +325,8 @@ class MeshLlmAgentProxyStreamTest {
             4096,                                 // maxTokens
             0.7,                                  // temperature
             false,                                // parallelToolCalls
-            ""                                    // outputMode (unset)
+            "",                                   // outputMode (unset)
+            ""                                    // model (unset)
         );
 
         assertNotNull(config.providerSelector());

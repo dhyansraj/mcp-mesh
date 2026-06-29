@@ -20,14 +20,20 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Thin A2A v1.0 client — sync {@code tasks/send} + poll until terminal.
+ * A2A v1.0 client — synchronous send/poll plus async submit/subscribe (SSE).
  *
- * <p>Phase 1 surface (issue #916): one synchronous {@link #send} call
- * that POSTs a JSON-RPC {@code tasks/send} request, then polls
- * {@code tasks/get} with exponential backoff (capped at
- * {@code pollIntervalMaxMs}) until the task reaches a terminal state
- * ({@code completed} / {@code failed} / {@code canceled}, case-insensitive
- * for the US/UK spelling) or the user-supplied timeout elapses.
+ * <p>Two call styles are supported:
+ * <ul>
+ *   <li><b>Synchronous</b> {@link #send} — POSTs a JSON-RPC {@code tasks/send}
+ *       request, then polls {@code tasks/get} with exponential backoff (capped
+ *       at {@code pollIntervalMaxMs}) until the task reaches a terminal state
+ *       ({@code completed} / {@code failed} / {@code canceled}, case-insensitive
+ *       for the US/UK spelling) or the user-supplied timeout elapses.</li>
+ *   <li><b>Asynchronous</b> {@link #submit} — POSTs {@code tasks/send} and
+ *       returns an {@link A2AJob} handle without blocking; {@link #subscribe}
+ *       opens a {@code tasks/sendSubscribe} SSE stream and returns an
+ *       {@link A2AStream} of task events.</li>
+ * </ul>
  *
  * <p>One instance per (url, skillId, auth) tuple — a typical Spring
  * agent constructs one per {@code @MeshTool} method (with {@code static}
@@ -35,8 +41,7 @@ import java.util.UUID;
  * amortized across calls.
  *
  * <p>Mirrors {@code mesh._a2a_consumer.A2AClient} from the Python
- * runtime. Phase 3 ({@code submit} / {@code subscribe} / SSE) is
- * deferred to a follow-up PR.
+ * runtime, including the {@code submit} / {@code subscribe} / SSE surface.
  *
  * <p><b>Lifecycle on JDK 17:</b> This class implements {@link AutoCloseable}
  * for forward-compatibility, but the underlying {@link java.net.http.HttpClient}

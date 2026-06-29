@@ -79,7 +79,17 @@ public class OpenAiHandler implements LlmProviderHandler {
         log.debug("OpenAiHandler: Processing {} messages", messages.size());
 
         List<Message> springMessages = convertMessages(messages);
-        Prompt prompt = new Prompt(springMessages);
+        // Plain-text generation: apply consumer-supplied model_params
+        // (max_tokens/temperature/top_p/vendor-matched model) when present so the
+        // no-tools/no-schema path honors them like the tools path does.
+        Prompt prompt;
+        if (LlmProviderHandler.hasAnyModelParam(options)) {
+            OpenAiChatOptions.Builder optionsBuilder = OpenAiChatOptions.builder();
+            applyModelParams(optionsBuilder, options);
+            prompt = new Prompt(springMessages, optionsBuilder.build());
+        } else {
+            prompt = new Prompt(springMessages);
+        }
         ChatResponse response = model.call(prompt);
 
         String content = response.getResult() != null && response.getResult().getOutput() != null
@@ -134,10 +144,38 @@ public class OpenAiHandler implements LlmProviderHandler {
 
         if (executeTools) {
             // Auto-execution mode: Use ChatClient which handles tool execution automatically
-            return generateWithToolsAutoExecute(model, springMessages, tools, toolExecutor, formattedSystemPrompt, enforcedSchema, messages);
+            return generateWithToolsAutoExecute(model, springMessages, tools, toolExecutor, formattedSystemPrompt, enforcedSchema, messages, options);
         } else {
             // No-execution mode: Use model.call with internalToolExecutionEnabled(false)
-            return generateWithToolsNoExecute(model, springMessages, tools, formattedSystemPrompt, enforcedSchema);
+            return generateWithToolsNoExecute(model, springMessages, tools, formattedSystemPrompt, enforcedSchema, options);
+        }
+    }
+
+    /**
+     * Apply the consumer-supplied {@code model_params} (max_tokens, temperature,
+     * top_p, and a vendor-matched model override) onto an OpenAI options builder.
+     * Absent keys are left untouched so Spring AI's own defaults apply. The
+     * {@code model} override is honored only when its declared vendor matches
+     * {@code openai}/{@code gpt}; on mismatch a warning is logged and the
+     * provider's default model is kept.
+     */
+    private void applyModelParams(OpenAiChatOptions.Builder builder, Map<String, Object> options) {
+        Integer maxTokens = LlmProviderHandler.maxTokensOption(options);
+        if (maxTokens != null) {
+            builder.maxTokens(maxTokens);
+        }
+        Double temperature = LlmProviderHandler.temperatureOption(options);
+        if (temperature != null) {
+            builder.temperature(temperature);
+        }
+        Double topP = LlmProviderHandler.topPOption(options);
+        if (topP != null) {
+            builder.topP(topP);
+        }
+        String modelOverride = LlmProviderHandler.resolveModelOverride(options, getVendor(), getAliases());
+        if (modelOverride != null) {
+            builder.model(modelOverride);
+            log.debug("OpenAiHandler: applied model override '{}'", modelOverride);
         }
     }
 
@@ -151,7 +189,8 @@ public class OpenAiHandler implements LlmProviderHandler {
             ToolExecutorCallback toolExecutor,
             String formattedSystemPrompt,
             OutputSchema outputSchema,
-            List<Map<String, Object>> originalMessages) {
+            List<Map<String, Object>> originalMessages,
+            Map<String, Object> options) {
 
         // Convert tools to Spring AI ToolCallback objects
         List<ToolCallback> toolCallbacks = new ArrayList<>();
@@ -183,29 +222,37 @@ public class OpenAiHandler implements LlmProviderHandler {
             requestSpec.toolCallbacks(toolCallbacks.toArray(new ToolCallback[0]));
         }
 
-        // Apply response_format immediately when outputSchema is present (like Python)
-        if (outputSchema != null) {
+        // Apply response_format immediately when outputSchema is present (like Python),
+        // plus any consumer-supplied model_params (max_tokens/temperature/top_p/model).
+        // Build options whenever EITHER a schema OR model_params are present so the
+        // numeric/model overrides reach the wire even without a schema.
+        boolean hasModelParams = LlmProviderHandler.hasAnyModelParam(options);
+        if (outputSchema != null || hasModelParams) {
             try {
-                // Make schema strict (add additionalProperties: false, all properties required)
-                Map<String, Object> strictSchema = outputSchema.makeStrict(true);
+                OpenAiChatOptions.Builder optionsBuilder = OpenAiChatOptions.builder();
+                if (outputSchema != null) {
+                    // Make schema strict (add additionalProperties: false, all properties required)
+                    Map<String, Object> strictSchema = outputSchema.makeStrict(true);
 
-                ResponseFormat responseFormat = ResponseFormat.builder()
-                    .type(Type.JSON_SCHEMA)
-                    .jsonSchema(ResponseFormat.JsonSchema.builder()
-                        .name(outputSchema.name())
-                        .schema(strictSchema)
-                        .strict(true)
-                        .build())
-                    .build();
+                    ResponseFormat responseFormat = ResponseFormat.builder()
+                        .type(Type.JSON_SCHEMA)
+                        .jsonSchema(ResponseFormat.JsonSchema.builder()
+                            .name(outputSchema.name())
+                            .schema(strictSchema)
+                            .strict(true)
+                            .build())
+                        .build();
+                    optionsBuilder.responseFormat(responseFormat);
+                }
+                applyModelParams(optionsBuilder, options);
 
-                OpenAiChatOptions chatOptions = OpenAiChatOptions.builder()
-                    .responseFormat(responseFormat)
-                    .build();
-
-                requestSpec.options(chatOptions);
-                log.debug("Applied OpenAI response_format with schema: {}", outputSchema.name());
+                requestSpec.options(optionsBuilder.build());
+                if (outputSchema != null) {
+                    log.debug("Applied OpenAI response_format with schema: {}", outputSchema.name());
+                }
             } catch (Exception e) {
-                log.warn("Failed to apply response_format for {}: {}", outputSchema.name(), e.getMessage());
+                log.warn("Failed to apply OpenAI options (schema={}): {}",
+                    outputSchema != null ? outputSchema.name() : "none", e.getMessage());
             }
         }
 
@@ -232,7 +279,8 @@ public class OpenAiHandler implements LlmProviderHandler {
             List<Message> springMessages,
             List<ToolDefinition> tools,
             String formattedSystemPrompt,
-            OutputSchema outputSchema) {
+            OutputSchema outputSchema,
+            Map<String, Object> options) {
 
         // Replace system message with formatted one
         List<Message> messagesWithFormattedSystem = replaceSystemMessage(springMessages, formattedSystemPrompt);
@@ -243,7 +291,10 @@ public class OpenAiHandler implements LlmProviderHandler {
         // Build prompt with chat options
         Prompt prompt;
 
-        // Apply response_format immediately when outputSchema is present (like Python)
+        // Apply response_format immediately when outputSchema is present (like Python),
+        // plus any consumer-supplied model_params (max_tokens/temperature/top_p/model).
+        // Always build OpenAiChatOptions (not the generic ToolCallingChatOptions) so
+        // model_params apply even without a schema.
         if (outputSchema != null) {
             try {
                 // Make schema strict (add additionalProperties: false, all properties required)
@@ -259,33 +310,31 @@ public class OpenAiHandler implements LlmProviderHandler {
                     .build();
 
                 // Use OpenAiChatOptions which supports both tools and response_format
-                OpenAiChatOptions chatOptions = OpenAiChatOptions.builder()
+                OpenAiChatOptions.Builder optionsBuilder = OpenAiChatOptions.builder()
                     .toolCallbacks(toolCallbacks.toArray(new ToolCallback[0]))
                     .internalToolExecutionEnabled(false)
-                    .responseFormat(responseFormat)
-                    .build();
+                    .responseFormat(responseFormat);
+                applyModelParams(optionsBuilder, options);
 
-                prompt = new Prompt(messagesWithFormattedSystem, chatOptions);
+                prompt = new Prompt(messagesWithFormattedSystem, optionsBuilder.build());
                 log.debug("Applied OpenAI response_format with schema: {}", outputSchema.name());
             } catch (Exception e) {
                 log.warn("Failed to apply response_format for {}: {}, falling back to basic options",
                     outputSchema.name(), e.getMessage());
-                // Fallback to basic options without response_format
-                org.springframework.ai.model.tool.ToolCallingChatOptions chatOptions =
-                    org.springframework.ai.model.tool.ToolCallingChatOptions.builder()
-                        .toolCallbacks(toolCallbacks)
-                        .internalToolExecutionEnabled(false)
-                        .build();
-                prompt = new Prompt(messagesWithFormattedSystem, chatOptions);
+                // Fallback to OpenAiChatOptions without response_format (still apply model_params)
+                OpenAiChatOptions.Builder optionsBuilder = OpenAiChatOptions.builder()
+                    .toolCallbacks(toolCallbacks.toArray(new ToolCallback[0]))
+                    .internalToolExecutionEnabled(false);
+                applyModelParams(optionsBuilder, options);
+                prompt = new Prompt(messagesWithFormattedSystem, optionsBuilder.build());
             }
         } else {
-            // No structured output needed
-            org.springframework.ai.model.tool.ToolCallingChatOptions chatOptions =
-                org.springframework.ai.model.tool.ToolCallingChatOptions.builder()
-                    .toolCallbacks(toolCallbacks)
-                    .internalToolExecutionEnabled(false)
-                    .build();
-            prompt = new Prompt(messagesWithFormattedSystem, chatOptions);
+            // No structured output needed — still apply model_params via OpenAiChatOptions.
+            OpenAiChatOptions.Builder optionsBuilder = OpenAiChatOptions.builder()
+                .toolCallbacks(toolCallbacks.toArray(new ToolCallback[0]))
+                .internalToolExecutionEnabled(false);
+            applyModelParams(optionsBuilder, options);
+            prompt = new Prompt(messagesWithFormattedSystem, optionsBuilder.build());
         }
 
         log.debug("Calling OpenAI with {} tools (execution disabled)", tools != null ? tools.size() : 0);

@@ -378,6 +378,64 @@ class MeshLlmAgentProxyModelParamsTest {
     }
 
     @Test
+    @DisplayName("@MeshLlm(model=...) per-tool override flows into the wire model_params.model (GAP C3)")
+    void meshLlmModelOverrideFlowsToWire() throws Exception {
+        // C3: @MeshLlm(model="anthropic/claude-3-5-sonnet-latest") must surface as
+        // model_params.model on the wire so the provider can honor it (same-vendor).
+        server.enqueue(stubLlmResponse("ok"));
+
+        // 12-arg configure overload simulates @MeshLlm(model="anthropic/claude-3-5-sonnet-latest").
+        proxy.configure(client, null, null, null, "", "ctx", 1, false,
+            io.mcpmesh.MeshLlmDefaults.MAX_TOKENS_UNSET, io.mcpmesh.MeshLlmDefaults.TEMPERATURE_UNSET,
+            io.mcpmesh.MeshLlmDefaults.OUTPUT_MODE_UNSET, "anthropic/claude-3-5-sonnet-latest");
+
+        proxy.request().user("hi").generate();
+
+        RecordedRequest req = server.takeRequest();
+        JsonNode modelParams = readModelParams(req);
+
+        assertEquals("anthropic/claude-3-5-sonnet-latest", modelParams.get("model").asText(),
+            "@MeshLlm(model=...) must reach the wire as model_params.model");
+    }
+
+    @Test
+    @DisplayName("per-call .modelParams(model) wins over @MeshLlm(model=...) annotation (GAP C3)")
+    void perCallModelOverridesAnnotation() throws Exception {
+        server.enqueue(stubLlmResponse("ok"));
+
+        // Annotation says one model; the per-call escape hatch supplies another.
+        proxy.configure(client, null, null, null, "", "ctx", 1, false,
+            io.mcpmesh.MeshLlmDefaults.MAX_TOKENS_UNSET, io.mcpmesh.MeshLlmDefaults.TEMPERATURE_UNSET,
+            io.mcpmesh.MeshLlmDefaults.OUTPUT_MODE_UNSET, "anthropic/claude-3-5-sonnet-latest");
+
+        proxy.request()
+            .user("hi")
+            .modelParams(Map.of("model", "anthropic/claude-3-5-haiku-latest"))
+            .generate();
+
+        RecordedRequest req = server.takeRequest();
+        JsonNode modelParams = readModelParams(req);
+
+        assertEquals("anthropic/claude-3-5-haiku-latest", modelParams.get("model").asText(),
+            "a per-call .modelParams(Map.of(\"model\", ...)) must win over the @MeshLlm(model=...) annotation");
+    }
+
+    @Test
+    @DisplayName("unset @MeshLlm model → no model key on the wire (provider uses its own model)")
+    void unsetModelOmitsKey() throws Exception {
+        server.enqueue(stubLlmResponse("ok"));
+
+        // Default 8-arg configure leaves the model override empty.
+        proxy.request().user("hi").generate();
+
+        RecordedRequest req = server.takeRequest();
+        JsonNode modelParams = readModelParams(req);
+
+        assertFalse(modelParams.has("model"),
+            "with no @MeshLlm(model=...) and no per-call override, model_params.model must be absent");
+    }
+
+    @Test
     @DisplayName("parallelToolCalls annotation honors user modelParams override (issue #1026)")
     void parallelToolCallsHonorsUserModelParamsOverride() throws Exception {
         // Issue #1026: previously `if (parallelToolCalls) modelParams.put("parallel_tool_calls", true)`
