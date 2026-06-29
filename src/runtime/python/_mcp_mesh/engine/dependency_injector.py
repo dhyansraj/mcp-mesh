@@ -899,9 +899,21 @@ def _prepare_injection_kwargs(
                     f"for capability={dep_name!r} into param={param_name!r}"
                 )
             else:
-                log.warning(
-                    f"{tp}MeshJob param {param_name!r} on {func.__name__} "
-                    f"could not be wired: MCP_MESH_REGISTRY_URL not set"
+                # This branch knows only two facts: the MeshJob slot was
+                # matched to the declared dependency dep_name, and no
+                # registry URL is available to build a submitter — so the
+                # param is left None silently (#1231). It does NOT verify
+                # provider/capability resolution, so the message must not
+                # claim it did. Route through warn_or_raise so the diagnostic
+                # rides MCP_MESH_STRICT_DI and the text can't drift.
+                warn_or_raise(
+                    log,
+                    f"{tp}⚠️ MeshJob parameter {param_name!r} on "
+                    f"'{func.__name__}' was matched to dependency "
+                    f"{dep_name!r}, but no MeshJobSubmitter could be injected "
+                    f"because MCP_MESH_REGISTRY_URL is not set; the parameter "
+                    f"stays None. Fix: set MCP_MESH_REGISTRY_URL so the "
+                    f"submitter for dependency {dep_name!r} can be built.",
                 )
                 # Set the slot explicitly to None so the user function's
                 # call signature is satisfied even when the MeshJob param

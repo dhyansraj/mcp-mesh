@@ -601,4 +601,149 @@ class OutputSchemaTest {
             assertNull(addressSchema.get("required"));
         }
     }
+
+    // =========================================================================
+    // #1230: strip the nullable anyOf branch on REQUIRED fields (defense-in-depth)
+    // =========================================================================
+
+    @Nested
+    @DisplayName("#1230 required-field null-branch strip")
+    class RequiredNullBranchStrip {
+
+        /** A plain-record-shaped schema: `summary` required + carrying a stale null branch. */
+        private Map<String, Object> plainRecordSchema() {
+            Map<String, Object> summary = new LinkedHashMap<>();
+            summary.put("anyOf", List.of(
+                Map.of("type", "null"),
+                Map.of("type", "string")
+            ));
+            Map<String, Object> note = new LinkedHashMap<>();
+            note.put("anyOf", List.of(
+                Map.of("type", "null"),
+                Map.of("type", "string")
+            ));
+            Map<String, Object> properties = new LinkedHashMap<>();
+            properties.put("summary", summary);
+            properties.put("note", note);
+
+            Map<String, Object> schema = new LinkedHashMap<>();
+            schema.put("type", "object");
+            schema.put("required", List.of("summary")); // note is Optional -> not required
+            schema.put("properties", properties);
+            return schema;
+        }
+
+        @Test
+        @DisplayName("makeStrict(true) drops {type:null} on required field, collapses to {type:string}")
+        @SuppressWarnings("unchecked")
+        void makeStrictStripsRequiredNullBranch() {
+            OutputSchema output = OutputSchema.fromSchema("Plain", plainRecordSchema());
+            Map<String, Object> strict = output.makeStrict(true);
+
+            Map<String, Object> props = (Map<String, Object>) strict.get("properties");
+            Map<String, Object> summary = (Map<String, Object>) props.get("summary");
+            assertFalse(summary.containsKey("anyOf"),
+                "required summary must have its anyOf null branch collapsed. Got: " + summary);
+            assertEquals("string", summary.get("type"),
+                "required summary must collapse to {type:string}. Got: " + summary);
+        }
+
+        @Test
+        @DisplayName("sanitize() drops {type:null} on required field but leaves non-required nullable")
+        @SuppressWarnings("unchecked")
+        void sanitizeStripsRequiredNullBranchOnly() {
+            OutputSchema output = OutputSchema.fromSchema("Plain", plainRecordSchema());
+            Map<String, Object> sanitized = output.sanitize();
+
+            Map<String, Object> props = (Map<String, Object>) sanitized.get("properties");
+
+            // required `summary` -> collapsed.
+            Map<String, Object> summary = (Map<String, Object>) props.get("summary");
+            assertFalse(summary.containsKey("anyOf"),
+                "required summary anyOf should be collapsed. Got: " + summary);
+            assertEquals("string", summary.get("type"));
+
+            // non-required `note` (Optional escape hatch) -> stays nullable.
+            Map<String, Object> note = (Map<String, Object>) props.get("note");
+            assertTrue(note.containsKey("anyOf"),
+                "non-required note must stay nullable (escape hatch). Got: " + note);
+        }
+
+        @Test
+        @DisplayName("makeStrict(true): required field whose non-null branch is a nested object is fully strictified after collapse")
+        @SuppressWarnings("unchecked")
+        void requiredNestedObjectBranchIsStrictifiedAfterCollapse() {
+            // `address` is required and nullable: anyOf:[{type:null}, {object...}].
+            // After collapsing the null branch, the inlined OBJECT must still flow
+            // through makeSchemaStrict so it gets additionalProperties:false and its
+            // own required expansion — not just be inlined and bypass strictification.
+            Map<String, Object> addressObject = new LinkedHashMap<>();
+            addressObject.put("type", "object");
+            addressObject.put("properties", new LinkedHashMap<>(Map.of(
+                "street", Map.of("type", "string"),
+                "city", Map.of("type", "string")
+            )));
+
+            Map<String, Object> address = new LinkedHashMap<>();
+            address.put("anyOf", List.of(
+                Map.of("type", "null"),
+                addressObject
+            ));
+
+            Map<String, Object> properties = new LinkedHashMap<>();
+            properties.put("address", address);
+
+            Map<String, Object> schema = new LinkedHashMap<>();
+            schema.put("type", "object");
+            schema.put("required", List.of("address"));
+            schema.put("properties", properties);
+
+            OutputSchema output = OutputSchema.fromSchema("Nested", schema);
+            Map<String, Object> strict = output.makeStrict(true);
+
+            Map<String, Object> props = (Map<String, Object>) strict.get("properties");
+            Map<String, Object> out = (Map<String, Object>) props.get("address");
+
+            assertFalse(out.containsKey("anyOf"),
+                "required address must have its anyOf null branch collapsed. Got: " + out);
+            assertEquals("object", out.get("type"),
+                "collapsed address must retain the nested object type. Got: " + out);
+            // The crux of the fix: the inlined object is fully strictified.
+            assertEquals(false, out.get("additionalProperties"),
+                "collapsed nested object must get additionalProperties:false (full strictify, "
+                    + "not bare inline). Got: " + out);
+            List<String> nestedRequired = (List<String>) out.get("required");
+            assertNotNull(nestedRequired,
+                "collapsed nested object must get its own required expansion. Got: " + out);
+            assertTrue(nestedRequired.contains("street") && nestedRequired.contains("city"),
+                "nested object's components must be expanded into required. Got: " + nestedRequired);
+        }
+
+        @Test
+        @DisplayName("makeStrict(true): newly-required field also gets its null branch stripped")
+        @SuppressWarnings("unchecked")
+        void addAllRequiredAlsoStripsNullBranch() {
+            // No explicit `required` -> makeStrict(true) marks ALL props required,
+            // so even the previously-optional-shaped null branch must be stripped.
+            Map<String, Object> field = new LinkedHashMap<>();
+            field.put("anyOf", List.of(
+                Map.of("type", "null"),
+                Map.of("type", "string")
+            ));
+            Map<String, Object> properties = new LinkedHashMap<>();
+            properties.put("field", field);
+            Map<String, Object> schema = new LinkedHashMap<>();
+            schema.put("type", "object");
+            schema.put("properties", properties);
+
+            OutputSchema output = OutputSchema.fromSchema("AllReq", schema);
+            Map<String, Object> strict = output.makeStrict(true);
+
+            Map<String, Object> props = (Map<String, Object>) strict.get("properties");
+            Map<String, Object> out = (Map<String, Object>) props.get("field");
+            assertFalse(out.containsKey("anyOf"),
+                "field is now required (addAllRequired) so its null branch must be stripped. Got: " + out);
+            assertEquals("string", out.get("type"));
+        }
+    }
 }

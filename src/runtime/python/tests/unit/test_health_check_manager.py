@@ -2,7 +2,6 @@
 Unit tests for health check manager functionality.
 """
 
-import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
@@ -106,25 +105,52 @@ async def test_health_check_function_failure_returns_degraded(agent_config):
 
 
 @pytest.mark.asyncio
-async def test_health_check_cache_expiration():
-    """Test that cache expires after TTL."""
+async def test_health_check_cache_expiration(monkeypatch):
+    """Test that cache expires after TTL.
+
+    Hermetic by construction (issue #1225):
+
+    - Uses a unique agent_id so no other coroutine in the suite can touch
+      this test's cache key. The shared "test-agent" id is health-checked by
+      a persistent background refresh loop spawned in fastapiserver_setup
+      (``_refresh_health_loop``, ttl=15) when sibling tests configure a
+      ``health_check``; a leaked instance of that loop can repopulate
+      ``health:test-agent`` during a real sleep window, turning the second
+      call into a cache HIT.
+    - Drives a controlled monotonic clock instead of ``asyncio.sleep(2)`` so
+      TTL expiry is explicit and instantaneous — deterministic, fast, and
+      immune to any concurrent repopulation. The cache reads
+      ``time.monotonic()`` (health_check_manager.py); we patch that.
+    """
+    agent_id = "test-agent-cache-expiration"
     call_count = 0
 
     async def health_check_fn() -> HealthStatus:
         nonlocal call_count
         call_count += 1
         return HealthStatus(
-            agent_name="test-agent",
+            agent_name=agent_id,
             status=HealthStatusType.HEALTHY,
             capabilities=["test"],
             timestamp=datetime.now(UTC),
         )
 
-    agent_config = {"name": "test-agent", "capabilities": ["test"]}
+    agent_config = {"name": agent_id, "capabilities": ["test"]}
 
-    # First call - cache miss
+    # Controlled monotonic clock — advanced explicitly so TTL expiry is
+    # deterministic without any wall-clock sleep.
+    fake_now = {"t": 1000.0}
+
+    def fake_monotonic() -> float:
+        return fake_now["t"]
+
+    monkeypatch.setattr(
+        "_mcp_mesh.shared.health_check_manager.time.monotonic", fake_monotonic
+    )
+
+    # First call - cache miss (stores expiry = 1000.0 + 1 = 1001.0)
     await get_health_status_with_cache(
-        agent_id="test-agent",
+        agent_id=agent_id,
         health_check_fn=health_check_fn,
         agent_config=agent_config,
         startup_context={},
@@ -133,12 +159,12 @@ async def test_health_check_cache_expiration():
 
     assert call_count == 1
 
-    # Wait for cache to expire
-    await asyncio.sleep(2)
+    # Advance the clock past the stored expiry so the cache is expired.
+    fake_now["t"] = 1002.0
 
     # Second call - cache expired, should call again
     await get_health_status_with_cache(
-        agent_id="test-agent",
+        agent_id=agent_id,
         health_check_fn=health_check_fn,
         agent_config=agent_config,
         startup_context={},

@@ -520,4 +520,130 @@ class MeshSchemaSupportTest {
         assertFalse(items.containsKey("properties"),
             "Cycle placeholder should be bounded (no further expansion). Got: " + out);
     }
+
+    // =========================================================================
+    // stripRequiredNullBranches — issue #1230 (close the structured-output schema)
+    // =========================================================================
+
+    /** Recursively assert no {@code {"type":"null"}} anyOf/oneOf branch survives. */
+    @SuppressWarnings("unchecked")
+    private static void assertNoNullBranch(Object node) {
+        if (node instanceof Map<?, ?> m) {
+            Map<String, Object> obj = (Map<String, Object>) m;
+            for (String combinator : List.of("anyOf", "oneOf")) {
+                Object branches = obj.get(combinator);
+                if (branches instanceof List<?> l) {
+                    for (Object b : l) {
+                        if (b instanceof Map<?, ?> bm) {
+                            assertFalse("null".equals(((Map<String, Object>) bm).get("type")),
+                                "Unexpected {type:null} branch in " + combinator + " at: " + obj);
+                        }
+                    }
+                }
+            }
+            for (Object v : obj.values()) {
+                assertNoNullBranch(v);
+            }
+        } else if (node instanceof List<?> l) {
+            for (Object item : l) {
+                assertNoNullBranch(item);
+            }
+        }
+    }
+
+    /** Plain record: every component non-Optional, non-@NotNull. */
+    public record Analysis(String summary, List<String> insights) {}
+
+    /** Escape hatch: an Optional<T> component stays nullable + optional. */
+    public record WithOptional(String summary, java.util.Optional<String> note) {}
+
+    /** Nested plain record exercising recursion through $defs/properties. */
+    public record Inner(String detail) {}
+    public record Outer(String title, Inner inner) {}
+
+    /** Build the structured-output schema exactly as MeshLlmAgentProxy.buildJsonSchema does. */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> outputSchema(Class<?> type) {
+        JsonNode node = MeshSchemaSupport.generator().generateSchema(type);
+        node = MeshSchemaSupport.rewriteRootSelfRefs(node, type);
+        ObjectMapper mapper = io.mcpmesh.core.MeshObjectMappers.create();
+        Map<String, Object> schema =
+            mapper.convertValue(node, new TypeReference<Map<String, Object>>() {});
+        return MeshSchemaSupport.stripRequiredNullBranches(MeshSchemaSupport.inlineRefs(schema));
+    }
+
+    @Test
+    @DisplayName("plain record: required components present AND no {type:null} branch (Pydantic parity)")
+    @SuppressWarnings("unchecked")
+    void stripRequiredNullBranches_plainRecord() {
+        Map<String, Object> out = outputSchema(Analysis.class);
+
+        // (1) Both components are in `required` (regression guard — the issue's
+        // original "fields not required" framing was wrong; they always were).
+        List<String> required = (List<String>) out.get("required");
+        assertNotNull(required, "Plain record should carry a `required` array. Got: " + out);
+        assertTrue(required.contains("summary"), "summary must be required. Got: " + out);
+        assertTrue(required.contains("insights"), "insights must be required. Got: " + out);
+
+        // (2) Pydantic-parity: NO {type:null} anyOf branch on any required field.
+        assertNoNullBranch(out);
+
+        // `summary` collapses to a bare {type:string}, not an anyOf.
+        Map<String, Object> props = (Map<String, Object>) out.get("properties");
+        Map<String, Object> summary = (Map<String, Object>) props.get("summary");
+        assertEquals("string", summary.get("type"),
+            "summary should collapse to {type:string}, no null branch. Got: " + out);
+        assertFalse(summary.containsKey("anyOf"), "summary should have no anyOf. Got: " + out);
+    }
+
+    @Test
+    @DisplayName("Optional<T> escape hatch: `note` stays out of required AND remains nullable")
+    @SuppressWarnings("unchecked")
+    void stripRequiredNullBranches_optionalUntouched() {
+        Map<String, Object> out = outputSchema(WithOptional.class);
+
+        List<String> required = (List<String>) out.get("required");
+        assertTrue(required != null && required.contains("summary"),
+            "summary (plain) must be required. Got: " + out);
+        assertFalse(required != null && required.contains("note"),
+            "Optional<String> note must NOT be required. Got: " + out);
+
+        // `summary` (required) has its null branch stripped...
+        Map<String, Object> props = (Map<String, Object>) out.get("properties");
+        Map<String, Object> summary = (Map<String, Object>) props.get("summary");
+        assertEquals("string", summary.get("type"), "summary null branch stripped. Got: " + out);
+
+        // ...but `note` (not required) stays nullable (escape hatch intact).
+        Map<String, Object> note = (Map<String, Object>) props.get("note");
+        boolean noteNullable =
+            note.containsKey("anyOf") || note.containsKey("oneOf") || "null".equals(note.get("type"));
+        assertTrue(noteNullable,
+            "Optional<String> note must remain nullable (not collapsed). Got: " + note);
+    }
+
+    @Test
+    @DisplayName("nested plain record: null branch stripped at depth (recursion)")
+    @SuppressWarnings("unchecked")
+    void stripRequiredNullBranches_nestedRecursion() {
+        Map<String, Object> out = outputSchema(Outer.class);
+
+        // No {type:null} branch survives anywhere — including the nested
+        // Inner.detail one (proves recursion into the inlined nested object).
+        assertNoNullBranch(out);
+
+        Map<String, Object> props = (Map<String, Object>) out.get("properties");
+        Map<String, Object> inner = (Map<String, Object>) props.get("inner");
+        // `inner` itself is required and collapses to the object schema.
+        Map<String, Object> innerProps = (Map<String, Object>) inner.get("properties");
+        assertNotNull(innerProps, "Nested Inner properties should be present. Got: " + out);
+        Map<String, Object> detail = (Map<String, Object>) innerProps.get("detail");
+        assertEquals("string", detail.get("type"),
+            "Nested Inner.detail should collapse to {type:string}. Got: " + out);
+    }
+
+    @Test
+    @DisplayName("stripRequiredNullBranches(null) returns null")
+    void stripRequiredNullBranches_nullSafe() {
+        assertNull(MeshSchemaSupport.stripRequiredNullBranches(null));
+    }
 }

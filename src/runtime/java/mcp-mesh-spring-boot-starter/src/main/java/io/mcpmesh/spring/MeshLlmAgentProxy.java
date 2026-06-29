@@ -1114,7 +1114,13 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
             node = MeshSchemaSupport.rewriteRootSelfRefs(node, type);
             Map<String, Object> schema =
                 objectMapper.convertValue(node, new TypeReference<Map<String, Object>>() {});
-            return MeshSchemaSupport.inlineRefs(schema);
+            // Issue #1230: close the structured-output schema — strip the stale
+            // `anyOf:[{type:null}, X]` nullable branch from REQUIRED record
+            // components so the LLM can't satisfy "required" by returning null
+            // (which silently drops the field). Optional<T> fields are left out of
+            // `required` upstream and stay nullable (escape hatch intact).
+            return MeshSchemaSupport.stripRequiredNullBranches(
+                MeshSchemaSupport.inlineRefs(schema));
         }
     }
 

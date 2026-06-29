@@ -872,13 +872,23 @@ public interface LlmProviderHandler {
                 result.remove(keyword);
             }
 
+            Set<String> required = requiredKeys(result);
+
             // Recursively process nested schemas
             Map<String, Object> properties = (Map<String, Object>) result.get("properties");
             if (properties != null) {
                 Map<String, Object> sanitizedProperties = new LinkedHashMap<>();
                 for (Map.Entry<String, Object> entry : properties.entrySet()) {
                     Map<String, Object> fieldSchema = (Map<String, Object>) entry.getValue();
-                    sanitizedProperties.put(entry.getKey(), sanitizeSchema(fieldSchema));
+                    Map<String, Object> sanitizedField = sanitizeSchema(fieldSchema);
+                    // Issue #1230 (defense-in-depth): drop the stale
+                    // anyOf:[{type:null}, X] nullable branch on REQUIRED fields so
+                    // a vendor can't satisfy "required" with null (Anthropic hint
+                    // mode bypasses makeStrict, so strip here too).
+                    if (required.contains(entry.getKey())) {
+                        sanitizedField = collapseRequiredNullBranch(sanitizedField);
+                    }
+                    sanitizedProperties.put(entry.getKey(), sanitizedField);
                 }
                 result.put("properties", sanitizedProperties);
             }
@@ -953,13 +963,27 @@ public interface LlmProviderHandler {
                 }
             }
 
+            Set<String> required = requiredKeys(result);
+
             // Recursively process nested schemas
             Map<String, Object> properties = (Map<String, Object>) result.get("properties");
             if (properties != null) {
                 Map<String, Object> strictProperties = new LinkedHashMap<>();
                 for (Map.Entry<String, Object> entry : properties.entrySet()) {
                     Map<String, Object> fieldSchema = (Map<String, Object>) entry.getValue();
-                    strictProperties.put(entry.getKey(), makeSchemaStrict(fieldSchema, addAllRequired));
+                    // Issue #1230 (defense-in-depth): a required field must not keep
+                    // its anyOf:[{type:null}, X] branch — collapse it so the vendor
+                    // can't satisfy "required" with null and silently drop content.
+                    // Collapse BEFORE strictifying so that when X is a nested object
+                    // the inlined schema still flows through makeSchemaStrict and
+                    // gets additionalProperties:false + its own required expansion;
+                    // collapsing after strictification would let X bypass strict
+                    // treatment entirely.
+                    if (required.contains(entry.getKey())) {
+                        fieldSchema = collapseRequiredNullBranch(fieldSchema);
+                    }
+                    Map<String, Object> strictField = makeSchemaStrict(fieldSchema, addAllRequired);
+                    strictProperties.put(entry.getKey(), strictField);
                 }
                 result.put("properties", strictProperties);
             }
@@ -982,6 +1006,61 @@ public interface LlmProviderHandler {
             }
 
             return result;
+        }
+
+        /** Collect the {@code required} string keys of a schema object (empty if absent). */
+        @SuppressWarnings("unchecked")
+        private static Set<String> requiredKeys(Map<String, Object> schema) {
+            Object req = schema.get("required");
+            if (!(req instanceof List)) {
+                return Set.of();
+            }
+            Set<String> keys = new LinkedHashSet<>();
+            for (Object r : (List<Object>) req) {
+                if (r instanceof String s) {
+                    keys.add(s);
+                }
+            }
+            return keys;
+        }
+
+        /**
+         * Issue #1230 (defense-in-depth): collapse a
+         * {@code {"anyOf"|"oneOf":[{"type":"null"}, X]}} field schema to {@code X}
+         * (sibling keys overlaid). Returns the input unchanged for any other shape.
+         */
+        @SuppressWarnings("unchecked")
+        private static Map<String, Object> collapseRequiredNullBranch(Map<String, Object> field) {
+            String combinator = field.containsKey("anyOf") ? "anyOf"
+                : field.containsKey("oneOf") ? "oneOf" : null;
+            if (combinator == null) {
+                return field;
+            }
+            Object branchesObj = field.get(combinator);
+            if (!(branchesObj instanceof List) || ((List<Object>) branchesObj).size() != 2) {
+                return field;
+            }
+            List<Object> branches = (List<Object>) branchesObj;
+            Map<String, Object> nonNull = null;
+            boolean sawNull = false;
+            for (Object b : branches) {
+                if (b instanceof Map && "null".equals(((Map<String, Object>) b).get("type"))) {
+                    sawNull = true;
+                } else if (b instanceof Map) {
+                    nonNull = (Map<String, Object>) b;
+                }
+            }
+            if (!sawNull || nonNull == null) {
+                return field;
+            }
+            Map<String, Object> collapsed = new LinkedHashMap<>(nonNull);
+            for (Map.Entry<String, Object> e : field.entrySet()) {
+                if (combinator.equals(e.getKey())) {
+                    continue;
+                }
+                collapsed.putIfAbsent(e.getKey(), e.getValue());
+            }
+            return collapsed;
         }
     }
 

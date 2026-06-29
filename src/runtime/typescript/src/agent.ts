@@ -48,7 +48,11 @@ import {
   spliceJobController,
 } from "./inbound-job-dispatch.js";
 import { MeshJobSubmitter } from "./mesh-job-submitter.js";
-import { getSettleState, type PendingSettleDep } from "./settle.js";
+import {
+  getSettleState,
+  type PendingSettleDep,
+  type SettleState,
+} from "./settle.js";
 import {
   ClaimDispatcher,
   stopDispatchers,
@@ -148,6 +152,18 @@ let autoStartScheduled = false;
 // pre-consumption danger zone, while sequential constructions across
 // async boundaries (e.g. one agent per test in a harness) stay allowed.
 let constructionGuardName: string | null = null;
+
+// #1231: warn-once dedupe for typed dependency slots that resolved at the
+// registry ("N/N deps resolved") but did not actually wire — the proxy was
+// never injected and the slot stays null. The deps array is rebuilt PER
+// CALL, so a per-call warn would spam; this set keys on `${toolName}:${dep}`
+// so each unwired slot warns exactly once per process.
+const _unwiredSlotWarned = new Set<string>();
+
+/** Test support: drop the warn-once dedupe so a fresh suite warns again. */
+export function __resetUnwiredSlotWarnedForTests(): void {
+  _unwiredSlotWarned.clear();
+}
 
 // Schedule auto-start after module loading completes
 function scheduleAutoStart(): void {
@@ -638,20 +654,11 @@ export class MeshAgent {
       // MeshJobSubmitter targeting that dep's capability. We bind the
       // submitter to the live registryUrl/agentId so it can submit
       // jobs without needing access to the agent instance.
-      const depsArray: (McpMeshTool | MeshJobSubmitter | null)[] = normalizedDeps.map(
-        (dep, depIndex) => {
-          if (depIndex === meshJobDepIndex) {
-            // Build the submitter lazily per call so we always pick
-            // up the current registryUrl (test harnesses sometimes
-            // mutate it between calls).
-            return new MeshJobSubmitter(
-              dep.capability,
-              this.agentId,
-              this.config.registryUrl,
-            );
-          }
-          return this.resolvedDeps.get(`${toolName}:dep_${depIndex}`) ?? null;
-        },
+      const depsArray = this._buildDepSlots(
+        toolName,
+        normalizedDeps,
+        meshJobDepIndex,
+        settleState,
       );
       const injectedCount = depsArray.filter((d) => d !== null).length;
 
@@ -938,17 +945,11 @@ export class MeshAgent {
             await settleState.awaitPending(pendingSettle);
           }
         }
-        const liveDeps: (McpMeshTool | MeshJobSubmitter | null)[] = normalizedDeps.map(
-          (dep, depIndex) => {
-            if (depIndex === meshJobDepIndex) {
-              return new MeshJobSubmitter(
-                dep.capability,
-                this.agentId,
-                this.config.registryUrl,
-              );
-            }
-            return this.resolvedDeps.get(`${toolName}:dep_${depIndex}`) ?? null;
-          },
+        const liveDeps = this._buildDepSlots(
+          toolName,
+          normalizedDeps,
+          meshJobDepIndex,
+          settleState,
         );
         const callArgs = spliceJobController(
           payload,
@@ -1111,6 +1112,60 @@ export class MeshAgent {
       this._bearerIds.set(bearer, id);
     }
     return id;
+  }
+
+  /**
+   * Build the positional dependency-slot array for one tool call, shared by
+   * BOTH the inbound HTTP wrapper (wrappedExecute) and the claim-dispatch
+   * path (the ClaimHandler for task:true tools). Centralising this keeps the
+   * two slot-assembly sites identical:
+   *   - the MeshJob slot (meshJobDepIndex) → a freshly-bound MeshJobSubmitter
+   *   - every other slot → resolvedDeps.get(`${toolName}:dep_${index}`) ?? null
+   *
+   * #1231: a typed dep slot can resolve at the registry yet never receive an
+   * injected proxy, leaving the parameter null. Once the settle latch has
+   * flipped (during settling the proxy may still land), warn ONCE per
+   * tool+slot — the array is rebuilt per call, so a per-call warning would
+   * spam. The warn-once dedupe keys on `${toolName}:dep_${index}` via the
+   * module-level `_unwiredSlotWarned` Set, so a tool exercised via BOTH the
+   * inbound and claim paths warns at most once total.
+   */
+  private _buildDepSlots(
+    toolName: string,
+    normalizedDeps: NormalizedDependency[],
+    meshJobDepIndex: number | undefined,
+    settleState: SettleState,
+  ): (McpMeshTool | MeshJobSubmitter | null)[] {
+    return normalizedDeps.map((dep, depIndex) => {
+      if (depIndex === meshJobDepIndex) {
+        // Build the submitter lazily per call so we always pick up the
+        // current registryUrl (test harnesses sometimes mutate it between
+        // calls).
+        return new MeshJobSubmitter(
+          dep.capability,
+          this.agentId,
+          this.config.registryUrl,
+        );
+      }
+      const slotKey = `${toolName}:dep_${depIndex}`;
+      const proxy = this.resolvedDeps.get(slotKey) ?? null;
+      // #1231: a declared typed dep slot that is still null AFTER settling
+      // never received an injected proxy. Warn ONCE per tool+slot. Note this
+      // is a post-settle null — there is no per-slot "resolved" signal here,
+      // so the message must not claim registry resolution.
+      if (proxy === null && settleState.isSettled()) {
+        if (!_unwiredSlotWarned.has(slotKey)) {
+          _unwiredSlotWarned.add(slotKey);
+          console.warn(
+            `[mesh-tool] dependency '${dep.capability}' on '${toolName}' ` +
+              `is still null after settling — no proxy was injected into ` +
+              `positional slot ${depIndex}. Fix: ensure the provider for ` +
+              `'${dep.capability}' is registered and reachable.`,
+          );
+        }
+      }
+      return proxy;
+    });
   }
 
   private _getOrBuildA2AClient(config: A2AClientConfig): A2AClient {

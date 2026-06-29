@@ -182,6 +182,197 @@ class JobsRuntimeManagerConsumerWiringTest {
     }
 
     /**
+     * Issue #1231 (scope A): a {@code MeshJob}-typed slot that resolves as a
+     * parameter but is never wired (no declared dependency backs it) must surface
+     * a prescriptive {@code WARN} at startup — not the previous silent
+     * {@code continue} / {@code log.debug}. Otherwise "N/N deps resolved"
+     * (registry provider-matching) masks a null MeshJobSubmitter that the
+     * developer only discovers at call time.
+     */
+    @SuppressWarnings("unused")
+    public static class NoDepConsumer {
+        public Map<String, Object> run(@Param("x") String x, MeshJob worker) {
+            return Map.of();
+        }
+    }
+
+    @Test
+    void meshJobSlotWithNoDependency_staysUnwired_andWarns() throws Exception {
+        NoDepConsumer bean = new NoDepConsumer();
+        Method method = NoDepConsumer.class.getMethod("run", String.class, MeshJob.class);
+        // No declared dependencies — the MeshJob slot cannot be backed.
+        MeshToolWrapper wrapper = new MeshToolWrapper(
+            NoDepConsumer.class.getName() + ".run",
+            "nodep_consumer",
+            "test",
+            bean,
+            method,
+            List.of(),
+            JsonMapper.builder().build(),
+            false);
+
+        MeshToolRegistry toolRegistry = new MeshToolRegistry();
+        MeshToolWrapperRegistry wrapperRegistry =
+            new MeshToolWrapperRegistry(new McpMeshToolProxyFactory(new McpHttpClient()));
+        wrapperRegistry.registerWrapper(wrapper);
+        seedToolMetadata(toolRegistry, new MeshToolRegistry.ToolMetadata(
+            "nodep_consumer", "", "1.0.0", new java.util.ArrayList<>(),
+            // No dependencies declared.
+            List.of(), Map.of(), null, true, false, bean, method));
+
+        MeshRuntime runtime = new MeshRuntime(
+            new AgentSpec("c3", "http://localhost:8000").agentId("c3-id"));
+
+        LogCapture capture = LogCapture.attach(JobsRuntimeManager.class);
+        try {
+            new JobsRuntimeManager(runtime, toolRegistry, wrapperRegistry)
+                .wireConsumers("c3-id", "http://localhost:8000");
+        } finally {
+            capture.detach();
+        }
+
+        // (1) The slot stays unwired (the silent behavior is preserved — user
+        // code still tolerates null per the DDDI contract).
+        assertNull(wrapper.getJobSubmitter(),
+            "no declared dependency backs the MeshJob slot, so it must stay unwired");
+
+        // (2) ...but the developer now sees a prescriptive WARN at startup,
+        // worded for the SPECIFIC no-declared-dependencies cause (distinct from
+        // the "no declared dependency backs it" cause exercised below).
+        boolean warned = capture.events.stream().anyMatch(e ->
+            "WARN".equals(e.level())
+                && e.message().contains("nodep_consumer")
+                && e.message().contains("MeshJob parameter")
+                && e.message().contains("declares no dependencies")
+                && e.message().contains("injected as null")
+                && e.message().contains("Declare a dependency"));
+        assertTrue(warned,
+            "unwired MeshJob slot (empty-deps cause) must produce the SPECIFIC "
+                + "\"declares no dependencies\" WARN naming the tool, the MeshJob parameter, "
+                + "and the null outcome. Captured: " + capture.events);
+    }
+
+    /**
+     * Issue #1231 (scope A), OTHER branch: a {@code MeshJob}-typed slot whose
+     * consumer DOES declare dependencies, but where none is positionally paired
+     * with the MeshJob param (more eligible param positions than declared deps)
+     * AND none resolves to a local {@code task=true} tool, must surface the
+     * DISTINCT {@code depCapability == null} WARN — naming a different cause
+     * ("no declared dependency backs it") than the empty-deps branch above.
+     */
+    @SuppressWarnings("unused")
+    public static class UnpairedMeshJobConsumer {
+        public Map<String, Object> run(
+                @Param("x") String x,
+                McpMeshTool<String> toolA,
+                McpMeshTool<String> toolB,
+                MeshJob worker) {
+            return Map.of();
+        }
+    }
+
+    @Test
+    void meshJobSlotWithDepsButNoneBacksIt_staysUnwired_andWarnsDistinctly() throws Exception {
+        UnpairedMeshJobConsumer bean = new UnpairedMeshJobConsumer();
+        Method method = UnpairedMeshJobConsumer.class.getMethod(
+            "run", String.class, McpMeshTool.class, McpMeshTool.class, MeshJob.class);
+
+        // Eligible positions (McpMeshTool + MeshJob) = [1, 2, 3]; only TWO deps
+        // declared, so they pair with the two McpMeshTool slots — the MeshJob
+        // param at eligible index 2 is left unpaired → getMeshJobDependencyCapability() null.
+        MeshToolWrapper wrapper = new MeshToolWrapper(
+            UnpairedMeshJobConsumer.class.getName() + ".run",
+            "unpaired_consumer",
+            "test",
+            bean,
+            method,
+            List.of("tool_a", "tool_b"),
+            JsonMapper.builder().build(),
+            false);
+
+        // Precondition for THIS branch: the MeshJob slot has no positionally
+        // paired declared capability (distinct from the empty-deps case).
+        assertNull(wrapper.getMeshJobDependencyCapability(),
+            "MeshJob param must be unpaired (more eligible positions than declared deps)");
+
+        MeshToolRegistry toolRegistry = new MeshToolRegistry();
+        MeshToolWrapperRegistry wrapperRegistry =
+            new MeshToolWrapperRegistry(new McpMeshToolProxyFactory(new McpHttpClient()));
+        wrapperRegistry.registerWrapper(wrapper);
+        // Two declared deps (so pickTaskBackedDependency's single-dep fallback
+        // does NOT fire) and neither is a local task=true tool (so the local
+        // task probe finds nothing) → depCapability stays null.
+        seedToolMetadata(toolRegistry, new MeshToolRegistry.ToolMetadata(
+            "unpaired_consumer", "", "1.0.0", new java.util.ArrayList<>(),
+            List.of(dep("tool_a"), dep("tool_b")), Map.of(), null, true, false, bean, method));
+
+        MeshRuntime runtime = new MeshRuntime(
+            new AgentSpec("c4", "http://localhost:8000").agentId("c4-id"));
+
+        LogCapture capture = LogCapture.attach(JobsRuntimeManager.class);
+        try {
+            new JobsRuntimeManager(runtime, toolRegistry, wrapperRegistry)
+                .wireConsumers("c4-id", "http://localhost:8000");
+        } finally {
+            capture.detach();
+        }
+
+        assertNull(wrapper.getJobSubmitter(),
+            "no declared dependency backs the MeshJob slot, so it must stay unwired");
+
+        // DISTINCT wording for the "deps declared but none backs the slot" cause.
+        boolean warned = capture.events.stream().anyMatch(e ->
+            "WARN".equals(e.level())
+                && e.message().contains("unpaired_consumer")
+                && e.message().contains("MeshJob parameter")
+                && e.message().contains("no declared dependency backs")
+                && e.message().contains("injected as null")
+                && e.message().contains("positionally paired"));
+        assertTrue(warned,
+            "unwired MeshJob slot (no-backing-dep cause) must produce the DISTINCT "
+                + "\"no declared dependency backs it\" WARN — naming a different cause than "
+                + "the empty-deps branch. Captured: " + capture.events);
+    }
+
+    /**
+     * Minimal Logback appender capturing level + formatted message of events
+     * from a target logger (mirrors {@code MeshDependsOnIntegrationTest.LogCapture}).
+     */
+    static final class LogCapture {
+        final java.util.List<LogEvent> events = new java.util.concurrent.CopyOnWriteArrayList<>();
+        private final ch.qos.logback.classic.Logger target;
+        private final ch.qos.logback.core.AppenderBase<ch.qos.logback.classic.spi.ILoggingEvent> appender;
+
+        private LogCapture(ch.qos.logback.classic.Logger target) {
+            this.target = target;
+            this.appender = new ch.qos.logback.core.AppenderBase<>() {
+                @Override
+                protected void append(ch.qos.logback.classic.spi.ILoggingEvent event) {
+                    events.add(new LogEvent(
+                        event.getLevel().toString(), event.getFormattedMessage()));
+                }
+            };
+        }
+
+        static LogCapture attach(Class<?> loggerClass) {
+            ch.qos.logback.classic.Logger logger =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(loggerClass);
+            LogCapture capture = new LogCapture(logger);
+            capture.appender.setContext(logger.getLoggerContext());
+            capture.appender.start();
+            logger.addAppender(capture.appender);
+            return capture;
+        }
+
+        void detach() {
+            target.detachAppender(appender);
+            appender.stop();
+        }
+
+        record LogEvent(String level, String message) {}
+    }
+
+    /**
      * MeshToolRegistry has no public bulk seeder; register via the public
      * registerTool path is annotation-driven. The wireConsumers loop reads
      * getAllTools(), so seed through reflection on the private map — the

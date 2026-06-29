@@ -1777,6 +1777,52 @@ class TestPrescriptiveDiagnosticsAndStrictDI:
 
         assert "will remain None" in caplog.text
 
+    def test_meshjob_unwired_submitter_routes_through_warn_or_raise(
+        self, caplog, monkeypatch
+    ):
+        """#1231: a MeshJob slot whose capability resolved at the registry
+        but whose submitter could not be built (MCP_MESH_REGISTRY_URL
+        unset) is the clear unwired-slot case. It must route through
+        ``warn_or_raise`` — a prescriptive permissive warning by default,
+        and a ``StrictDIError`` with the SAME text under
+        ``MCP_MESH_STRICT_DI``. 'N/N deps resolved' is registry
+        provider-matching, not slot injection, so this silent-None must be
+        surfaced."""
+        from mesh.types import MeshJob
+        from _mcp_mesh.engine.strict_di import StrictDIError
+
+        # The unwired condition: capability declared (so the MeshJob branch
+        # is reached) but no registry URL to construct the submitter.
+        monkeypatch.delenv("MCP_MESH_REGISTRY_URL", raising=False)
+
+        async def submit(user_id: str, job: MeshJob = None):
+            return job
+
+        # The exact diagnostic body (everything after the trace prefix) for
+        # the 'job' param + dependency 'run_workflow' + unset registry URL
+        # case. Asserting the single string in BOTH paths makes any drift
+        # between the permissive warn and the strict raise fail the test.
+        expected = (
+            "MeshJob parameter 'job' on 'submit' was matched to dependency "
+            "'run_workflow', but no MeshJobSubmitter could be injected "
+            "because MCP_MESH_REGISTRY_URL is not set; the parameter stays "
+            "None. Fix: set MCP_MESH_REGISTRY_URL so the submitter for "
+            "dependency 'run_workflow' can be built."
+        )
+
+        # Permissive: prescriptive warning, slot left None, no raise.
+        with caplog.at_level(logging.WARNING):
+            final_kwargs, count = self._prep(submit, ["run_workflow"])
+        assert final_kwargs["job"] is None
+        assert count == 0
+        assert expected in caplog.text
+
+        # Strict: the SAME diagnostic raises StrictDIError with the same text.
+        self._enable_strict(monkeypatch)
+        with pytest.raises(StrictDIError) as exc_info:
+            self._prep(submit, ["run_workflow"])
+        assert expected in str(exc_info.value)
+
     def test_strict_untyped_single_param_zero_deps_does_not_raise(
         self, monkeypatch
     ):
