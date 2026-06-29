@@ -547,6 +547,46 @@ func TestLoadSweepConfigFromEnv(t *testing.T) {
 			t.Errorf("Retention with negative value = %s, want %s (default)", cfg.Retention, defaultRetention)
 		}
 	})
+
+	t.Run("stale timeout disabled by default", func(t *testing.T) {
+		t.Setenv("MCP_MESH_JOB_STALE_TIMEOUT", "")
+		cfg := LoadSweepConfigFromEnv(nil)
+		if cfg.JobStaleTimeout != 0 {
+			t.Errorf("JobStaleTimeout default = %s, want 0 (disabled)", cfg.JobStaleTimeout)
+		}
+	})
+
+	t.Run("stale timeout custom value parsed", func(t *testing.T) {
+		t.Setenv("MCP_MESH_JOB_STALE_TIMEOUT", "30m")
+		cfg := LoadSweepConfigFromEnv(nil)
+		if cfg.JobStaleTimeout != 30*time.Minute {
+			t.Errorf("JobStaleTimeout = %s, want 30m", cfg.JobStaleTimeout)
+		}
+	})
+
+	t.Run("stale timeout zero stays disabled", func(t *testing.T) {
+		t.Setenv("MCP_MESH_JOB_STALE_TIMEOUT", "0s")
+		cfg := LoadSweepConfigFromEnv(nil)
+		if cfg.JobStaleTimeout != 0 {
+			t.Errorf("JobStaleTimeout = %s, want 0 (disabled)", cfg.JobStaleTimeout)
+		}
+	})
+
+	t.Run("stale timeout invalid stays disabled", func(t *testing.T) {
+		t.Setenv("MCP_MESH_JOB_STALE_TIMEOUT", "not-a-duration")
+		cfg := LoadSweepConfigFromEnv(nil)
+		if cfg.JobStaleTimeout != 0 {
+			t.Errorf("JobStaleTimeout with invalid value = %s, want 0 (disabled)", cfg.JobStaleTimeout)
+		}
+	})
+
+	t.Run("stale timeout negative stays disabled", func(t *testing.T) {
+		t.Setenv("MCP_MESH_JOB_STALE_TIMEOUT", "-1h")
+		cfg := LoadSweepConfigFromEnv(nil)
+		if cfg.JobStaleTimeout != 0 {
+			t.Errorf("JobStaleTimeout with negative value = %s, want 0 (disabled)", cfg.JobStaleTimeout)
+		}
+	})
 }
 
 // seedSchemaEntryAt inserts a schema_entry directly via Ent with the given

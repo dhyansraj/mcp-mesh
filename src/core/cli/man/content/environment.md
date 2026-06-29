@@ -514,6 +514,15 @@ export DEFAULT_EVICTION_THRESHOLD=60  # Evict stale agents (seconds)
 # rows). Event rows are governed by a separate hardcoded 100k row cap.
 export MCP_MESH_RETENTION=1h
 
+# MeshJob default total-runtime ceiling. Go duration string (e.g. "2h",
+# "30m"). Applies a DEFAULT total_deadline — measured from a job's
+# submission time — to jobs that did NOT set their own total_deadline; a
+# job that exceeds it is marked failed with a "stale: ..." reason and a
+# synthetic `stale` event. Jobs that set their own total_deadline are
+# unaffected. Default: off (unset / "0") — jobs without an explicit
+# total_deadline run unbounded, subject only to lease recovery.
+export MCP_MESH_JOB_STALE_TIMEOUT=2h
+
 # CORS
 export ENABLE_CORS=true
 export ALLOWED_ORIGINS="*"

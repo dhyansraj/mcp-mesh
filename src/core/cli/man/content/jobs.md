@@ -293,6 +293,23 @@ registry waits a small grace window before issuing the cancel-forward
 (default 200ms, tunable via `MCP_MESH_CANCEL_EVENT_GRACE_MS`, capped
 at 10s) so the synthetic event lands before the cancel token fires.
 
+**Synthetic stale event**. When the registry reaps a job for exceeding
+the `MCP_MESH_JOB_STALE_TIMEOUT` default ceiling (see **Reaping and
+lease recovery**), it writes a synthetic
+`{"type": "stale", "payload": {"reason": "stale", "detail": "..."}}`
+event into the log as it transitions the job to `failed`. A handler
+parked on `recv_event(types=["stale", ...])` observes the reaping and
+can unwind cleanly:
+
+```python
+event = await job.recv_event(types=["stale", "cancelled"], timeout_secs=30.0)
+if event and event["type"] == "stale":
+    return {"status": "aborted", "reason": event["payload"]["detail"]}
+```
+
+No SDK change is needed — `stale` is an ordinary event type, so the
+existing `recv_event` / stream paths surface it across every runtime.
+
 ## Stream subscription
 
 Non-destructive observer iterator. Multiple subscribers can mirror
@@ -348,6 +365,37 @@ deadline regardless of depth.
 The header is on the default `MCP_MESH_PROPAGATE_HEADERS` allowlist
 alongside `X-Mesh-Job-Id` and `X-Mesh-Trace-Id` — no per-agent
 configuration is needed.
+
+## Reaping and lease recovery
+
+A registry cron sweep keeps the job pool healthy without operator
+intervention:
+
+- **Orphan reroute.** A job whose owner replica is gone (deregistered
+  or gone unhealthy) is returned to the claimable pool so any peer with
+  the matching capability picks it up. Jobs parked in `input_required`
+  are covered too — a job waiting on a consumer answer whose owner then
+  dies is reclaimed, not stranded.
+- **Lease recovery.** Every accepted progress/heartbeat delta extends
+  the owner's lease. A job whose lease expires with no further deltas —
+  a wedged or silently-crashed handler — is reset to claimable while
+  retries remain, or marked `failed` once the retry budget is spent.
+  This includes jobs parked in `input_required`: if the producer stops
+  extending the lease while waiting for an answer that never comes, the
+  job is reclaimed rather than held forever.
+- **Total-deadline ceiling.** A job that set `total_deadline` is failed
+  with `deadline_exceeded` once that wall-clock deadline passes.
+- **Default stale ceiling (opt-in).** Set `MCP_MESH_JOB_STALE_TIMEOUT`
+  (a duration, e.g. `2h`) on the registry to apply a *default*
+  total-runtime ceiling, measured from submission, to jobs that did
+  **not** set their own `total_deadline`. Such a job is marked `failed`
+  with a `stale: ...` error once it exceeds the ceiling. Unset (the
+  default) leaves the feature off — jobs without an explicit
+  `total_deadline` run unbounded (subject only to lease recovery).
+  Jobs that set their own `total_deadline` are unaffected.
+
+Reaping is observable in-handler via a synthetic `stale` event — see
+**Event injection** below.
 
 ## Out-of-band inspection
 

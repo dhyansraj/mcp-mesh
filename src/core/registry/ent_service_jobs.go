@@ -792,8 +792,8 @@ func (s *EntService) CountPendingJobsForAgent(ctx context.Context, agentID strin
 }
 
 // ResetOrphanedJobs handles the orphan-reroute phase of the registry sweep.
-// For every working job whose owner_instance_id no longer maps to a
-// registered agent row, the job is either:
+// For every live (working OR input_required) job whose owner_instance_id no
+// longer maps to a registered agent row, the job is either:
 //
 //   - reset to claimable (owner=NULL, lease cleared) when attempt_count <=
 //     max_retries — the next live replica picks it up via POST /jobs/claim.
@@ -822,7 +822,7 @@ func (s *EntService) ResetOrphanedJobs(ctx context.Context) (reset, exhausted in
 	// Collect candidate orphan jobs: working + has an owner.
 	candidates, err := s.entDB.Client.Job.Query().
 		Where(
-			job.StatusEQ(job.StatusWorking),
+			job.StatusIn(job.StatusWorking, job.StatusInputRequired),
 			job.OwnerInstanceIDNotNil(),
 		).
 		All(ctx)
@@ -887,6 +887,10 @@ func (s *EntService) ResetOrphanedJobs(ctx context.Context) (reset, exhausted in
 		}
 
 		if _, uerr := s.entDB.Client.Job.UpdateOneID(j.ID).
+			// Normalize to working so the row is claimable again — see the
+			// matching note in ReclaimExpiredLeaseJobs. A reclaimed
+			// input_required orphan would otherwise never be re-claimed.
+			SetStatus(job.StatusWorking).
 			ClearOwnerInstanceID().
 			ClearLeaseExpiresAt().
 			ClearLastHeartbeatAt().
@@ -915,8 +919,8 @@ func (s *EntService) ResetOrphanedJobs(ctx context.Context) (reset, exhausted in
 // the still-running job, and its eventual completion delta is rejected
 // not_owner.
 //
-// For every working job whose lease_expires_at has passed, the job is
-// either:
+// For every live (working OR input_required) job whose lease_expires_at has
+// passed, the job is either:
 //
 //   - reset to claimable (owner=NULL, lease cleared, last_heartbeat_at
 //     cleared) when attempt_count <= max_retries — identical field-reset
@@ -953,7 +957,7 @@ func (s *EntService) ReclaimExpiredLeaseJobs(ctx context.Context) (reset, exhaus
 
 	candidates, err := s.entDB.Client.Job.Query().
 		Where(
-			job.StatusEQ(job.StatusWorking),
+			job.StatusIn(job.StatusWorking, job.StatusInputRequired),
 			job.LeaseExpiresAtNotNil(),
 			job.LeaseExpiresAtLT(now),
 		).
@@ -971,10 +975,14 @@ func (s *EntService) ReclaimExpiredLeaseJobs(ctx context.Context) (reset, exhaus
 		}
 
 		// Guard predicate shared by both branches: the row must still be
-		// working AND still carry the exact expired lease we observed.
+		// in a live, lease-bearing state (working OR input_required) AND
+		// still carry the exact expired lease we observed. input_required
+		// is included because the producer extends its lease while parked
+		// waiting for a consumer answer (see ApplyJobDeltas); a parked job
+		// whose lease then expires must be reclaimed just like a working one.
 		guard := []predicate.Job{
 			job.IDEQ(j.ID),
-			job.StatusEQ(job.StatusWorking),
+			job.StatusIn(job.StatusWorking, job.StatusInputRequired),
 			job.LeaseExpiresAtEQ(*j.LeaseExpiresAt),
 		}
 
@@ -998,6 +1006,12 @@ func (s *EntService) ReclaimExpiredLeaseJobs(ctx context.Context) (reset, exhaus
 
 		affected, uerr := s.entDB.Client.Job.Update().
 			Where(guard...).
+			// Normalize to working so the row is claimable again. A
+			// reclaimed input_required job would otherwise stay
+			// input_required with no owner — and ClaimNextJob only
+			// claims status=working, so it would never be picked back
+			// up. No-op for rows already working.
+			SetStatus(job.StatusWorking).
 			ClearOwnerInstanceID().
 			ClearLeaseExpiresAt().
 			ClearLastHeartbeatAt().
@@ -1327,4 +1341,104 @@ func (s *EntService) ExpireDeadlinedJobs(ctx context.Context) (int, error) {
 		expired++
 	}
 	return expired, nil
+}
+
+// staleJobError is the error string stamped on jobs reaped by
+// ExpireStaleJobs. Mirrors the "deadline_exceeded" / "orphaned: ..."
+// reason-string style so operators can grep all sweep-reap paths the same
+// way.
+const staleJobError = "stale: no total_deadline set and exceeded MCP_MESH_JOB_STALE_TIMEOUT default ceiling"
+
+// ExpireStaleJobs enforces a DEFAULT total-runtime ceiling for jobs that did
+// NOT set their own total_deadline. It is the opt-in companion to
+// ExpireDeadlinedJobs: where that phase enforces an explicit per-job
+// total_deadline, this one applies the operator-wide MCP_MESH_JOB_STALE_TIMEOUT
+// as a default deadline measured from submitted_at. Jobs that set their own
+// total_deadline are left to ExpireDeadlinedJobs (the total_deadline IS NULL
+// filter below excludes them).
+//
+// For every non-terminal job with a NULL total_deadline whose submitted_at is
+// older than `now - staleTimeout`, the row is marked failed with the
+// `stale:` reason and its lease/owner cleared. No new terminal state is
+// introduced — `failed` + the reason string IS the signal.
+//
+// Each reap uses the guarded-update discipline (WHERE id=? AND status NOT IN
+// terminal AND total_deadline IS NULL) so a concurrent completion / explicit
+// deadline-set / earlier sweep phase that already handled the row produces
+// Affected=0 and we skip it without counting or eventing. Successfully-reaped
+// rows get a synthetic `stale` event posted (allowTerminal=true, since the row
+// is now terminal) so handlers parked on recv_event(types=["stale"]) observe
+// the reaping — the same mechanism CancelJob uses for its synthetic
+// `cancelled` event.
+//
+// Phase ordering (see SweepJob.runOnce): this must run AFTER both
+// ReclaimExpiredLeaseJobs and ExpireDeadlinedJobs so a row those already
+// retired isn't double-processed.
+func (s *EntService) ExpireStaleJobs(ctx context.Context, staleTimeout time.Duration, now time.Time) (int, error) {
+	if staleTimeout <= 0 {
+		return 0, nil
+	}
+
+	cutoff := now.Add(-staleTimeout)
+
+	candidates, err := s.entDB.Client.Job.Query().
+		Where(
+			job.StatusNotIn(job.StatusCompleted, job.StatusFailed, job.StatusCancelled),
+			job.TotalDeadlineIsNil(),
+			job.SubmittedAtLT(cutoff),
+		).
+		All(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("query stale jobs: %w", err)
+	}
+	if len(candidates) == 0 {
+		return 0, nil
+	}
+
+	staled := 0
+	for _, j := range candidates {
+		affected, uerr := s.entDB.Client.Job.Update().
+			Where(
+				job.IDEQ(j.ID),
+				job.StatusNotIn(job.StatusCompleted, job.StatusFailed, job.StatusCancelled),
+				job.TotalDeadlineIsNil(),
+			).
+			SetStatus(job.StatusFailed).
+			SetError(staleJobError).
+			ClearLeaseExpiresAt().
+			ClearOwnerInstanceID().
+			SetLastHeartbeatAt(now).
+			Save(ctx)
+		if uerr != nil {
+			return staled, fmt.Errorf("expire stale job %s: %w", j.ID, uerr)
+		}
+		if affected == 0 {
+			// Lost a race: a concurrent completion, an explicit
+			// total_deadline set, or an earlier sweep phase already
+			// retired the row. Don't count, don't event.
+			continue
+		}
+		staled++
+
+		// Synthetic `stale` event so handlers parked on
+		// recv_event(types=["stale"]) observe the reaping. The row is now
+		// terminal, so allowTerminal=true bypasses PostJobEvent's terminal
+		// guard (same opt-out CancelJob uses for `cancelled`). Best-effort:
+		// the reap already landed; a failed event post must not abort the
+		// rest of the sweep batch.
+		if _, _, evErr := s.PostJobEvent(
+			ctx,
+			j.ID,
+			"stale",
+			map[string]interface{}{"reason": "stale", "detail": staleJobError},
+			nil,
+			"",
+			true,
+		); evErr != nil {
+			if s.logger != nil {
+				s.logger.Warning("ExpireStaleJobs: failed to post synthetic stale event for job %s: %v", j.ID, evErr)
+			}
+		}
+	}
+	return staled, nil
 }

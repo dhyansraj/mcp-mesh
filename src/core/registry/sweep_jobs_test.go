@@ -13,7 +13,23 @@ import (
 	"mcp-mesh/src/core/ent"
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/job"
+	"mcp-mesh/src/core/ent/jobevent"
 )
+
+// countJobEventsOfType returns how many JobEvent rows of the given type
+// exist for a job. Used by the stale-reaping tests to assert exactly one
+// synthetic `stale` event is posted (and re-running the sweep doesn't add
+// another).
+func countJobEventsOfType(t *testing.T, client *ent.Client, jobID, eventType string) int {
+	t.Helper()
+	n, err := client.JobEvent.Query().
+		Where(jobevent.JobID(jobID), jobevent.TypeEQ(eventType)).
+		Count(context.Background())
+	if err != nil {
+		t.Fatalf("count %s events for %s: %v", eventType, jobID, err)
+	}
+	return n
+}
 
 // seedJobRow inserts a Job row directly via Ent so tests can pin every
 // field (owner, attempts, status, total_deadline) deterministically.
@@ -564,12 +580,16 @@ func TestSweep_ReclaimExpiredLeaseJobs_DeltaExtendedLeaseUntouched(t *testing.T)
 }
 
 // TestSweep_ReclaimExpiredLeaseJobs_InputRequiredResumeExtendsLease covers
-// the input_required round trip: a job pauses in input_required longer
-// than its lease window (the paused row is never touched — the lease
-// phase only targets status=working), then resumes via an accepted
-// status=working delta. The resume delta must extend the stale claim-time
-// lease so the freshly resumed job is not instantly reclaimed on the next
-// sweep tick.
+// the input_required round trip: a job parked in input_required with a
+// still-valid lease is not reclaimed (the producer extends the lease while
+// waiting for a consumer answer), then resumes via an accepted
+// status=working delta. The resume delta must extend the lease so the
+// freshly resumed job is not instantly reclaimed on the next sweep tick.
+//
+// Note: an input_required job whose lease has genuinely EXPIRED *is* now
+// reclaimed by the lease phase (issue #1229 C1 — see
+// TestSweep_ReclaimExpiredLeaseJobs_InputRequiredReclaimedRetryable). This
+// test keeps the lease valid during tick 1 so the park is legitimate.
 func TestSweep_ReclaimExpiredLeaseJobs_InputRequiredResumeExtendsLease(t *testing.T) {
 	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
 	cfg := SweepConfig{Retention: 1 * time.Hour}
@@ -582,21 +602,21 @@ func TestSweep_ReclaimExpiredLeaseJobs_InputRequiredResumeExtendsLease(t *testin
 	owner := "paused-owner"
 	j := seedJobRow(t, client, "job-input-required", "render", &owner, job.StatusInputRequired, 1, 3, now.Add(-30*time.Minute))
 
-	// Claim-time lease that lapsed while the job sat in input_required.
+	// Still-valid lease: the producer's input_required delta extended it
+	// while the job waits for a consumer answer.
 	if _, err := client.Job.UpdateOneID(j.ID).
-		SetLeaseExpiresAt(time.Now().UTC().Add(-20 * time.Minute)).
+		SetLeaseExpiresAt(time.Now().UTC().Add(20 * time.Minute)).
 		Save(ctx); err != nil {
 		t.Fatalf("seed lease: %v", err)
 	}
 
-	// Tick 1: the paused job must NOT be reclaimed despite the expired
-	// lease — input_required is not status=working.
+	// Tick 1: the parked job must NOT be reclaimed — its lease is valid.
 	res1, err := sweep.runOnce(ctx)
 	if err != nil {
 		t.Fatalf("runOnce (paused): %v", err)
 	}
 	if res1.jobsLeaseReset != 0 || res1.jobsLeaseFailed != 0 {
-		t.Fatalf("expected paused job untouched, got reset=%d failed=%d", res1.jobsLeaseReset, res1.jobsLeaseFailed)
+		t.Fatalf("expected parked job untouched, got reset=%d failed=%d", res1.jobsLeaseReset, res1.jobsLeaseFailed)
 	}
 
 	// Resume: owner posts status=working. The accepted delta must extend
@@ -776,5 +796,384 @@ func TestSweep_ExpireDeadlinedJobs_TerminalUntouched(t *testing.T) {
 	}
 	if got.Status != job.StatusCompleted {
 		t.Errorf("expected status=completed preserved, got %s", got.Status)
+	}
+}
+
+// TestSweep_ReclaimExpiredLeaseJobs_InputRequiredReclaimedRetryable is the
+// C1 bug-fix coverage: an input_required job whose lease has expired (the
+// producer posted an input_required delta — which extends the lease — then
+// parked waiting for a consumer answer that never came, and the lease
+// lapsed) is reclaimed by the lease phase exactly like a working job. Before
+// the StatusIn(working, input_required) filter change this row orphaned
+// forever holding a claim slot.
+func TestSweep_ReclaimExpiredLeaseJobs_InputRequiredReclaimedRetryable(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 1 * time.Hour}
+	client, _, sweep, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Healthy owner so the orphan reroute doesn't fire — only the lease
+	// phase can act, and only because input_required is now in scope.
+	seedAgent(t, client, "parked-owner", agent.StatusHealthy, now)
+	owner := "parked-owner"
+	j := seedJobRow(t, client, "job-ir-lease-retry", "render", &owner, job.StatusInputRequired, 1, 3, now.Add(-30*time.Minute))
+
+	// Expired lease, UTC-pinned to match the production comparison path.
+	if _, err := client.Job.UpdateOneID(j.ID).
+		SetLeaseExpiresAt(time.Now().UTC().Add(-5 * time.Minute)).
+		Save(ctx); err != nil {
+		t.Fatalf("seed lease: %v", err)
+	}
+
+	res, err := sweep.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if res.jobsLeaseReset != 1 {
+		t.Errorf("expected 1 input_required job reclaimed (reset), got %d", res.jobsLeaseReset)
+	}
+	if res.jobsLeaseFailed != 0 {
+		t.Errorf("expected 0 lease-failed, got %d", res.jobsLeaseFailed)
+	}
+
+	got, err := client.Job.Get(ctx, j.ID)
+	if err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if got.Status != job.StatusWorking {
+		t.Errorf("expected status=working (claimable) after reclaim, got %s", got.Status)
+	}
+	if got.OwnerInstanceID != nil {
+		t.Errorf("expected owner cleared, got %v", *got.OwnerInstanceID)
+	}
+	if got.LeaseExpiresAt != nil {
+		t.Errorf("expected lease cleared, got %v", got.LeaseExpiresAt)
+	}
+	if got.AttemptCount != 1 {
+		t.Errorf("expected attempt_count unchanged at 1, got %d", got.AttemptCount)
+	}
+}
+
+// TestSweep_ReclaimExpiredLeaseJobs_InputRequiredReclaimedExhausted verifies
+// the exhausted branch of the C1 fix: an input_required job past its retry
+// budget with an expired lease is marked failed rather than recycled.
+func TestSweep_ReclaimExpiredLeaseJobs_InputRequiredReclaimedExhausted(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 1 * time.Hour}
+	client, _, sweep, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	seedAgent(t, client, "parked-owner-2", agent.StatusHealthy, now)
+	owner := "parked-owner-2"
+	// attempt_count=4, max_retries=3 → strictly exceeded → exhausted.
+	j := seedJobRow(t, client, "job-ir-lease-exhausted", "render", &owner, job.StatusInputRequired, 4, 3, now.Add(-30*time.Minute))
+
+	if _, err := client.Job.UpdateOneID(j.ID).
+		SetLeaseExpiresAt(time.Now().UTC().Add(-5 * time.Minute)).
+		Save(ctx); err != nil {
+		t.Fatalf("seed lease: %v", err)
+	}
+
+	res, err := sweep.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if res.jobsLeaseReset != 0 {
+		t.Errorf("expected 0 lease-reset, got %d", res.jobsLeaseReset)
+	}
+	if res.jobsLeaseFailed != 1 {
+		t.Errorf("expected 1 lease-failed (exhausted input_required), got %d", res.jobsLeaseFailed)
+	}
+
+	got, err := client.Job.Get(ctx, j.ID)
+	if err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if got.Status != job.StatusFailed {
+		t.Errorf("expected status=failed, got %s", got.Status)
+	}
+	if got.Error == nil || *got.Error != "lease expired: no completion within lease window" {
+		t.Errorf("expected lease-expired error, got %v", got.Error)
+	}
+}
+
+// TestSweep_ResetOrphanedJobs_InputRequiredOrphanReclaimed verifies the C1
+// fix for the orphan-reroute phase: an input_required job whose owner agent
+// has been purged is reset to claimable (previously left orphaned forever).
+func TestSweep_ResetOrphanedJobs_InputRequiredOrphanReclaimed(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 1 * time.Hour}
+	client, _, sweep, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	seedAgent(t, client, "ir-orphan-owner", agent.StatusUnhealthy, now.Add(-3*time.Hour))
+	owner := "ir-orphan-owner"
+	j := seedJobRow(t, client, "job-ir-orphan", "render", &owner, job.StatusInputRequired, 1, 3, now.Add(-10*time.Minute))
+
+	res, err := sweep.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if res.jobsReset != 1 {
+		t.Errorf("expected 1 input_required orphan reset, got %d", res.jobsReset)
+	}
+
+	got, err := client.Job.Get(ctx, j.ID)
+	if err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if got.Status != job.StatusWorking {
+		t.Errorf("expected status=working after orphan reset, got %s", got.Status)
+	}
+	if got.OwnerInstanceID != nil {
+		t.Errorf("expected owner cleared, got %v", *got.OwnerInstanceID)
+	}
+}
+
+// TestSweep_ExpireStaleJobs_NoDeadlineReaped is the core C2 case: a non-
+// terminal job with total_deadline=NULL whose submitted_at is older than the
+// stale timeout is marked failed with the `stale:` reason AND a synthetic
+// `stale` JobEvent is posted.
+func TestSweep_ExpireStaleJobs_NoDeadlineReaped(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 1 * time.Hour, JobStaleTimeout: 1 * time.Hour}
+	client, _, sweep, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Live owner so this is NOT an orphan; no lease so the lease phase
+	// skips it; no total_deadline so ExpireDeadlinedJobs skips it. The
+	// stale phase is the only one that can act.
+	seedAgent(t, client, "stale-owner", agent.StatusHealthy, now)
+	owner := "stale-owner"
+	// submitted_at 2h ago > 1h stale timeout → reaped.
+	j := seedJobRow(t, client, "job-stale", "render", &owner, job.StatusWorking, 1, 3, now.Add(-2*time.Hour))
+
+	res, err := sweep.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if res.jobsStaled != 1 {
+		t.Errorf("expected 1 job staled, got %d", res.jobsStaled)
+	}
+	if res.jobsDeadlined != 0 {
+		t.Errorf("expected 0 deadlined (no total_deadline), got %d", res.jobsDeadlined)
+	}
+
+	got, err := client.Job.Get(ctx, j.ID)
+	if err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if got.Status != job.StatusFailed {
+		t.Errorf("expected status=failed, got %s", got.Status)
+	}
+	if got.Error == nil || *got.Error != staleJobError {
+		t.Errorf("expected error %q, got %v", staleJobError, got.Error)
+	}
+	if got.LeaseExpiresAt != nil {
+		t.Errorf("expected lease cleared, got %v", got.LeaseExpiresAt)
+	}
+	if got.OwnerInstanceID != nil {
+		t.Errorf("expected owner cleared, got %v", *got.OwnerInstanceID)
+	}
+
+	if n := countJobEventsOfType(t, client, j.ID, "stale"); n != 1 {
+		t.Errorf("expected exactly 1 synthetic stale event, got %d", n)
+	}
+}
+
+// TestSweep_ExpireStaleJobs_InputRequiredReaped verifies the stale ceiling
+// also covers input_required jobs (non-terminal, no total_deadline).
+func TestSweep_ExpireStaleJobs_InputRequiredReaped(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 1 * time.Hour, JobStaleTimeout: 1 * time.Hour}
+	client, _, sweep, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	seedAgent(t, client, "stale-ir-owner", agent.StatusHealthy, now)
+	owner := "stale-ir-owner"
+	j := seedJobRow(t, client, "job-stale-ir", "render", &owner, job.StatusInputRequired, 1, 3, now.Add(-2*time.Hour))
+
+	res, err := sweep.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if res.jobsStaled != 1 {
+		t.Errorf("expected 1 input_required job staled, got %d", res.jobsStaled)
+	}
+
+	got, err := client.Job.Get(ctx, j.ID)
+	if err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if got.Status != job.StatusFailed {
+		t.Errorf("expected status=failed, got %s", got.Status)
+	}
+	if n := countJobEventsOfType(t, client, j.ID, "stale"); n != 1 {
+		t.Errorf("expected 1 stale event, got %d", n)
+	}
+}
+
+// TestSweep_ExpireStaleJobs_DeadlineSetUntouched verifies that a job which
+// DID set its own total_deadline is NOT touched by the stale phase — it is
+// left to ExpireDeadlinedJobs. The stale ceiling is a default for jobs that
+// didn't opt into an explicit deadline.
+func TestSweep_ExpireStaleJobs_DeadlineSetUntouched(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 1 * time.Hour, JobStaleTimeout: 1 * time.Hour}
+	client, _, sweep, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	seedAgent(t, client, "deadline-owner", agent.StatusHealthy, now)
+	owner := "deadline-owner"
+	// Old submitted_at (would be stale) BUT total_deadline is set in the
+	// FUTURE — ExpireStaleJobs must skip it (total_deadline IS NULL filter),
+	// and ExpireDeadlinedJobs must skip it too (deadline not yet passed).
+	j := seedJobRow(t, client, "job-has-deadline", "render", &owner, job.StatusWorking, 1, 3, now.Add(-2*time.Hour))
+	if _, err := client.Job.UpdateOneID(j.ID).
+		SetTotalDeadline(time.Now().UTC().Add(1 * time.Hour)).
+		Save(ctx); err != nil {
+		t.Fatalf("seed deadline: %v", err)
+	}
+
+	res, err := sweep.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if res.jobsStaled != 0 {
+		t.Errorf("expected 0 staled (job set its own total_deadline), got %d", res.jobsStaled)
+	}
+
+	got, err := client.Job.Get(ctx, j.ID)
+	if err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if got.Status != job.StatusWorking {
+		t.Errorf("expected status=working preserved, got %s", got.Status)
+	}
+	if n := countJobEventsOfType(t, client, j.ID, "stale"); n != 0 {
+		t.Errorf("expected no stale event, got %d", n)
+	}
+}
+
+// TestSweep_ExpireStaleJobs_FreshJobUntouched verifies that a job submitted
+// recently (within the stale timeout) is NOT reaped.
+func TestSweep_ExpireStaleJobs_FreshJobUntouched(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 1 * time.Hour, JobStaleTimeout: 1 * time.Hour}
+	client, _, sweep, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	seedAgent(t, client, "fresh-owner", agent.StatusHealthy, now)
+	owner := "fresh-owner"
+	// submitted_at 10m ago < 1h timeout → untouched.
+	j := seedJobRow(t, client, "job-fresh", "render", &owner, job.StatusWorking, 1, 3, now.Add(-10*time.Minute))
+
+	res, err := sweep.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if res.jobsStaled != 0 {
+		t.Errorf("expected 0 staled (fresh job), got %d", res.jobsStaled)
+	}
+
+	got, err := client.Job.Get(ctx, j.ID)
+	if err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if got.Status != job.StatusWorking {
+		t.Errorf("expected status=working preserved, got %s", got.Status)
+	}
+}
+
+// TestSweep_ExpireStaleJobs_DisabledByZeroTimeout verifies that with
+// JobStaleTimeout==0 (the default) the stale phase does not run at all — an
+// old, deadline-less job is left untouched.
+func TestSweep_ExpireStaleJobs_DisabledByZeroTimeout(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 1 * time.Hour} // JobStaleTimeout left at 0
+	client, _, sweep, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	seedAgent(t, client, "disabled-owner", agent.StatusHealthy, now)
+	owner := "disabled-owner"
+	j := seedJobRow(t, client, "job-stale-disabled", "render", &owner, job.StatusWorking, 1, 3, now.Add(-5*time.Hour))
+
+	res, err := sweep.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if res.jobsStaled != 0 {
+		t.Errorf("expected 0 staled (phase disabled), got %d", res.jobsStaled)
+	}
+
+	got, err := client.Job.Get(ctx, j.ID)
+	if err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if got.Status != job.StatusWorking {
+		t.Errorf("expected status=working preserved when disabled, got %s", got.Status)
+	}
+	if n := countJobEventsOfType(t, client, j.ID, "stale"); n != 0 {
+		t.Errorf("expected no stale event when disabled, got %d", n)
+	}
+}
+
+// TestSweep_ExpireStaleJobs_Idempotent verifies that re-running the sweep
+// over an already-reaped (now terminal) job does not double-fail it or post
+// a second stale event — the guarded update no-ops on the terminal row.
+func TestSweep_ExpireStaleJobs_Idempotent(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 1 * time.Hour, JobStaleTimeout: 1 * time.Hour}
+	client, _, sweep, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	seedAgent(t, client, "idem-owner", agent.StatusHealthy, now)
+	owner := "idem-owner"
+	j := seedJobRow(t, client, "job-stale-idem", "render", &owner, job.StatusWorking, 1, 3, now.Add(-2*time.Hour))
+
+	res1, err := sweep.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce (1): %v", err)
+	}
+	if res1.jobsStaled != 1 {
+		t.Fatalf("first tick: expected 1 staled, got %d", res1.jobsStaled)
+	}
+
+	res2, err := sweep.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce (2): %v", err)
+	}
+	if res2.jobsStaled != 0 {
+		t.Errorf("second tick: expected 0 staled (already terminal), got %d", res2.jobsStaled)
+	}
+
+	if n := countJobEventsOfType(t, client, j.ID, "stale"); n != 1 {
+		t.Errorf("expected exactly 1 stale event after two ticks, got %d", n)
+	}
+
+	got, err := client.Job.Get(ctx, j.ID)
+	if err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if got.Error == nil || *got.Error != staleJobError {
+		t.Errorf("expected stale error preserved, got %v", got.Error)
 	}
 }

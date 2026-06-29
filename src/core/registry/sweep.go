@@ -81,6 +81,12 @@ func readSweepIntervalFromEnv() time.Duration {
 // no goroutine is launched, no agents or events are purged).
 type SweepConfig struct {
 	Retention time.Duration
+
+	// JobStaleTimeout is a DEFAULT total-runtime ceiling applied to jobs that
+	// did NOT set their own total_deadline, measured from submitted_at. 0
+	// (the default) DISABLES the stale-job phase entirely — it is opt-in, so
+	// most deployments scan zero rows. See ExpireStaleJobs.
+	JobStaleTimeout time.Duration
 }
 
 // LoadSweepConfigFromEnv reads sweep configuration from the environment.
@@ -106,6 +112,30 @@ func LoadSweepConfigFromEnv(log *logger.Logger) SweepConfig {
 			}
 		} else if log != nil {
 			log.Warning("Invalid MCP_MESH_RETENTION %q, using default %s: %v", v, cfg.Retention, err)
+		}
+	}
+
+	// MCP_MESH_JOB_STALE_TIMEOUT: a DEFAULT total-runtime ceiling for jobs
+	// that didn't set their own total_deadline (measured from submitted_at).
+	// Parsed exactly like MCP_MESH_RETENTION except the default is 0
+	// (DISABLED) — the feature is opt-in, so unset means the stale-job phase
+	// scans zero rows.
+	//   - unset / empty: 0 (disabled)
+	//   - positive duration (e.g. "2h", "30m"): use that value
+	//   - "0" / "0s": disabled (same as unset)
+	//   - negative: warn and stay disabled (likely a typo)
+	//   - invalid: warn and stay disabled
+	if v := os.Getenv("MCP_MESH_JOB_STALE_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			if d < 0 {
+				if log != nil {
+					log.Warning("Invalid MCP_MESH_JOB_STALE_TIMEOUT %q: negative durations are not allowed (use 0 / unset to disable); leaving stale-job sweep disabled", v)
+				}
+			} else {
+				cfg.JobStaleTimeout = d
+			}
+		} else if log != nil {
+			log.Warning("Invalid MCP_MESH_JOB_STALE_TIMEOUT %q, leaving stale-job sweep disabled: %v", v, err)
 		}
 	}
 
@@ -243,6 +273,7 @@ type sweepResult struct {
 	jobsLeaseReset   int // expired-lease jobs returned to the pool for re-claim
 	jobsLeaseFailed  int // expired-lease jobs that ran out of retries (status=failed)
 	jobsDeadlined    int // total_deadline-exceeded jobs (status=failed)
+	jobsStaled       int // default-ceiling stale jobs (status=failed, no total_deadline)
 	jobEventsPurged  int // JobEvent rows GC'd for terminal jobs past retention
 }
 
@@ -264,12 +295,12 @@ func (s *SweepJob) tick(ctx context.Context) {
 		anyWork := res.agentsPurged > 0 || res.eventsPurged > 0 || res.schemasPurged > 0 ||
 			res.jobsReset > 0 || res.jobsExhausted > 0 ||
 			res.jobsLeaseReset > 0 || res.jobsLeaseFailed > 0 || res.jobsDeadlined > 0 ||
-			res.jobEventsPurged > 0
+			res.jobsStaled > 0 || res.jobEventsPurged > 0
 		if anyWork {
-			s.logger.Info("sweep: purged %d agents, %d events, %d orphan schemas; jobs: %d reset, %d exhausted, %d lease-reset, %d lease-failed, %d deadlined, %d job_events purged (took %s)",
+			s.logger.Info("sweep: purged %d agents, %d events, %d orphan schemas; jobs: %d reset, %d exhausted, %d lease-reset, %d lease-failed, %d deadlined, %d staled, %d job_events purged (took %s)",
 				res.agentsPurged, res.eventsPurged, res.schemasPurged,
 				res.jobsReset, res.jobsExhausted, res.jobsLeaseReset, res.jobsLeaseFailed,
-				res.jobsDeadlined, res.jobEventsPurged, took)
+				res.jobsDeadlined, res.jobsStaled, res.jobEventsPurged, took)
 		} else {
 			s.logger.Debug("sweep: nothing to purge (took %s)", took)
 		}
@@ -288,8 +319,12 @@ func (s *SweepJob) tick(ctx context.Context) {
 //     the lease on the rows it resets) so only leases held by a still-live
 //     owner are considered.
 //  4. Total-deadline expiry — independent of agent liveness.
-//  5. Event cap enforcement.
-//  6. Orphan schema_entry purge.
+//  5. Stale-job expiry — default total-runtime ceiling for jobs with no
+//     explicit total_deadline (opt-in via MCP_MESH_JOB_STALE_TIMEOUT). Runs
+//     after the lease/deadline phases so a row those retired isn't
+//     double-processed.
+//  6. Event cap enforcement.
+//  7. Orphan schema_entry purge.
 func (s *SweepJob) runOnce(ctx context.Context) (sweepResult, error) {
 	var res sweepResult
 	now := s.clock()
@@ -343,6 +378,20 @@ func (s *SweepJob) runOnce(ctx context.Context) (sweepResult, error) {
 		res.jobsDeadlined = expired
 		if err != nil {
 			return res, fmt.Errorf("expire deadlined jobs: %w", err)
+		}
+
+		// Default total-runtime ceiling (opt-in: MCP_MESH_JOB_STALE_TIMEOUT,
+		// 0 = disabled). Applies a default total_deadline measured from
+		// submitted_at to jobs that did NOT set their own. Runs AFTER the
+		// lease-reclaim and explicit-deadline phases so a row those already
+		// retired isn't double-processed (the guarded update would no-op
+		// anyway, but skipping the scan keeps the common disabled case free).
+		if s.cfg.JobStaleTimeout > 0 {
+			staled, err := s.service.ExpireStaleJobs(ctx, s.cfg.JobStaleTimeout, now)
+			res.jobsStaled = staled
+			if err != nil {
+				return res, fmt.Errorf("expire stale jobs: %w", err)
+			}
 		}
 
 		// JobEvent GC. Events outlive their parent job by the retention
