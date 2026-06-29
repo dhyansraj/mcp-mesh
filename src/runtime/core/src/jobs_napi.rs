@@ -257,6 +257,31 @@ impl JsJobController {
         Ok(())
     }
 
+    /// Transition the job to `input_required`, signalling the consumer
+    /// that the handler is blocked awaiting an external answer. STATUS-ONLY
+    /// primitive: it posts the `input_required` delta (with `prompt`
+    /// carried on the existing `progress_message` field) and resolves once
+    /// posted — it does NOT await the answer. Compose it with the existing
+    /// event primitives for a full request-and-await: call
+    /// `await job.requestInput(prompt)`, then park on
+    /// `await job.recvEvent(["answer"])`; an external party answers via
+    /// `proxy.sendEvent("answer", ...)`; the handler resumes and
+    /// `await job.complete(...)`s.
+    ///
+    /// Flushes IMMEDIATELY (not via the coalescing batch tick) because the
+    /// consumer is blocked on this control-plane transition. NON-terminal:
+    /// the handler keeps running and may still call `updateProgress` /
+    /// `complete` / `fail` afterwards. `complete` / `fail` exit
+    /// `input_required` (the registry confirms the transition).
+    #[napi]
+    pub async fn request_input(&self, prompt: Option<String>) -> Result<()> {
+        self.inner
+            .request_input(prompt)
+            .await
+            .map_err(job_error_to_napi)?;
+        Ok(())
+    }
+
     /// Wait for the next event posted into this job's event log.
     ///
     /// Mirrors [`JobController::recv_event`]. Returns the event as a JS

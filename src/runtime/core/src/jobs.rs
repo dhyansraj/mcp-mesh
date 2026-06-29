@@ -323,6 +323,46 @@ impl JobController {
         q.enqueue(delta);
     }
 
+    /// Transition the job to `input_required`, signalling the consumer that
+    /// the handler is blocked awaiting an external answer. STATUS-ONLY
+    /// primitive: it posts the `input_required` delta (with `prompt` carried
+    /// on the existing `progress_message` field) and returns once posted — it
+    /// does NOT await the answer. The canonical flow composes this with the
+    /// existing event primitives: the handler calls `request_input(prompt)`,
+    /// then parks on `recv_event(types=[...])`; an external party answers via
+    /// `JobProxy::send_event`; the handler resumes and `complete()`s (or
+    /// `fail()`s).
+    ///
+    /// Flushes IMMEDIATELY via the same `submit_batch` path `flush_terminal`
+    /// uses — NOT the coalescing batch tick — because this is a control-plane
+    /// transition the consumer is blocked on; it must not wait up to a tick
+    /// interval. Unlike `flush_terminal`, it does NOT set the terminal
+    /// sentinel: `input_required` is non-terminal, the handler keeps running,
+    /// and a subsequent `update_progress`/`complete`/`fail` is still valid.
+    /// The registry lease-extends on this delta (`ApplyJobDeltas`).
+    ///
+    /// Exit: `complete()` / `fail()` already transition out of
+    /// `input_required` (the registry confirms). There is no mid-flight
+    /// resume-to-`working` primitive in v1 — a `resume_working()` is a future
+    /// follow-up.
+    pub async fn request_input(&self, prompt: Option<String>) -> Result<(), JobError> {
+        let delta = JobDelta::input_required(self.job_id.clone(), prompt);
+        // Evict any pending coalesced progress delta for this job UNDER the
+        // queue lock before the immediate flush — same fence `flush_terminal`
+        // uses — so a stale progress delta queued just before this call can't
+        // land at the registry AFTER the input_required transition on the next
+        // batching tick. We do NOT set the terminal sentinel: the job stays
+        // live and later progress/terminal deltas are still valid.
+        {
+            let mut q = self.queue.lock().await;
+            q.pending.remove(&self.job_id);
+        }
+        self.backend
+            .submit_batch(&self.instance_id, vec![delta])
+            .await?;
+        Ok(())
+    }
+
     /// Mark the job complete with the given result. Flushes immediately
     /// (terminal status — application is done).
     pub async fn complete(&self, result: serde_json::Value) -> Result<(), JobError> {
@@ -1538,6 +1578,64 @@ mod tests {
         let job = backend.get_job(&resp.id).await.unwrap();
         assert_eq!(job.status, JobStatus::Completed);
         assert_eq!(job.result, Some(serde_json::json!({"ans": 42})));
+    }
+
+    #[tokio::test]
+    async fn request_input_flushes_immediately_non_terminal() {
+        let backend = MockBackend::new();
+        let queue = new_coalescing_queue();
+        let resp = backend
+            .create_job(CreateJobRequest {
+                capability: "cap".into(),
+                submitted_payload: serde_json::json!({}),
+                submitted_by: "inst-1".into(),
+                max_retries: None,
+                max_duration: None,
+                total_deadline: None,
+                owner_instance_id: None,
+            })
+            .await
+            .unwrap();
+        let ctrl = JobController::new(
+            resp.id.clone(),
+            "inst-1".to_string(),
+            backend.clone() as Arc<dyn TaskBackend>,
+            queue.clone(),
+        );
+        // A pending progress delta should be evicted by request_input so it
+        // can't land after the input_required transition.
+        ctrl.update_progress(0.4, Some("pre".into())).await;
+        ctrl.request_input(Some("need approval".into()))
+            .await
+            .unwrap();
+
+        // Queue drained (pending progress evicted under the lock).
+        {
+            let q = queue.lock().await;
+            assert_eq!(q.len(), 0);
+        }
+
+        // Exactly one batch flushed immediately — the input_required delta.
+        assert_eq!(backend.batch_count(), 1);
+        let (instance, deltas) = backend.last_batch().unwrap();
+        assert_eq!(instance, "inst-1");
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].status, Some(JobStatus::InputRequired));
+        assert_eq!(deltas[0].progress_message.as_deref(), Some("need approval"));
+        // NON-terminal: the controller stays live.
+        assert!(!deltas[0].is_terminal());
+        assert!(!ctrl.is_terminal().await);
+
+        // Registry reflects input_required + the prompt on progress_message.
+        let job = backend.get_job(&resp.id).await.unwrap();
+        assert_eq!(job.status, JobStatus::InputRequired);
+        assert_eq!(job.progress_message.as_deref(), Some("need approval"));
+
+        // The controller is still usable: complete() works from
+        // input_required (mirrors the registry's accepted transition).
+        ctrl.complete(serde_json::json!({"ok": true})).await.unwrap();
+        let job = backend.get_job(&resp.id).await.unwrap();
+        assert_eq!(job.status, JobStatus::Completed);
     }
 
     #[tokio::test]

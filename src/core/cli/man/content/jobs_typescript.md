@@ -30,6 +30,7 @@ no behavior change for non-job tools.
 | Injected type        | `job: MeshJob \| null = null`             | `<dep>: MeshJob \| null = null`           |
 | Concrete injection   | `JobController` (or `null`)               | `MeshJobSubmitter`                        |
 | Progress             | `await job?.updateProgress(f, m)`         | (read via `__mesh_job_status`)            |
+| Request input        | `await job?.requestInput(prompt)`         | (status → `input_required`; answer via `postEvent`) |
 | Terminal success     | `await job?.complete(payload)`            | `await proxy.wait(timeoutSecs)`           |
 | Terminal failure     | `await job?.fail(reason)`                 | `wait()` rejects                          |
 | Transient retry      | `throw new TransientError(...)` w/ `retryOn` | (registry hands to peer in ~5s)        |
@@ -349,6 +350,53 @@ if (event && event.type === "stale") {
 
 No SDK change is needed — `stale` is an ordinary event type, so the
 existing `recvEvent` / stream paths surface it across every runtime.
+
+**Request input — pause for an external answer.** A `task: true` handler
+that needs a human (or another agent) to supply something mid-run calls
+`requestInput(prompt)` to transition the job to `input_required`, then
+parks on `recvEvent` for the answer:
+
+```typescript
+agent.addTool({
+  name: "approve_spend",
+  capability: "approve_spend",
+  task: true,
+  parameters: z.object({ amount: z.number() }),
+  meshJobParamIndex: 1,
+  execute: async ({ amount }, job: MeshJob | null = null) => {
+    if (!job) throw new Error("job slot is not bound");
+
+    // 1. Signal the consumer we're blocked on input. The prompt rides the
+    //    job's progress_message field; status flips to "input_required".
+    await job.requestInput?.(`Approve $${amount}? Reply yes/no.`);
+
+    // 2. Park on the answer (no busy-wait — long-polls the event log).
+    const event = await job.recvEvent?.(["answer"], 300);
+    if (!event) {
+      await job.fail?.("timed out waiting for approval");
+      return { status: "timeout" };
+    }
+
+    // 3. Resume and finish. complete()/fail() exit input_required.
+    const payload = event.payload as Record<string, unknown> | null;
+    return { status: payload?.approved ? "approved" : "denied" };
+  },
+});
+```
+
+An external party answers by posting the matching event:
+
+```typescript
+await mesh.jobs.postEvent(jobId, "answer", { approved: true });
+```
+
+`requestInput` is **status-only**: it posts the `input_required`
+transition (flushing immediately, since the consumer is blocked on it)
+and resolves — it does not await the answer. Awaiting is composed with
+the existing `recvEvent` / `postEvent` event primitives, as above. The
+transition is **non-terminal**: the handler keeps running. `complete()`
+/ `fail()` exit `input_required` (a mid-flight resume-to-`working`
+primitive is a future follow-up).
 
 ## Stream subscription
 

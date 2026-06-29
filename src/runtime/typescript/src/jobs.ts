@@ -18,10 +18,14 @@
  *     error-message substrings ("job is terminal" / "job not found").
  *
  * The `JobController` / `JobProxy` napi-rs classes from `@mcpmesh/core`
- * already expose `recvEvent` / `sendEvent` methods directly — application
- * code calls them via the `MeshJob`-typed parameter the framework
- * injects. This module just adds the helper + error classes around that
- * surface, mirroring Python's `mesh.jobs.post_event` API one-for-one.
+ * already expose `recvEvent` / `sendEvent` / `requestInput` methods
+ * directly — application code calls them via the `MeshJob`-typed parameter
+ * the framework injects. In particular `await job.requestInput(prompt)`
+ * transitions the job to `input_required` (status-only; flushes
+ * immediately) so a handler can park on `await job.recvEvent(["answer"])`
+ * for an external party to answer via {@link postEvent} / `proxy.sendEvent`.
+ * This module just adds the helper + error classes around that surface,
+ * mirroring Python's `mesh.jobs.post_event` API one-for-one.
  */
 
 import { JobProxy } from "@mcpmesh/core";

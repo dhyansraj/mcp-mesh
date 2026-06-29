@@ -237,6 +237,16 @@ class MeshJob(Protocol):
 
     On the producer side the injected object exposes:
         - ``await job.update_progress(progress, message=None)`` — coalesced delta.
+        - ``await job.request_input(prompt=None)`` *(since v2.6)* —
+          transition the job to ``input_required``, signalling the consumer
+          that the handler is blocked awaiting an external answer. STATUS-ONLY:
+          posts the transition (``prompt`` rides the ``progress_message``
+          field), flushes immediately, and returns — it does NOT await the
+          answer. Compose with ``recv_event`` for request-and-await:
+          ``await job.request_input(prompt)`` then
+          ``await job.recv_event(types=["answer"])``; an external party answers
+          via ``proxy.send_event("answer", ...)``. Non-terminal — the handler
+          keeps running; ``complete`` / ``fail`` exit ``input_required``.
         - ``await job.complete(result)`` — terminal success.
         - ``await job.fail(error)`` — terminal failure.
         - ``await job.recv_event(types=None, timeout_secs=None)`` *(since v2.2)* —

@@ -29,6 +29,7 @@ request-response — no behavior change for non-job tools.
 | Injected type        | `MeshJob` (cast to `JobController`)         | `MeshJob` (cast to `MeshJobSubmitter`)             |
 | Concrete injection   | `JobController` (or `null`)                 | `MeshJobSubmitter`                                 |
 | Progress             | `controller.updateProgress(f, m)`           | (read via `__mesh_job_status`)                     |
+| Request input        | `controller.requestInput(prompt)`           | (status → `input_required`; answer via `postEvent`) |
 | Terminal success     | `controller.complete(payload)`              | `proxy.await(timeoutSeconds)`                      |
 | Terminal failure     | `controller.fail(reason)`                   | `await()` throws                                   |
 | Transient retry      | `throw new IOException(...)` w/ `retryOn`   | (registry hands to peer in ~5s)                    |
@@ -369,6 +370,52 @@ LRU cache keyed by `(registryUrl, jobId)` (default cap 256; tune via
 
 - `JobNotFoundException` — job swept or id typo
 - `JobTerminalException` — job already terminal, no more events accepted
+
+**Request input — pause for an external answer.** A `task = true`
+handler that needs a human (or another agent) to supply something
+mid-run calls `requestInput(prompt)` to transition the job to
+`input_required`, then parks on `recvEvent` for the answer:
+
+```java
+@MeshTool(capability = "approve_spend", task = true)
+public Map<String, Object> approveSpend(
+    @Param("amount") double amount,
+    MeshJob job) throws Exception {
+  JobController controller = (JobController) job;
+
+  // 1. Signal the consumer we're blocked on input. The prompt rides the
+  //    job's progress_message field; status flips to "input_required".
+  controller.requestInput("Approve $" + amount + "? Reply yes/no.");
+
+  // 2. Park on the answer (no busy-wait — long-polls the event log).
+  Map<String, Object> event = controller.recvEvent(
+      List.of("answer"), Duration.ofSeconds(300));
+  if (event == null) {
+    controller.fail("timed out waiting for approval");
+    return Map.of("status", "timeout");
+  }
+
+  // 3. Resume and finish. complete()/fail() exit input_required.
+  @SuppressWarnings("unchecked")
+  Map<String, Object> payload = (Map<String, Object>) event.get("payload");
+  boolean approved = payload != null && Boolean.TRUE.equals(payload.get("approved"));
+  return Map.of("status", approved ? "approved" : "denied");
+}
+```
+
+An external party answers by posting the matching event:
+
+```java
+MeshJobs.postEvent(jobId, "answer", Map.of("approved", true));
+```
+
+`requestInput` is **status-only**: it posts the `input_required`
+transition (flushing immediately, since the consumer is blocked on it)
+and returns — it does not await the answer. Awaiting is composed with
+the existing `recvEvent` / `postEvent` event primitives, as above. The
+transition is **non-terminal**: the handler keeps running.
+`complete()` / `fail()` exit `input_required` (a mid-flight
+resume-to-`working` primitive is a future follow-up).
 
 ## Lifecycle facades by `jobId`
 

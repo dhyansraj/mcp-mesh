@@ -28,6 +28,7 @@ behavior change for non-job tools.
 | Injected type              | `job: MeshJob = None`             | `<dep_name>: MeshJob = None`            |
 | Concrete injection         | `JobController` (or `None`)       | `MeshJobSubmitter`                      |
 | Progress                   | `await job.update_progress(f, m)` | (read via `__mesh_job_status`)          |
+| Request input              | `await job.request_input(prompt)` | (status → `input_required`; answer via `post_event`) |
 | Terminal success           | `await job.complete(payload)`     | `await proxy.wait(timeout_secs=N)`      |
 | Terminal failure           | `await job.fail(reason)`          | `wait()` raises                         |
 | Transient retry            | `raise OSError(...)` w/ `retry_on=(OSError,)` | (registry hands to peer in ~5s) |
@@ -309,6 +310,44 @@ if event and event["type"] == "stale":
 
 No SDK change is needed — `stale` is an ordinary event type, so the
 existing `recv_event` / stream paths surface it across every runtime.
+
+**Request input — pause for an external answer.** A `task=True` handler
+that needs a human (or another agent) to supply something mid-run calls
+`request_input(prompt)` to transition the job to `input_required`, then
+parks on `recv_event` for the answer:
+
+```python
+@app.tool()
+@mesh.tool(capability="approve_spend", task=True)
+async def approve_spend(amount: float, job: mesh.MeshJob = None) -> dict:
+    # 1. Signal the consumer we're blocked on input. The prompt rides the
+    #    job's progress_message field; status flips to "input_required".
+    await job.request_input(f"Approve ${amount}? Reply yes/no.")
+
+    # 2. Park on the answer (no busy-wait — long-polls the event log).
+    event = await job.recv_event(types=["answer"], timeout_secs=300.0)
+    if event is None:
+        return await job.fail("timed out waiting for approval")
+
+    # 3. Resume and finish. complete()/fail() exit input_required.
+    if event["payload"].get("approved"):
+        return {"status": "approved"}
+    return {"status": "denied"}
+```
+
+An external party answers by posting the matching event:
+
+```python
+await mesh.jobs.post_event(job_id, "answer", {"approved": True})
+```
+
+`request_input` is **status-only**: it posts the `input_required`
+transition (flushing immediately, since the consumer is blocked on it)
+and returns — it does not await the answer. Awaiting is composed with
+the existing `recv_event` / `post_event` event primitives, as above.
+The transition is **non-terminal**: the handler keeps running.
+`complete()` / `fail()` exit `input_required` (a mid-flight
+resume-to-`working` primitive is a future follow-up).
 
 ## Stream subscription
 

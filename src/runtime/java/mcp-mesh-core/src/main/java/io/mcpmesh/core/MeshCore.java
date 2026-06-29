@@ -531,6 +531,27 @@ public interface MeshCore {
     int mesh_job_controller_release_lease(Pointer handle, String reason);
 
     /**
+     * Transition the job to {@code input_required}, signalling the consumer
+     * that the handler is blocked awaiting an external answer. STATUS-ONLY:
+     * posts the {@code input_required} delta (with {@code prompt} carried on
+     * the existing {@code progress_message} field) and returns once posted —
+     * it does NOT await the answer. Compose it with the event primitives for
+     * request-and-await: call {@code mesh_job_controller_request_input(prompt)},
+     * then park on {@code mesh_job_controller_recv_event(["answer"])}; an
+     * external party answers via {@code mesh_job_proxy_send_event}; the handler
+     * resumes and calls {@code mesh_job_controller_complete}.
+     *
+     * <p>Flushes IMMEDIATELY (not via the coalescing batch tick) because the
+     * consumer is blocked on this control-plane transition. NON-terminal: the
+     * handler keeps running; complete / fail exit {@code input_required}.
+     *
+     * @param handle Controller handle
+     * @param prompt Optional prompt (may be null for "no prompt")
+     * @return 0 on success, -1 on error
+     */
+    int mesh_job_controller_request_input(Pointer handle, String prompt);
+
+    /**
      * Whether complete / fail has already been called on this controller.
      *
      * @param handle Controller handle

@@ -421,6 +421,51 @@ pub unsafe extern "C" fn mesh_job_controller_release_lease(
         .unwrap_or_else(jobs_set_err)
 }
 
+/// Transition the job to `input_required`, signalling the consumer that the
+/// handler is blocked awaiting an external answer. STATUS-ONLY primitive: it
+/// posts the `input_required` delta (with `prompt` carried on the existing
+/// `progress_message` field) and returns once posted — it does NOT await the
+/// answer. Compose it with the existing event primitives for a full
+/// request-and-await: call `mesh_job_controller_request_input(prompt)`, then
+/// park on `mesh_job_controller_recv_event(["answer"])`; an external party
+/// answers via `mesh_job_proxy_send_event("answer", ...)`; the handler
+/// resumes and calls `mesh_job_controller_complete(...)`.
+///
+/// `prompt` may be NULL ("no prompt"); an empty string is passed through as
+/// `Some("")` for parity with `mesh_job_controller_release_lease`.
+///
+/// See [`crate::jobs::JobController::request_input`] for full semantics.
+/// Flushes IMMEDIATELY (not via the coalescing batch tick) because the
+/// consumer is blocked on this control-plane transition. NON-terminal: the
+/// handler keeps running; `complete` / `fail` exit `input_required`.
+///
+/// # Safety
+/// `handle` must come from [`mesh_job_controller_new`] and must not yet have
+/// been freed.
+#[no_mangle]
+pub unsafe extern "C" fn mesh_job_controller_request_input(
+    handle: *mut JobControllerHandle,
+    prompt: *const c_char,
+) -> i32 {
+    take_last_error();
+    if handle.is_null() {
+        set_last_error("handle is null");
+        return -1;
+    }
+    let handle = &*handle;
+    // `prompt` is optional — NULL means "no prompt". Empty string is passed
+    // through as `Some("")` for parity with `mesh_job_controller_release_lease`.
+    let prompt_opt: Option<String> = match opt_cstr(prompt, "prompt") {
+        Ok(opt) => opt.map(str::to_string),
+        Err(()) => return -1,
+    };
+    let inner = handle.inner.clone();
+    jobs_runtime()
+        .block_on(async move { inner.request_input(prompt_opt).await })
+        .map(|_| 0)
+        .unwrap_or_else(jobs_set_err)
+}
+
 /// Whether `complete` / `fail` has already been called on this controller.
 ///
 /// # Returns
