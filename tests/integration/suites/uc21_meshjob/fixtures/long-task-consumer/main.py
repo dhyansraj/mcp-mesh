@@ -541,6 +541,38 @@ async def commission_subscribe_observer(
     }
 
 
+# ---------------------------------------------------------------------------
+# input_required lease-reclaim submitter (tc29 / C1, #1229)
+# ---------------------------------------------------------------------------
+
+
+@app.tool()
+@mesh.tool(
+    capability="commission_awaits_input",
+    dependencies=["awaits_input_forever"],
+    description="Submit awaits_input_forever with a small max_duration and max_retries=0; never posts the answer.",
+)
+async def commission_awaits_input(
+    user_id: str = "alice",
+    max_duration: int = 2,
+    awaits_input_forever: MeshJob = None,
+) -> dict:
+    if awaits_input_forever is None:
+        return {"error": "awaits_input_forever submitter not injected"}
+    # Small max_duration sizes the LEASE window so it lapses quickly once the
+    # producer parks in input_required without heartbeating. max_retries=0
+    # makes the lease lapse terminal on the first reclaim pass (status=failed,
+    # error="lease expired: ..."), avoiding a reset→reclaim race that a
+    # non-zero retry budget would introduce. We deliberately NEVER post the
+    # "answer" event the producer is parked on.
+    proxy = await awaits_input_forever.submit(
+        user_id=user_id,
+        max_duration=max_duration,
+        max_retries=0,
+    )
+    return {"job_id": getattr(proxy, "job_id", None)}
+
+
 import os  # noqa: E402  (kept here for clarity that env-port is the only env hook)
 
 

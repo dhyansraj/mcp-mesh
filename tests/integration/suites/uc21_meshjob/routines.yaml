@@ -78,6 +78,67 @@ routines:
         capture: registry_start
         timeout: 30
 
+  # Start the registry with the stale-job reaping phase ENABLED.
+  #
+  # Clones start_registry_with_fast_sweep but adds
+  # ``MCP_MESH_JOB_STALE_TIMEOUT=3s`` — the opt-in default total-runtime
+  # ceiling for jobs that did NOT set their own ``total_deadline`` (#1229).
+  # A non-terminal job with a NULL total_deadline whose ``submitted_at`` is
+  # older than 3s is reaped by the new ExpireStaleJobs sweep phase → marked
+  # ``failed`` with error ``"stale: ..."``, owner/lease cleared, and a
+  # synthetic ``stale`` JobEvent posted.
+  #
+  # The sweep tick is tightened to ``MCP_MESH_SWEEP_INTERVAL=2s`` so the
+  # stale cutoff is enforced within a couple of ticks; the RETENTION +
+  # health knobs are kept identical to the fast-sweep routine so the
+  # lease/orphan phases still behave as in the shared routine.
+  #
+  # ISOLATION: this routine is used ONLY by the C2 tc (tc28). A suite-wide
+  # stale timeout would reap every other tc's still-working jobs, so the
+  # shared start_registry_with_fast_sweep routine is deliberately left
+  # untouched — each stale-reaping tc spins up its own isolated registry.
+  #
+  # The registry does NOT emit a dedicated startup log line for the stale
+  # timeout (it is folded into LoadSweepConfigFromEnv silently), so the
+  # post-start guard keeps the existing ``[sweep] using MCP_MESH_SWEEP_INTERVAL``
+  # assertion — that line proves the sweep config (including the stale
+  # knob parsed in the same pass) took effect.
+  start_registry_with_stale_reaping:
+    description: "Start the mesh registry with the stale-job reaping phase enabled (MCP_MESH_JOB_STALE_TIMEOUT=3s)"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: |
+          MCP_MESH_SWEEP_INTERVAL=2s \
+          MCP_MESH_JOB_STALE_TIMEOUT=3s \
+          MCP_MESH_RETENTION=10s \
+          MCP_MESH_HEALTH_CHECK_INTERVAL=5 \
+          DEFAULT_TIMEOUT_THRESHOLD=15 \
+            meshctl start --registry-only -d
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              echo "registry ready after ${i}s"
+              # Verify the sweep override actually stamped its log line.
+              # The stale timeout is parsed in the same LoadSweepConfigFromEnv
+              # pass as MCP_MESH_SWEEP_INTERVAL, so this guard confirms the
+              # whole sweep config (including the stale knob) took effect.
+              # Tail the log so a stale match from an earlier run in the
+              # same shell session can't make a misconfigured current run
+              # look healthy.
+              tail -n 200 ~/.mcp-mesh/logs/registry.log \
+                | grep -qE '\[sweep\] using MCP_MESH_SWEEP_INTERVAL' \
+                || { echo "FAIL: MCP_MESH_SWEEP_INTERVAL override did not take effect"; exit 1; }
+              echo "[setup] confirmed sweep override active (stale reaping enabled)"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "ERROR: registry did not become ready in 20s"
+          tail -50 ~/.mcp-mesh/logs/registry.log 2>/dev/null || true
+          exit 1
+        capture: registry_start
+        timeout: 30
+
   # Stop everything started by this test (agents + registry).
   stop_all:
     description: "Stop all mesh processes started by this test"

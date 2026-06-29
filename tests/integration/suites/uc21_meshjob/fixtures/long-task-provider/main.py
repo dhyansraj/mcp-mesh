@@ -480,6 +480,56 @@ async def run_until_cancel(
     return {"status": "loop_exhausted", "events_seen": events_seen}
 
 
+# ---------------------------------------------------------------------------
+# input_required parking — exercises C1 lease-reclaim of input_required jobs
+# (#1229). The producer transitions the row to ``input_required`` and then
+# parks indefinitely WITHOUT posting any further progress.
+# ---------------------------------------------------------------------------
+#
+# The injected JobController exposes ``request_input(prompt)`` — the SDK
+# primitive that transitions the owned job to ``input_required`` (status-only,
+# non-terminal, flushed immediately). It uses the controller's own job context
+# and lease ownership, so no registry-URL / instance-id plumbing is needed.
+#
+# After signalling input_required the handler parks on recv_event for an
+# "answer" event that never arrives, posting NO progress. Because progress
+# deltas are what extend the lease, the silent park lets the lease lapse so
+# the registry's ReclaimExpiredLeaseJobs phase (now input_required-scoped)
+# can reap it — the whole point of the C1 test.
+
+
+@app.tool()
+@mesh.tool(
+    capability="awaits_input_forever",
+    task=True,
+    description="Transitions the job to input_required, then parks on recv_event for an answer that never arrives — never posts progress, never completes.",
+)
+async def awaits_input_forever(
+    user_id: str,
+    job: MeshJob = None,
+) -> dict[str, Any]:
+    if job is None:
+        return {"status": "no_job_ctx"}
+    # Transition the row to input_required via the SDK primitive (the injected
+    # controller is the lease owner, so no manual owner-check plumbing needed).
+    await job.request_input(f"waiting on input for {user_id}")
+    # Park waiting for an "answer" event that the consumer never posts.
+    # CRITICAL: do NOT call update_progress here — a progress delta would
+    # extend the lease and defeat the lease-reclaim test. recv_event is a
+    # pure long-poll read; it does not heartbeat the lease. We loop on the
+    # long-poll so the handler stays parked well past the lease window; the
+    # registry reaps the row out from under us via ReclaimExpiredLeaseJobs.
+    for _ in range(60):
+        event = await job.recv_event(types=["answer"], timeout_secs=15.0)
+        if event is not None:
+            # An answer arrived (not expected in the C1 test) — complete so
+            # the fixture is still well-behaved if ever exercised that way.
+            payload = {"status": "got_answer", "payload": event["payload"]}
+            await job.complete(payload)
+            return payload
+    return {"status": "never_answered"}
+
+
 @mesh.agent(
     name="long-task-provider",
     version="1.0.0",
