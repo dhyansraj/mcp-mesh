@@ -238,6 +238,57 @@ func TestComputeSupersessionView_ResolvedDepsAllowDimming(t *testing.T) {
 	assert.Equal(t, 1, view.total)
 }
 
+// TestRegistryCountsDiscloseDownBuckets is an end-to-end guard over issue #1198:
+// the header count surface must route a blocking down instance to the red
+// "unhealthy" alarm while an orphaned non-blocking down instance is disclosed in
+// gray as "inactive" — never red. It mirrors how outputDockerComposeStyle feeds
+// the headerView into the count formatter (headerView.total superseded,
+// len(headerView.blocking) blocking).
+func TestRegistryCountsDiscloseDownBuckets(t *testing.T) {
+	base := time.Now().Add(-1 * time.Hour)
+
+	// provider-solo is down AND explains consumer-1's unresolved dependency:
+	// genuine blocking alarm.
+	provider := testAgent("provider-solo", "provider", "unhealthy", base, nil)
+	provider.Tools = []ToolInfo{{Name: "date_service", Capability: "date_service"}}
+	consumer := testAgent("consumer-1", "consumer", "healthy", base, nil)
+	consumer.DependencyResolutions = []DependencyResolution{
+		{Capability: "date_service", Status: "unresolved"},
+	}
+	// stale-solo is down, has no healthy replacement and blocks nothing: an
+	// orphaned non-blocking down instance.
+	stale := testAgent("stale-solo", "stale", "unhealthy", base, nil)
+
+	agents := []EnhancedAgent{provider, consumer, stale}
+	view := computeSupersessionView(agents)
+
+	require.True(t, view.blocking["provider-solo"], "provider-solo must be the blocking down instance")
+	require.False(t, view.blocking["stale-solo"], "stale-solo blocks nothing")
+	require.False(t, view.superseded["stale-solo"], "stale-solo has no healthy replacement, so it is not superseded")
+	require.Equal(t, 0, view.total, "no superseded instances in this fixture")
+
+	// Registry reports 1 healthy (consumer) and 2 unhealthy (provider + stale).
+	// The header derives superseded from view.total and blocking from
+	// len(view.blocking), exactly as showRegistryStatus does.
+	s := formatRegistryAgentCounts(1, 2, view.total, len(view.blocking))
+
+	assert.Contains(t, s, colorRed+"1 unhealthy",
+		"the blocking down instance is the genuine alarm and renders red")
+	assert.Contains(t, s, colorGray+"1 inactive",
+		"the orphaned non-blocking down instance is a muted gray 'inactive' disclosure, not red")
+	assert.NotContains(t, s, "2 unhealthy",
+		"a down instance that blocks nothing must not inflate the red unhealthy count")
+
+	// And the footer (orphaned down hidden, blocking promoted to a row).
+	_, summary := collapseDefaultView(agents, view)
+	require.Equal(t, 1, summary.hiddenDownAgents, "only the orphaned down instance is hidden")
+	footer := formatListFooter(2, 1, summary)
+	assert.Contains(t, footer, colorGray+"1 inactive instance hidden",
+		"the hidden orphan is disclosed as gray inactive in the footer, not red 'agent down'")
+	assert.NotContains(t, footer, colorRed,
+		"nothing in the footer is a genuine alarm: the blocking instance is a visible red row, not a footer count")
+}
+
 func TestCollapseDefaultView(t *testing.T) {
 	base := time.Now().Add(-1 * time.Hour)
 
@@ -327,58 +378,100 @@ func TestFormatListFooter(t *testing.T) {
 		assert.Equal(t, "7 agents (7 healthy)", footer)
 	})
 
-	t.Run("down and superseded clauses", func(t *testing.T) {
+	t.Run("inactive and superseded clauses", func(t *testing.T) {
 		footer := formatListFooter(3, 3, listDefaultSummary{hiddenSuperseded: 2, hiddenDownAgents: 1})
 		assert.Contains(t, footer, "3 agents (3 healthy)")
-		assert.Contains(t, footer, "1 agent down (use --all)")
+		assert.Contains(t, footer, "1 inactive instance hidden (use --all)")
 		assert.Contains(t, footer, "2 superseded hidden")
-		assert.Contains(t, footer, colorRed+"1 agent down",
-			"the down clause is the alarm surface and renders red")
+		// Orphaned non-blocking down instances block nothing, so they are a
+		// muted gray "inactive" disclosure rather than a red "agent down"
+		// alarm (issue #1198).
+		assert.Contains(t, footer, colorGray+"1 inactive instance hidden",
+			"a hidden non-blocking down instance is a neutral gray disclosure, not a red alarm")
+		assert.NotContains(t, footer, colorRed,
+			"no clause in this footer is a genuine alarm, so nothing renders red")
+		assert.NotContains(t, footer, "agent down",
+			"the alarming 'agent down' wording is reserved; hidden orphans read as 'inactive'")
 		assert.Contains(t, footer, colorGray+"2 superseded hidden",
 			"the superseded clause is neutral gray")
 		assert.NotContains(t, footer, "superseded hidden (use --all)",
-			"--all hint is not repeated when the down clause already carries it")
+			"--all hint is not repeated when the inactive clause already carries it")
 	})
 
 	t.Run("superseded-only clause carries the --all hint", func(t *testing.T) {
 		footer := formatListFooter(7, 7, listDefaultSummary{hiddenSuperseded: 8})
 		assert.Contains(t, footer, "8 superseded hidden (use --all)")
-		assert.NotContains(t, footer, "down")
+		assert.NotContains(t, footer, "inactive")
 	})
 
-	t.Run("plural down clause", func(t *testing.T) {
+	t.Run("plural inactive clause", func(t *testing.T) {
 		footer := formatListFooter(1, 1, listDefaultSummary{hiddenDownAgents: 2})
 		assert.Contains(t, footer, "1 agent (1 healthy)")
-		assert.Contains(t, footer, "2 agents down (use --all)")
+		assert.Contains(t, footer, "2 inactive instances hidden (use --all)")
+		assert.NotContains(t, footer, colorRed)
 	})
 }
 
 func TestFormatRegistryAgentCounts(t *testing.T) {
-	t.Run("splits superseded out of unhealthy", func(t *testing.T) {
-		s := formatRegistryAgentCounts(7, 9, 8)
+	t.Run("blocking down is red unhealthy, superseded is gray", func(t *testing.T) {
+		// 9 down total: 8 superseded, of the remaining 1 genuine all 1 blocks.
+		s := formatRegistryAgentCounts(7, 9, 8, 1)
 		assert.Contains(t, s, "7 healthy")
-		assert.Contains(t, s, "1 unhealthy", "genuine unhealthy = unhealthy - superseded")
+		assert.Contains(t, s, "1 unhealthy", "blocking down instances are the red alarm")
 		assert.Contains(t, s, "8 superseded")
-		// Genuine unhealthy is the alarm surface (red); superseded is neutral (gray).
+		// Only the genuinely-blocking down count is the alarm surface (red);
+		// superseded is neutral (gray).
 		assert.Contains(t, s, colorRed+"1 unhealthy")
 		assert.Contains(t, s, colorGray+"8 superseded")
+		assert.NotContains(t, s, "inactive")
 	})
 
-	t.Run("all superseded omits unhealthy clause", func(t *testing.T) {
-		s := formatRegistryAgentCounts(7, 8, 8)
+	t.Run("orphaned non-blocking down is gray inactive, not red", func(t *testing.T) {
+		// 3 down total: 0 superseded, 0 blocking -> all 3 orphaned/inactive.
+		s := formatRegistryAgentCounts(5, 3, 0, 0)
+		assert.Contains(t, s, "5 healthy")
+		assert.Contains(t, s, "3 inactive",
+			"orphaned non-blocking down instances disclose as gray 'inactive', not red 'unhealthy'")
+		assert.Contains(t, s, colorGray+"3 inactive")
+		assert.NotContains(t, s, "unhealthy",
+			"a down instance that blocks nothing must not inflate the red unhealthy count (issue #1198)")
+		assert.NotContains(t, s, colorRed)
+	})
+
+	t.Run("splits down into red blocking and gray inactive", func(t *testing.T) {
+		// 5 down total: 1 superseded, of the remaining 4 genuine 1 blocks and
+		// 3 are inactive orphans.
+		s := formatRegistryAgentCounts(2, 5, 1, 1)
+		assert.Contains(t, s, colorRed+"1 unhealthy", "only the blocking down instance is red")
+		assert.Contains(t, s, colorGray+"3 inactive", "non-blocking orphans are gray inactive")
+		assert.Contains(t, s, colorGray+"1 superseded")
+	})
+
+	t.Run("all superseded omits unhealthy and inactive clauses", func(t *testing.T) {
+		s := formatRegistryAgentCounts(7, 8, 8, 0)
 		assert.NotContains(t, s, "unhealthy")
+		assert.NotContains(t, s, "inactive")
 		assert.Contains(t, s, "8 superseded")
 	})
 
 	t.Run("no unhealthy at all", func(t *testing.T) {
-		s := formatRegistryAgentCounts(3, 0, 0)
+		s := formatRegistryAgentCounts(3, 0, 0, 0)
 		assert.Equal(t, fmt.Sprintf("%s3 healthy%s", colorGreen, colorReset), s)
 	})
 
 	t.Run("clamps superseded to unhealthy on fetch skew", func(t *testing.T) {
-		s := formatRegistryAgentCounts(3, 2, 5)
+		s := formatRegistryAgentCounts(3, 2, 5, 0)
 		assert.Contains(t, s, "2 superseded")
 		assert.NotContains(t, s, "unhealthy")
+		assert.NotContains(t, s, "inactive")
+	})
+
+	t.Run("clamps blocking to genuine down on skew", func(t *testing.T) {
+		// blocking reported higher than the genuine down count must not
+		// produce a negative inactive count.
+		s := formatRegistryAgentCounts(3, 2, 1, 5)
+		assert.Contains(t, s, colorRed+"1 unhealthy")
+		assert.NotContains(t, s, "inactive")
 	})
 }
 

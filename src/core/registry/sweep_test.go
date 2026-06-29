@@ -831,3 +831,55 @@ func TestSweep_PurgeOrphanSchemaEntries_SkipsReferencedAcrossLargeBatch(t *testi
 		}
 	}
 }
+
+// TestUnregisterPreservesUpdatedAtSoSweepCanPurge verifies the retention-clock
+// invariant for graceful shutdown: UnregisterAgent flips an agent to unhealthy
+// but MUST NOT bump updated_at (the last-heartbeat timestamp the sweep filters
+// on). If it bumped updated_at to now, the retention clock would restart on
+// every unregister and a long-silent, gracefully-shut-down agent could never
+// age past Retention to be purged. This asserts updated_at is preserved and
+// that a subsequent sweep with elapsed Retention then purges the agent.
+func TestUnregisterPreservesUpdatedAtSoSweepCanPurge(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 1 * time.Hour}
+	client, service, job, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Agent last heartbeated well outside the retention window. Seed it as
+	// healthy so the unregister is what performs the down-transition.
+	lastHeartbeat := now.Add(-3 * time.Hour)
+	seedAgent(t, client, "graceful-1", agent.StatusHealthy, lastHeartbeat)
+
+	if err := service.UnregisterAgent(ctx, "graceful-1"); err != nil {
+		t.Fatalf("UnregisterAgent: %v", err)
+	}
+
+	got, err := client.Agent.Get(ctx, "graceful-1")
+	if err != nil {
+		t.Fatalf("reload agent: %v", err)
+	}
+	if got.Status != agent.StatusUnhealthy {
+		t.Errorf("expected status=unhealthy after unregister, got %s", got.Status)
+	}
+	// The crux: updated_at must still be the pre-unregister heartbeat time, NOT
+	// advanced toward now. Tolerate sub-second storage rounding only.
+	if got.UpdatedAt.Sub(lastHeartbeat).Abs() > time.Second {
+		t.Fatalf("expected updated_at preserved at %v after unregister, got %v (advanced — retention clock would restart)",
+			lastHeartbeat, got.UpdatedAt)
+	}
+
+	// Because updated_at was preserved at -3h and Retention is 1h, the sweep
+	// must now purge the agent.
+	res, err := job.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if res.agentsPurged != 1 {
+		t.Errorf("expected 1 agent purged, got %d", res.agentsPurged)
+	}
+	if _, err := client.Agent.Get(ctx, "graceful-1"); !ent.IsNotFound(err) {
+		t.Errorf("expected agent purged from table, got err=%v", err)
+	}
+}
