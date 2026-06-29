@@ -1,5 +1,5 @@
 # Dockerfile for chatbot-agent MCP Mesh LLM agent
-FROM mcpmesh/python-runtime:2.4.0
+FROM mcpmesh/python-runtime:2.6.0
 
 WORKDIR /app
 

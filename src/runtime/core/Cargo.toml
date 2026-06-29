@@ -1,6 +1,6 @@
 [package]
 name = "mcp-mesh-core"
-version = "2.4.0"
+version = "2.6.0"
 edition = "2021"
 # MSRV. CI builds with moving stable (dtolnay/rust-toolchain@stable);
 # this floor documents the newest stdlib API the crate relies on
