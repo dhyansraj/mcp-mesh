@@ -742,6 +742,149 @@ public final class MeshSchemaSupport {
         return node;
     }
 
+    /**
+     * Issue #1230: close the structured-output schema by stripping the stale
+     * nullable {@code anyOf} branch from REQUIRED record components.
+     *
+     * <p>The shared {@link #generator()} emits {@code NULLABLE_FIELDS_BY_DEFAULT}
+     * + {@code NULLABLE_ALWAYS_AS_ANYOF}, so a plain (non-{@code Optional},
+     * non-{@code @NotNull}) record component like {@code String summary} is
+     * generated as {@code "summary":{"anyOf":[{"type":"null"},{"type":"string"}]}}
+     * even though {@code summary} IS in the enclosing object's {@code required}
+     * array. An LLM can then satisfy "required" by returning {@code null} and the
+     * field's content is silently dropped. Pydantic (the parity target) emits no
+     * null branch for a required field ({@code "summary":{"type":"string"}}).
+     *
+     * <p>This walks the schema and, for any object node, collapses a property
+     * whose key is in that object's {@code required} array and whose schema is
+     * {@code {"anyOf"|"oneOf":[{"type":"null"}, X]}} (exactly two branches, one of
+     * which is the bare null type) down to {@code X} — preserving any sibling keys
+     * on the property (e.g. {@code description}). Properties NOT in {@code required}
+     * (the {@code Optional<T>} escape hatch) are left untouched so they stay
+     * nullable+optional. Recurses into {@code properties}, {@code items} (object or
+     * array form), and the {@code $defs}/{@code definitions} maps. Null/shape-safe;
+     * returns a new tree (does not mutate the input).
+     *
+     * <p>Scoped to the OUTPUT path ({@link MeshLlmAgentProxy} structured output);
+     * the shared generator config is deliberately NOT changed because
+     * {@link #generator()} also feeds {@link #buildToolInputSchema} whose
+     * cross-runtime dep-hash equality (see {@code MeshSchemaSupportTest}) depends
+     * on the current anyOf shape.
+     *
+     * @param schema schema Map (possibly null)
+     * @return a new schema Map with required-field null branches stripped, or {@code null}
+     */
+    @SuppressWarnings("unchecked")
+    public static Map<String, Object> stripRequiredNullBranches(Map<String, Object> schema) {
+        if (schema == null) {
+            return null;
+        }
+        return (Map<String, Object>) stripRequiredNullBranchesNode(schema);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Object stripRequiredNullBranchesNode(Object node) {
+        if (node instanceof Map<?, ?> mapNode) {
+            Map<String, Object> obj = (Map<String, Object>) mapNode;
+            Map<String, Object> out = new java.util.LinkedHashMap<>();
+
+            java.util.Set<String> required = new java.util.LinkedHashSet<>();
+            Object req = obj.get("required");
+            if (req instanceof List<?> reqList) {
+                for (Object r : reqList) {
+                    if (r instanceof String s) {
+                        required.add(s);
+                    }
+                }
+            }
+
+            for (Map.Entry<String, Object> e : obj.entrySet()) {
+                String key = e.getKey();
+                Object value = e.getValue();
+                if ("properties".equals(key) && value instanceof Map<?, ?> propsMap) {
+                    Map<String, Object> props = (Map<String, Object>) propsMap;
+                    Map<String, Object> newProps = new java.util.LinkedHashMap<>();
+                    for (Map.Entry<String, Object> pe : props.entrySet()) {
+                        Object propSchema = stripRequiredNullBranchesNode(pe.getValue());
+                        if (required.contains(pe.getKey())) {
+                            propSchema = collapseNullBranch(propSchema);
+                        }
+                        newProps.put(pe.getKey(), propSchema);
+                    }
+                    out.put(key, newProps);
+                } else {
+                    out.put(key, stripRequiredNullBranchesNode(value));
+                }
+            }
+            return out;
+        }
+        if (node instanceof List<?> listNode) {
+            List<Object> out = new ArrayList<>(listNode.size());
+            for (Object item : listNode) {
+                out.add(stripRequiredNullBranchesNode(item));
+            }
+            return out;
+        }
+        return node;
+    }
+
+    /**
+     * Collapse a {@code {"anyOf"|"oneOf":[{"type":"null"}, X]}} property schema to
+     * {@code X} (with the property's sibling keys overlaid onto X). When the shape
+     * is anything else (more than two branches, no null branch, not an anyOf/oneOf),
+     * the node is returned unchanged.
+     */
+    @SuppressWarnings("unchecked")
+    private static Object collapseNullBranch(Object node) {
+        if (!(node instanceof Map<?, ?> mapNode)) {
+            return node;
+        }
+        Map<String, Object> obj = (Map<String, Object>) mapNode;
+        String combinatorKey = obj.containsKey("anyOf") ? "anyOf"
+            : obj.containsKey("oneOf") ? "oneOf" : null;
+        if (combinatorKey == null) {
+            return node;
+        }
+        Object branchesObj = obj.get(combinatorKey);
+        if (!(branchesObj instanceof List<?> branches) || branches.size() != 2) {
+            return node;
+        }
+        Object nonNull = null;
+        boolean sawNull = false;
+        for (Object b : branches) {
+            if (isBareNullType(b)) {
+                sawNull = true;
+            } else {
+                nonNull = b;
+            }
+        }
+        if (!sawNull || nonNull == null) {
+            return node;
+        }
+        if (!(nonNull instanceof Map<?, ?> nnMap)) {
+            return nonNull;
+        }
+        Map<String, Object> collapsed = new java.util.LinkedHashMap<>((Map<String, Object>) nnMap);
+        // Overlay the property's sibling keys (description, etc.) without
+        // letting them clobber the kept branch's own type/structure keys.
+        for (Map.Entry<String, Object> e : obj.entrySet()) {
+            if (combinatorKey.equals(e.getKey())) {
+                continue;
+            }
+            collapsed.putIfAbsent(e.getKey(), e.getValue());
+        }
+        return collapsed;
+    }
+
+    /** True when {@code node} is exactly {@code {"type":"null"}} (its only meaningful key). */
+    private static boolean isBareNullType(Object node) {
+        if (!(node instanceof Map<?, ?> m)) {
+            return false;
+        }
+        Object type = m.get("type");
+        return "null".equals(type);
+    }
+
     /** Extract {@code <Name>} from {@code "#/$defs/<Name>"} or {@code "#/definitions/<Name>"}. */
     private static String refDefName(String ref) {
         if (ref == null) {
