@@ -354,6 +354,15 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
             if (om != null && !String.valueOf(om).isEmpty()) {
                 handlerOptions.put(LlmProviderHandler.OPTION_OUTPUT_MODE, String.valueOf(om));
             }
+            // C2: thread the numeric/model generation params through to the
+            // vendor handlers so they apply onto the per-vendor ChatOptions.
+            // Keys absent here are simply not forwarded → handler keeps the
+            // Spring AI default (no force-set nulls). The model override is
+            // vendor-checked inside each handler (resolveModelOverride).
+            copyOption(modelParams, handlerOptions, LlmProviderHandler.OPTION_MODEL);
+            copyOption(modelParams, handlerOptions, LlmProviderHandler.OPTION_MAX_TOKENS);
+            copyOption(modelParams, handlerOptions, LlmProviderHandler.OPTION_TEMPERATURE);
+            copyOption(modelParams, handlerOptions, LlmProviderHandler.OPTION_TOP_P);
         }
         if (parallelToolCalls) {
             log.info("Provider parallel tool calls enabled — tools will execute concurrently via CompletableFuture");
@@ -852,6 +861,18 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
         spec.put("parameters", parameters);
 
         return spec;
+    }
+
+    /**
+     * Copy a present, non-null {@code model_params} entry into the handler
+     * options map. Absent keys are not copied so the handler keeps the Spring AI
+     * default (C2: don't force-set nulls).
+     */
+    private static void copyOption(Map<String, Object> modelParams, Map<String, Object> handlerOptions, String key) {
+        Object v = modelParams.get(key);
+        if (v != null) {
+            handlerOptions.put(key, v);
+        }
     }
 
     private LlmProviderConfig findProvider(String capability) {

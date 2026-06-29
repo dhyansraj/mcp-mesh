@@ -90,6 +90,7 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
     private volatile double defaultTemperature = MeshLlmDefaults.TEMPERATURE_UNSET;
     private volatile boolean parallelToolCalls = false;
     private volatile String defaultOutputMode = MeshLlmDefaults.OUTPUT_MODE_UNSET;
+    private volatile String defaultModel = "";
 
     private McpHttpClient mcpClient;
     private McpMeshToolProxyFactory proxyFactory;
@@ -198,6 +199,33 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         this.defaultOutputMode = outputMode != null ? outputMode : MeshLlmDefaults.OUTPUT_MODE_UNSET;
         if (!this.defaultOutputMode.isEmpty()) {
             log.info("@MeshLlm outputMode for {}: {}", functionId, this.defaultOutputMode);
+        }
+    }
+
+    /**
+     * Configure the proxy with dependencies, parallel tool calls option,
+     * {@code maxTokens}/{@code temperature} defaults, the {@code @MeshLlm}
+     * {@code outputMode}, and the optional {@code @MeshLlm} {@code model}
+     * per-tool override.
+     *
+     * <p>Wires the annotation's {@code model} through to the wire
+     * {@code model_params.model} so the consumer can request a specific model per
+     * tool. The provider honors it when the override's vendor matches its own,
+     * else falls back to the provider's default model (vendor-checked, mirroring
+     * Python). When {@code model} is left unset (empty/blank), no {@code model}
+     * key is injected and the provider uses its own declared model. A per-call
+     * {@code modelParams(Map.of("model", ...))} override takes precedence over
+     * this annotation value.
+     */
+    public void configure(McpHttpClient mcpClient, McpMeshToolProxyFactory proxyFactory,
+                          ToolInvoker toolInvoker, MeshDependencyInjector dependencyInjector,
+                          String systemPrompt, String contextParamName, int maxIterations,
+                          boolean parallelToolCalls, int maxTokens, double temperature,
+                          String outputMode, String model) {
+        configure(mcpClient, proxyFactory, toolInvoker, dependencyInjector, systemPrompt, contextParamName, maxIterations, parallelToolCalls, maxTokens, temperature, outputMode);
+        this.defaultModel = (model != null && !model.isBlank()) ? model : "";
+        if (!this.defaultModel.isEmpty()) {
+            log.info("@MeshLlm model override for {}: {}", functionId, this.defaultModel);
         }
     }
 
@@ -702,6 +730,14 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
             if (defaultOutputMode != null && !defaultOutputMode.isEmpty()
                     && !modelParams.containsKey("output_mode")) {
                 modelParams.put("output_mode", defaultOutputMode);
+            }
+            // model (@MeshLlm(model=...)): inject the annotation's per-tool model
+            // override only when set AND the escape-hatch modelParams did not
+            // already supply a "model" (a per-call .modelParams(Map.of("model", ...))
+            // wins). Unset → key omitted → provider uses its own declared model.
+            if (defaultModel != null && !defaultModel.isEmpty()
+                    && !modelParams.containsKey("model")) {
+                modelParams.put("model", defaultModel);
             }
             return modelParams;
         }

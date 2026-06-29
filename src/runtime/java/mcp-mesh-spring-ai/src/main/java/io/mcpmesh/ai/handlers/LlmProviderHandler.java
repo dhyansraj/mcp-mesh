@@ -62,6 +62,22 @@ public interface LlmProviderHandler {
     String OPTION_OUTPUT_MODE = "output_mode";
 
     // =========================================================================
+    // model_params → ChatOptions keys (C2: provider applies model_params)
+    // =========================================================================
+
+    /** Key under which a consumer-supplied per-tool/per-call model override travels (e.g. "anthropic/claude-..."). */
+    String OPTION_MODEL = "model";
+
+    /** Key under which a consumer-supplied {@code max_tokens} travels in the options map. */
+    String OPTION_MAX_TOKENS = "max_tokens";
+
+    /** Key under which a consumer-supplied {@code temperature} travels in the options map. */
+    String OPTION_TEMPERATURE = "temperature";
+
+    /** Key under which a consumer-supplied {@code top_p} travels in the options map. */
+    String OPTION_TOP_P = "top_p";
+
+    // =========================================================================
     // Core Methods
     // =========================================================================
 
@@ -307,6 +323,163 @@ public interface LlmProviderHandler {
         }
         Object v = options.get(OPTION_OUTPUT_MODE);
         return v != null ? v.toString() : OUTPUT_MODE_UNSET;
+    }
+
+    // =========================================================================
+    // model_params extraction (C2: provider applies model_params)
+    // =========================================================================
+
+    /**
+     * Read the consumer-supplied {@code max_tokens} from the options map.
+     *
+     * @param options the generation options (may be null)
+     * @return the value as an Integer, or {@code null} if absent/unparseable
+     */
+    static Integer maxTokensOption(Map<String, Object> options) {
+        return intOption(options, OPTION_MAX_TOKENS);
+    }
+
+    /**
+     * Read the consumer-supplied {@code temperature} from the options map.
+     *
+     * @param options the generation options (may be null)
+     * @return the value as a Double, or {@code null} if absent/unparseable/NaN
+     */
+    static Double temperatureOption(Map<String, Object> options) {
+        return doubleOption(options, OPTION_TEMPERATURE);
+    }
+
+    /**
+     * Read the consumer-supplied {@code top_p} from the options map.
+     *
+     * @param options the generation options (may be null)
+     * @return the value as a Double, or {@code null} if absent/unparseable/NaN
+     */
+    static Double topPOption(Map<String, Object> options) {
+        return doubleOption(options, OPTION_TOP_P);
+    }
+
+    private static Integer intOption(Map<String, Object> options, String key) {
+        if (options == null) {
+            return null;
+        }
+        Object v = options.get(key);
+        if (v instanceof Number n) {
+            return n.intValue();
+        }
+        if (v instanceof String s && !s.isBlank()) {
+            try {
+                return Integer.valueOf(s.trim());
+            } catch (NumberFormatException ignored) {
+                // fall through
+            }
+        }
+        return null;
+    }
+
+    private static Double doubleOption(Map<String, Object> options, String key) {
+        if (options == null) {
+            return null;
+        }
+        Object v = options.get(key);
+        if (v instanceof Number n) {
+            double d = n.doubleValue();
+            return Double.isNaN(d) ? null : d;
+        }
+        if (v instanceof String s && !s.isBlank()) {
+            try {
+                double d = Double.parseDouble(s.trim());
+                return Double.isNaN(d) ? null : d;
+            } catch (NumberFormatException ignored) {
+                // fall through
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Resolve a consumer-supplied {@code model} override against this handler's
+     * vendor, mirroring Python's vendor-checked model-override behavior.
+     *
+     * <p>The override travels as a fully-qualified model string of the form
+     * {@code "<vendor>/<model-name>"} (e.g. {@code "anthropic/claude-3-5-sonnet-latest"}).
+     * Only the vendor-qualified model name is returned, and only when the
+     * declared vendor matches {@code expectedVendor} (case-insensitive, with the
+     * handler's {@link #getAliases()} also accepted). On a vendor mismatch a
+     * warning is logged and {@code null} is returned so the caller keeps the
+     * provider's own default model (Spring AI default).
+     *
+     * <p>A bare model string with no {@code vendor/} prefix is treated as
+     * matching (returned verbatim) — the consumer simply named a model without a
+     * vendor qualifier and we assume it targets this provider.
+     *
+     * @param options        the generation options (may be null)
+     * @param expectedVendor this handler's vendor (e.g. "anthropic")
+     * @param aliases        accepted vendor aliases (e.g. {"claude"}); may be null
+     * @return the bare model name to apply, or {@code null} to keep the default
+     */
+    static String resolveModelOverride(Map<String, Object> options, String expectedVendor, String[] aliases) {
+        if (options == null) {
+            return null;
+        }
+        Object v = options.get(OPTION_MODEL);
+        if (!(v instanceof String raw) || raw.isBlank()) {
+            return null;
+        }
+        String value = raw.trim();
+        int slash = value.indexOf('/');
+        if (slash < 0) {
+            // Bare model name (no vendor prefix) — assume it targets this provider.
+            return value;
+        }
+        String declaredVendor = value.substring(0, slash);
+        String modelName = value.substring(slash + 1);
+        if (modelName.isBlank()) {
+            return null;
+        }
+        if (vendorMatches(declaredVendor, expectedVendor, aliases)) {
+            return modelName;
+        }
+        LoggerFactory.getLogger(LlmProviderHandler.class).warn(
+            "Ignoring cross-vendor model override '{}' (declared vendor '{}' does not match provider vendor '{}'); "
+            + "falling back to the provider's default model.", value, declaredVendor, expectedVendor);
+        return null;
+    }
+
+    /**
+     * Whether the options map carries any of the C2 generation params
+     * ({@code model}, {@code max_tokens}, {@code temperature}, {@code top_p}).
+     * Used by handlers to decide whether to build a vendor options object at all
+     * when no structured-output schema is present.
+     *
+     * @param options the generation options (may be null)
+     * @return true if at least one of the four keys is present and non-null
+     */
+    static boolean hasAnyModelParam(Map<String, Object> options) {
+        if (options == null) {
+            return false;
+        }
+        return options.get(OPTION_MODEL) != null
+            || options.get(OPTION_MAX_TOKENS) != null
+            || options.get(OPTION_TEMPERATURE) != null
+            || options.get(OPTION_TOP_P) != null;
+    }
+
+    private static boolean vendorMatches(String declared, String expectedVendor, String[] aliases) {
+        if (declared == null) {
+            return false;
+        }
+        if (declared.equalsIgnoreCase(expectedVendor)) {
+            return true;
+        }
+        if (aliases != null) {
+            for (String alias : aliases) {
+                if (declared.equalsIgnoreCase(alias)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     // =========================================================================

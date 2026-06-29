@@ -234,10 +234,40 @@ public class AnthropicHandler implements LlmProviderHandler {
 
         if (executeTools) {
             // Auto-execution mode: Use ChatClient which handles tool execution automatically
-            return generateWithToolsAutoExecute(model, springMessages, tools, toolExecutor, formattedSystemPrompt, enforcedSchema, hintSchema, hintTools);
+            return generateWithToolsAutoExecute(model, springMessages, tools, toolExecutor, formattedSystemPrompt, enforcedSchema, hintSchema, hintTools, options);
         } else {
             // No-execution mode: Use model.call with internalToolExecutionEnabled(false)
-            return generateWithToolsNoExecute(model, springMessages, tools, formattedSystemPrompt, enforcedSchema, hintSchema, hintTools);
+            return generateWithToolsNoExecute(model, springMessages, tools, formattedSystemPrompt, enforcedSchema, hintSchema, hintTools, options);
+        }
+    }
+
+    /**
+     * Apply the consumer-supplied {@code model_params} (max_tokens, temperature,
+     * top_p, and a vendor-matched model override) onto an Anthropic options
+     * builder. Absent keys are left untouched so Spring AI's own defaults apply.
+     *
+     * <p>The {@code model} override is honored only when its declared vendor
+     * matches {@code anthropic}/{@code claude}; on mismatch
+     * {@link LlmProviderHandler#resolveModelOverride} logs a warning and returns
+     * null, leaving the provider's default model in place.
+     */
+    private void applyModelParams(AnthropicChatOptions.Builder builder, Map<String, Object> options) {
+        Integer maxTokens = LlmProviderHandler.maxTokensOption(options);
+        if (maxTokens != null) {
+            builder.maxTokens(maxTokens);
+        }
+        Double temperature = LlmProviderHandler.temperatureOption(options);
+        if (temperature != null) {
+            builder.temperature(temperature);
+        }
+        Double topP = LlmProviderHandler.topPOption(options);
+        if (topP != null) {
+            builder.topP(topP);
+        }
+        String modelOverride = LlmProviderHandler.resolveModelOverride(options, getVendor(), getAliases());
+        if (modelOverride != null) {
+            builder.model(modelOverride);
+            log.debug("AnthropicHandler: applied model override '{}'", modelOverride);
         }
     }
 
@@ -252,7 +282,8 @@ public class AnthropicHandler implements LlmProviderHandler {
             String formattedSystemPrompt,
             OutputSchema outputSchema,
             OutputSchema hintSchema,
-            List<ToolDefinition> hintTools) {
+            List<ToolDefinition> hintTools,
+            Map<String, Object> options) {
 
         // Convert tools to Spring AI ToolCallback objects
         List<ToolCallback> toolCallbacks = new ArrayList<>();
@@ -284,20 +315,28 @@ public class AnthropicHandler implements LlmProviderHandler {
             requestSpec.toolCallbacks(toolCallbacks.toArray(new ToolCallback[0]));
         }
 
-        // Apply native output_format when outputSchema is present
-        if (outputSchema != null) {
+        // Apply native output_format when outputSchema is present, plus any
+        // consumer-supplied model_params (max_tokens/temperature/top_p/model).
+        // Build options whenever EITHER a schema OR model_params are present so
+        // the numeric/model overrides reach the wire even without a schema.
+        boolean hasModelParams = LlmProviderHandler.hasAnyModelParam(options);
+        if (outputSchema != null || hasModelParams) {
             try {
-                Map<String, Object> sanitizedSchema = outputSchema.sanitize();
-                String schemaJson = TOOL_CALLBACK_MAPPER.writeValueAsString(sanitizedSchema);
+                AnthropicChatOptions.Builder optionsBuilder = AnthropicChatOptions.builder();
+                if (outputSchema != null) {
+                    Map<String, Object> sanitizedSchema = outputSchema.sanitize();
+                    String schemaJson = TOOL_CALLBACK_MAPPER.writeValueAsString(sanitizedSchema);
+                    optionsBuilder.outputSchema(schemaJson);
+                }
+                applyModelParams(optionsBuilder, options);
 
-                AnthropicChatOptions chatOptions = AnthropicChatOptions.builder()
-                    .outputSchema(schemaJson)
-                    .build();
-
-                requestSpec.options(chatOptions);
-                log.debug("Applied Anthropic output_format with schema: {}", outputSchema.name());
+                requestSpec.options(optionsBuilder.build());
+                if (outputSchema != null) {
+                    log.debug("Applied Anthropic output_format with schema: {}", outputSchema.name());
+                }
             } catch (Exception e) {
-                log.warn("Failed to apply output_format for {}: {}", outputSchema.name(), e.getMessage());
+                log.warn("Failed to apply Anthropic options (schema={}): {}",
+                    outputSchema != null ? outputSchema.name() : "none", e.getMessage());
             }
         }
 
@@ -351,7 +390,8 @@ public class AnthropicHandler implements LlmProviderHandler {
             String formattedSystemPrompt,
             OutputSchema outputSchema,
             OutputSchema hintSchema,
-            List<ToolDefinition> hintTools) {
+            List<ToolDefinition> hintTools,
+            Map<String, Object> options) {
 
         // Replace system message with formatted one
         List<Message> messagesWithFormattedSystem = replaceSystemMessage(springMessages, formattedSystemPrompt);
@@ -362,38 +402,39 @@ public class AnthropicHandler implements LlmProviderHandler {
         // Build prompt with chat options
         org.springframework.ai.chat.prompt.Prompt prompt;
 
-        // Apply native output_format when outputSchema is present
+        // Apply native output_format when outputSchema is present. AnthropicChatOptions
+        // also carries the consumer-supplied model_params (max_tokens/temperature/
+        // top_p/model). When there's no schema we still build AnthropicChatOptions
+        // (instead of the generic ToolCallingChatOptions) so model_params apply.
         if (outputSchema != null) {
             try {
                 Map<String, Object> sanitizedSchema = outputSchema.sanitize();
                 String schemaJson = TOOL_CALLBACK_MAPPER.writeValueAsString(sanitizedSchema);
 
-                AnthropicChatOptions chatOptions = AnthropicChatOptions.builder()
+                AnthropicChatOptions.Builder optionsBuilder = AnthropicChatOptions.builder()
                     .toolCallbacks(toolCallbacks)
                     .internalToolExecutionEnabled(false)
-                    .outputSchema(schemaJson)
-                    .build();
+                    .outputSchema(schemaJson);
+                applyModelParams(optionsBuilder, options);
 
-                prompt = new org.springframework.ai.chat.prompt.Prompt(messagesWithFormattedSystem, chatOptions);
+                prompt = new org.springframework.ai.chat.prompt.Prompt(messagesWithFormattedSystem, optionsBuilder.build());
                 log.debug("Applied Anthropic output_format with schema: {}", outputSchema.name());
             } catch (Exception e) {
                 log.warn("Failed to apply output_format for {}: {}, falling back to basic options",
                     outputSchema.name(), e.getMessage());
-                org.springframework.ai.model.tool.ToolCallingChatOptions chatOptions =
-                    org.springframework.ai.model.tool.ToolCallingChatOptions.builder()
-                        .toolCallbacks(toolCallbacks)
-                        .internalToolExecutionEnabled(false)
-                        .build();
-                prompt = new org.springframework.ai.chat.prompt.Prompt(messagesWithFormattedSystem, chatOptions);
+                AnthropicChatOptions.Builder optionsBuilder = AnthropicChatOptions.builder()
+                    .toolCallbacks(toolCallbacks)
+                    .internalToolExecutionEnabled(false);
+                applyModelParams(optionsBuilder, options);
+                prompt = new org.springframework.ai.chat.prompt.Prompt(messagesWithFormattedSystem, optionsBuilder.build());
             }
         } else {
-            // No structured output needed
-            org.springframework.ai.model.tool.ToolCallingChatOptions chatOptions =
-                org.springframework.ai.model.tool.ToolCallingChatOptions.builder()
-                    .toolCallbacks(toolCallbacks)
-                    .internalToolExecutionEnabled(false)
-                    .build();
-            prompt = new org.springframework.ai.chat.prompt.Prompt(messagesWithFormattedSystem, chatOptions);
+            // No structured output needed — still apply model_params via AnthropicChatOptions.
+            AnthropicChatOptions.Builder optionsBuilder = AnthropicChatOptions.builder()
+                .toolCallbacks(toolCallbacks)
+                .internalToolExecutionEnabled(false);
+            applyModelParams(optionsBuilder, options);
+            prompt = new org.springframework.ai.chat.prompt.Prompt(messagesWithFormattedSystem, optionsBuilder.build());
         }
 
         log.debug("Calling Claude with {} tools (execution disabled)", tools != null ? tools.size() : 0);

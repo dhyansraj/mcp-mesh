@@ -125,6 +125,25 @@ public @interface MeshLlm {
     FilterMode filterMode() default FilterMode.ALL;
 
     /**
+     * Optional per-tool model override.
+     *
+     * <p>When set (non-empty), this model string (e.g.
+     * {@code "anthropic/claude-3-5-sonnet-latest"}) is sent to the provider via
+     * {@code model_params.model}. The provider honors it when the override's
+     * vendor matches its own vendor, otherwise it logs a warning and falls back
+     * to the provider's default model — mirroring Python's vendor-checked
+     * behavior.
+     *
+     * <p>A per-call override supplied via the proxy's {@code modelParams(Map)}
+     * escape hatch (key {@code "model"}) takes precedence over this annotation
+     * value.
+     *
+     * <p>If unset (empty string), no {@code model} is sent on the wire and the
+     * provider uses the model declared on its own {@code @MeshLlmProvider}.
+     */
+    String model() default "";
+
+    /**
      * Maximum tokens for LLM response.
      *
      * <p>If unset ({@code -1}), the provider's own default is used — no

@@ -160,10 +160,10 @@ public class GeminiHandler implements LlmProviderHandler {
 
         if (executeTools) {
             // Auto-execution mode: Use ChatClient which handles tool execution automatically
-            return generateWithToolsAutoExecute(model, springMessages, tools, toolExecutor, formattedSystemPrompt, outputSchema);
+            return generateWithToolsAutoExecute(model, springMessages, tools, toolExecutor, formattedSystemPrompt, outputSchema, options);
         } else {
             // No-execution mode: Use model.call with internalToolExecutionEnabled(false)
-            return generateWithToolsNoExecute(model, springMessages, tools, formattedSystemPrompt, outputSchema);
+            return generateWithToolsNoExecute(model, springMessages, tools, formattedSystemPrompt, outputSchema, options);
         }
     }
 
@@ -176,7 +176,8 @@ public class GeminiHandler implements LlmProviderHandler {
             List<ToolDefinition> tools,
             ToolExecutorCallback toolExecutor,
             String formattedSystemPrompt,
-            OutputSchema outputSchema) {
+            OutputSchema outputSchema,
+            Map<String, Object> options) {
 
         // Convert tools to Spring AI ToolCallback objects
         List<ToolCallback> toolCallbacks = new ArrayList<>();
@@ -211,6 +212,16 @@ public class GeminiHandler implements LlmProviderHandler {
         // Don't use applyResponseFormat - Spring AI has issues with Gemini responseSchema
         // Structured output is handled via prompt-based hints in formatSystemPrompt()
 
+        // Apply consumer-supplied model_params (max_tokens/temperature/top_p/model)
+        // onto a vendor-correct Gemini options object when present. The concrete
+        // options class must match the underlying chat model (see buildModelParamOptions).
+        if (LlmProviderHandler.hasAnyModelParam(options)) {
+            ChatOptions paramOptions = buildModelParamOptions(model, options);
+            if (paramOptions != null) {
+                requestSpec.options(paramOptions);
+            }
+        }
+
         // Execute the request
         ChatResponse chatResponse = requestSpec.call().chatResponse();
         String content = chatResponse.getResult() != null && chatResponse.getResult().getOutput() != null
@@ -234,7 +245,8 @@ public class GeminiHandler implements LlmProviderHandler {
             List<Message> springMessages,
             List<ToolDefinition> tools,
             String formattedSystemPrompt,
-            OutputSchema outputSchema) {
+            OutputSchema outputSchema,
+            Map<String, Object> options) {
 
         // Replace system message with formatted one
         List<Message> messagesWithFormattedSystem = replaceSystemMessage(springMessages, formattedSystemPrompt);
@@ -250,7 +262,7 @@ public class GeminiHandler implements LlmProviderHandler {
         // Structured output is handled via prompt-based hints in formatSystemPrompt()
         log.debug("Using prompt-based JSON hints for structured output (not responseSchema)");
 
-        ChatOptions chatOptions = buildToolNoExecuteOptions(model, toolCallbacks);
+        ChatOptions chatOptions = buildToolNoExecuteOptions(model, toolCallbacks, options);
 
         // Create prompt with options
         org.springframework.ai.chat.prompt.Prompt prompt =
@@ -344,13 +356,72 @@ public class GeminiHandler implements LlmProviderHandler {
      * <p>Package-private for testability.
      */
     ChatOptions buildToolNoExecuteOptions(ChatModel chatModel, List<ToolCallback> toolCallbacks) {
+        return buildToolNoExecuteOptions(chatModel, toolCallbacks, null);
+    }
+
+    /**
+     * Build provider-specific {@link ChatOptions} for the no-tool-execution path,
+     * applying any consumer-supplied {@code model_params}
+     * (max_tokens→maxOutputTokens, temperature, top_p, vendor-matched model).
+     */
+    ChatOptions buildToolNoExecuteOptions(ChatModel chatModel, List<ToolCallback> toolCallbacks,
+                                          Map<String, Object> options) {
         if (VERTEX_CHAT_MODEL_CLASS != null && VERTEX_CHAT_MODEL_CLASS.isInstance(chatModel)) {
-            return buildVertexOptions(toolCallbacks);
+            return buildVertexOptions(toolCallbacks, options);
         }
-        return GoogleGenAiChatOptions.builder()
+        GoogleGenAiChatOptions.Builder builder = GoogleGenAiChatOptions.builder()
             .toolCallbacks(toolCallbacks)
-            .internalToolExecutionEnabled(false)
-            .build();
+            .internalToolExecutionEnabled(false);
+        applyGoogleGenAiModelParams(builder, options);
+        return builder.build();
+    }
+
+    /**
+     * Build a vendor-correct Gemini options object carrying ONLY the
+     * consumer-supplied {@code model_params} (no tool callbacks) for the
+     * auto-execute (ChatClient) path, where tools are attached via the request
+     * spec rather than the options object.
+     *
+     * @return the options object, or {@code null} if no params are present
+     */
+    private ChatOptions buildModelParamOptions(ChatModel chatModel, Map<String, Object> options) {
+        if (!LlmProviderHandler.hasAnyModelParam(options)) {
+            return null;
+        }
+        if (VERTEX_CHAT_MODEL_CLASS != null && VERTEX_CHAT_MODEL_CLASS.isInstance(chatModel)) {
+            VertexAiGeminiChatOptions.Builder builder = VertexAiGeminiChatOptions.builder();
+            applyVertexModelParams(builder, options);
+            return builder.build();
+        }
+        GoogleGenAiChatOptions.Builder builder = GoogleGenAiChatOptions.builder();
+        applyGoogleGenAiModelParams(builder, options);
+        return builder.build();
+    }
+
+    /**
+     * Apply {@code model_params} to a Google AI Studio (GenAI) options builder.
+     * Gemini maps {@code max_tokens} → {@code maxOutputTokens}. The {@code model}
+     * override is honored only when its declared vendor matches
+     * {@code gemini}/{@code google}.
+     */
+    private void applyGoogleGenAiModelParams(GoogleGenAiChatOptions.Builder builder, Map<String, Object> options) {
+        Integer maxTokens = LlmProviderHandler.maxTokensOption(options);
+        if (maxTokens != null) {
+            builder.maxOutputTokens(maxTokens);
+        }
+        Double temperature = LlmProviderHandler.temperatureOption(options);
+        if (temperature != null) {
+            builder.temperature(temperature);
+        }
+        Double topP = LlmProviderHandler.topPOption(options);
+        if (topP != null) {
+            builder.topP(topP);
+        }
+        String modelOverride = LlmProviderHandler.resolveModelOverride(options, getVendor(), getAliases());
+        if (modelOverride != null) {
+            builder.model(modelOverride);
+            log.debug("GeminiHandler: applied model override '{}'", modelOverride);
+        }
     }
 
     /**
@@ -362,11 +433,37 @@ public class GeminiHandler implements LlmProviderHandler {
      * body is first executed is guaranteed to succeed -- the class IS on the
      * classpath by the time we get here.
      */
-    private ChatOptions buildVertexOptions(List<ToolCallback> toolCallbacks) {
-        return VertexAiGeminiChatOptions.builder()
+    private ChatOptions buildVertexOptions(List<ToolCallback> toolCallbacks, Map<String, Object> options) {
+        VertexAiGeminiChatOptions.Builder builder = VertexAiGeminiChatOptions.builder()
             .toolCallbacks(toolCallbacks)
-            .internalToolExecutionEnabled(false)
-            .build();
+            .internalToolExecutionEnabled(false);
+        applyVertexModelParams(builder, options);
+        return builder.build();
+    }
+
+    /**
+     * Apply {@code model_params} to a Vertex AI Gemini options builder. Mirrors
+     * {@link #applyGoogleGenAiModelParams} but on the Vertex builder type (the
+     * concrete class differs and the chat model does an explicit checkcast).
+     */
+    private void applyVertexModelParams(VertexAiGeminiChatOptions.Builder builder, Map<String, Object> options) {
+        Integer maxTokens = LlmProviderHandler.maxTokensOption(options);
+        if (maxTokens != null) {
+            builder.maxOutputTokens(maxTokens);
+        }
+        Double temperature = LlmProviderHandler.temperatureOption(options);
+        if (temperature != null) {
+            builder.temperature(temperature);
+        }
+        Double topP = LlmProviderHandler.topPOption(options);
+        if (topP != null) {
+            builder.topP(topP);
+        }
+        String modelOverride = LlmProviderHandler.resolveModelOverride(options, getVendor(), getAliases());
+        if (modelOverride != null) {
+            builder.model(modelOverride);
+            log.debug("GeminiHandler (vertex): applied model override '{}'", modelOverride);
+        }
     }
 
     /**

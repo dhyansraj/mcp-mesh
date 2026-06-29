@@ -36,7 +36,8 @@ public class MeshLlmRegistry {
         int maxTokens,
         double temperature,
         boolean parallelToolCalls,
-        String outputMode
+        String outputMode,
+        String model
     ) {}
 
     // Registry: functionId -> LlmConfig
@@ -83,7 +84,8 @@ public class MeshLlmRegistry {
             annotation.maxTokens(),
             annotation.temperature(),
             annotation.parallelToolCalls(),
-            resolveOutputMode(annotation.outputMode(), functionId)
+            resolveOutputMode(annotation.outputMode(), functionId),
+            annotation.model() != null ? annotation.model() : ""
         );
 
         configsByFunctionId.put(functionId, config);
