@@ -3,15 +3,10 @@ package io.mcpmesh.spring;
 import io.mcpmesh.JobController;
 import io.mcpmesh.MeshJobSubmitter;
 import io.mcpmesh.a2a.A2AClient;
-import io.mcpmesh.types.McpMeshTool;
-import io.mcpmesh.types.MeshLlmAgent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.SmartLifecycle;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import java.lang.reflect.Parameter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -29,13 +24,27 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *       wrapper, calls {@link MeshToolWrapper#setJobBindingContext} so
  *       inbound calls bearing {@code X-Mesh-Job-Id} can construct a
  *       {@link JobController}, AND spawns a {@link ClaimDispatcher} that
- *       polls {@code POST /jobs/claim} for that capability (pull-mode).</li>
+ *       polls {@code POST /jobs/claim} for that capability (pull-mode).
+ *       The dispatcher delegates each claimed job back to the same
+ *       {@link MeshToolWrapper} via
+ *       {@link MeshToolWrapper#invokeForClaim}, so the claim path shapes
+ *       arguments — {@code @Param} coercion, McpMeshTool / MeshLlmAgent
+ *       dependency proxies (with settle-grace), and the
+ *       {@code @A2AConsumer}-injected A2AClient — identically to the
+ *       inbound (push-mode) path. A {@code task=true} producer may therefore
+ *       declare dependency parameters; this mirrors Python, whose claim
+ *       path re-runs the same DI-wrapped handler.</li>
  *   <li><b>Consumer side</b> — for every wrapper that declares a
  *       {@link io.mcpmesh.MeshJob}-typed parameter and at least one
  *       declared dependency, constructs a {@link MeshJobSubmitter}
- *       bound to the first declared dependency capability and calls
- *       {@link MeshToolWrapper#setJobSubmitter} so the slot is filled
- *       on each invocation (Phase 1 simplification — see contract).</li>
+ *       bound to the declared dependency capability the MeshJob slot was
+ *       positionally paired with at wrapper construction
+ *       ({@link MeshToolWrapper#getMeshJobDependencyCapability}) and calls
+ *       {@link MeshToolWrapper#setJobSubmitter} so the slot is filled on each
+ *       invocation. Binding off the DECLARED selector (not a local
+ *       {@code task()} registry probe) wires the submitter whether the task
+ *       producer is local or REMOTE, and regardless of how many other
+ *       dependencies the consumer mixes in — mirroring Python.</li>
  *   <li><b>Helper tools</b> — invokes
  *       {@link JobsHelperToolsRegistrar#register} so every Java mesh
  *       agent advertises the three framework-internal helpers.</li>
@@ -57,6 +66,15 @@ public final class JobsRuntimeManager implements SmartLifecycle {
     private final MeshRuntime runtime;
     private final MeshToolRegistry toolRegistry;
     private final MeshToolWrapperRegistry wrapperRegistry;
+    /**
+     * Retained for constructor compatibility. The claim path now resolves
+     * the {@code @A2AConsumer}-injected A2AClient through the
+     * {@link MeshToolWrapper} (the bean post-processor wires
+     * {@link MeshToolWrapper#setA2AClientBinding} for {@code task=true}
+     * wrappers too), so this manager no longer needs the processor to fill
+     * A2A slots itself — the previous reflection invoker did.
+     */
+    @SuppressWarnings("unused")
     private final A2AConsumerBeanPostProcessor a2aProcessor;
 
     private final Map<String, ClaimDispatcher> dispatchers = new ConcurrentHashMap<>();
@@ -71,13 +89,14 @@ public final class JobsRuntimeManager implements SmartLifecycle {
     }
 
     /**
-     * Issue #923: includes the {@link A2AConsumerBeanPostProcessor} so
-     * the claim-path reflection invoker can fill {@link A2AClient}
-     * parameter slots on {@code task=true @A2AConsumer} methods.
-     * Without this, a long-running A2A bridge dispatched via the claim
-     * path would receive {@code a2a=null} and NPE on the first
-     * {@code a2a.send(...)} call. Pass {@code null} for environments
-     * without A2A consumer support.
+     * Issue #923 (historical): this overload accepted the
+     * {@link A2AConsumerBeanPostProcessor} so the old claim-path reflection
+     * invoker could fill {@link A2AClient} parameter slots on
+     * {@code task=true @A2AConsumer} methods. The claim path now delegates to
+     * {@link MeshToolWrapper#invokeForClaim}, which fills the A2A slot from the
+     * binding the bean post-processor already wired onto the wrapper — so the
+     * processor argument is retained only for source compatibility and may be
+     * {@code null}.
      */
     public JobsRuntimeManager(
             MeshRuntime runtime,
@@ -112,9 +131,9 @@ public final class JobsRuntimeManager implements SmartLifecycle {
         wireProducers(instanceId, registryUrl);
 
         // 2. Consumer-side: any wrapper with a MeshJob slot AND at least
-        //    one declared dependency gets a MeshJobSubmitter bound to
-        //    dep[0] (Phase 1 simplification — Phase 2 will surface task=
-        //    true status from the registry's dependency events).
+        //    one declared dependency gets a MeshJobSubmitter bound to the
+        //    declared dependency capability the MeshJob slot was paired with
+        //    (local OR remote task producer — see wireConsumers).
         wireConsumers(instanceId, registryUrl);
 
         // Helper tools are registered eagerly in MeshAutoConfiguration#meshRuntime
@@ -127,17 +146,6 @@ public final class JobsRuntimeManager implements SmartLifecycle {
     private void wireProducers(String instanceId, String registryUrl) {
         for (MeshToolRegistry.ToolMetadata meta : toolRegistry.getAllTools()) {
             if (!meta.task()) continue;
-            // Phase 1 limit: the claim path doesn't resolve dependency
-            // proxies (the dispatcher is a thin reflection invoker —
-            // wireConsumers / per-call dep injection is the wrapper's
-            // job, not the dispatcher's). A `task=true` producer that
-            // declares `McpMeshTool` / `MeshLlmAgent` parameters would
-            // therefore see them as null on the claim path and the
-            // user code would NPE. Reject this combination eagerly at
-            // startup so the failure mode is obvious; mirrors the
-            // "Phase 1 limit" comment in `invokeViaReflection`. (PR
-            // #891 review.)
-            validateProducerParams(meta);
             MeshToolWrapper wrapper = lookupWrapperForMethod(meta);
             if (wrapper == null) {
                 log.warn("No wrapper found for task=true tool {}; producer dispatch will be inert",
@@ -146,15 +154,29 @@ public final class JobsRuntimeManager implements SmartLifecycle {
             }
             wrapper.setJobBindingContext(instanceId, registryUrl);
 
-            // Spawn a ClaimDispatcher that invokes the same method via reflection.
+            // Spawn a ClaimDispatcher that delegates each claimed job back to
+            // the already-resolved MeshToolWrapper. The wrapper holds the
+            // heartbeat-resolved McpMeshTool / MeshLlmAgent proxies (with
+            // settle-grace) AND the @A2AConsumer-injected A2AClient, so the
+            // claim path now shapes arguments identically to the inbound
+            // (push-mode) path — a `task=true` producer can declare
+            // dependency parameters and have them resolved, mirroring
+            // Python's claim path (which re-runs the same DI-wrapped
+            // handler). The dispatcher binds JobContext + the Rust cancel
+            // registry around handle(), so invokeForClaim runs synchronously
+            // on the dispatch thread with the right outbound-header / cancel
+            // context — no extra thread hop.
+            //
             // Issue #895: thread the @MeshTool(retryOn=...) whitelist through so
             // the claim-path matches the inbound-HTTP-path's release-and-retry
-            // semantics.
+            // semantics. invokeForClaim unwraps InvocationTargetException to the
+            // user exception so the dispatcher's retryOn matching still applies.
             ClaimDispatcher dispatcher = new ClaimDispatcher(
                 meta.capability(),
                 instanceId,
                 registryUrl,
-                (payload, controller) -> invokeViaReflection(meta, payload, controller),
+                (payload, controller) -> wrapper.invokeForClaim(
+                    payload, controller, deadlineFromJobContext()),
                 meta.retryOn()
             );
             dispatcher.start();
@@ -164,7 +186,10 @@ public final class JobsRuntimeManager implements SmartLifecycle {
         }
     }
 
-    private void wireConsumers(String instanceId, String registryUrl) {
+    // Package-private (not private) so unit tests can drive consumer-side
+    // submitter wiring in isolation without spawning the producer-side
+    // ClaimDispatchers (network pollers) that start() also kicks off.
+    void wireConsumers(String instanceId, String registryUrl) {
         for (MeshToolRegistry.ToolMetadata meta : toolRegistry.getAllTools()) {
             MeshToolWrapper wrapper = lookupWrapperForMethod(meta);
             if (wrapper == null || wrapper.getMeshJobParamIndex() == null) continue;
@@ -176,19 +201,31 @@ public final class JobsRuntimeManager implements SmartLifecycle {
             // tolerates null per the DDDI contract).
             List<MeshToolRegistry.DependencyInfo> deps = meta.dependencies();
             if (deps == null || deps.isEmpty()) continue;
-            // Pick the dep that backs the MeshJob slot: walk the
-            // declared dependencies and pick the first one whose
-            // capability is itself registered as `task=true` on this
-            // agent. The previous `deps.get(0)` heuristic was wrong
-            // when the user declared a `task=true` dep AFTER an
-            // ordinary dep — the submitter would be bound to the
-            // wrong capability and silently target a non-task tool.
-            // (PR #891 review.) If no task-backed dep is found, leave
-            // the slot null — the consumer probably meant to compose
-            // a JobProxy by hand.
-            String depCapability = pickTaskBackedDependency(deps);
+            // Bind the submitter to the DECLARED dependency the user typed
+            // the MeshJob slot for. The wrapper paired the MeshJob param
+            // positionally with one declared dependency index at
+            // construction (eligible positions = McpMeshTool + MeshJob,
+            // sorted, paired to the declared dependency list) — the same
+            // positional contract Python/TypeScript use. We trust that
+            // declared capability rather than probing the LOCAL registry for
+            // a `task=true` tool: a REMOTE task producer is invisible to the
+            // local registry, so the old `task()` probe only ever wired the
+            // submitter for an in-process producer (or the single-dep
+            // fallback), silently leaving a remote task dep — especially one
+            // mixed with other deps — with a null MeshJob slot. This mirrors
+            // Python's dependency_injector, which wires the submitter off the
+            // declared dependency capability at the MeshJob param's dep_index.
+            String depCapability = wrapper.getMeshJobDependencyCapability();
             if (depCapability == null) {
-                log.debug("Consumer {} declares MeshJob slot but no task=true dep found in registry; " +
+                // Fallback for the (rare) case where the MeshJob slot has no
+                // positionally-paired declared dependency (e.g. more MeshJob
+                // params than declared deps): retain the legacy
+                // local-task-probe / single-dep heuristic so the previously
+                // working in-process happy path is preserved, not narrowed.
+                depCapability = pickTaskBackedDependency(deps);
+            }
+            if (depCapability == null) {
+                log.debug("Consumer {} declares MeshJob slot but no declared dependency backs it; " +
                     "skipping submitter wiring", meta.capability());
                 continue;
             }
@@ -235,102 +272,16 @@ public final class JobsRuntimeManager implements SmartLifecycle {
     }
 
     /**
-     * Reject {@code @MeshTool(task=true)} producers that declare
-     * {@link McpMeshTool} or {@link MeshLlmAgent} parameters. The
-     * claim path runs in a thin reflection dispatcher and does not
-     * resolve dependency proxies — the params would be null and the
-     * user code would NPE. Force the user to split the helper deps
-     * into a separate non-task tool. (PR #891 review.)
+     * The remaining job budget bound by {@link ClaimDispatcher} around the
+     * handler, surfaced from the current {@link io.mcpmesh.JobContext} snapshot
+     * so {@link MeshToolWrapper#invokeForClaim} carries it for symmetry with
+     * the inbound path. The actual async await
+     * ({@link #awaitFutureWithJobBudget}) re-reads the context directly, so
+     * this is informational — null when no deadline is bound.
      */
-    private static void validateProducerParams(MeshToolRegistry.ToolMetadata meta) {
-        Method m = meta.method();
-        Parameter[] params = m.getParameters();
-        for (int i = 0; i < params.length; i++) {
-            Class<?> t = params[i].getType();
-            if (McpMeshTool.class.isAssignableFrom(t) || MeshLlmAgent.class.isAssignableFrom(t)) {
-                throw new IllegalStateException(String.format(
-                    "@MeshTool(task=true) method %s.%s declares a %s parameter at index %d. " +
-                    "task=true producers cannot have McpMeshTool/MeshLlmAgent dependencies " +
-                    "because the claim path doesn't resolve them. Move the dep to a " +
-                    "non-task helper method and call it from the producer.",
-                    m.getDeclaringClass().getName(), m.getName(), t.getSimpleName(), i));
-            }
-        }
-    }
-
-    /**
-     * Reflectively invoke the producer method for one claimed job.
-     *
-     * <p>Mirrors the inbound dispatch wrapper's argument-shaping logic
-     * (mcp params + dep slots + MeshJob slot) — but for the claim path,
-     * deps are NOT injected (the claim path is intentionally limited to
-     * "user method + payload + controller"; deps would require resolving
-     * them from the registry inside the dispatcher, which Phase 2 may
-     * add). User methods that depend on deps AND are claim-dispatched
-     * will see null deps; design.org calls this out as a Phase 1 limit.
-     */
-    private Object invokeViaReflection(
-            MeshToolRegistry.ToolMetadata meta,
-            Map<String, Object> payload,
-            JobController controller) throws Exception {
-        Method method = meta.method();
-        Object bean = meta.bean();
-        method.setAccessible(true);
-
-        // Issue #923: resolve the @A2AConsumer binding (if any) once per
-        // claim — the claim path doesn't hit MeshToolWrapper, so we
-        // can't piggy-back on its setA2AClientBinding wiring. The
-        // binding map is keyed by Method, so the lookup here uses the
-        // same Method instance the user method's reflection metadata
-        // exposes.
-        A2AConsumerBeanPostProcessor.MethodBinding a2aBinding =
-            a2aProcessor != null ? a2aProcessor.bindingFor(method) : null;
-
-        Object[] fullArgs = new Object[method.getParameterCount()];
-        java.lang.reflect.Parameter[] params = method.getParameters();
-        for (int i = 0; i < params.length; i++) {
-            Class<?> type = params[i].getType();
-            if (io.mcpmesh.MeshJob.class.isAssignableFrom(type)) {
-                fullArgs[i] = controller;
-                continue;
-            }
-            if (A2AClient.class.isAssignableFrom(type)) {
-                // Issue #923: fill the @A2AConsumer-injected A2AClient
-                // slot on the claim path. Without this, a task=true
-                // @A2AConsumer bridge (e.g. uc27 report consumer) would
-                // NPE on the first a2a.send(...) call when dispatched
-                // via the claim path instead of inbound HTTP.
-                if (a2aBinding == null) {
-                    log.warn("JobsRuntimeManager: method {} declares A2AClient parameter but no "
-                        + "A2AConsumerBeanPostProcessor binding exists. Tool will receive null and "
-                        + "likely NPE on first A2A call. Was the bean registered outside Spring's "
-                        + "BeanPostProcessor scan path?", meta.method().getName());
-                }
-                fullArgs[i] = a2aBinding != null ? a2aBinding.client() : null;
-                continue;
-            }
-            io.mcpmesh.Param paramAnn = params[i].getAnnotation(io.mcpmesh.Param.class);
-            if (paramAnn != null) {
-                Object val = payload != null ? payload.get(paramAnn.value()) : null;
-                fullArgs[i] = coerce(val, type);
-                continue;
-            }
-            // McpMeshTool / MeshLlmAgent on the claim path are filled with null
-            // (Phase 1 limit — see method javadoc).
-            fullArgs[i] = null;
-        }
-
-        try {
-            Object result = method.invoke(bean, fullArgs);
-            if (result instanceof java.util.concurrent.CompletableFuture<?> cf) {
-                result = awaitFutureWithJobBudget(cf, meta.capability());
-            }
-            return result;
-        } catch (InvocationTargetException ite) {
-            Throwable cause = ite.getCause();
-            if (cause instanceof Exception ex) throw ex;
-            throw new RuntimeException(cause);
-        }
+    private static Long deadlineFromJobContext() {
+        io.mcpmesh.JobContext.Snapshot job = io.mcpmesh.JobContext.current();
+        return job != null ? job.deadlineSecsRemaining : null;
     }
 
     /**
@@ -340,9 +291,11 @@ public final class JobsRuntimeManager implements SmartLifecycle {
      * thread forever. Bound the await to the job's actual budget
      * ({@code max_duration} from the claim, surfaced via the
      * {@link io.mcpmesh.JobContext} snapshot the dispatcher binds around
-     * this handler), falling back to a generous ceiling when the job has no
-     * deadline (jobs are unlimited-by-default per the registry contract, so
-     * the fallback is a leak backstop, not a policy timeout). The timed-out
+     * this handler). A NULL deadline means "no bound" — fall back to a
+     * generous ceiling (jobs are unlimited-by-default per the registry
+     * contract, so the fallback is a leak backstop, not a policy timeout). An
+     * already-exhausted budget ({@code <= 0}) fails fast rather than waiting
+     * out the ceiling. The timed-out
      * future is cancelled, which frees the dispatch thread, cancels
      * dependent stages, and turns a late {@code complete()} into a no-op —
      * {@code CompletableFuture.cancel} does NOT interrupt the thread
@@ -354,7 +307,15 @@ public final class JobsRuntimeManager implements SmartLifecycle {
             java.util.concurrent.CompletableFuture<?> cf, String capability) throws Exception {
         io.mcpmesh.JobContext.Snapshot job = io.mcpmesh.JobContext.current();
         Long budget = job != null ? job.deadlineSecsRemaining : null;
-        long timeoutSecs = (budget != null && budget > 0) ? budget : NO_DEADLINE_AWAIT_CEILING_SECS;
+        if (budget != null && budget <= 0) {
+            // Budget already spent — fail fast rather than falling back to the
+            // no-deadline ceiling (which would turn an exhausted budget into a
+            // 24h wait). Only a null deadline means "no bound".
+            cf.cancel(true);
+            throw new RuntimeException("Async operation budget already exhausted "
+                + "(claim-path budget for capability '" + capability + "')");
+        }
+        long timeoutSecs = (budget != null) ? budget : NO_DEADLINE_AWAIT_CEILING_SECS;
         try {
             return cf.get(timeoutSecs, java.util.concurrent.TimeUnit.SECONDS);
         } catch (java.util.concurrent.TimeoutException te) {
@@ -363,7 +324,7 @@ public final class JobsRuntimeManager implements SmartLifecycle {
                 + " seconds (claim-path budget for capability '" + capability + "')");
         } catch (java.util.concurrent.ExecutionException ee) {
             // Unwrap to the user exception (mirrors MeshToolWrapper.awaitIfFuture
-            // and the InvocationTargetException handling in invokeViaReflection) —
+            // and the InvocationTargetException handling in invokeForClaim) —
             // the @MeshTool(retryOn=...) whitelist matches with cls.isInstance(cause)
             // in ClaimDispatcher.handleRetryOrFail, so a wrapped ExecutionException
             // would never match the user's declared exception types.
@@ -386,30 +347,6 @@ public final class JobsRuntimeManager implements SmartLifecycle {
      * its dispatch thread.
      */
     static final long NO_DEADLINE_AWAIT_CEILING_SECS = 86_400L;
-
-    /** Best-effort scalar coercion — identical to MeshToolWrapper's fast path. */
-    private static Object coerce(Object val, Class<?> target) {
-        if (val == null) {
-            if (target.isPrimitive()) {
-                if (target == boolean.class) return false;
-                if (target == int.class) return 0;
-                if (target == long.class) return 0L;
-                if (target == double.class) return 0.0d;
-                if (target == float.class) return 0.0f;
-                if (target == short.class) return (short) 0;
-                if (target == byte.class) return (byte) 0;
-                if (target == char.class) return '\0';
-            }
-            return null;
-        }
-        if (target.isInstance(val)) return val;
-        if (val instanceof Number n) {
-            if (target == Integer.class || target == int.class) return n.intValue();
-            if (target == Long.class || target == long.class) return n.longValue();
-            if (target == Double.class || target == double.class) return n.doubleValue();
-        }
-        return val;
-    }
 
     private MeshToolWrapper lookupWrapperForMethod(MeshToolRegistry.ToolMetadata meta) {
         // Wrappers are keyed by funcId == targetClassName.methodName.
