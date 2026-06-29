@@ -105,19 +105,17 @@ public class MeshCapabilityBeanRegistrar implements BeanDefinitionRegistryPostPr
             return;
         }
 
-        // Settling-window grace (#1193): declare each capability key with the
-        // process-wide settle state so the bean-injected proxy path
-        // (McpMeshTool.call) can perform a bounded, capability-keyed wait
-        // before failing fast at startup — mirroring the @MeshRoute path.
-        // The per-capability latch is counted down by
+        // Settling-window grace (#1193): declare each successfully-registered
+        // capability key with the process-wide settle state so the
+        // bean-injected proxy path (McpMeshTool.call) can perform a bounded,
+        // capability-keyed wait before failing fast at startup — mirroring the
+        // @MeshRoute path. The per-capability latch is counted down by
         // MeshDependencyInjector.updateToolDependency (markResolved) the
-        // moment the endpoint lands. Declaring the keys here (registration
-        // time) means the agent-level "all declared deps resolved" latch can
-        // also flip eagerly off these @MeshDependsOn capabilities.
+        // moment the endpoint lands. We declare keys ONLY for capabilities we
+        // actually register a bean/proxy for: a name-conflicting capability is
+        // skipped below and never gets a proxy, so marking it declared would
+        // strand the agent-level "all declared deps resolved" latch forever.
         MeshSettleState settleState = MeshSettleState.getInstance();
-        for (String capability : capabilities.keySet()) {
-            settleState.registerDeclared(capability);
-        }
 
         int added = 0;
         int conflicts = 0;
@@ -144,6 +142,7 @@ public class MeshCapabilityBeanRegistrar implements BeanDefinitionRegistryPostPr
             // default candidate when multiple producers share a type.
             def.setPrimary(true);
             registry.registerBeanDefinition(capability, def);
+            settleState.registerDeclared(capability);
             added++;
         }
         log.info("@MeshDependsOn: registered {} McpMeshTool bean(s) early "

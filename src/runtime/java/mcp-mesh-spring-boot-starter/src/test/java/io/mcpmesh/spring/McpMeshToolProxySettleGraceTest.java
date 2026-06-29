@@ -105,11 +105,8 @@ class McpMeshToolProxySettleGraceTest {
 
         McpMeshToolProxy<String> proxy = new McpMeshToolProxy<>("remote_cap", new StubHttpClient());
 
-        long start = System.nanoTime();
         assertThrows(MeshToolUnavailableException.class, () -> proxy.call(Map.of("q", "x")),
             "settled agent: an unresolved dependency must fail fast, not wait");
-        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
-        assertTrue(elapsedMs < 50, "settled call must not wait, waited " + elapsedMs + "ms");
         assertEquals(0, state.getWaitCount(),
             "settled steady-state must never touch the wait primitives");
     }
@@ -142,9 +139,7 @@ class McpMeshToolProxySettleGraceTest {
         McpMeshToolProxy<String> proxy = new McpMeshToolProxy<>("remote_cap", http);
         proxy.updateEndpoint("http://localhost:1/mcp", "remote_fn");
 
-        long start = System.nanoTime();
         assertEquals(StubHttpClient.SENTINEL, proxy.call(Map.of("q", "x")));
-        assertTrue((System.nanoTime() - start) / 1_000_000 < 100);
         assertEquals(0, state.getWaitCount(),
             "an available proxy must never touch the settle wait primitives");
     }

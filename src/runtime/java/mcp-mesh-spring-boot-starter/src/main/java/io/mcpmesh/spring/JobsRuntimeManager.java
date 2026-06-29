@@ -291,9 +291,11 @@ public final class JobsRuntimeManager implements SmartLifecycle {
      * thread forever. Bound the await to the job's actual budget
      * ({@code max_duration} from the claim, surfaced via the
      * {@link io.mcpmesh.JobContext} snapshot the dispatcher binds around
-     * this handler), falling back to a generous ceiling when the job has no
-     * deadline (jobs are unlimited-by-default per the registry contract, so
-     * the fallback is a leak backstop, not a policy timeout). The timed-out
+     * this handler). A NULL deadline means "no bound" — fall back to a
+     * generous ceiling (jobs are unlimited-by-default per the registry
+     * contract, so the fallback is a leak backstop, not a policy timeout). An
+     * already-exhausted budget ({@code <= 0}) fails fast rather than waiting
+     * out the ceiling. The timed-out
      * future is cancelled, which frees the dispatch thread, cancels
      * dependent stages, and turns a late {@code complete()} into a no-op —
      * {@code CompletableFuture.cancel} does NOT interrupt the thread
@@ -305,7 +307,15 @@ public final class JobsRuntimeManager implements SmartLifecycle {
             java.util.concurrent.CompletableFuture<?> cf, String capability) throws Exception {
         io.mcpmesh.JobContext.Snapshot job = io.mcpmesh.JobContext.current();
         Long budget = job != null ? job.deadlineSecsRemaining : null;
-        long timeoutSecs = (budget != null && budget > 0) ? budget : NO_DEADLINE_AWAIT_CEILING_SECS;
+        if (budget != null && budget <= 0) {
+            // Budget already spent — fail fast rather than falling back to the
+            // no-deadline ceiling (which would turn an exhausted budget into a
+            // 24h wait). Only a null deadline means "no bound".
+            cf.cancel(true);
+            throw new RuntimeException("Async operation budget already exhausted "
+                + "(claim-path budget for capability '" + capability + "')");
+        }
+        long timeoutSecs = (budget != null) ? budget : NO_DEADLINE_AWAIT_CEILING_SECS;
         try {
             return cf.get(timeoutSecs, java.util.concurrent.TimeUnit.SECONDS);
         } catch (java.util.concurrent.TimeoutException te) {
