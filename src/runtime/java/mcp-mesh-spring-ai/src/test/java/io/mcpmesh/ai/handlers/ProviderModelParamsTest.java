@@ -12,6 +12,7 @@ import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 
 import java.util.*;
 
@@ -185,6 +186,115 @@ class ProviderModelParamsTest {
             ChatOptions opts = captor.getValue().getOptions();
             assertNull(opts.getModel(),
                 "cross-vendor model override must be ignored — Anthropic keeps its own default model");
+        }
+    }
+
+    @Nested
+    @DisplayName("Gemini")
+    class Gemini {
+
+        private final GeminiHandler handler = new GeminiHandler();
+
+        // A plain mock(ChatModel.class) is NOT a VertexAiGeminiChatModel, so the
+        // handler takes the Google AI Studio (GenAI) branch and produces
+        // GoogleGenAiChatOptions. The Vertex branch needs the concrete
+        // VertexAiGeminiChatModel and is out of scope for this unit harness.
+
+        @Test
+        @DisplayName("max_tokens→maxOutputTokens/temperature/top_p flow onto GoogleGenAiChatOptions")
+        void numericParamsApplied() {
+            ArgumentCaptor<Prompt> captor = ArgumentCaptor.forClass(Prompt.class);
+            ChatModel model = mockModel(captor);
+
+            Map<String, Object> options = new LinkedHashMap<>();
+            options.put(LlmProviderHandler.OPTION_MAX_TOKENS, 777);
+            options.put(LlmProviderHandler.OPTION_TEMPERATURE, 0.33);
+            options.put(LlmProviderHandler.OPTION_TOP_P, 0.7);
+
+            handler.generateWithTools(model, userMessages(), List.of(), null, null, options);
+
+            ChatOptions opts = captor.getValue().getOptions();
+            assertInstanceOf(GoogleGenAiChatOptions.class, opts);
+            GoogleGenAiChatOptions g = (GoogleGenAiChatOptions) opts;
+            assertEquals(777, g.getMaxOutputTokens(), "max_tokens maps to maxOutputTokens");
+            assertEquals(0.33, g.getTemperature(), 1e-9);
+            assertEquals(0.7, g.getTopP(), 1e-9);
+        }
+
+        @Test
+        @DisplayName("same-vendor model override is applied (gemini/... and google/...)")
+        void sameVendorModelApplied() {
+            ArgumentCaptor<Prompt> captor = ArgumentCaptor.forClass(Prompt.class);
+            ChatModel model = mockModel(captor);
+
+            handler.generateWithTools(model, userMessages(), List.of(), null, null,
+                Map.of(LlmProviderHandler.OPTION_MODEL, "gemini/gemini-2.0-flash"));
+
+            assertEquals("gemini-2.0-flash", captor.getValue().getOptions().getModel(),
+                "same-vendor 'gemini/' override must be applied (vendor-stripped)");
+
+            ArgumentCaptor<Prompt> captor2 = ArgumentCaptor.forClass(Prompt.class);
+            ChatModel model2 = mockModel(captor2);
+            handler.generateWithTools(model2, userMessages(), List.of(), null, null,
+                Map.of(LlmProviderHandler.OPTION_MODEL, "google/gemini-2.0-flash"));
+            assertEquals("gemini-2.0-flash", captor2.getValue().getOptions().getModel(),
+                "the 'google' alias must match the gemini vendor and apply the model");
+        }
+
+        @Test
+        @DisplayName("vertex_ai/... override is accepted on the GenAI branch (FIX 2)")
+        void vertexQualifiedOverrideAccepted() {
+            ArgumentCaptor<Prompt> captor = ArgumentCaptor.forClass(Prompt.class);
+            ChatModel model = mockModel(captor);
+
+            handler.generateWithTools(model, userMessages(), List.of(), null, null,
+                Map.of(LlmProviderHandler.OPTION_MODEL, "vertex_ai/gemini-1.5-pro"));
+
+            assertEquals("gemini-1.5-pro", captor.getValue().getOptions().getModel(),
+                "a vertex_ai-qualified override routes through GeminiHandler and must be accepted");
+        }
+
+        @Test
+        @DisplayName("cross-vendor model override is rejected → provider default (model stays null)")
+        void crossVendorModelRejected() {
+            ArgumentCaptor<Prompt> captor = ArgumentCaptor.forClass(Prompt.class);
+            ChatModel model = mockModel(captor);
+
+            handler.generateWithTools(model, userMessages(), List.of(), null, null,
+                Map.of(LlmProviderHandler.OPTION_MODEL, "openai/gpt-4o"));
+
+            assertNull(captor.getValue().getOptions().getModel(),
+                "cross-vendor model override must be ignored — Gemini keeps its own default model");
+        }
+
+        @Test
+        @DisplayName("plain-text generateWithMessages applies model_params (FIX 3)")
+        void plainTextPathAppliesParams() {
+            ArgumentCaptor<Prompt> captor = ArgumentCaptor.forClass(Prompt.class);
+            ChatModel model = mockModel(captor);
+
+            Map<String, Object> options = new LinkedHashMap<>();
+            options.put(LlmProviderHandler.OPTION_MAX_TOKENS, 512);
+            options.put(LlmProviderHandler.OPTION_MODEL, "gemini/gemini-2.0-flash");
+
+            handler.generateWithMessages(model, userMessages(), options);
+
+            ChatOptions opts = captor.getValue().getOptions();
+            assertInstanceOf(GoogleGenAiChatOptions.class, opts);
+            assertEquals(512, ((GoogleGenAiChatOptions) opts).getMaxOutputTokens());
+            assertEquals("gemini-2.0-flash", opts.getModel());
+        }
+
+        @Test
+        @DisplayName("plain-text generateWithMessages with no params builds a no-options prompt")
+        void plainTextPathNoParams() {
+            ArgumentCaptor<Prompt> captor = ArgumentCaptor.forClass(Prompt.class);
+            ChatModel model = mockModel(captor);
+
+            handler.generateWithMessages(model, userMessages(), Map.of());
+
+            assertNull(captor.getValue().getOptions(),
+                "no model_params → plain Prompt(messages) with no ChatOptions");
         }
     }
 

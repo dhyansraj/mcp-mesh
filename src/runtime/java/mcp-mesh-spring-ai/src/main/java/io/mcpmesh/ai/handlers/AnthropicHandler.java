@@ -174,7 +174,17 @@ public class AnthropicHandler implements LlmProviderHandler {
         log.debug("AnthropicHandler: Processing {} messages", messages.size());
 
         List<Message> springMessages = convertMessages(messages);
-        Prompt prompt = new Prompt(springMessages);
+        // Plain-text generation: apply consumer-supplied model_params
+        // (max_tokens/temperature/top_p/vendor-matched model) when present so the
+        // no-tools/no-schema path honors them like the tools path does.
+        Prompt prompt;
+        if (LlmProviderHandler.hasAnyModelParam(options)) {
+            AnthropicChatOptions.Builder optionsBuilder = AnthropicChatOptions.builder();
+            applyModelParams(optionsBuilder, options);
+            prompt = new Prompt(springMessages, optionsBuilder.build());
+        } else {
+            prompt = new Prompt(springMessages);
+        }
         ChatResponse response = model.call(prompt);
 
         String content = response.getResult() != null && response.getResult().getOutput() != null
@@ -361,7 +371,13 @@ public class AnthropicHandler implements LlmProviderHandler {
                 if (!toolCallbacks.isEmpty()) {
                     retrySpec.toolCallbacks(toolCallbacks.toArray(new ToolCallback[0]));
                 }
-                // No output_format applied — rely on HINT instructions
+                // No output_format applied — rely on HINT instructions. Still
+                // re-apply consumer-supplied model_params (max_tokens/temperature/
+                // top_p/model) so the retry matches the initial request minus
+                // the rejected output_format.
+                AnthropicChatOptions.Builder retryOptions = AnthropicChatOptions.builder();
+                applyModelParams(retryOptions, options);
+                retrySpec.options(retryOptions.build());
                 chatResponse = retrySpec.call().chatResponse();
             } else {
                 throw e;
@@ -461,13 +477,15 @@ public class AnthropicHandler implements LlmProviderHandler {
                     }
                 }
 
-                // Rebuild prompt without outputFormat
-                org.springframework.ai.model.tool.ToolCallingChatOptions hintOptions =
-                    org.springframework.ai.model.tool.ToolCallingChatOptions.builder()
-                        .toolCallbacks(toolCallbacks)
-                        .internalToolExecutionEnabled(false)
-                        .build();
-                prompt = new org.springframework.ai.chat.prompt.Prompt(hintMessages, hintOptions);
+                // Rebuild prompt without outputFormat. Use AnthropicChatOptions
+                // (not the generic ToolCallingChatOptions) and re-apply the
+                // consumer-supplied model_params so the retry matches the initial
+                // request minus the rejected output_format.
+                AnthropicChatOptions.Builder hintBuilder = AnthropicChatOptions.builder()
+                    .toolCallbacks(toolCallbacks)
+                    .internalToolExecutionEnabled(false);
+                applyModelParams(hintBuilder, options);
+                prompt = new org.springframework.ai.chat.prompt.Prompt(hintMessages, hintBuilder.build());
 
                 response = model.call(prompt);
             } else {

@@ -52,6 +52,20 @@ public class GeminiHandler implements LlmProviderHandler {
         return new String[]{"google"};
     }
 
+    /**
+     * Vendor aliases accepted specifically for {@code model_params.model} override
+     * resolution. Superset of {@link #getAliases()}: mesh delegation routes both
+     * Google AI Studio ({@code gemini/...}) and Vertex AI ({@code vertex_ai/...})
+     * model strings through this single {@code GeminiHandler}, so a
+     * {@code vertex_ai/}-qualified override is same-provider and must be accepted
+     * on BOTH the Vertex and GenAI option branches. Kept separate from the public
+     * {@link #getAliases()} (which other surfaces assert returns exactly
+     * {@code ["google"]}) so widening override-matching doesn't change that
+     * contract. A genuinely cross-vendor override (e.g. {@code openai/...}) is
+     * still rejected by {@link LlmProviderHandler#resolveModelOverride}.
+     */
+    private static final String[] MODEL_OVERRIDE_ALIASES = {"google", "vertex_ai", "vertex"};
+
     /** Gemini uses a shorter previous-turn prefix than the Anthropic/OpenAI default. */
     @Override
     public String previousResponsePrefix() {
@@ -99,7 +113,14 @@ public class GeminiHandler implements LlmProviderHandler {
         log.debug("GeminiHandler: Processing {} messages", messages.size());
 
         List<Message> springMessages = convertMessages(messages);
-        Prompt prompt = new Prompt(springMessages);
+        // Plain-text generation: apply consumer-supplied model_params
+        // (max_tokens→maxOutputTokens/temperature/top_p/vendor-matched model) when
+        // present. buildModelParamOptions branches Vertex vs GenAI to match the
+        // underlying chat model and returns null when no params are present.
+        ChatOptions paramOptions = buildModelParamOptions(model, options);
+        Prompt prompt = paramOptions != null
+            ? new Prompt(springMessages, paramOptions)
+            : new Prompt(springMessages);
         ChatResponse response = model.call(prompt);
 
         String content = response.getResult() != null && response.getResult().getOutput() != null
@@ -417,7 +438,7 @@ public class GeminiHandler implements LlmProviderHandler {
         if (topP != null) {
             builder.topP(topP);
         }
-        String modelOverride = LlmProviderHandler.resolveModelOverride(options, getVendor(), getAliases());
+        String modelOverride = LlmProviderHandler.resolveModelOverride(options, getVendor(), MODEL_OVERRIDE_ALIASES);
         if (modelOverride != null) {
             builder.model(modelOverride);
             log.debug("GeminiHandler: applied model override '{}'", modelOverride);
@@ -459,7 +480,7 @@ public class GeminiHandler implements LlmProviderHandler {
         if (topP != null) {
             builder.topP(topP);
         }
-        String modelOverride = LlmProviderHandler.resolveModelOverride(options, getVendor(), getAliases());
+        String modelOverride = LlmProviderHandler.resolveModelOverride(options, getVendor(), MODEL_OVERRIDE_ALIASES);
         if (modelOverride != null) {
             builder.model(modelOverride);
             log.debug("GeminiHandler (vertex): applied model override '{}'", modelOverride);

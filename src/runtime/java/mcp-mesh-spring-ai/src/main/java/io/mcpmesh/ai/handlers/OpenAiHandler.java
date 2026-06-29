@@ -79,7 +79,17 @@ public class OpenAiHandler implements LlmProviderHandler {
         log.debug("OpenAiHandler: Processing {} messages", messages.size());
 
         List<Message> springMessages = convertMessages(messages);
-        Prompt prompt = new Prompt(springMessages);
+        // Plain-text generation: apply consumer-supplied model_params
+        // (max_tokens/temperature/top_p/vendor-matched model) when present so the
+        // no-tools/no-schema path honors them like the tools path does.
+        Prompt prompt;
+        if (LlmProviderHandler.hasAnyModelParam(options)) {
+            OpenAiChatOptions.Builder optionsBuilder = OpenAiChatOptions.builder();
+            applyModelParams(optionsBuilder, options);
+            prompt = new Prompt(springMessages, optionsBuilder.build());
+        } else {
+            prompt = new Prompt(springMessages);
+        }
         ChatResponse response = model.call(prompt);
 
         String content = response.getResult() != null && response.getResult().getOutput() != null

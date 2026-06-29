@@ -406,7 +406,7 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                     response.put("tool_calls", List.of());
                     usageMeta = llmResponse.usage();
                 } else {
-                    String content = llmProvider.generateWithMessages(config.provider(), messages);
+                    String content = llmProvider.generateWithMessages(config.provider(), messages, handlerOptions);
                     // Note: generateWithMessages() doesn't return token usage metadata.
                     // usageMeta remains null — this is expected for non-structured paths.
                     response.put("content", content);
