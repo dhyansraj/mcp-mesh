@@ -176,6 +176,44 @@ describe("consumer-span LLM token telemetry (#1228)", () => {
     expect(span!.llmModel).toBe("claude-sonnet-4");
   });
 
+  it("stamps llm_* token fields when the handler throws AFTER an LLM call recorded usage", async () => {
+    const boom = new Error("handler failed after LLM call");
+    const tool = llm({
+      name: FUNCTION_ID,
+      provider: { capability: "llm-service" },
+      parameters: z.object({}),
+      execute: async (_args: unknown, { llm: llmCallable }: { llm: (m: string) => Promise<string> }) => {
+        // Real LLM call records usage, THEN the handler fails.
+        await llmCallable("Summarize the doc");
+        throw boom;
+      },
+    });
+
+    LlmToolRegistry.getInstance().setResolvedProvider(FUNCTION_ID, {
+      endpoint: PROVIDER_ENDPOINT,
+      functionName: "process_chat",
+      model: "claude-sonnet-4",
+      agentId: "provider-agent",
+    });
+
+    callMcpToolMock.mockResolvedValue(
+      providerResponse({ content: "A short summary.", inputTokens: 100, outputTokens: 40 })
+    );
+
+    // The handler's exception must still propagate.
+    await expect(tool.execute({} as never)).rejects.toThrow("handler failed after LLM call");
+
+    const span = consumerSpan();
+    expect(span).toBeDefined();
+    expect(span!.success).toBe(false);
+    // Accumulated usage from the LLM call before the throw is preserved.
+    expect(span!.llmInputTokens).toBe(100);
+    expect(span!.llmOutputTokens).toBe(40);
+    expect(span!.llmTotalTokens).toBe(140);
+    expect(span!.llmModel).toBe("claude-sonnet-4");
+    expect(span!.llmProvider).toBe(`mesh:${PROVIDER_ENDPOINT}`);
+  });
+
   it("publishes the consumer span WITHOUT llm_* fields when execute never calls the llm", async () => {
     const tool = llm({
       name: FUNCTION_ID,

@@ -358,12 +358,17 @@ export function llm<
 
             // Call user's execute handler
             debug.llm(`Calling user execute handler`);
-            const result = await llmConfig.execute(cleanArgs, { llm: llmCallable as LlmAgent<TResponse extends ZodType ? z.infer<TResponse> : TReturns extends ZodType ? z.infer<TReturns> : string> });
-            debug.llm(`Execute completed successfully`);
-
-            // Issue #1228: capture the agentic-loop token usage finalized by
-            // the last llm() call so the consumer span can carry it.
-            llmMeta = llmCallable.meta;
+            let result;
+            try {
+              result = await llmConfig.execute(cleanArgs, { llm: llmCallable as LlmAgent<TResponse extends ZodType ? z.infer<TResponse> : TReturns extends ZodType ? z.infer<TReturns> : string> });
+              debug.llm(`Execute completed successfully`);
+            } finally {
+              // Issue #1228: capture the agentic-loop token usage so the
+              // consumer span can carry it on BOTH success and error. If the
+              // handler throws after it already made LLM calls, the accumulated
+              // usage is preserved before the exception unwinds.
+              llmMeta = llmCallable.meta;
+            }
 
             // Convert result to string for MCP
             if (typeof result === "string") {
