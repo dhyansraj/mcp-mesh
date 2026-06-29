@@ -2083,12 +2083,21 @@ func (s *EntService) unregisterAgentAttempt(ctx context.Context, agentID string)
 		}
 	}
 
-	// Update agent status to unhealthy and update timestamp (like RegisterAgent does)
+	// Flip status to unhealthy but deliberately PRESERVE updated_at (do not bump
+	// it to `now`). updated_at is the agent's last-heartbeat timestamp from the
+	// sweep job's perspective (purgeStaleAgents filters on
+	// UpdatedAtLT(now-retention)). Bumping it on a graceful shutdown would
+	// restart the retention clock on every unregister, so a gracefully-shut-down
+	// agent in a watch-driven dev loop (repeated re-register/unregister) would
+	// keep refreshing its timestamp and never age past retention to be purged.
+	// Leaving it untouched lets the sweep purge the agent once it has actually
+	// been silent for Retention. This matches the down-transition invariant
+	// upheld by health_monitor.markAgentUnhealthyIfUnchanged and
+	// markAgentStaleAttempt, which also preserve updated_at.
 	agentUpdated, err := tx.Agent.
 		Update().
 		Where(agent.IDEQ(agentID)).
 		SetStatus(agent.StatusUnhealthy).
-		SetUpdatedAt(now). // Update timestamp like RegisterAgent does
 		Save(ctx)
 
 	if err != nil {
