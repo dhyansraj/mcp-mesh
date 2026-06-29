@@ -200,7 +200,19 @@ public final class JobsRuntimeManager implements SmartLifecycle {
             // submitter. Without one, leave the slot empty (user code
             // tolerates null per the DDDI contract).
             List<MeshToolRegistry.DependencyInfo> deps = meta.dependencies();
-            if (deps == null || deps.isEmpty()) continue;
+            if (deps == null || deps.isEmpty()) {
+                // Issue #1231: a MeshJob-typed param can show "resolved" in the
+                // registry's provider-matching while its MeshJobSubmitter slot was
+                // never wired — null is injected silently and the developer only
+                // discovers it at call time. Make the unwired slot prescriptive at
+                // startup: a MeshJob submitter is wired off a DECLARED dependency,
+                // so with no dependencies there is nothing to bind it to.
+                log.warn("Consumer {} has a MeshJob parameter but declares no dependencies — "
+                        + "its MeshJobSubmitter slot will be injected as null. Declare a dependency "
+                        + "whose capability the MeshJob param maps to so the submitter can be wired.",
+                    meta.capability());
+                continue;
+            }
             // Bind the submitter to the DECLARED dependency the user typed
             // the MeshJob slot for. The wrapper paired the MeshJob param
             // positionally with one declared dependency index at
@@ -225,8 +237,15 @@ public final class JobsRuntimeManager implements SmartLifecycle {
                 depCapability = pickTaskBackedDependency(deps);
             }
             if (depCapability == null) {
-                log.debug("Consumer {} declares MeshJob slot but no declared dependency backs it; " +
-                    "skipping submitter wiring", meta.capability());
+                // Issue #1231: the MeshJob slot resolved as a param but no declared
+                // dependency is positionally paired with it (and no local task-backed
+                // dep matched the fallback), so the MeshJobSubmitter slot stays null
+                // and the developer hits null at call time. Promote from debug to warn
+                // so the unwired slot is visible at startup with a concrete remedy.
+                log.warn("Consumer {} declares a MeshJob parameter but no declared dependency backs "
+                        + "it — its MeshJobSubmitter slot will be injected as null. Declare a "
+                        + "dependency whose capability the MeshJob param maps to (positionally paired "
+                        + "with the slot) so the submitter can be wired.", meta.capability());
                 continue;
             }
             try {

@@ -149,6 +149,18 @@ let autoStartScheduled = false;
 // async boundaries (e.g. one agent per test in a harness) stay allowed.
 let constructionGuardName: string | null = null;
 
+// #1231: warn-once dedupe for typed dependency slots that resolved at the
+// registry ("N/N deps resolved") but did not actually wire — the proxy was
+// never injected and the slot stays null. The deps array is rebuilt PER
+// CALL, so a per-call warn would spam; this set keys on `${toolName}:${dep}`
+// so each unwired slot warns exactly once per process.
+const _unwiredSlotWarned = new Set<string>();
+
+/** Test support: drop the warn-once dedupe so a fresh suite warns again. */
+export function __resetUnwiredSlotWarnedForTests(): void {
+  _unwiredSlotWarned.clear();
+}
+
 // Schedule auto-start after module loading completes
 function scheduleAutoStart(): void {
   if (autoStartScheduled) return;
@@ -650,7 +662,28 @@ export class MeshAgent {
               this.config.registryUrl,
             );
           }
-          return this.resolvedDeps.get(`${toolName}:dep_${depIndex}`) ?? null;
+          const proxy =
+            this.resolvedDeps.get(`${toolName}:dep_${depIndex}`) ?? null;
+          // #1231: a typed dep slot that resolved at the registry but never
+          // got a proxy injected stays null silently. Warn ONCE per
+          // tool+slot (per-call would spam — the array is rebuilt every
+          // call). Settle-gated: while the agent is still settling the dep
+          // may yet resolve, so only warn once the latch has flipped.
+          if (proxy === null && settleState.isSettled()) {
+            const slotKey = `${toolName}:dep_${depIndex}`;
+            if (!_unwiredSlotWarned.has(slotKey)) {
+              _unwiredSlotWarned.add(slotKey);
+              console.warn(
+                `[mesh-tool] dependency '${dep.capability}' on '${toolName}' ` +
+                  `resolved but no proxy was injected into positional slot ` +
+                  `${depIndex} — the parameter stays null after settling. A ` +
+                  `registry match ('N/N deps resolved') reflects provider ` +
+                  `availability, not slot injection. Fix: ensure the provider ` +
+                  `for '${dep.capability}' is reachable.`,
+              );
+            }
+          }
+          return proxy;
         },
       );
       const injectedCount = depsArray.filter((d) => d !== null).length;

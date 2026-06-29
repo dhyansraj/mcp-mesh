@@ -1777,6 +1777,45 @@ class TestPrescriptiveDiagnosticsAndStrictDI:
 
         assert "will remain None" in caplog.text
 
+    def test_meshjob_unwired_submitter_routes_through_warn_or_raise(
+        self, caplog, monkeypatch
+    ):
+        """#1231: a MeshJob slot whose capability resolved at the registry
+        but whose submitter could not be built (MCP_MESH_REGISTRY_URL
+        unset) is the clear unwired-slot case. It must route through
+        ``warn_or_raise`` — a prescriptive permissive warning by default,
+        and a ``StrictDIError`` with the SAME text under
+        ``MCP_MESH_STRICT_DI``. 'N/N deps resolved' is registry
+        provider-matching, not slot injection, so this silent-None must be
+        surfaced."""
+        from mesh.types import MeshJob
+        from _mcp_mesh.engine.strict_di import StrictDIError
+
+        # The unwired condition: capability declared (so the MeshJob branch
+        # is reached) but no registry URL to construct the submitter.
+        monkeypatch.delenv("MCP_MESH_REGISTRY_URL", raising=False)
+
+        async def submit(user_id: str, job: MeshJob = None):
+            return job
+
+        # Permissive: prescriptive warning, slot left None, no raise.
+        with caplog.at_level(logging.WARNING):
+            final_kwargs, count = self._prep(submit, ["run_workflow"])
+        assert final_kwargs["job"] is None
+        assert count == 0
+        text = caplog.text
+        assert "MeshJob parameter 'job'" in text
+        assert "MCP_MESH_REGISTRY_URL is not set" in text
+        assert "run_workflow" in text
+
+        # Strict: the SAME diagnostic raises StrictDIError with the same text.
+        self._enable_strict(monkeypatch)
+        with pytest.raises(
+            StrictDIError, match="MCP_MESH_REGISTRY_URL is not set"
+        ) as exc_info:
+            self._prep(submit, ["run_workflow"])
+        assert "MeshJob parameter 'job'" in str(exc_info.value)
+
     def test_strict_untyped_single_param_zero_deps_does_not_raise(
         self, monkeypatch
     ):
