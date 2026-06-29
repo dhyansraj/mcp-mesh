@@ -1798,23 +1798,30 @@ class TestPrescriptiveDiagnosticsAndStrictDI:
         async def submit(user_id: str, job: MeshJob = None):
             return job
 
+        # The exact diagnostic body (everything after the trace prefix) for
+        # the 'job' param + dependency 'run_workflow' + unset registry URL
+        # case. Asserting the single string in BOTH paths makes any drift
+        # between the permissive warn and the strict raise fail the test.
+        expected = (
+            "MeshJob parameter 'job' on 'submit' was matched to dependency "
+            "'run_workflow', but no MeshJobSubmitter could be injected "
+            "because MCP_MESH_REGISTRY_URL is not set; the parameter stays "
+            "None. Fix: set MCP_MESH_REGISTRY_URL so the submitter for "
+            "dependency 'run_workflow' can be built."
+        )
+
         # Permissive: prescriptive warning, slot left None, no raise.
         with caplog.at_level(logging.WARNING):
             final_kwargs, count = self._prep(submit, ["run_workflow"])
         assert final_kwargs["job"] is None
         assert count == 0
-        text = caplog.text
-        assert "MeshJob parameter 'job'" in text
-        assert "MCP_MESH_REGISTRY_URL is not set" in text
-        assert "run_workflow" in text
+        assert expected in caplog.text
 
         # Strict: the SAME diagnostic raises StrictDIError with the same text.
         self._enable_strict(monkeypatch)
-        with pytest.raises(
-            StrictDIError, match="MCP_MESH_REGISTRY_URL is not set"
-        ) as exc_info:
+        with pytest.raises(StrictDIError) as exc_info:
             self._prep(submit, ["run_workflow"])
-        assert "MeshJob parameter 'job'" in str(exc_info.value)
+        assert expected in str(exc_info.value)
 
     def test_strict_untyped_single_param_zero_deps_does_not_raise(
         self, monkeypatch

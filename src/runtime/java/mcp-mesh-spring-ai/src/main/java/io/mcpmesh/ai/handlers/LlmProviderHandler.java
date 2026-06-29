@@ -971,13 +971,18 @@ public interface LlmProviderHandler {
                 Map<String, Object> strictProperties = new LinkedHashMap<>();
                 for (Map.Entry<String, Object> entry : properties.entrySet()) {
                     Map<String, Object> fieldSchema = (Map<String, Object>) entry.getValue();
-                    Map<String, Object> strictField = makeSchemaStrict(fieldSchema, addAllRequired);
                     // Issue #1230 (defense-in-depth): a required field must not keep
                     // its anyOf:[{type:null}, X] branch — collapse it so the vendor
                     // can't satisfy "required" with null and silently drop content.
+                    // Collapse BEFORE strictifying so that when X is a nested object
+                    // the inlined schema still flows through makeSchemaStrict and
+                    // gets additionalProperties:false + its own required expansion;
+                    // collapsing after strictification would let X bypass strict
+                    // treatment entirely.
                     if (required.contains(entry.getKey())) {
-                        strictField = collapseRequiredNullBranch(strictField);
+                        fieldSchema = collapseRequiredNullBranch(fieldSchema);
                     }
+                    Map<String, Object> strictField = makeSchemaStrict(fieldSchema, addAllRequired);
                     strictProperties.put(entry.getKey(), strictField);
                 }
                 result.put("properties", strictProperties);

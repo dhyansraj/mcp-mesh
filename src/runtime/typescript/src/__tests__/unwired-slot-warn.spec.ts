@@ -1,12 +1,12 @@
 /**
  * Unwired typed-dependency-slot diagnostics (issue #1231).
  *
- * "N/N deps resolved" is registry provider-matching, not slot injection: a
- * typed dependency slot can resolve at the registry yet never receive an
- * injected proxy, leaving the parameter silently null. The deps array is
- * rebuilt PER CALL, so the diagnostic must warn ONCE per tool+slot (a
- * per-call warning would spam) and only AFTER the settle latch has flipped
- * (during settling the proxy may still land).
+ * A declared typed dependency slot can remain null after the settle window
+ * closes — no proxy was ever injected — leaving the parameter silently null.
+ * The deps array is rebuilt PER CALL, so the diagnostic must warn ONCE per
+ * tool+slot (a per-call warning would spam) and only AFTER the settle latch
+ * has flipped (during settling the proxy may still land). The same warn-once
+ * dedupe spans BOTH the inbound HTTP path and the claim-dispatch path.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { z } from "zod";
@@ -69,7 +69,7 @@ afterEach(() => {
 function unwiredWarnings(): string[] {
   return (warnSpy?.mock.calls ?? [])
     .map((call) => String(call[0]))
-    .filter((msg) => msg.includes("resolved but no proxy was injected"));
+    .filter((msg) => msg.includes("no proxy was injected"));
 }
 
 describe("unwired typed-slot warning (#1231)", () => {
@@ -133,5 +133,67 @@ describe("unwired typed-slot warning (#1231)", () => {
 
     expect(await execute({})).toBe("wired");
     expect(unwiredWarnings()).toHaveLength(0);
+  });
+
+  it("warns ONCE for an unwired slot on the claim-dispatch path", async () => {
+    const fastmcp = makeFastMCPStub();
+    const agent = new MeshAgent(fastmcp, {
+      name: "claim-agent",
+      httpPort: 0,
+    });
+    agent.addTool({
+      name: "task_tool",
+      task: true,
+      parameters: z.object({}),
+      dependencies: [{ capability: "missing_cap" }],
+      execute: async (_args: unknown, dep: unknown) =>
+        dep ? "wired" : "unwired",
+    });
+
+    // The claim-dispatch path is exercised via the registered ClaimHandler
+    // (one per task: true tool), not via FastMCP's execute().
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { handler } = (agent as any)._taskHandlers.get("task_tool");
+    // meshJobParamIndex is unset, so the dummy controller is never spliced
+    // into callArgs — the user execute() only sees (payload, dep).
+    for (let i = 0; i < 3; i++) {
+      expect(await handler({}, {} as never)).toBe("unwired");
+    }
+
+    const warnings = unwiredWarnings();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("missing_cap");
+    expect(warnings[0]).toContain("task_tool");
+    expect(warnings[0]).toContain("slot 0");
+  });
+
+  it("dedupes the unwired warning ACROSS the inbound and claim paths", async () => {
+    const fastmcp = makeFastMCPStub();
+    const agent = new MeshAgent(fastmcp, {
+      name: "both-paths-agent",
+      httpPort: 0,
+    });
+    agent.addTool({
+      name: "task_tool",
+      task: true,
+      parameters: z.object({}),
+      dependencies: [{ capability: "missing_cap" }],
+      execute: async (_args: unknown, dep: unknown) =>
+        dep ? "wired" : "unwired",
+    });
+
+    const execute = fastmcp.addTool.mock.calls[0][0].execute as (
+      args: unknown,
+    ) => Promise<string>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { handler } = (agent as any)._taskHandlers.get("task_tool");
+
+    // Exercise the same tool+slot via BOTH paths — the shared
+    // _unwiredSlotWarned Set must dedupe to a single warning total.
+    expect(await execute({})).toBe("unwired");
+    expect(await handler({}, {} as never)).toBe("unwired");
+    expect(await execute({})).toBe("unwired");
+
+    expect(unwiredWarnings()).toHaveLength(1);
   });
 });

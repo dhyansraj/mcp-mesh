@@ -48,7 +48,11 @@ import {
   spliceJobController,
 } from "./inbound-job-dispatch.js";
 import { MeshJobSubmitter } from "./mesh-job-submitter.js";
-import { getSettleState, type PendingSettleDep } from "./settle.js";
+import {
+  getSettleState,
+  type PendingSettleDep,
+  type SettleState,
+} from "./settle.js";
 import {
   ClaimDispatcher,
   stopDispatchers,
@@ -650,41 +654,11 @@ export class MeshAgent {
       // MeshJobSubmitter targeting that dep's capability. We bind the
       // submitter to the live registryUrl/agentId so it can submit
       // jobs without needing access to the agent instance.
-      const depsArray: (McpMeshTool | MeshJobSubmitter | null)[] = normalizedDeps.map(
-        (dep, depIndex) => {
-          if (depIndex === meshJobDepIndex) {
-            // Build the submitter lazily per call so we always pick
-            // up the current registryUrl (test harnesses sometimes
-            // mutate it between calls).
-            return new MeshJobSubmitter(
-              dep.capability,
-              this.agentId,
-              this.config.registryUrl,
-            );
-          }
-          const proxy =
-            this.resolvedDeps.get(`${toolName}:dep_${depIndex}`) ?? null;
-          // #1231: a typed dep slot that resolved at the registry but never
-          // got a proxy injected stays null silently. Warn ONCE per
-          // tool+slot (per-call would spam — the array is rebuilt every
-          // call). Settle-gated: while the agent is still settling the dep
-          // may yet resolve, so only warn once the latch has flipped.
-          if (proxy === null && settleState.isSettled()) {
-            const slotKey = `${toolName}:dep_${depIndex}`;
-            if (!_unwiredSlotWarned.has(slotKey)) {
-              _unwiredSlotWarned.add(slotKey);
-              console.warn(
-                `[mesh-tool] dependency '${dep.capability}' on '${toolName}' ` +
-                  `resolved but no proxy was injected into positional slot ` +
-                  `${depIndex} — the parameter stays null after settling. A ` +
-                  `registry match ('N/N deps resolved') reflects provider ` +
-                  `availability, not slot injection. Fix: ensure the provider ` +
-                  `for '${dep.capability}' is reachable.`,
-              );
-            }
-          }
-          return proxy;
-        },
+      const depsArray = this._buildDepSlots(
+        toolName,
+        normalizedDeps,
+        meshJobDepIndex,
+        settleState,
       );
       const injectedCount = depsArray.filter((d) => d !== null).length;
 
@@ -971,17 +945,11 @@ export class MeshAgent {
             await settleState.awaitPending(pendingSettle);
           }
         }
-        const liveDeps: (McpMeshTool | MeshJobSubmitter | null)[] = normalizedDeps.map(
-          (dep, depIndex) => {
-            if (depIndex === meshJobDepIndex) {
-              return new MeshJobSubmitter(
-                dep.capability,
-                this.agentId,
-                this.config.registryUrl,
-              );
-            }
-            return this.resolvedDeps.get(`${toolName}:dep_${depIndex}`) ?? null;
-          },
+        const liveDeps = this._buildDepSlots(
+          toolName,
+          normalizedDeps,
+          meshJobDepIndex,
+          settleState,
         );
         const callArgs = spliceJobController(
           payload,
@@ -1144,6 +1112,60 @@ export class MeshAgent {
       this._bearerIds.set(bearer, id);
     }
     return id;
+  }
+
+  /**
+   * Build the positional dependency-slot array for one tool call, shared by
+   * BOTH the inbound HTTP wrapper (wrappedExecute) and the claim-dispatch
+   * path (the ClaimHandler for task:true tools). Centralising this keeps the
+   * two slot-assembly sites identical:
+   *   - the MeshJob slot (meshJobDepIndex) → a freshly-bound MeshJobSubmitter
+   *   - every other slot → resolvedDeps.get(`${toolName}:dep_${index}`) ?? null
+   *
+   * #1231: a typed dep slot can resolve at the registry yet never receive an
+   * injected proxy, leaving the parameter null. Once the settle latch has
+   * flipped (during settling the proxy may still land), warn ONCE per
+   * tool+slot — the array is rebuilt per call, so a per-call warning would
+   * spam. The warn-once dedupe keys on `${toolName}:dep_${index}` via the
+   * module-level `_unwiredSlotWarned` Set, so a tool exercised via BOTH the
+   * inbound and claim paths warns at most once total.
+   */
+  private _buildDepSlots(
+    toolName: string,
+    normalizedDeps: NormalizedDependency[],
+    meshJobDepIndex: number | undefined,
+    settleState: SettleState,
+  ): (McpMeshTool | MeshJobSubmitter | null)[] {
+    return normalizedDeps.map((dep, depIndex) => {
+      if (depIndex === meshJobDepIndex) {
+        // Build the submitter lazily per call so we always pick up the
+        // current registryUrl (test harnesses sometimes mutate it between
+        // calls).
+        return new MeshJobSubmitter(
+          dep.capability,
+          this.agentId,
+          this.config.registryUrl,
+        );
+      }
+      const slotKey = `${toolName}:dep_${depIndex}`;
+      const proxy = this.resolvedDeps.get(slotKey) ?? null;
+      // #1231: a declared typed dep slot that is still null AFTER settling
+      // never received an injected proxy. Warn ONCE per tool+slot. Note this
+      // is a post-settle null — there is no per-slot "resolved" signal here,
+      // so the message must not claim registry resolution.
+      if (proxy === null && settleState.isSettled()) {
+        if (!_unwiredSlotWarned.has(slotKey)) {
+          _unwiredSlotWarned.add(slotKey);
+          console.warn(
+            `[mesh-tool] dependency '${dep.capability}' on '${toolName}' ` +
+              `is still null after settling — no proxy was injected into ` +
+              `positional slot ${depIndex}. Fix: ensure the provider for ` +
+              `'${dep.capability}' is registered and reachable.`,
+          );
+        }
+      }
+      return proxy;
+    });
   }
 
   private _getOrBuildA2AClient(config: A2AClientConfig): A2AClient {

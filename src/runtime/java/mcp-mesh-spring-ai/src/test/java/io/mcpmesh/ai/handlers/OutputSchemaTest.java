@@ -670,6 +670,56 @@ class OutputSchemaTest {
         }
 
         @Test
+        @DisplayName("makeStrict(true): required field whose non-null branch is a nested object is fully strictified after collapse")
+        @SuppressWarnings("unchecked")
+        void requiredNestedObjectBranchIsStrictifiedAfterCollapse() {
+            // `address` is required and nullable: anyOf:[{type:null}, {object...}].
+            // After collapsing the null branch, the inlined OBJECT must still flow
+            // through makeSchemaStrict so it gets additionalProperties:false and its
+            // own required expansion — not just be inlined and bypass strictification.
+            Map<String, Object> addressObject = new LinkedHashMap<>();
+            addressObject.put("type", "object");
+            addressObject.put("properties", new LinkedHashMap<>(Map.of(
+                "street", Map.of("type", "string"),
+                "city", Map.of("type", "string")
+            )));
+
+            Map<String, Object> address = new LinkedHashMap<>();
+            address.put("anyOf", List.of(
+                Map.of("type", "null"),
+                addressObject
+            ));
+
+            Map<String, Object> properties = new LinkedHashMap<>();
+            properties.put("address", address);
+
+            Map<String, Object> schema = new LinkedHashMap<>();
+            schema.put("type", "object");
+            schema.put("required", List.of("address"));
+            schema.put("properties", properties);
+
+            OutputSchema output = OutputSchema.fromSchema("Nested", schema);
+            Map<String, Object> strict = output.makeStrict(true);
+
+            Map<String, Object> props = (Map<String, Object>) strict.get("properties");
+            Map<String, Object> out = (Map<String, Object>) props.get("address");
+
+            assertFalse(out.containsKey("anyOf"),
+                "required address must have its anyOf null branch collapsed. Got: " + out);
+            assertEquals("object", out.get("type"),
+                "collapsed address must retain the nested object type. Got: " + out);
+            // The crux of the fix: the inlined object is fully strictified.
+            assertEquals(false, out.get("additionalProperties"),
+                "collapsed nested object must get additionalProperties:false (full strictify, "
+                    + "not bare inline). Got: " + out);
+            List<String> nestedRequired = (List<String>) out.get("required");
+            assertNotNull(nestedRequired,
+                "collapsed nested object must get its own required expansion. Got: " + out);
+            assertTrue(nestedRequired.contains("street") && nestedRequired.contains("city"),
+                "nested object's components must be expanded into required. Got: " + nestedRequired);
+        }
+
+        @Test
         @DisplayName("makeStrict(true): newly-required field also gets its null branch stripped")
         @SuppressWarnings("unchecked")
         void addAllRequiredAlsoStripsNullBranch() {
