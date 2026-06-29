@@ -42,12 +42,13 @@ import type {
   LlmAgent,
   LlmToolProxy,
   LlmOutputMode,
+  LlmMeta,
 } from "./types.js";
 import { MeshLlmAgent, createLlmToolProxy } from "./llm-agent.js";
 import { envMaxIterations } from "./llm-provider.js";
 import { debug } from "./debug.js";
 import { generateTraceId, generateSpanId, publishTraceSpan, matchesPropagateHeader } from "./tracing.js";
-import type { TraceContext } from "./tracing.js";
+import type { TraceContext, SpanData } from "./tracing.js";
 import { runWithTraceContext, runWithPropagatedHeaders } from "./proxy.js";
 
 /**
@@ -315,6 +316,12 @@ export function llm<
     let error: string | null = null;
     let resultType = "string";
 
+    // Issue #1228: LLM token usage from the agentic loop, captured after the
+    // user's execute() runs (which drives agent.run() via the llm callable).
+    // Read into a local so the consumer span below carries the loop totals —
+    // mirrors Python's set_llm_metadata contextvar feeding the consumer span.
+    let llmMeta: LlmMeta | null = null;
+
     try {
       // Run within trace context for propagation to downstream calls
       return await runWithTraceContext(traceContext, async () => {
@@ -354,6 +361,10 @@ export function llm<
             const result = await llmConfig.execute(cleanArgs, { llm: llmCallable as LlmAgent<TResponse extends ZodType ? z.infer<TResponse> : TReturns extends ZodType ? z.infer<TReturns> : string> });
             debug.llm(`Execute completed successfully`);
 
+            // Issue #1228: capture the agentic-loop token usage finalized by
+            // the last llm() call so the consumer span can carry it.
+            llmMeta = llmCallable.meta;
+
             // Convert result to string for MCP
             if (typeof result === "string") {
               return result;
@@ -374,6 +385,24 @@ export function llm<
       const endTime = Date.now() / 1000;
       const durationMs = (endTime - startTime) * 1000;
 
+      // Issue #1228: stamp the consumer span with the agentic-loop token usage
+      // (parity with Python's ExecutionTracer reading set_llm_metadata). Only
+      // set the llm_* fields when a real usage record exists — a tool whose
+      // execute() never calls the llm() callable leaves llmMeta null and the
+      // span carries no llm_* fields.
+      const llmFields: Pick<
+        SpanData,
+        "llmInputTokens" | "llmOutputTokens" | "llmTotalTokens" | "llmModel" | "llmProvider"
+      > = {};
+      if (llmMeta) {
+        const m = llmMeta as LlmMeta;
+        llmFields.llmInputTokens = m.inputTokens;
+        llmFields.llmOutputTokens = m.outputTokens;
+        llmFields.llmTotalTokens = m.totalTokens;
+        if (m.model) llmFields.llmModel = m.model;
+        if (m.provider) llmFields.llmProvider = m.provider;
+      }
+
       publishTraceSpan({
         traceId,
         spanId,
@@ -390,6 +419,7 @@ export function llm<
         dependencies: [],
         injectedDependencies: 0,
         meshPositions: [],
+        ...llmFields,
       }).catch(() => {
         // Silently ignore publish errors
       });
