@@ -1030,7 +1030,7 @@ func outputEnhancedJSON(output ListOutput) error {
 // row annotations, --all dimming, and the footer (issue #1195).
 func outputDockerComposeStyle(output ListOutput, headerView, view supersessionView, summary listDefaultSummary, showAll, verbose, noDeps, wide bool) error {
 	// Show registry status first
-	showRegistryStatus(output.Registry, headerView.total)
+	showRegistryStatus(output.Registry, headerView.total, len(headerView.blocking))
 
 	if len(output.Agents) == 0 {
 		fmt.Println("No agents found")
@@ -1087,8 +1087,11 @@ func outputDockerComposeStyle(output ListOutput, headerView, view supersessionVi
 	return nil
 }
 
-// showRegistryStatus displays registry status with proper formatting
-func showRegistryStatus(registry RegistryStatus, supersededCount int) {
+// showRegistryStatus displays registry status with proper formatting.
+// supersededCount and blockingCount come from the headerView computed over the
+// full agent set so the count breakdown can route only the genuinely-blocking
+// down instances to the red "unhealthy" alarm (issue #1198).
+func showRegistryStatus(registry RegistryStatus, supersededCount, blockingCount int) {
 	statusColor := getStatusColor(registry.Status)
 	fmt.Printf("Registry: %s%s%s", statusColor, registry.Status, colorReset)
 
@@ -1098,7 +1101,7 @@ func showRegistryStatus(registry RegistryStatus, supersededCount int) {
 
 	if registry.Status == "running" {
 		// Show healthy/unhealthy/superseded breakdown (issue #1195)
-		fmt.Printf(" - %s", formatRegistryAgentCounts(registry.HealthyCount, registry.UnhealthyCount, supersededCount))
+		fmt.Printf(" - %s", formatRegistryAgentCounts(registry.HealthyCount, registry.UnhealthyCount, supersededCount, blockingCount))
 	}
 
 	if registry.Uptime != "" {
@@ -1110,20 +1113,38 @@ func showRegistryStatus(registry RegistryStatus, supersededCount int) {
 }
 
 // formatRegistryAgentCounts renders the agent count breakdown for the registry
-// status line. Superseded instances are split out of the unhealthy count and
-// rendered dim so they don't read as alarming; the remaining (genuinely
-// unhealthy) count is the alarm surface and renders red (issue #1195).
-func formatRegistryAgentCounts(healthy, unhealthy, superseded int) string {
+// status line. The down (unhealthy) total is split three ways so only the
+// genuinely-alarming portion reads red (issues #1195, #1198):
+//
+//   - superseded — a healthy newer instance of the same name exists; rendered
+//     gray since it blocks nothing.
+//   - blocking — down AND declares a capability some live agent depends on but
+//     hasn't resolved; this is the real alarm and renders red as "unhealthy".
+//   - inactive — orphaned non-blocking down instances (no healthy replacement,
+//     yet blocking nothing); rendered gray as "inactive" because they're just
+//     stale instances pending the retention purge, not a live problem.
+//
+// blocking is the count of genuinely-blocking down instances (len of the
+// header supersession view's blocking set); the remaining down instances are
+// the inactive disclosure.
+func formatRegistryAgentCounts(healthy, unhealthy, superseded, blocking int) string {
 	// The counts come from two separate registry fetches; clamp so a
-	// momentary skew can't produce a negative unhealthy count.
+	// momentary skew can't produce a negative count.
 	if superseded > unhealthy {
 		superseded = unhealthy
 	}
 	genuine := unhealthy - superseded
+	if blocking > genuine {
+		blocking = genuine
+	}
+	inactive := genuine - blocking
 
 	s := fmt.Sprintf("%s%d healthy%s", colorGreen, healthy, colorReset)
-	if genuine > 0 {
-		s += fmt.Sprintf(", %s%d unhealthy%s", colorRed, genuine, colorReset)
+	if blocking > 0 {
+		s += fmt.Sprintf(", %s%d unhealthy%s", colorRed, blocking, colorReset)
+	}
+	if inactive > 0 {
+		s += fmt.Sprintf(", %s%d inactive%s", colorGray, inactive, colorReset)
 	}
 	if superseded > 0 {
 		s += fmt.Sprintf(", %s%d superseded%s", colorGray, superseded, colorReset)
@@ -1141,16 +1162,20 @@ func formatSupersededAnnotation(count int) string {
 }
 
 // formatListFooter renders the summary line printed after the default table,
-// e.g. "3 agents (3 healthy) - 1 agent down (use --all) - 2 superseded hidden".
+// e.g. "3 agents (3 healthy) - 1 inactive instance hidden (use --all) - 2 superseded hidden".
 // displayed and healthy count distinct declared agent names among the rendered
-// rows. Down agents hidden from the table are reported namelessly in red; the
-// superseded clause is gray, and "(use --all)" rides on whichever hidden
-// clause appears first. Clauses are omitted when zero.
+// rows. The hidden down agents counted here are orphaned non-blocking instances
+// (a genuinely blocking down instance is promoted to a visible red row by
+// collapseDefaultView and never reaches this count), so they block nothing and
+// are disclosed in neutral gray as "inactive" pending retention purge rather
+// than as a red "agent down" alarm. The superseded clause is likewise gray, and
+// "(use --all)" rides on whichever hidden clause appears first. Clauses are
+// omitted when zero.
 func formatListFooter(displayed, healthy int, summary listDefaultSummary) string {
 	footer := fmt.Sprintf("%d agent%s (%d healthy)", displayed, pluralS(displayed), healthy)
 	if summary.hiddenDownAgents > 0 {
-		footer += fmt.Sprintf(" - %s%d agent%s down (use --all)%s",
-			colorRed, summary.hiddenDownAgents, pluralS(summary.hiddenDownAgents), colorReset)
+		footer += fmt.Sprintf(" - %s%d inactive instance%s hidden (use --all)%s",
+			colorGray, summary.hiddenDownAgents, pluralS(summary.hiddenDownAgents), colorReset)
 	}
 	if summary.hiddenSuperseded > 0 {
 		clause := fmt.Sprintf("%d superseded hidden", summary.hiddenSuperseded)
