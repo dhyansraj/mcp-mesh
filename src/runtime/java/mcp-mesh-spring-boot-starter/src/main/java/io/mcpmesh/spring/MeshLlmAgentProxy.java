@@ -417,6 +417,13 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         // Metadata from last call
         private GenerationMeta lastMeta = null;
 
+        // Accumulated LLM token usage across agentic-loop iterations (issue #1227).
+        // Read by generate() to populate lastMeta and published to the consumer
+        // span via TraceContext.setLlmMetadata.
+        private long accumulatedInputTokens = 0;
+        private long accumulatedOutputTokens = 0;
+        private String effectiveModel = null;
+
         // --- Messages ---
 
         @Override
@@ -545,8 +552,13 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
             try {
                 String result = executeAgenticLoop(provider);
                 long latency = System.currentTimeMillis() - startTime;
-                // Update metadata (tokens would come from response if provider returns them)
-                this.lastMeta = new GenerationMeta(0, 0, 0, latency, maxIterations, provider.provider());
+                // Update metadata with the token usage accumulated across the
+                // agentic loop (issue #1227). effectiveModel falls back to the
+                // provider name when the response carried no model field.
+                int in = (int) accumulatedInputTokens;
+                int out = (int) accumulatedOutputTokens;
+                String model = effectiveModel != null ? effectiveModel : provider.provider();
+                this.lastMeta = new GenerationMeta(in, out, in + out, latency, maxIterations, model);
                 return result;
             } finally {
                 clearInvocationContext();
@@ -778,7 +790,12 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
             log.info("Built {} tool definitions for LLM (availableTools={})",
                 toolDefs.size(), availableTools.size());
 
-            // 4. Execute agentic loop
+            // 4. Execute agentic loop. Reset per-call accumulators so a reused
+            // builder doesn't carry stale token totals (issue #1227).
+            accumulatedInputTokens = 0;
+            accumulatedOutputTokens = 0;
+            effectiveModel = null;
+            try {
             int iteration = 0;
             while (iteration < maxIterations) {
                 iteration++;
@@ -818,6 +835,11 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                     log.error("LLM call failed: {}", e.getMessage());
                     throw new RuntimeException("LLM call failed", e);
                 }
+
+                // Accumulate LLM token usage from this iteration's response
+                // (issue #1227). Null/missing-safe: a response without
+                // _mesh_usage contributes nothing.
+                accumulateUsage(response);
 
                 // Check for tool calls
                 List<Map<String, Object>> toolCalls = extractToolCalls(response);
@@ -867,6 +889,35 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
 
             log.warn("Max iterations ({}) reached for LLM agent {}", maxIterations, functionId);
             return extractLastAssistantContent(llmMessages);
+            } finally {
+                // Publish accumulated token usage to the per-thread sink so
+                // ExecutionTracer.endSpan can stamp the CONSUMER span (parity
+                // with Python's set_llm_metadata → end_execution). Only emit
+                // when usage was actually reported, avoiding zero-spam for
+                // providers/tools that report none.
+                if (accumulatedInputTokens > 0 || accumulatedOutputTokens > 0) {
+                    String providerName = provider.provider() != null ? provider.provider() : "";
+                    TraceContext.setLlmMetadata(providerName, effectiveModel,
+                        accumulatedInputTokens, accumulatedOutputTokens);
+                }
+            }
+        }
+
+        /**
+         * Accumulate {@code _mesh_usage} token counts from a provider response into the
+         * per-call running totals (issue #1227). Null/missing-safe.
+         */
+        private void accumulateUsage(Map<String, Object> response) {
+            Map<String, Object> usage = extractUsage(response);
+            if (usage == null) {
+                return;
+            }
+            accumulatedInputTokens += toTokenCount(usage.get("prompt_tokens"));
+            accumulatedOutputTokens += toTokenCount(usage.get("completion_tokens"));
+            Object model = usage.get("model");
+            if (model instanceof String s && !s.isBlank()) {
+                effectiveModel = s;
+            }
         }
 
         private Map<String, Object> buildToolResultMessage(ParsedToolCall parsed) {
@@ -1127,6 +1178,59 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         }
 
         return List.of();
+    }
+
+    /**
+     * Extract the provider's {@code _mesh_usage} token-usage object from a response.
+     *
+     * <p>The object — {@code {model, prompt_tokens, completion_tokens}} — may appear at
+     * the response top level OR inside the nested {@code content[0].text} JSON envelope
+     * that {@link #extractContent}/{@link #extractToolCalls} already unwrap. Mirrors that
+     * same unwrap path. Returns {@code null} when no usage is present (non-LLM tools or
+     * providers that don't report usage) so callers contribute nothing.
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> extractUsage(Map<String, Object> response) {
+        Object topLevel = response.get("_mesh_usage");
+        if (topLevel instanceof Map<?, ?> m) {
+            return (Map<String, Object>) m;
+        }
+
+        Object content = response.get("content");
+        if (content instanceof List<?> contentList && !contentList.isEmpty()) {
+            Object first = contentList.get(0);
+            if (first instanceof Map<?, ?> block) {
+                Object text = block.get("text");
+                if (text instanceof String textStr && textStr.trim().startsWith("{")) {
+                    try {
+                        Map<String, Object> parsed = objectMapper.readValue(textStr, Map.class);
+                        Object nested = parsed.get("_mesh_usage");
+                        if (nested instanceof Map<?, ?> nm) {
+                            return (Map<String, Object>) nm;
+                        }
+                    } catch (JacksonException e) {
+                        log.trace("Failed to parse nested JSON for _mesh_usage: {}", e.getMessage());
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /** Coerce a token-count field (Number or numeric String) to a long; 0 if missing/unparseable. */
+    private static long toTokenCount(Object value) {
+        if (value instanceof Number n) {
+            return n.longValue();
+        }
+        if (value instanceof String s && !s.isBlank()) {
+            try {
+                return Long.parseLong(s.trim());
+            } catch (NumberFormatException ignored) {
+                return 0L;
+            }
+        }
+        return 0L;
     }
 
     private String extractContent(Map<String, Object> response) {

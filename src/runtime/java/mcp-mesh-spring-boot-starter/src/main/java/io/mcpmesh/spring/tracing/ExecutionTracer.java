@@ -143,6 +143,18 @@ public class ExecutionTracer {
             traceData.putAll(agentContext.getContext());
         }
 
+        // Stamp accumulated LLM token-usage onto THIS (consumer) span. The
+        // MeshLlmAgentProxy agentic loop publishes totals into a per-thread sink
+        // (mirrors Python's _llm_metadata contextvar). Reuse withLlmMeta so the
+        // wire keys (llm_input_tokens/llm_output_tokens/llm_total_tokens/
+        // llm_model/llm_provider) match the dashboard contract exactly.
+        TraceContext.LlmMetadata llmMeta = TraceContext.getLlmMetadata();
+        if (llmMeta != null) {
+            scope.withLlmMeta(llmMeta.provider(), llmMeta.model(),
+                llmMeta.inputTokens(), llmMeta.outputTokens());
+            TraceContext.clearLlmMetadata();
+        }
+
         // Add custom metadata
         if (scope.getMetadata() != null) {
             traceData.putAll(scope.getMetadata());
