@@ -4,66 +4,16 @@
 
 ## Overview
 
-MCP Mesh provides first-class LLM support for Java/Spring Boot agents through the `@MeshLlm` annotation. Two modes are available:
-
-| Mode              | Annotation                          | API Key Location | Use Case                         |
-| ----------------- | ----------------------------------- | ---------------- | -------------------------------- |
-| **Direct**        | `@MeshLlm(provider = "claude")`     | Local agent      | Single agent, simpler setup      |
-| **Mesh Delegate** | `@MeshLlm(providerSelector = @...)` | Provider agent   | Shared LLM, centralized key mgmt |
+MCP Mesh provides first-class LLM support for Java/Spring Boot agents through the `@MeshLlm` annotation. Every LLM call is routed to a provider agent in the mesh — the consumer never holds a vendor API key. Use `providerSelector` to pick which provider serves the request.
 
 ## Architecture
-
-### Direct Mode
-
-```
-User -> Agent -> Spring AI -> Claude API (direct)
-                 (local API key)
-```
-
-### Mesh Delegation Mode
 
 ```
 User -> Agent -> Mesh -> LLM Provider Agent -> Claude API
                          (API key here only)
 ```
 
-## Direct LLM (@MeshLlm with provider)
-
-Use `provider = "claude"` or `provider = "openai"` for direct API calls. Requires the API key set locally.
-
-```java
-import io.mcpmesh.*;
-import io.mcpmesh.types.MeshLlmAgent;
-
-@MeshLlm(
-    provider = "claude",
-    maxIterations = 1,
-    systemPrompt = "You are a helpful, friendly assistant. Keep responses concise.",
-    maxTokens = 1024,
-    temperature = 0.7
-)
-@MeshTool(
-    capability = "chat",
-    description = "Interactive chat with Claude",
-    tags = {"chat", "llm", "java", "direct"}
-)
-public ChatResponse chat(
-    @Param(value = "message", description = "User message") String message,
-    MeshLlmAgent llm
-) {
-    if (llm != null && llm.isAvailable()) {
-        String response = llm.generate(message);
-        return new ChatResponse(message, response, "direct:claude");
-    }
-    return new ChatResponse(message, "LLM unavailable", "fallback");
-}
-```
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-# or
-export OPENAI_API_KEY=sk-...
-```
+The API key lives only on the provider agent. Consumers select a provider by capability and tags; the mesh resolves the binding and forwards the call.
 
 ## Mesh Delegation (@MeshLlm with providerSelector)
 
@@ -97,6 +47,46 @@ public AnalysisResult analyze(
         .generate(AnalysisResult.class);
 }
 ```
+
+## Model Override
+
+Override the provider's default model per consumer tool with `model`:
+
+```java
+@MeshLlm(
+    providerSelector = @Selector(capability = "llm", tags = {"+claude"}),
+    model = "anthropic/claude-haiku"   // override provider default for this tool
+)
+@MeshTool(capability = "fast-assist")
+public String fastAssist(@Param("message") String message, MeshLlmAgent llm) {
+    return llm.request().user(message).generate();
+}
+```
+
+The override is honored when its vendor matches the provider's vendor. A vendor mismatch (e.g. requesting an OpenAI model from a Claude provider) logs a warning and falls back to the provider default. When `model` is unset, the provider uses the model declared on its own `@MeshLlmProvider`.
+
+A per-call override via the proxy escape hatch (`request().modelParams(Map.of("model", "..."))`) takes precedence over the annotation value.
+
+## Model Tuning
+
+Set `maxTokens`/`temperature` on `@MeshLlm`, or use the fluent builder (`maxTokens()`, `temperature()`, `topP()`, `stop()`) for per-call values. These serialize into the `model_params` wire shape and the provider applies them to the vendor call:
+
+```java
+@MeshLlm(
+    providerSelector = @Selector(capability = "llm", tags = {"+claude"}),
+    maxTokens = 4096,
+    temperature = 0.3
+)
+@MeshTool(capability = "summarize")
+public String summarize(@Param("text") String text, MeshLlmAgent llm) {
+    return llm.request()
+        .user(text)
+        .topP(0.9)
+        .generate();
+}
+```
+
+When a value is unset, the provider's own default applies — nothing is sent on the wire for that key.
 
 ## Fluent Builder API
 
