@@ -1,6 +1,40 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.5.0...HEAD)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.6.0...HEAD)
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.5.0...v2.6.0)
+
+## v2.6.0 (2026-06-29)
+
+Capability-aware version resolution, and Java reaches feature parity with Python on the MeshJob and `@mesh.llm` contracts.
+
+v2.5 hardened the platform; v2.6 sharpens two contracts. The registry now resolves a dependency to the **highest version** that satisfies the consumer's constraint — turning the `version` field from an undefined tiebreaker into a real, semver-aware selector. Alongside it, the Java runtime closes its remaining gaps with Python: a `task=true` MeshJob producer can now declare cross-agent dependencies, and `@mesh.llm` consumers gain per-tool model override with full `model_params` passthrough to the vendor call.
+
+### 🎯 Highest-satisfying-version resolution (#1219)
+
+Dependency and `@mesh.llm` provider resolution previously picked a winner by tag-match score only; the `version` constraint was applied as a hard filter but never influenced selection, so ties fell to registration order — effectively undefined. Resolution now selects deterministically by **tag score, then highest semver version, then agent id**: among providers that match capability and tags, the newest satisfying version wins.
+
+- **`version` is a real semver constraint** (Masterminds/semver). A bare `"4.6.0"` is **exact** — consistent with how `capability` and `tags` match — while `">=4.6.0"`, `"^4.6.0"` (newest within the major), and `"~4.6.0"` (newest within the minor) opt into bounded floating. An omitted version matches any and takes the highest available.
+- **Both resolution paths** — regular `@mesh.tool` dependencies and the `@mesh.llm` provider selector — share one comparator in the registry. No protocol or registration change; resolution is the shared control plane across all runtimes.
+- **Upgrade note:** deployments running multiple providers of the same capability and tags at different versions that (unknowingly) relied on registration-order ties now resolve deterministically to the highest version. This is strictly more predictable; pin an exact `version` on the consumer to hold a specific provider.
+
+### ☕ Java MeshJob + dependency-injection parity (#1221)
+
+Java's MeshJob producer claim path was a thin reflection invoker that diverged from Python and TypeScript, whose claim path runs the full DI-wrapped handler. Three related gaps are closed so a Java agent behaves like its Python equivalent:
+
+- **`task=true` producers can now declare `McpMeshTool`/`MeshLlmAgent` dependencies.** The claim path delegates argument-building to the resolved tool wrapper, so dependencies, LLM agents, A2A bindings, and settle-grace are injected on the claim path exactly as on the inbound path; the startup guard that rejected this combination is removed. Cancellation still aborts the injected proxy's in-flight outbound calls.
+- **The consumer `MeshJobSubmitter`** is now bound off the declared dependency selector, so a remote `task=true` capability mixed with other dependencies resolves a submitter instead of silently leaving the slot null.
+- **`@MeshDependsOn`-injected `@Service`/`@Component` beans** receive the same bounded settle-grace as the inbound path — a bean that calls its injected proxy during startup waits for resolution instead of throwing on a cold start.
+
+### 🎛️ Java `@mesh.llm` model control (#1222)
+
+The Java `@mesh.llm` surface reaches parity with Python on model selection and tuning:
+
+- **Per-tool / per-call model override** — `@MeshLlm(model = "...")` overrides the provider's default model, carried via `model_params`. The provider honors it only when the vendor matches its own (warn and fall back otherwise); a per-call override wins over the annotation.
+- **`model_params` now reach the vendor call** — `max_tokens`, `temperature`, `top_p`, and the model override are applied to the per-vendor Spring AI `ChatOptions` across the Anthropic, OpenAI, and Gemini handlers (Gemini maps `max_tokens` to `maxOutputTokens`), on the tools, structured-output, retry, and plain-text paths. The consumer previously put these on the wire but the provider dropped them.
+- The v2-removed direct-LLM mode (a local API key on `@MeshLlm`) is fully retired from the Java docs; thinking/reasoning configuration continues to flow through the `model_params` escape hatch.
+
+> **Streaming production remains a known gap on the Java runtime** (#1223): a Java agent can consume a stream but cannot yet *produce* one — there is no streaming `@MeshTool` or `@MeshLlmProvider` — because the stateless MCP transport cannot emit progress notifications. Tracked for a future release.
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.4.0...v2.5.0)
 

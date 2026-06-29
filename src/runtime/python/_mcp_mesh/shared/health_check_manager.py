@@ -79,7 +79,7 @@ async def get_health_status_with_cache(
         HealthStatus from cache or fresh check
     """
     cache_key = f"health:{agent_id}"
-    current_time = time.time()
+    current_time = time.monotonic()
 
     # Check cache
     if cache_key in _health_cache:

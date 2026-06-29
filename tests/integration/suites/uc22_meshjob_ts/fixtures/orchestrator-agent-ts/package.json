@@ -7,7 +7,7 @@
     "start": "tsx src/index.ts"
   },
   "dependencies": {
-    "@mcpmesh/sdk": "^2.4.0",
+    "@mcpmesh/sdk": "^2.6.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {

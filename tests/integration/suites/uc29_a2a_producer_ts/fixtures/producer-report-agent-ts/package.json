@@ -8,7 +8,7 @@
     "start": "tsx src/index.ts"
   },
   "dependencies": {
-    "@mcpmesh/sdk": "^2.4.0",
+    "@mcpmesh/sdk": "^2.6.0",
     "express": "^4.21.2"
   },
   "devDependencies": {
