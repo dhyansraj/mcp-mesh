@@ -68,6 +68,15 @@ public interface LlmProviderHandler {
     /** Key under which a consumer-supplied per-tool/per-call model override travels (e.g. "anthropic/claude-..."). */
     String OPTION_MODEL = "model";
 
+    /**
+     * Internal options key carrying the provider's DECLARED model (vendor-stripped,
+     * e.g. {@code "gpt-4o"}) from {@code @MeshLlmProvider(model=...)}. Underscore-prefixed
+     * so it cannot collide with a real {@code model_params} key. Threaded by
+     * {@code MeshLlmProviderProcessor} so handlers can set the model on EVERY request —
+     * without it, requests fall through to Spring AI's vendor default model.
+     */
+    String OPTION_DECLARED_MODEL = "__declared_model__";
+
     /** Key under which a consumer-supplied {@code max_tokens} travels in the options map. */
     String OPTION_MAX_TOKENS = "max_tokens";
 
@@ -444,6 +453,37 @@ public interface LlmProviderHandler {
             "Ignoring cross-vendor model override '{}' (declared vendor '{}' does not match provider vendor '{}'); "
             + "falling back to the provider's default model.", value, declaredVendor, expectedVendor);
         return null;
+    }
+
+    /**
+     * Read the provider's declared model from the options map.
+     *
+     * @param options the generation options (may be null)
+     * @return the declared model (vendor-stripped, e.g. "gpt-4o"), or {@code null} if absent
+     */
+    static String declaredModelOption(Map<String, Object> options) {
+        if (options == null) {
+            return null;
+        }
+        Object v = options.get(OPTION_DECLARED_MODEL);
+        return v instanceof String s && !s.isBlank() ? s : null;
+    }
+
+    /**
+     * Resolve the effective model to set on the request: a vendor-matched per-call
+     * {@code model} override wins; otherwise the provider's declared model.
+     *
+     * <p>This is the single resolution point used by handlers to set the model on
+     * EVERY request so requests never fall through to Spring AI's vendor default.
+     *
+     * @param options        the generation options (may be null)
+     * @param expectedVendor this handler's vendor (e.g. "openai")
+     * @param aliases        accepted vendor aliases (e.g. {"gpt"}); may be null
+     * @return the bare model name to apply, or {@code null} if neither is available
+     */
+    static String effectiveModel(Map<String, Object> options, String expectedVendor, String[] aliases) {
+        String override = resolveModelOverride(options, expectedVendor, aliases);
+        return override != null ? override : declaredModelOption(options);
     }
 
     /**

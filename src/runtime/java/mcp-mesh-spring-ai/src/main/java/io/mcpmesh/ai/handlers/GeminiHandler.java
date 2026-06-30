@@ -113,14 +113,14 @@ public class GeminiHandler implements LlmProviderHandler {
         log.debug("GeminiHandler: Processing {} messages", messages.size());
 
         List<Message> springMessages = convertMessages(messages);
-        // Plain-text generation: apply consumer-supplied model_params
-        // (max_tokens→maxOutputTokens/temperature/top_p/vendor-matched model) when
-        // present. buildModelParamOptions branches Vertex vs GenAI to match the
-        // underlying chat model and returns null when no params are present.
+        // Plain-text generation: always build a vendor-correct Gemini options object
+        // so the effective model (declared model, or a vendor-matched per-call
+        // override) is set on the request — without it the request falls through to
+        // Spring AI's default Gemini model. Consumer-supplied model_params
+        // (max_tokens→maxOutputTokens/temperature/top_p) are applied here too.
+        // buildModelParamOptions branches Vertex vs GenAI to match the chat model.
         ChatOptions paramOptions = buildModelParamOptions(model, options);
-        Prompt prompt = paramOptions != null
-            ? new Prompt(springMessages, paramOptions)
-            : new Prompt(springMessages);
+        Prompt prompt = new Prompt(springMessages, paramOptions);
         ChatResponse response = model.call(prompt);
 
         String content = response.getResult() != null && response.getResult().getOutput() != null
@@ -233,15 +233,12 @@ public class GeminiHandler implements LlmProviderHandler {
         // Don't use applyResponseFormat - Spring AI has issues with Gemini responseSchema
         // Structured output is handled via prompt-based hints in formatSystemPrompt()
 
-        // Apply consumer-supplied model_params (max_tokens/temperature/top_p/model)
-        // onto a vendor-correct Gemini options object when present. The concrete
-        // options class must match the underlying chat model (see buildModelParamOptions).
-        if (LlmProviderHandler.hasAnyModelParam(options)) {
-            ChatOptions paramOptions = buildModelParamOptions(model, options);
-            if (paramOptions != null) {
-                requestSpec.options(paramOptions);
-            }
-        }
+        // Always attach a vendor-correct Gemini options object so the effective
+        // model (declared model or a vendor-matched per-call override) is set on
+        // EVERY request, plus any consumer-supplied model_params (max_tokens/
+        // temperature/top_p). The concrete options class must match the underlying
+        // chat model (see buildModelParamOptions).
+        requestSpec.options(buildModelParamOptions(model, options));
 
         // Execute the request
         ChatResponse chatResponse = requestSpec.call().chatResponse();
@@ -398,17 +395,17 @@ public class GeminiHandler implements LlmProviderHandler {
     }
 
     /**
-     * Build a vendor-correct Gemini options object carrying ONLY the
+     * Build a vendor-correct Gemini options object carrying the effective model
+     * (declared model or a vendor-matched per-call override) and any
      * consumer-supplied {@code model_params} (no tool callbacks) for the
      * auto-execute (ChatClient) path, where tools are attached via the request
      * spec rather than the options object.
      *
-     * @return the options object, or {@code null} if no params are present
+     * <p>Always returns a non-null options object so the effective model is set on
+     * EVERY request — without it the request falls through to Spring AI's default
+     * Gemini model.
      */
     private ChatOptions buildModelParamOptions(ChatModel chatModel, Map<String, Object> options) {
-        if (!LlmProviderHandler.hasAnyModelParam(options)) {
-            return null;
-        }
         if (VERTEX_CHAT_MODEL_CLASS != null && VERTEX_CHAT_MODEL_CLASS.isInstance(chatModel)) {
             VertexAiGeminiChatOptions.Builder builder = VertexAiGeminiChatOptions.builder();
             applyVertexModelParams(builder, options);
@@ -438,10 +435,13 @@ public class GeminiHandler implements LlmProviderHandler {
         if (topP != null) {
             builder.topP(topP);
         }
-        String modelOverride = LlmProviderHandler.resolveModelOverride(options, getVendor(), MODEL_OVERRIDE_ALIASES);
-        if (modelOverride != null) {
-            builder.model(modelOverride);
-            log.debug("GeminiHandler: applied model override '{}'", modelOverride);
+        // Set the effective model on EVERY request: a vendor-matched per-call
+        // override wins, else the provider's declared model. Without this the
+        // request falls through to Spring AI's default Gemini model.
+        String eff = LlmProviderHandler.effectiveModel(options, getVendor(), MODEL_OVERRIDE_ALIASES);
+        if (eff != null) {
+            builder.model(eff);
+            log.debug("GeminiHandler: applied model '{}'", eff);
         }
     }
 
@@ -480,10 +480,11 @@ public class GeminiHandler implements LlmProviderHandler {
         if (topP != null) {
             builder.topP(topP);
         }
-        String modelOverride = LlmProviderHandler.resolveModelOverride(options, getVendor(), MODEL_OVERRIDE_ALIASES);
-        if (modelOverride != null) {
-            builder.model(modelOverride);
-            log.debug("GeminiHandler (vertex): applied model override '{}'", modelOverride);
+        // Set the effective model on EVERY request (see applyGoogleGenAiModelParams).
+        String eff = LlmProviderHandler.effectiveModel(options, getVendor(), MODEL_OVERRIDE_ALIASES);
+        if (eff != null) {
+            builder.model(eff);
+            log.debug("GeminiHandler (vertex): applied model '{}'", eff);
         }
     }
 
