@@ -45,6 +45,7 @@ from ._native_client_helpers import (
     make_is_available,
     reset_unsupported_kwargs_dedupe,
     resolve_request_timeout,
+    restricts_sampling_params,
     warn_unsupported_kwarg_once,
 )
 
@@ -480,6 +481,13 @@ def _build_create_kwargs(
 
     create_kwargs: dict[str, Any] = {"model": _strip_prefix(model)}
 
+    # gpt-5 (non-chat) and o-series reasoning models reject any explicit
+    # ``temperature``/``top_p`` (HTTP 400) — only the default is accepted.
+    # Omit those two params for the restricted models (everything else,
+    # including ``max_completion_tokens``, is forwarded normally). Soft-fail
+    # with a WARN per omitted param rather than letting the request 400.
+    restricted = restricts_sampling_params(model)
+
     for key in _OPENAI_PASSTHROUGH_KWARGS:
         value = request_params.get(key)
         # Drop None values — OpenAI rejects ``max_tokens=None`` etc., and
@@ -487,6 +495,16 @@ def _build_create_kwargs(
         # callers expect. (``request_params.get`` already returns None for
         # missing keys, so the absence check collapses into the value check.)
         if value is None:
+            continue
+        if restricted and key in ("temperature", "top_p"):
+            logger.warning(
+                "OpenAI model %s rejects %s; omitting %s=%s "
+                "(only the default is supported)",
+                model,
+                key,
+                key,
+                value,
+            )
             continue
         create_kwargs[key] = value
 

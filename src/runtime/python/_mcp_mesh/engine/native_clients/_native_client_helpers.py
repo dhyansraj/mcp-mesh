@@ -59,6 +59,33 @@ def reset_unsupported_kwargs_dedupe(dedupe_set: set[str]) -> None:
     dedupe_set.clear()
 
 
+def restricts_sampling_params(model: str | None) -> bool:
+    """Whether an OpenAI model restricts ``temperature``/``top_p`` to their
+    default value (rejecting any explicit setting with HTTP 400).
+
+    OpenAI o-series reasoning models (o1/o3/o4) and the gpt-5 family (except
+    gpt-5-chat) accept ONLY the default sampling params. Verified against the
+    live API:
+
+      * REJECT: gpt-5, gpt-5-mini, gpt-5-nano, o1, o3-mini, o4-mini
+      * ACCEPT: gpt-4o, gpt-4.1, gpt-5-chat-latest
+
+    Accepts a bare or ``vendor/``-qualified model string (e.g.
+    ``openai/o3-mini``). Returns ``True`` when ``temperature``/``top_p`` should
+    be omitted. Mirrors the Java ``OpenAiHandler.restrictsSamplingParams``.
+    """
+    if not model:
+        return False
+    m = model.lower()
+    if "/" in m:
+        m = m.split("/", 1)[1]  # strip vendor prefix e.g. "openai/o3-mini"
+    if m in ("o1", "o3", "o4") or m.startswith(("o1-", "o3-", "o4-")):
+        return True
+    if m.startswith("gpt-5") and not m.startswith("gpt-5-chat"):
+        return True
+    return False
+
+
 def resolve_request_timeout(
     request_params: dict[str, Any],
     *,
