@@ -328,23 +328,23 @@ public class AnthropicHandler implements LlmProviderHandler {
         // a vendor-matched per-call override) is set on EVERY request. output_format
         // is added when an outputSchema is present; consumer-supplied model_params are
         // applied too.
-        try {
-            AnthropicChatOptions.Builder optionsBuilder = AnthropicChatOptions.builder();
-            if (outputSchema != null) {
+        AnthropicChatOptions.Builder optionsBuilder = AnthropicChatOptions.builder();
+        if (outputSchema != null) {
+            // Isolate ONLY the schema serialization: a schema failure must not
+            // prevent applyModelParams/options(...) from running, otherwise the
+            // declared model is dropped and the request falls back to Spring AI's default.
+            try {
                 Map<String, Object> sanitizedSchema = outputSchema.sanitize();
                 String schemaJson = TOOL_CALLBACK_MAPPER.writeValueAsString(sanitizedSchema);
                 optionsBuilder.outputSchema(schemaJson);
-            }
-            applyModelParams(optionsBuilder, options);
-
-            requestSpec.options(optionsBuilder.build());
-            if (outputSchema != null) {
                 log.debug("Applied Anthropic output_format with schema: {}", outputSchema.name());
+            } catch (Exception e) {
+                log.warn("Failed to apply Anthropic output_schema for {}: {}, proceeding without it",
+                    outputSchema.name(), e.getMessage());
             }
-        } catch (Exception e) {
-            log.warn("Failed to apply Anthropic options (schema={}): {}",
-                outputSchema != null ? outputSchema.name() : "none", e.getMessage());
         }
+        applyModelParams(optionsBuilder, options);
+        requestSpec.options(optionsBuilder.build());
 
         // Execute the request — if outputFormat was applied and the API rejects it,
         // retry with HINT-mode instructions instead of native output_format

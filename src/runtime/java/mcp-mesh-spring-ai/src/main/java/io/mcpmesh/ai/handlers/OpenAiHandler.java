@@ -262,9 +262,12 @@ public class OpenAiHandler implements LlmProviderHandler {
         // vendor-matched per-call override) is set on EVERY request. response_format
         // is added when an outputSchema is present (like Python); consumer-supplied
         // model_params are applied with sampling-param gating for restricted models.
-        try {
-            OpenAiChatOptions.Builder optionsBuilder = OpenAiChatOptions.builder();
-            if (outputSchema != null) {
+        OpenAiChatOptions.Builder optionsBuilder = OpenAiChatOptions.builder();
+        if (outputSchema != null) {
+            // Isolate ONLY the response_format construction: a schema failure must
+            // not prevent applyModelParams/options(...) from running, otherwise the
+            // declared model is dropped and the request falls back to Spring AI's default.
+            try {
                 // Make schema strict (add additionalProperties: false, all properties required)
                 Map<String, Object> strictSchema = outputSchema.makeStrict(true);
 
@@ -277,17 +280,14 @@ public class OpenAiHandler implements LlmProviderHandler {
                         .build())
                     .build();
                 optionsBuilder.responseFormat(responseFormat);
-            }
-            applyModelParams(optionsBuilder, options);
-
-            requestSpec.options(optionsBuilder.build());
-            if (outputSchema != null) {
                 log.debug("Applied OpenAI response_format with schema: {}", outputSchema.name());
+            } catch (Exception e) {
+                log.warn("Failed to apply OpenAI response_format for {}: {}, proceeding without it",
+                    outputSchema.name(), e.getMessage());
             }
-        } catch (Exception e) {
-            log.warn("Failed to apply OpenAI options (schema={}): {}",
-                outputSchema != null ? outputSchema.name() : "none", e.getMessage());
         }
+        applyModelParams(optionsBuilder, options);
+        requestSpec.options(optionsBuilder.build());
 
         // Execute the request
         ChatResponse chatResponse = requestSpec.call().chatResponse();

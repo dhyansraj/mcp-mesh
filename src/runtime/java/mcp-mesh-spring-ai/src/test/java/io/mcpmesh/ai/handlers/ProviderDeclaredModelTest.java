@@ -190,6 +190,59 @@ class ProviderDeclaredModelTest {
     }
 
     // =====================================================================
+    // Regression — schema-construction failure must NOT drop the declared model
+    // on the auto-execute path (toolExecutor != null).
+    // =====================================================================
+
+    @Nested
+    @DisplayName("schema-failure does not drop the declared model (auto-execute)")
+    class SchemaFailureKeepsModel {
+
+        /** A no-op tool executor — non-null so the handler takes the auto-execute path. */
+        private final LlmProviderHandler.ToolExecutorCallback noopExecutor = (name, args) -> "";
+
+        /**
+         * An OutputSchema whose {@code properties} is a String, not a Map. Both
+         * OpenAI's {@code makeStrict()} and Anthropic's {@code sanitize()} cast
+         * {@code properties} to a Map and throw ClassCastException — the exact
+         * schema-construction failure the fix isolates.
+         */
+        private LlmProviderHandler.OutputSchema brokenSchema() {
+            Map<String, Object> schema = new LinkedHashMap<>();
+            schema.put("type", "object");
+            schema.put("properties", "not-a-map");
+            return new LlmProviderHandler.OutputSchema("Broken", schema, false);
+        }
+
+        @Test
+        @DisplayName("OpenAI: declared model survives a response_format build failure")
+        void openAiKeepsModelOnSchemaFailure() {
+            ArgumentCaptor<Prompt> captor = ArgumentCaptor.forClass(Prompt.class);
+            ChatModel model = mockModel(captor);
+
+            new OpenAiHandler().generateWithTools(
+                model, userMessages(), List.of(), noopExecutor, brokenSchema(), declared("gpt-4o"));
+
+            assertEquals("gpt-4o", captor.getValue().getOptions().getModel(),
+                "declared model must still be applied when response_format construction fails");
+        }
+
+        @Test
+        @DisplayName("Anthropic: declared model survives an output_schema build failure")
+        void anthropicKeepsModelOnSchemaFailure() {
+            ArgumentCaptor<Prompt> captor = ArgumentCaptor.forClass(Prompt.class);
+            ChatModel model = mockModel(captor);
+
+            new AnthropicHandler().generateWithTools(
+                model, userMessages(), List.of(), noopExecutor, brokenSchema(),
+                declared("claude-3-5-sonnet-latest"));
+
+            assertEquals("claude-3-5-sonnet-latest", captor.getValue().getOptions().getModel(),
+                "declared model must still be applied when output_schema construction fails");
+        }
+    }
+
+    // =====================================================================
     // PART 3 — OpenAI sampling-param gating
     // =====================================================================
 
