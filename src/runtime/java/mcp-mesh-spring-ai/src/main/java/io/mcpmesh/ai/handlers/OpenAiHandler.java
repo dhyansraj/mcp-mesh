@@ -162,7 +162,7 @@ public class OpenAiHandler implements LlmProviderHandler {
     private void applyModelParams(OpenAiChatOptions.Builder builder, Map<String, Object> options) {
         Integer maxTokens = LlmProviderHandler.maxTokensOption(options);
         if (maxTokens != null) {
-            builder.maxTokens(maxTokens);
+            builder.maxCompletionTokens(maxTokens);
         }
         Double temperature = LlmProviderHandler.temperatureOption(options);
         if (temperature != null) {
