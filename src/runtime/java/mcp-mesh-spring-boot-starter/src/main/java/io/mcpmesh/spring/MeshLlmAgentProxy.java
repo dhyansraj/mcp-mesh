@@ -833,7 +833,7 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                     response = mcpClient.callTool(provider.endpoint(), provider.functionName(), params);
                 } catch (Exception e) {
                     log.error("LLM call failed: {}", e.getMessage());
-                    throw new RuntimeException("LLM call failed", e);
+                    throw new RuntimeException("LLM call failed: " + e.getMessage(), e);
                 }
 
                 // Accumulate LLM token usage from this iteration's response

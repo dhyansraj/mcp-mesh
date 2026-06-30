@@ -563,7 +563,8 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
             }
         } catch (Exception e) {
             log.error("LLM generation failed: {}", e.getMessage(), e);
-            throw new RuntimeException("LLM generation failed", e);
+            throw new RuntimeException(
+                "LLM generation failed [provider=" + config.provider() + ", model=" + config.modelName() + "]: " + e.getMessage(), e);
         }
 
         response.put("model", config.provider() + "/" + config.modelName());
