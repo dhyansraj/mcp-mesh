@@ -28,6 +28,7 @@ behavior change for non-job tools.
 | Injected type              | `job: MeshJob = None`             | `<dep_name>: MeshJob = None`            |
 | Concrete injection         | `JobController` (or `None`)       | `MeshJobSubmitter`                      |
 | Progress                   | `await job.update_progress(f, m)` | (read via `__mesh_job_status`)          |
+| Request input              | `await job.request_input(prompt)` | (status → `input_required`; answer via `post_event`) |
 | Terminal success           | `await job.complete(payload)`     | `await proxy.wait(timeout_secs=N)`      |
 | Terminal failure           | `await job.fail(reason)`          | `wait()` raises                         |
 | Transient retry            | `raise OSError(...)` w/ `retry_on=(OSError,)` | (registry hands to peer in ~5s) |
@@ -293,6 +294,61 @@ registry waits a small grace window before issuing the cancel-forward
 (default 200ms, tunable via `MCP_MESH_CANCEL_EVENT_GRACE_MS`, capped
 at 10s) so the synthetic event lands before the cancel token fires.
 
+**Synthetic stale event**. When the registry reaps a job for exceeding
+the `MCP_MESH_JOB_STALE_TIMEOUT` default ceiling (see **Reaping and
+lease recovery**), it writes a synthetic
+`{"type": "stale", "payload": {"reason": "stale", "detail": "..."}}`
+event into the log as it transitions the job to `failed`. A handler
+parked on `recv_event(types=["stale", ...])` observes the reaping and
+can unwind cleanly:
+
+```python
+event = await job.recv_event(types=["stale", "cancelled"], timeout_secs=30.0)
+if event and event["type"] == "stale":
+    return {"status": "aborted", "reason": event["payload"]["detail"]}
+```
+
+No SDK change is needed — `stale` is an ordinary event type, so the
+existing `recv_event` / stream paths surface it across every runtime.
+
+**Request input — pause for an external answer.** A `task=True` handler
+that needs a human (or another agent) to supply something mid-run calls
+`request_input(prompt)` to transition the job to `input_required`, then
+parks on `recv_event` for the answer:
+
+```python
+@app.tool()
+@mesh.tool(capability="approve_spend", task=True)
+async def approve_spend(amount: float, job: mesh.MeshJob = None) -> dict:
+    # 1. Signal the consumer we're blocked on input. The prompt rides the
+    #    job's progress_message field; status flips to "input_required".
+    await job.request_input(f"Approve ${amount}? Reply yes/no.")
+
+    # 2. Park on the answer (no busy-wait — long-polls the event log).
+    event = await job.recv_event(types=["answer"], timeout_secs=300.0)
+    if event is None:
+        return await job.fail("timed out waiting for approval")
+
+    # 3. Resume and finish. complete()/fail() exit input_required.
+    if event["payload"].get("approved"):
+        return {"status": "approved"}
+    return {"status": "denied"}
+```
+
+An external party answers by posting the matching event:
+
+```python
+await mesh.jobs.post_event(job_id, "answer", {"approved": True})
+```
+
+`request_input` is **status-only**: it posts the `input_required`
+transition (flushing immediately, since the consumer is blocked on it)
+and returns — it does not await the answer. Awaiting is composed with
+the existing `recv_event` / `post_event` event primitives, as above.
+The transition is **non-terminal**: the handler keeps running.
+`complete()` / `fail()` exit `input_required` (a mid-flight
+resume-to-`working` primitive is a future follow-up).
+
 ## Stream subscription
 
 Non-destructive observer iterator. Multiple subscribers can mirror
@@ -348,6 +404,37 @@ deadline regardless of depth.
 The header is on the default `MCP_MESH_PROPAGATE_HEADERS` allowlist
 alongside `X-Mesh-Job-Id` and `X-Mesh-Trace-Id` — no per-agent
 configuration is needed.
+
+## Reaping and lease recovery
+
+A registry cron sweep keeps the job pool healthy without operator
+intervention:
+
+- **Orphan reroute.** A job whose owner replica is gone (deregistered
+  or gone unhealthy) is returned to the claimable pool so any peer with
+  the matching capability picks it up. Jobs parked in `input_required`
+  are covered too — a job waiting on a consumer answer whose owner then
+  dies is reclaimed, not stranded.
+- **Lease recovery.** Every accepted progress/heartbeat delta extends
+  the owner's lease. A job whose lease expires with no further deltas —
+  a wedged or silently-crashed handler — is reset to claimable while
+  retries remain, or marked `failed` once the retry budget is spent.
+  This includes jobs parked in `input_required`: if the producer stops
+  extending the lease while waiting for an answer that never comes, the
+  job is reclaimed rather than held forever.
+- **Total-deadline ceiling.** A job that set `total_deadline` is failed
+  with `deadline_exceeded` once that wall-clock deadline passes.
+- **Default stale ceiling (opt-in).** Set `MCP_MESH_JOB_STALE_TIMEOUT`
+  (a duration, e.g. `2h`) on the registry to apply a *default*
+  total-runtime ceiling, measured from submission, to jobs that did
+  **not** set their own `total_deadline`. Such a job is marked `failed`
+  with a `stale: ...` error once it exceeds the ceiling. Unset (the
+  default) leaves the feature off — jobs without an explicit
+  `total_deadline` run unbounded (subject only to lease recovery).
+  Jobs that set their own `total_deadline` are unaffected.
+
+Reaping is observable in-handler via a synthetic `stale` event — see
+**Event injection** below.
 
 ## Out-of-band inspection
 

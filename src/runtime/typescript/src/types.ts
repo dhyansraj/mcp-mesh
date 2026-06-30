@@ -115,6 +115,20 @@ export interface MeshJob {
   // Producer-side surface (when injected as JobController):
   jobId?: string;
   updateProgress?(progress: number, message?: string): Promise<void>;
+  /**
+   * Transition the job to `input_required`, signalling the consumer that
+   * the handler is blocked awaiting an external answer. STATUS-ONLY:
+   * posts the transition (`prompt` rides the `progress_message` field),
+   * flushes immediately, and resolves — it does NOT await the answer.
+   * Compose with `recvEvent` for request-and-await:
+   * `await job.requestInput(prompt)` then
+   * `await job.recvEvent(["answer"])`; an external party answers via
+   * `proxy.sendEvent("answer", ...)`. Non-terminal — the handler keeps
+   * running; `complete` / `fail` exit `input_required`.
+   *
+   * Mirrors Python's `MeshJob.request_input`.
+   */
+  requestInput?(prompt?: string): Promise<void>;
   complete?(result: unknown): Promise<void>;
   fail?(error: string): Promise<void>;
   /**

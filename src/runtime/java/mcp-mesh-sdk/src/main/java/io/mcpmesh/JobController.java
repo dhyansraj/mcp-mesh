@@ -203,6 +203,41 @@ public final class JobController implements MeshJob, AutoCloseable {
     }
 
     /**
+     * Transition the job to {@code input_required}, signalling the consumer
+     * that the handler is blocked awaiting an external answer. STATUS-ONLY:
+     * posts the transition ({@code prompt} rides the {@code progress_message}
+     * field), flushes immediately, and returns — it does NOT await the answer.
+     * Compose it with {@link #recvEvent} for request-and-await: call
+     * {@code requestInput(prompt)}, then park on
+     * {@code recvEvent(List.of("answer"), timeout)}; an external party answers
+     * via {@code MeshJobs.postEvent(jobId, "answer", ...)}; the handler resumes
+     * and {@link #complete}s.
+     *
+     * <p>Flushes IMMEDIATELY (not via the coalescing batch tick) because the
+     * consumer is blocked on this control-plane transition. NON-terminal: the
+     * handler keeps running and may still call {@link #updateProgress} /
+     * {@link #complete} / {@link #fail} afterwards. {@code complete} /
+     * {@code fail} exit {@code input_required} (the registry confirms the
+     * transition).
+     *
+     * <p>Mirrors Python's {@code job.request_input(prompt)} and TypeScript's
+     * {@code job.requestInput(prompt)}.
+     *
+     * @param prompt short human-readable prompt (may be {@code null} for
+     *               "no prompt").
+     * @throws MeshException if the controller is closed or the native call fails
+     */
+    public void requestInput(String prompt) {
+        synchronized (lock) {
+            ensureOpen();
+            int rc = core.mesh_job_controller_request_input(handle, prompt);
+            if (rc != 0) {
+                throw new MeshException("mesh_job_controller_request_input failed: " + lastError(core));
+            }
+        }
+    }
+
+    /**
      * Whether {@link #complete} / {@link #fail} has already been called on
      * this controller. The dispatch wrapper uses this to decide whether a
      * returning user method needs an auto-{@code complete} (the

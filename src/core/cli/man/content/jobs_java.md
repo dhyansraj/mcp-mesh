@@ -29,6 +29,7 @@ request-response — no behavior change for non-job tools.
 | Injected type        | `MeshJob` (cast to `JobController`)         | `MeshJob` (cast to `MeshJobSubmitter`)             |
 | Concrete injection   | `JobController` (or `null`)                 | `MeshJobSubmitter`                                 |
 | Progress             | `controller.updateProgress(f, m)`           | (read via `__mesh_job_status`)                     |
+| Request input        | `controller.requestInput(prompt)`           | (status → `input_required`; answer via `postEvent`) |
 | Terminal success     | `controller.complete(payload)`              | `proxy.await(timeoutSeconds)`                      |
 | Terminal failure     | `controller.fail(reason)`                   | `await()` throws                                   |
 | Transient retry      | `throw new IOException(...)` w/ `retryOn`   | (registry hands to peer in ~5s)                    |
@@ -370,6 +371,52 @@ LRU cache keyed by `(registryUrl, jobId)` (default cap 256; tune via
 - `JobNotFoundException` — job swept or id typo
 - `JobTerminalException` — job already terminal, no more events accepted
 
+**Request input — pause for an external answer.** A `task = true`
+handler that needs a human (or another agent) to supply something
+mid-run calls `requestInput(prompt)` to transition the job to
+`input_required`, then parks on `recvEvent` for the answer:
+
+```java
+@MeshTool(capability = "approve_spend", task = true)
+public Map<String, Object> approveSpend(
+    @Param("amount") double amount,
+    MeshJob job) throws Exception {
+  JobController controller = (JobController) job;
+
+  // 1. Signal the consumer we're blocked on input. The prompt rides the
+  //    job's progress_message field; status flips to "input_required".
+  controller.requestInput("Approve $" + amount + "? Reply yes/no.");
+
+  // 2. Park on the answer (no busy-wait — long-polls the event log).
+  Map<String, Object> event = controller.recvEvent(
+      List.of("answer"), Duration.ofSeconds(300));
+  if (event == null) {
+    controller.fail("timed out waiting for approval");
+    return Map.of("status", "timeout");
+  }
+
+  // 3. Resume and finish. complete()/fail() exit input_required.
+  @SuppressWarnings("unchecked")
+  Map<String, Object> payload = (Map<String, Object>) event.get("payload");
+  boolean approved = payload != null && Boolean.TRUE.equals(payload.get("approved"));
+  return Map.of("status", approved ? "approved" : "denied");
+}
+```
+
+An external party answers by posting the matching event:
+
+```java
+MeshJobs.postEvent(jobId, "answer", Map.of("approved", true));
+```
+
+`requestInput` is **status-only**: it posts the `input_required`
+transition (flushing immediately, since the consumer is blocked on it)
+and returns — it does not await the answer. Awaiting is composed with
+the existing `recvEvent` / `postEvent` event primitives, as above. The
+transition is **non-terminal**: the handler keeps running.
+`complete()` / `fail()` exit `input_required` (a mid-flight
+resume-to-`working` primitive is a future follow-up).
+
 ## Lifecycle facades by `jobId`
 
 Symmetric to `MeshJobs.postEvent` / `MeshJobs.subscribeEvents`: callers
@@ -454,6 +501,26 @@ by tying cancel observation to the event channel. The registry waits
 a small grace window before issuing the cancel-forward (default
 200ms, tunable via `MCP_MESH_CANCEL_EVENT_GRACE_MS`, capped at 10s).
 
+**Synthetic stale event**. When the registry reaps a job for exceeding
+the `MCP_MESH_JOB_STALE_TIMEOUT` default ceiling (see **Reaping and
+lease recovery**), it writes a synthetic
+`{ "type": "stale", "payload": { "reason": "stale", "detail": "..." } }`
+event into the log as it transitions the job to `failed`. A handler
+parked on `recvEvent(List.of("stale", ...), ...)` observes the reaping
+and can unwind cleanly:
+
+```java
+Map<String, Object> event =
+    controller.recvEvent(List.of("stale", "cancelled"), Duration.ofSeconds(30));
+if (event != null && "stale".equals(event.get("type"))) {
+  Map<String, Object> payload = (Map<String, Object>) event.get("payload");
+  return Map.of("status", "aborted", "reason", payload.get("detail"));
+}
+```
+
+No SDK change is needed — `stale` is an ordinary event type, so the
+existing `recvEvent` / stream paths surface it across every runtime.
+
 ## Stream subscription
 
 Non-destructive observer iterator. Multiple subscribers can mirror
@@ -523,6 +590,37 @@ deadline regardless of depth.
 The header is on the default `MCP_MESH_PROPAGATE_HEADERS` allowlist
 alongside `X-Mesh-Job-Id` and `X-Mesh-Trace-Id` — no per-agent
 configuration is needed.
+
+## Reaping and lease recovery
+
+A registry cron sweep keeps the job pool healthy without operator
+intervention:
+
+- **Orphan reroute.** A job whose owner replica is gone (deregistered
+  or gone unhealthy) is returned to the claimable pool so any peer with
+  the matching capability picks it up. Jobs parked in `input_required`
+  are covered too — a job waiting on a consumer answer whose owner then
+  dies is reclaimed, not stranded.
+- **Lease recovery.** Every accepted progress/heartbeat delta extends
+  the owner's lease. A job whose lease expires with no further deltas —
+  a wedged or silently-crashed handler — is reset to claimable while
+  retries remain, or marked `failed` once the retry budget is spent.
+  This includes jobs parked in `input_required`: if the producer stops
+  extending the lease while waiting for an answer that never comes, the
+  job is reclaimed rather than held forever.
+- **Total-deadline ceiling.** A job that set `totalDeadline` is failed
+  with `deadline_exceeded` once that wall-clock deadline passes.
+- **Default stale ceiling (opt-in).** Set `MCP_MESH_JOB_STALE_TIMEOUT`
+  (a duration, e.g. `2h`) on the registry to apply a *default*
+  total-runtime ceiling, measured from submission, to jobs that did
+  **not** set their own `totalDeadline`. Such a job is marked `failed`
+  with a `stale: ...` error once it exceeds the ceiling. Unset (the
+  default) leaves the feature off — jobs without an explicit
+  `totalDeadline` run unbounded (subject only to lease recovery). Jobs
+  that set their own `totalDeadline` are unaffected.
+
+Reaping is observable in-handler via a synthetic `stale` event — see
+**Event injection** above.
 
 ## Out-of-band inspection
 

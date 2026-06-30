@@ -572,4 +572,65 @@ public class LongTaskProviderApplication {
         exhausted.put("events_seen", eventsSeen);
         return exhausted;
     }
+
+    // -------------------------------------------------------------------
+    // input_required parking — exercises C1 lease-reclaim of
+    // input_required jobs (#1229). Java port of uc21's awaits_input_forever
+    // producer (uc21_meshjob/fixtures/long-task-provider/main.py).
+    //
+    // The injected JobController exposes requestInput(prompt) — the SDK
+    // primitive (added in this branch: JNA -> C-FFI -> shared Rust core)
+    // that transitions the owned job to input_required (status-only,
+    // non-terminal, flushed immediately). It uses the controller's own job
+    // context and lease ownership, so no registry-URL / instance-id
+    // plumbing is needed.
+    //
+    // After signalling input_required the handler parks on recvEvent for
+    // an "answer" event that never arrives, posting NO progress. Because
+    // progress deltas are what extend the lease, the silent park lets the
+    // lease lapse so the registry's ReclaimExpiredLeaseJobs phase (now
+    // input_required-scoped) can reap it — the whole point of the C1 test.
+    // -------------------------------------------------------------------
+    @MeshTool(
+        capability = "awaits_input_forever",
+        task = true,
+        description = "Transitions the job to input_required, then parks on recvEvent for an answer that never arrives — never posts progress, never completes."
+    )
+    public Map<String, Object> awaitsInputForever(
+            @Param("user_id") String userId,
+            MeshJob job) {
+        JobController controller = job instanceof JobController c ? c : null;
+        if (controller == null) {
+            Map<String, Object> noJob = new LinkedHashMap<>();
+            noJob.put("status", "no_job_ctx");
+            return noJob;
+        }
+        // Transition the row to input_required via the SDK primitive (the
+        // injected controller is the lease owner, so no manual owner-check
+        // plumbing needed).
+        controller.requestInput("waiting on input for " + userId);
+        // Park waiting for an "answer" event that the consumer never posts.
+        // CRITICAL: do NOT call updateProgress here — a progress delta
+        // would extend the lease and defeat the lease-reclaim test.
+        // recvEvent is a pure long-poll read; it does not heartbeat the
+        // lease. We loop on the long-poll so the handler stays parked well
+        // past the lease window; the registry reaps the row out from under
+        // us via ReclaimExpiredLeaseJobs.
+        for (int i = 0; i < 60; i++) {
+            Map<String, Object> event = controller.recvEvent(
+                List.of("answer"), Duration.ofSeconds(15));
+            if (event != null) {
+                // An answer arrived (not expected in the C1 test) — complete
+                // so the fixture stays well-behaved if ever exercised that way.
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("status", "got_answer");
+                payload.put("payload", event.get("payload"));
+                controller.complete(payload);
+                return payload;
+            }
+        }
+        Map<String, Object> neverAnswered = new LinkedHashMap<>();
+        neverAnswered.put("status", "never_answered");
+        return neverAnswered;
+    }
 }

@@ -269,6 +269,37 @@ impl PyJobController {
         })
     }
 
+    /// Transition the job to ``input_required``, signalling the consumer
+    /// that the handler is blocked awaiting an external answer. STATUS-ONLY
+    /// primitive: it posts the ``input_required`` delta (with ``prompt``
+    /// carried on the existing ``progress_message`` field) and returns once
+    /// posted — it does NOT await the answer. Compose it with the existing
+    /// event primitives for a full request-and-await: call
+    /// ``await job.request_input(prompt)``, then park on
+    /// ``await job.recv_event(types=["answer"])``; an external party answers
+    /// via ``proxy.send_event("answer", ...)``; the handler resumes and
+    /// ``await job.complete(...)``s.
+    ///
+    /// Flushes IMMEDIATELY (not via the coalescing batch tick) because the
+    /// consumer is blocked on this control-plane transition. NON-terminal:
+    /// the handler keeps running and may still call ``update_progress`` /
+    /// ``complete`` / ``fail`` afterwards. ``complete`` / ``fail`` exit
+    /// ``input_required`` (the registry confirms the transition).
+    ///
+    /// Signature: ``request_input(prompt: Optional[str] = None) -> None``
+    #[pyo3(signature = (prompt=None))]
+    fn request_input<'py>(
+        &self,
+        py: Python<'py>,
+        prompt: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            inner.request_input(prompt).await.map_err(job_error_to_py)?;
+            Ok(())
+        })
+    }
+
     /// Whether ``complete`` / ``fail`` has already been called on this
     /// controller. The Python dispatch wrapper uses this to decide
     /// whether a returning user function needs an auto-``complete`` —

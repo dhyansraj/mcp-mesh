@@ -95,6 +95,24 @@ impl JobDelta {
         }
     }
 
+    /// Construct an `input_required` delta (non-terminal). Transitions a
+    /// running job to `input_required` status, signalling the consumer that
+    /// the handler is blocked awaiting an external answer (typically supplied
+    /// via `post_event` + drained by `recv_event`). The optional `message`
+    /// rides the existing `progress_message` field — no new wire field. The
+    /// registry lease-extends on this delta (`ApplyJobDeltas` in
+    /// `ent_service_jobs.go`); the job stays live, so this is NOT terminal.
+    pub fn input_required(id: impl Into<String>, message: Option<String>) -> Self {
+        Self {
+            id: id.into(),
+            status: Some(JobStatus::InputRequired),
+            progress: None,
+            progress_message: message,
+            result: None,
+            error: None,
+        }
+    }
+
     /// Construct a terminal `completed` delta with a result payload.
     pub fn completed(id: impl Into<String>, result: serde_json::Value) -> Self {
         Self {
@@ -741,6 +759,33 @@ mod tests {
         assert_eq!(d.progress_message.as_deref(), Some("halfway"));
         assert!(d.status.is_none());
         assert!(!d.is_terminal());
+    }
+
+    #[test]
+    fn job_delta_input_required_constructor() {
+        let d = JobDelta::input_required("job-1", Some("need approval".into()));
+        assert_eq!(d.id, "job-1");
+        assert_eq!(d.status, Some(JobStatus::InputRequired));
+        assert_eq!(d.progress_message.as_deref(), Some("need approval"));
+        assert!(d.progress.is_none());
+        assert!(d.result.is_none());
+        assert!(d.error.is_none());
+        // input_required is NON-terminal — the handler keeps running.
+        assert!(!d.is_terminal());
+        // Status serializes as snake_case "input_required".
+        let v = serde_json::to_value(&d).unwrap();
+        assert_eq!(v["status"], serde_json::json!("input_required"));
+        assert_eq!(v["progress_message"], serde_json::json!("need approval"));
+    }
+
+    #[test]
+    fn job_delta_input_required_omits_message_when_none() {
+        let d = JobDelta::input_required("job-1", None);
+        assert_eq!(d.status, Some(JobStatus::InputRequired));
+        assert!(d.progress_message.is_none());
+        let s = serde_json::to_string(&d).unwrap();
+        assert!(s.contains("\"status\":\"input_required\""));
+        assert!(!s.contains("progress_message"));
     }
 
     #[test]

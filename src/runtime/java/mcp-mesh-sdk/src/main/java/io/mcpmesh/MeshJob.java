@@ -13,8 +13,12 @@ package io.mcpmesh;
  *       {@code @MeshTool(task = true)} receives a {@code JobController} via
  *       this slot when invoked through the job-dispatch path
  *       ({@code X-Mesh-Job-Id} header present, or claimed from the pull
- *       queue). The user calls {@code updateProgress() / complete() / fail()}
- *       on it.</li>
+ *       queue). The user calls {@code updateProgress() / requestInput() /
+ *       complete() / fail()} on it. {@code requestInput(prompt)} transitions
+ *       the job to {@code input_required} (status-only; flushes immediately)
+ *       so the handler can park on {@code recvEvent(List.of("answer"), ...)}
+ *       for an external party to answer via
+ *       {@code MeshJobs.postEvent(jobId, "answer", ...)}.</li>
  *   <li><b>Consumer side</b> — a method depending on a {@code task = true}
  *       capability receives a {@code MeshJobSubmitter} via this slot. The
  *       user calls {@code .submit(...)} on it to start a job and

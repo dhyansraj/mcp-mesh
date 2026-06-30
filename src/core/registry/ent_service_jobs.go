@@ -792,8 +792,8 @@ func (s *EntService) CountPendingJobsForAgent(ctx context.Context, agentID strin
 }
 
 // ResetOrphanedJobs handles the orphan-reroute phase of the registry sweep.
-// For every working job whose owner_instance_id no longer maps to a
-// registered agent row, the job is either:
+// For every live (working OR input_required) job whose owner_instance_id no
+// longer maps to a registered agent row, the job is either:
 //
 //   - reset to claimable (owner=NULL, lease cleared) when attempt_count <=
 //     max_retries — the next live replica picks it up via POST /jobs/claim.
@@ -822,7 +822,7 @@ func (s *EntService) ResetOrphanedJobs(ctx context.Context) (reset, exhausted in
 	// Collect candidate orphan jobs: working + has an owner.
 	candidates, err := s.entDB.Client.Job.Query().
 		Where(
-			job.StatusEQ(job.StatusWorking),
+			job.StatusIn(job.StatusWorking, job.StatusInputRequired),
 			job.OwnerInstanceIDNotNil(),
 		).
 		All(ctx)
@@ -872,28 +872,54 @@ func (s *EntService) ResetOrphanedJobs(ctx context.Context) (reset, exhausted in
 			continue
 		}
 
+		// Guarded update (mirrors ReclaimExpiredLeaseJobs): the row must still
+		// be in a live, owner-bearing state with the SAME owner we observed as
+		// orphaned. Candidates are scanned outside any transaction, so a job
+		// can change between the query and this update — the owner could have
+		// completed it, a heartbeat could have landed, or another sweep phase
+		// could have retired it. The guard makes the mutation a no-op
+		// (Affected=0) in all those cases so we never overwrite a row that
+		// moved on under us.
+		guard := []predicate.Job{
+			job.IDEQ(j.ID),
+			job.StatusIn(job.StatusWorking, job.StatusInputRequired),
+			job.OwnerInstanceIDEQ(*j.OwnerInstanceID),
+		}
+
 		if j.AttemptCount > j.MaxRetries {
-			if _, uerr := s.entDB.Client.Job.UpdateOneID(j.ID).
+			affected, uerr := s.entDB.Client.Job.Update().
+				Where(guard...).
 				SetStatus(job.StatusFailed).
 				SetError("orphaned: max retries exceeded").
 				ClearLeaseExpiresAt().
 				ClearOwnerInstanceID().
 				SetLastHeartbeatAt(now).
-				Save(ctx); uerr != nil {
+				Save(ctx)
+			if uerr != nil {
 				return reset, exhausted, fmt.Errorf("mark exhausted job %s: %w", j.ID, uerr)
 			}
-			exhausted++
+			if affected > 0 {
+				exhausted++
+			}
 			continue
 		}
 
-		if _, uerr := s.entDB.Client.Job.UpdateOneID(j.ID).
+		affected, uerr := s.entDB.Client.Job.Update().
+			Where(guard...).
+			// Normalize to working so the row is claimable again — see the
+			// matching note in ReclaimExpiredLeaseJobs. A reclaimed
+			// input_required orphan would otherwise never be re-claimed.
+			SetStatus(job.StatusWorking).
 			ClearOwnerInstanceID().
 			ClearLeaseExpiresAt().
 			ClearLastHeartbeatAt().
-			Save(ctx); uerr != nil {
+			Save(ctx)
+		if uerr != nil {
 			return reset, exhausted, fmt.Errorf("reset orphan job %s: %w", j.ID, uerr)
 		}
-		reset++
+		if affected > 0 {
+			reset++
+		}
 	}
 	return reset, exhausted, nil
 }
@@ -915,8 +941,8 @@ func (s *EntService) ResetOrphanedJobs(ctx context.Context) (reset, exhausted in
 // the still-running job, and its eventual completion delta is rejected
 // not_owner.
 //
-// For every working job whose lease_expires_at has passed, the job is
-// either:
+// For every live (working OR input_required) job whose lease_expires_at has
+// passed, the job is either:
 //
 //   - reset to claimable (owner=NULL, lease cleared, last_heartbeat_at
 //     cleared) when attempt_count <= max_retries — identical field-reset
@@ -953,7 +979,7 @@ func (s *EntService) ReclaimExpiredLeaseJobs(ctx context.Context) (reset, exhaus
 
 	candidates, err := s.entDB.Client.Job.Query().
 		Where(
-			job.StatusEQ(job.StatusWorking),
+			job.StatusIn(job.StatusWorking, job.StatusInputRequired),
 			job.LeaseExpiresAtNotNil(),
 			job.LeaseExpiresAtLT(now),
 		).
@@ -971,10 +997,14 @@ func (s *EntService) ReclaimExpiredLeaseJobs(ctx context.Context) (reset, exhaus
 		}
 
 		// Guard predicate shared by both branches: the row must still be
-		// working AND still carry the exact expired lease we observed.
+		// in a live, lease-bearing state (working OR input_required) AND
+		// still carry the exact expired lease we observed. input_required
+		// is included because the producer extends its lease while parked
+		// waiting for a consumer answer (see ApplyJobDeltas); a parked job
+		// whose lease then expires must be reclaimed just like a working one.
 		guard := []predicate.Job{
 			job.IDEQ(j.ID),
-			job.StatusEQ(job.StatusWorking),
+			job.StatusIn(job.StatusWorking, job.StatusInputRequired),
 			job.LeaseExpiresAtEQ(*j.LeaseExpiresAt),
 		}
 
@@ -998,6 +1028,12 @@ func (s *EntService) ReclaimExpiredLeaseJobs(ctx context.Context) (reset, exhaus
 
 		affected, uerr := s.entDB.Client.Job.Update().
 			Where(guard...).
+			// Normalize to working so the row is claimable again. A
+			// reclaimed input_required job would otherwise stay
+			// input_required with no owner — and ClaimNextJob only
+			// claims status=working, so it would never be picked back
+			// up. No-op for rows already working.
+			SetStatus(job.StatusWorking).
 			ClearOwnerInstanceID().
 			ClearLeaseExpiresAt().
 			ClearLastHeartbeatAt().
@@ -1034,6 +1070,65 @@ var ErrJobTerminal = fmt.Errorf("job is already in a terminal state")
 // when contention does happen each retry is one query + one insert, so a
 // handful of attempts converges quickly.
 const postEventMaxAttempts = 5
+
+// insertJobEventTx assigns the next per-job seq (max+1) and inserts the event
+// into the job's event log, all on the supplied transaction client. It is the
+// shared insert body for both PostJobEvent (which wraps it with the parent
+// existence/terminal check + UNIQUE-violation retry) and the sweep's
+// status-flip-plus-event atomic paths (e.g. ExpireStaleJobs), which post a
+// synthetic event in the SAME transaction as the terminal status update so the
+// two commit or roll back together. A UNIQUE (job_id, seq) violation surfaces
+// to the caller as an ent constraint error.
+func insertJobEventTx(
+	ctx context.Context,
+	tx *ent.Tx,
+	jobID string,
+	eventType string,
+	payload interface{},
+	traceContext map[string]interface{},
+	postedBy string,
+) (int64, time.Time, error) {
+	// Find the current max seq for this job. A previously-empty log produces
+	// an aggregate result with no rows; the Scan-into-struct pattern below
+	// handles the NULL case by yielding 0.
+	var maxRow []struct {
+		Max *int64 `json:"max"`
+	}
+	if err := tx.JobEvent.Query().
+		Where(jobevent.JobID(jobID)).
+		Aggregate(ent.Max(jobevent.FieldSeq)).
+		Scan(ctx, &maxRow); err != nil {
+		return 0, time.Time{}, fmt.Errorf("query max seq: %w", err)
+	}
+	next := int64(1)
+	if len(maxRow) > 0 && maxRow[0].Max != nil {
+		next = *maxRow[0].Max + 1
+	}
+
+	builder := tx.JobEvent.Create().
+		SetSeq(next).
+		SetJobID(jobID).
+		SetType(eventType)
+	if payload != nil {
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			return 0, time.Time{}, fmt.Errorf("marshal event payload: %w", err)
+		}
+		builder = builder.SetPayload(raw)
+	}
+	if traceContext != nil {
+		builder = builder.SetTraceContext(traceContext)
+	}
+	if postedBy != "" {
+		builder = builder.SetPostedBy(postedBy)
+	}
+
+	row, err := builder.Save(ctx)
+	if err != nil {
+		return 0, time.Time{}, err
+	}
+	return row.Seq, row.CreatedAt, nil
+}
 
 // PostJobEvent atomically assigns the next per-job seq and inserts the
 // event into the job's event log. Returns the assigned seq and the
@@ -1094,47 +1189,12 @@ func (s *EntService) PostJobEvent(
 				return ErrJobTerminal
 			}
 
-			// Find the current max seq for this job. A previously-empty log
-			// produces an aggregate result with no rows; the Scan-into-struct
-			// pattern below handles the NULL case by yielding 0.
-			var maxRow []struct {
-				Max *int64 `json:"max"`
-			}
-			if err := tx.JobEvent.Query().
-				Where(jobevent.JobID(jobID)).
-				Aggregate(ent.Max(jobevent.FieldSeq)).
-				Scan(ctx, &maxRow); err != nil {
-				return fmt.Errorf("query max seq: %w", err)
-			}
-			next := int64(1)
-			if len(maxRow) > 0 && maxRow[0].Max != nil {
-				next = *maxRow[0].Max + 1
-			}
-
-			builder := tx.JobEvent.Create().
-				SetSeq(next).
-				SetJobID(jobID).
-				SetType(eventType)
-			if payload != nil {
-				raw, err := json.Marshal(payload)
-				if err != nil {
-					return fmt.Errorf("marshal event payload: %w", err)
-				}
-				builder = builder.SetPayload(raw)
-			}
-			if traceContext != nil {
-				builder = builder.SetTraceContext(traceContext)
-			}
-			if postedBy != "" {
-				builder = builder.SetPostedBy(postedBy)
-			}
-
-			row, err := builder.Save(ctx)
+			seq, created, err := insertJobEventTx(ctx, tx, jobID, eventType, payload, traceContext, postedBy)
 			if err != nil {
 				return err
 			}
-			assignedSeq = row.Seq
-			createdAt = row.CreatedAt
+			assignedSeq = seq
+			createdAt = created
 			return nil
 		})
 		if txErr == nil {
@@ -1327,4 +1387,122 @@ func (s *EntService) ExpireDeadlinedJobs(ctx context.Context) (int, error) {
 		expired++
 	}
 	return expired, nil
+}
+
+// staleJobError is the error string stamped on jobs reaped by
+// ExpireStaleJobs. Mirrors the "deadline_exceeded" / "orphaned: ..."
+// reason-string style so operators can grep all sweep-reap paths the same
+// way.
+const staleJobError = "stale: no total_deadline set and exceeded MCP_MESH_JOB_STALE_TIMEOUT default ceiling"
+
+// ExpireStaleJobs enforces a DEFAULT total-runtime ceiling for jobs that did
+// NOT set their own total_deadline. It is the opt-in companion to
+// ExpireDeadlinedJobs: where that phase enforces an explicit per-job
+// total_deadline, this one applies the operator-wide MCP_MESH_JOB_STALE_TIMEOUT
+// as a default deadline measured from submitted_at. Jobs that set their own
+// total_deadline are left to ExpireDeadlinedJobs (the total_deadline IS NULL
+// filter below excludes them).
+//
+// For every non-terminal job with a NULL total_deadline whose submitted_at is
+// older than `now - staleTimeout`, the row is marked failed with the
+// `stale:` reason and its lease/owner cleared. No new terminal state is
+// introduced — `failed` + the reason string IS the signal.
+//
+// Each reap uses the guarded-update discipline (WHERE id=? AND status NOT IN
+// terminal AND total_deadline IS NULL) so a concurrent completion / explicit
+// deadline-set / earlier sweep phase that already handled the row produces
+// Affected=0 and we skip it without counting or eventing. Successfully-reaped
+// rows get a synthetic `stale` event posted (allowTerminal=true, since the row
+// is now terminal) so handlers parked on recv_event(types=["stale"]) observe
+// the reaping — the same mechanism CancelJob uses for its synthetic
+// `cancelled` event.
+//
+// Phase ordering (see SweepJob.runOnce): this must run AFTER both
+// ReclaimExpiredLeaseJobs and ExpireDeadlinedJobs so a row those already
+// retired isn't double-processed.
+func (s *EntService) ExpireStaleJobs(ctx context.Context, staleTimeout time.Duration, now time.Time) (int, error) {
+	if staleTimeout <= 0 {
+		return 0, nil
+	}
+
+	cutoff := now.Add(-staleTimeout)
+
+	candidates, err := s.entDB.Client.Job.Query().
+		Where(
+			job.StatusNotIn(job.StatusCompleted, job.StatusFailed, job.StatusCancelled),
+			job.TotalDeadlineIsNil(),
+			job.SubmittedAtLT(cutoff),
+		).
+		All(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("query stale jobs: %w", err)
+	}
+	if len(candidates) == 0 {
+		return 0, nil
+	}
+
+	staled := 0
+	for _, j := range candidates {
+		// The guarded status flip AND the synthetic `stale` event insert run
+		// in ONE transaction per row: either both commit or neither does.
+		// Unlike cancel — where the cancel HTTP-forward is the primary signal
+		// and the synthetic event is supplementary — the `stale` event is the
+		// ONLY notification a reaped handler parked on
+		// recv_event(types=["stale"]) ever receives, so losing it must not be
+		// possible. If the txn fails the row stays non-terminal and the NEXT
+		// sweep tick re-reaps it and re-emits the event (self-healing retry;
+		// no outbox needed). allowTerminal semantics don't apply here: the
+		// status flip and the event share a tx, so the row is still
+		// non-terminal at insert time.
+		var affected int
+		txErr := s.entDB.Transaction(ctx, func(tx *ent.Tx) error {
+			a, uerr := tx.Job.Update().
+				Where(
+					job.IDEQ(j.ID),
+					job.StatusNotIn(job.StatusCompleted, job.StatusFailed, job.StatusCancelled),
+					job.TotalDeadlineIsNil(),
+				).
+				SetStatus(job.StatusFailed).
+				SetError(staleJobError).
+				ClearLeaseExpiresAt().
+				ClearOwnerInstanceID().
+				SetLastHeartbeatAt(now).
+				Save(ctx)
+			if uerr != nil {
+				return fmt.Errorf("expire stale job %s: %w", j.ID, uerr)
+			}
+			affected = a
+			if a == 0 {
+				// Lost a race: a concurrent completion, an explicit
+				// total_deadline set, or an earlier sweep phase already
+				// retired the row. Don't event; the txn commits a no-op.
+				return nil
+			}
+			if _, _, evErr := insertJobEventTx(
+				ctx,
+				tx,
+				j.ID,
+				"stale",
+				map[string]interface{}{"reason": "stale", "detail": staleJobError},
+				nil,
+				"",
+			); evErr != nil {
+				return fmt.Errorf("post synthetic stale event for job %s: %w", j.ID, evErr)
+			}
+			return nil
+		})
+		if txErr != nil {
+			// Roll back leaves the row non-terminal → next sweep re-reaps and
+			// re-emits. Log at ERROR but keep sweeping the rest of the batch.
+			if s.logger != nil {
+				s.logger.Error("ExpireStaleJobs: atomic reap+event failed for job %s, will retry next sweep: %v", j.ID, txErr)
+			}
+			continue
+		}
+		if affected == 0 {
+			continue
+		}
+		staled++
+	}
+	return staled, nil
 }

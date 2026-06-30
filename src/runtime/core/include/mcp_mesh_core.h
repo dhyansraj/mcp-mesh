@@ -798,6 +798,29 @@ int32_t mesh_job_controller_fail(struct JobControllerHandle *handle, const char 
 // of Python's / TS's release_lease contract).
 int32_t mesh_job_controller_release_lease(struct JobControllerHandle *handle, const char *reason);
 
+// Transition the job to `input_required`, signalling the consumer that the
+// handler is blocked awaiting an external answer. STATUS-ONLY primitive: it
+// posts the `input_required` delta (with `prompt` carried on the existing
+// `progress_message` field) and returns once posted — it does NOT await the
+// answer. Compose it with the existing event primitives for a full
+// request-and-await: call `mesh_job_controller_request_input(prompt)`, then
+// park on `mesh_job_controller_recv_event(["answer"])`; an external party
+// answers via `mesh_job_proxy_send_event("answer", ...)`; the handler
+// resumes and calls `mesh_job_controller_complete(...)`.
+//
+// `prompt` may be NULL ("no prompt"); an empty string is passed through as
+// `Some("")` for parity with `mesh_job_controller_release_lease`.
+//
+// See [`crate::jobs::JobController::request_input`] for full semantics.
+// Flushes IMMEDIATELY (not via the coalescing batch tick) because the
+// consumer is blocked on this control-plane transition. NON-terminal: the
+// handler keeps running; `complete` / `fail` exit `input_required`.
+//
+// # Safety
+// `handle` must come from [`mesh_job_controller_new`] and must not yet have
+// been freed.
+int32_t mesh_job_controller_request_input(struct JobControllerHandle *handle, const char *prompt);
+
 // Whether `complete` / `fail` has already been called on this controller.
 //
 // # Returns

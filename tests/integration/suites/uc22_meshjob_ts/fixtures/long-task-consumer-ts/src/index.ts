@@ -612,6 +612,45 @@ agent.addTool({
   },
 });
 
+// ---------------------------------------------------------------------------
+// input_required lease-reclaim submitter (tc28 / C1, #1229)
+// ---------------------------------------------------------------------------
+//
+// TS port of uc21_meshjob/fixtures/long-task-consumer/main.py
+// (commission_awaits_input). Submits awaits_input_forever with a SMALL
+// max_duration (sizes the lease window so it lapses quickly once the producer
+// parks in input_required without heartbeating) and max_retries=0 (makes the
+// lease lapse terminal on the first reclaim pass: status=failed,
+// error="lease expired: ...", avoiding a reset→reclaim race a non-zero retry
+// budget would introduce). We deliberately NEVER post the "answer" event the
+// producer is parked on.
+// ---------------------------------------------------------------------------
+agent.addTool({
+  name: "commission_awaits_input",
+  capability: "commission_awaits_input",
+  dependencies: [{ capability: "awaits_input_forever" }],
+  meshJobDepIndex: 0,
+  description:
+    "Submit awaits_input_forever with a small max_duration and max_retries=0; never posts the answer.",
+  parameters: z.object({
+    user_id: z.string().default("alice"),
+    max_duration: z.number().int().default(2),
+  }),
+  execute: async (
+    { user_id, max_duration },
+    awaitsInputForever: MeshJob | null = null,
+  ) => {
+    if (!awaitsInputForever?.submit) {
+      return { error: "awaits_input_forever submitter not injected" };
+    }
+    const proxy = await awaitsInputForever.submit(
+      { user_id },
+      { maxDuration: max_duration, maxRetries: 0 },
+    );
+    return { job_id: (proxy as { jobId?: string }).jobId ?? null };
+  },
+});
+
 console.log(
   `long-task-consumer-ts uc22 fixture defined on port ${HTTP_PORT}. Waiting for auto-start...`,
 );
