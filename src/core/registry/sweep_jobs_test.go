@@ -899,6 +899,12 @@ func TestSweep_ReclaimExpiredLeaseJobs_InputRequiredReclaimedExhausted(t *testin
 	if got.Error == nil || *got.Error != "lease expired: no completion within lease window" {
 		t.Errorf("expected lease-expired error, got %v", got.Error)
 	}
+	if got.OwnerInstanceID != nil {
+		t.Errorf("expected owner cleared on exhausted lease, got %v", *got.OwnerInstanceID)
+	}
+	if got.LeaseExpiresAt != nil {
+		t.Errorf("expected lease cleared on exhausted lease, got %v", got.LeaseExpiresAt)
+	}
 }
 
 // TestSweep_ResetOrphanedJobs_InputRequiredOrphanReclaimed verifies the C1

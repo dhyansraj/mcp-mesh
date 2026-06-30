@@ -130,13 +130,6 @@ test:
           echo "REACHED_INPUT_REQUIRED=1"
           exit 0
         fi
-        # If it already went terminal failed (sweep won the race against our
-        # poll), that's still consistent with the reclaim — surface it and
-        # let the terminal assertions below decide.
-        if [ "$ST" = "failed" ]; then
-          echo "ALREADY_FAILED_BEFORE_POLL_SAW_INPUT_REQUIRED=1"
-          exit 0
-        fi
         sleep 1
       done
       echo "ERROR: job never reached input_required within 30s"

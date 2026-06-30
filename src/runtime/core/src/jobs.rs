@@ -353,8 +353,26 @@ impl JobController {
         // land at the registry AFTER the input_required transition on the next
         // batching tick. We do NOT set the terminal sentinel: the job stays
         // live and later progress/terminal deltas are still valid.
+        //
+        // Guard on the terminal sentinel UNDER the same lock first, mirroring
+        // `update_progress` / `flush_terminal` / `release_lease`: a helper task
+        // that calls `request_input` AFTER the controller went terminal
+        // (`complete` / `fail` / `release_lease`) must NOT submit a late
+        // `input_required` delta — the job is already done, and the registry
+        // would reject it (or it would stomp the terminal status). Unlike
+        // `update_progress` (which returns `()` and can only drop silently),
+        // this method returns a `Result`, so we surface `JobTerminal` — the
+        // same variant `send_event` raises for the identical "acted on an
+        // already-terminal job" condition, with SDK re-classification already
+        // wired across Python / TS / Java / FFI.
         {
             let mut q = self.queue.lock().await;
+            if self.terminal.load(Ordering::SeqCst) {
+                return Err(JobError::JobTerminal(format!(
+                    "request_input on terminal job {}",
+                    self.job_id
+                )));
+            }
             q.pending.remove(&self.job_id);
         }
         self.backend
@@ -1634,6 +1652,62 @@ mod tests {
         // The controller is still usable: complete() works from
         // input_required (mirrors the registry's accepted transition).
         ctrl.complete(serde_json::json!({"ok": true})).await.unwrap();
+        let job = backend.get_job(&resp.id).await.unwrap();
+        assert_eq!(job.status, JobStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn request_input_after_terminal_is_guarded() {
+        // A helper task calling request_input AFTER the controller went
+        // terminal (complete/fail) must NOT submit a late input_required
+        // delta — mirrors the update_progress/release_lease terminal guard.
+        // request_input returns a Result, so the guard surfaces JobTerminal
+        // (same variant send_event raises) rather than dropping silently.
+        let backend = MockBackend::new();
+        let queue = new_coalescing_queue();
+        let resp = backend
+            .create_job(CreateJobRequest {
+                capability: "cap".into(),
+                submitted_payload: serde_json::json!({}),
+                submitted_by: "inst-1".into(),
+                max_retries: None,
+                max_duration: None,
+                total_deadline: None,
+                owner_instance_id: None,
+            })
+            .await
+            .unwrap();
+        let ctrl = JobController::new(
+            resp.id.clone(),
+            "inst-1".to_string(),
+            backend.clone() as Arc<dyn TaskBackend>,
+            queue.clone(),
+        );
+
+        ctrl.complete(serde_json::json!({"done": true})).await.unwrap();
+        assert!(ctrl.is_terminal().await);
+        // Exactly one batch so far — the terminal one.
+        assert_eq!(backend.batch_count(), 1);
+
+        // Late request_input: must be rejected with JobTerminal and must
+        // NOT submit another batch.
+        let err = ctrl
+            .request_input(Some("too late".into()))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, JobError::JobTerminal(_)),
+            "expected JobTerminal, got {:?}",
+            err
+        );
+
+        // No additional batch flushed — the registry never saw a
+        // post-terminal input_required delta.
+        assert_eq!(backend.batch_count(), 1);
+        let (_, deltas) = backend.last_batch().unwrap();
+        assert!(deltas[0].is_terminal());
+
+        // Job status unchanged — still Completed, not InputRequired.
         let job = backend.get_job(&resp.id).await.unwrap();
         assert_eq!(job.status, JobStatus::Completed);
     }
