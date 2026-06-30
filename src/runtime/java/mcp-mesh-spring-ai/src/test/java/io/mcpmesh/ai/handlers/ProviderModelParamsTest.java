@@ -287,15 +287,20 @@ class ProviderModelParamsTest {
         }
 
         @Test
-        @DisplayName("plain-text generateWithMessages with no params builds a no-options prompt")
+        @DisplayName("plain-text generateWithMessages with no params builds an options object with no model set")
         void plainTextPathNoParams() {
             ArgumentCaptor<Prompt> captor = ArgumentCaptor.forClass(Prompt.class);
             ChatModel model = mockModel(captor);
 
             handler.generateWithMessages(model, userMessages(), Map.of());
 
-            assertNull(captor.getValue().getOptions(),
-                "no model_params → plain Prompt(messages) with no ChatOptions");
+            // The handler now always builds a vendor-correct options object so the
+            // effective model can be set on every request. With no declared model
+            // and no override, the model stays null (Spring AI default applies).
+            ChatOptions opts = captor.getValue().getOptions();
+            assertInstanceOf(GoogleGenAiChatOptions.class, opts);
+            assertNull(opts.getModel(),
+                "no declared model and no override → model stays null (Spring AI default)");
         }
     }
 

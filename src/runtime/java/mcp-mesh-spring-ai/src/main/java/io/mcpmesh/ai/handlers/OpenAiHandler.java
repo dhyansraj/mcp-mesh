@@ -79,17 +79,14 @@ public class OpenAiHandler implements LlmProviderHandler {
         log.debug("OpenAiHandler: Processing {} messages", messages.size());
 
         List<Message> springMessages = convertMessages(messages);
-        // Plain-text generation: apply consumer-supplied model_params
-        // (max_tokens/temperature/top_p/vendor-matched model) when present so the
-        // no-tools/no-schema path honors them like the tools path does.
-        Prompt prompt;
-        if (LlmProviderHandler.hasAnyModelParam(options)) {
-            OpenAiChatOptions.Builder optionsBuilder = OpenAiChatOptions.builder();
-            applyModelParams(optionsBuilder, options);
-            prompt = new Prompt(springMessages, optionsBuilder.build());
-        } else {
-            prompt = new Prompt(springMessages);
-        }
+        // Plain-text generation: always build OpenAiChatOptions so the effective
+        // model (declared model, or a vendor-matched per-call override) is set on
+        // the request — without it the request falls through to Spring AI's default
+        // OpenAI model. Consumer-supplied model_params (max_tokens/temperature/
+        // top_p) are applied here too, with sampling-param gating for restricted models.
+        OpenAiChatOptions.Builder optionsBuilder = OpenAiChatOptions.builder();
+        applyModelParams(optionsBuilder, options);
+        Prompt prompt = new Prompt(springMessages, optionsBuilder.build());
         ChatResponse response = model.call(prompt);
 
         String content = response.getResult() != null && response.getResult().getOutput() != null
@@ -160,23 +157,62 @@ public class OpenAiHandler implements LlmProviderHandler {
      * provider's default model is kept.
      */
     private void applyModelParams(OpenAiChatOptions.Builder builder, Map<String, Object> options) {
+        // Resolve the effective model ONCE: a vendor-matched per-call override wins,
+        // else the provider's declared model. Set it on EVERY request so requests
+        // never fall through to Spring AI's vendor default model.
+        String eff = LlmProviderHandler.effectiveModel(options, getVendor(), getAliases());
+        if (eff != null) {
+            builder.model(eff);
+            log.debug("OpenAiHandler: applied model '{}'", eff);
+        }
+
         Integer maxTokens = LlmProviderHandler.maxTokensOption(options);
         if (maxTokens != null) {
             builder.maxCompletionTokens(maxTokens);
         }
+
+        // gpt-5 (non-chat) and o-series reasoning models accept ONLY the default
+        // temperature/top_p and reject any explicit value. Gate those params for
+        // the restricted models, using the SAME effective model resolved above.
+        boolean restricted = restrictsSamplingParams(eff);
         Double temperature = LlmProviderHandler.temperatureOption(options);
         if (temperature != null) {
-            builder.temperature(temperature);
+            if (restricted) {
+                log.warn("OpenAiHandler: omitting temperature={} for model '{}' (only the default is supported)", temperature, eff);
+            } else {
+                builder.temperature(temperature);
+            }
         }
         Double topP = LlmProviderHandler.topPOption(options);
         if (topP != null) {
-            builder.topP(topP);
+            if (restricted) {
+                log.warn("OpenAiHandler: omitting top_p={} for model '{}' (only the default is supported)", topP, eff);
+            } else {
+                builder.topP(topP);
+            }
         }
-        String modelOverride = LlmProviderHandler.resolveModelOverride(options, getVendor(), getAliases());
-        if (modelOverride != null) {
-            builder.model(modelOverride);
-            log.debug("OpenAiHandler: applied model override '{}'", modelOverride);
-        }
+    }
+
+    /**
+     * Whether an OpenAI model restricts {@code temperature}/{@code top_p} to their
+     * default value (rejecting any explicit setting). Verified against the live API:
+     * <ul>
+     *   <li>REJECT: gpt-5, gpt-5-mini, gpt-5-nano, o1, o3-mini, o4-mini</li>
+     *   <li>ACCEPT: gpt-4o, gpt-4.1, gpt-5-chat-latest</li>
+     * </ul>
+     * Accepts a bare or {@code vendor/}-qualified model string.
+     */
+    static boolean restrictsSamplingParams(String model) {
+        if (model == null) return false;
+        String m = model.toLowerCase();
+        int slash = m.indexOf('/');
+        if (slash >= 0) m = m.substring(slash + 1);
+        // o-series reasoning models reject temperature/top_p
+        if (m.equals("o1") || m.equals("o3") || m.equals("o4")
+            || m.startsWith("o1-") || m.startsWith("o3-") || m.startsWith("o4-")) return true;
+        // gpt-5 family restricts temperature/top_p to default — except gpt-5-chat*
+        if (m.startsWith("gpt-5") && !m.startsWith("gpt-5-chat")) return true;
+        return false;
     }
 
     /**
@@ -222,39 +258,36 @@ public class OpenAiHandler implements LlmProviderHandler {
             requestSpec.toolCallbacks(toolCallbacks.toArray(new ToolCallback[0]));
         }
 
-        // Apply response_format immediately when outputSchema is present (like Python),
-        // plus any consumer-supplied model_params (max_tokens/temperature/top_p/model).
-        // Build options whenever EITHER a schema OR model_params are present so the
-        // numeric/model overrides reach the wire even without a schema.
-        boolean hasModelParams = LlmProviderHandler.hasAnyModelParam(options);
-        if (outputSchema != null || hasModelParams) {
+        // Always build OpenAiChatOptions so the effective model (declared model or a
+        // vendor-matched per-call override) is set on EVERY request. response_format
+        // is added when an outputSchema is present (like Python); consumer-supplied
+        // model_params are applied with sampling-param gating for restricted models.
+        OpenAiChatOptions.Builder optionsBuilder = OpenAiChatOptions.builder();
+        if (outputSchema != null) {
+            // Isolate ONLY the response_format construction: a schema failure must
+            // not prevent applyModelParams/options(...) from running, otherwise the
+            // declared model is dropped and the request falls back to Spring AI's default.
             try {
-                OpenAiChatOptions.Builder optionsBuilder = OpenAiChatOptions.builder();
-                if (outputSchema != null) {
-                    // Make schema strict (add additionalProperties: false, all properties required)
-                    Map<String, Object> strictSchema = outputSchema.makeStrict(true);
+                // Make schema strict (add additionalProperties: false, all properties required)
+                Map<String, Object> strictSchema = outputSchema.makeStrict(true);
 
-                    ResponseFormat responseFormat = ResponseFormat.builder()
-                        .type(Type.JSON_SCHEMA)
-                        .jsonSchema(ResponseFormat.JsonSchema.builder()
-                            .name(outputSchema.name())
-                            .schema(strictSchema)
-                            .strict(true)
-                            .build())
-                        .build();
-                    optionsBuilder.responseFormat(responseFormat);
-                }
-                applyModelParams(optionsBuilder, options);
-
-                requestSpec.options(optionsBuilder.build());
-                if (outputSchema != null) {
-                    log.debug("Applied OpenAI response_format with schema: {}", outputSchema.name());
-                }
+                ResponseFormat responseFormat = ResponseFormat.builder()
+                    .type(Type.JSON_SCHEMA)
+                    .jsonSchema(ResponseFormat.JsonSchema.builder()
+                        .name(outputSchema.name())
+                        .schema(strictSchema)
+                        .strict(true)
+                        .build())
+                    .build();
+                optionsBuilder.responseFormat(responseFormat);
+                log.debug("Applied OpenAI response_format with schema: {}", outputSchema.name());
             } catch (Exception e) {
-                log.warn("Failed to apply OpenAI options (schema={}): {}",
-                    outputSchema != null ? outputSchema.name() : "none", e.getMessage());
+                log.warn("Failed to apply OpenAI response_format for {}: {}, proceeding without it",
+                    outputSchema.name(), e.getMessage());
             }
         }
+        applyModelParams(optionsBuilder, options);
+        requestSpec.options(optionsBuilder.build());
 
         // Execute the request
         ChatResponse chatResponse = requestSpec.call().chatResponse();

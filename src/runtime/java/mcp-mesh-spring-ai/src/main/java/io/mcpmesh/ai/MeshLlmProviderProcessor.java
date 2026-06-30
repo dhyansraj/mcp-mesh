@@ -349,6 +349,13 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
         // or invalid the handler falls back to per-vendor auto-selection (zero
         // regression). Threaded to handlers via the options map.
         Map<String, Object> handlerOptions = new LinkedHashMap<>();
+        // Thread the provider's DECLARED model (vendor-stripped) into EVERY generate
+        // path so handlers set the model on every request. Without this, requests
+        // with no per-call override fall through to Spring AI's vendor default model
+        // (e.g. OpenAI's default gpt-5), which can reject non-default sampling params.
+        if (config.modelName() != null && !config.modelName().isBlank()) {
+            handlerOptions.put(LlmProviderHandler.OPTION_DECLARED_MODEL, config.modelName());
+        }
         if (modelParams != null) {
             Object om = modelParams.get("output_mode");
             if (om != null && !String.valueOf(om).isEmpty()) {

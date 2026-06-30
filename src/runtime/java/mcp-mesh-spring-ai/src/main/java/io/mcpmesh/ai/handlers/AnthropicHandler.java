@@ -174,17 +174,13 @@ public class AnthropicHandler implements LlmProviderHandler {
         log.debug("AnthropicHandler: Processing {} messages", messages.size());
 
         List<Message> springMessages = convertMessages(messages);
-        // Plain-text generation: apply consumer-supplied model_params
-        // (max_tokens/temperature/top_p/vendor-matched model) when present so the
-        // no-tools/no-schema path honors them like the tools path does.
-        Prompt prompt;
-        if (LlmProviderHandler.hasAnyModelParam(options)) {
-            AnthropicChatOptions.Builder optionsBuilder = AnthropicChatOptions.builder();
-            applyModelParams(optionsBuilder, options);
-            prompt = new Prompt(springMessages, optionsBuilder.build());
-        } else {
-            prompt = new Prompt(springMessages);
-        }
+        // Plain-text generation: always build AnthropicChatOptions so the effective
+        // model (declared model, or a vendor-matched per-call override) is set on the
+        // request — without it the request falls through to Spring AI's default
+        // Anthropic model. Consumer-supplied model_params are applied here too.
+        AnthropicChatOptions.Builder optionsBuilder = AnthropicChatOptions.builder();
+        applyModelParams(optionsBuilder, options);
+        Prompt prompt = new Prompt(springMessages, optionsBuilder.build());
         ChatResponse response = model.call(prompt);
 
         String content = response.getResult() != null && response.getResult().getOutput() != null
@@ -274,10 +270,13 @@ public class AnthropicHandler implements LlmProviderHandler {
         if (topP != null) {
             builder.topP(topP);
         }
-        String modelOverride = LlmProviderHandler.resolveModelOverride(options, getVendor(), getAliases());
-        if (modelOverride != null) {
-            builder.model(modelOverride);
-            log.debug("AnthropicHandler: applied model override '{}'", modelOverride);
+        // Set the effective model on EVERY request: a vendor-matched per-call
+        // override wins, else the provider's declared model. Without this the
+        // request falls through to Spring AI's default Anthropic model.
+        String eff = LlmProviderHandler.effectiveModel(options, getVendor(), getAliases());
+        if (eff != null) {
+            builder.model(eff);
+            log.debug("AnthropicHandler: applied model '{}'", eff);
         }
     }
 
@@ -325,30 +324,27 @@ public class AnthropicHandler implements LlmProviderHandler {
             requestSpec.toolCallbacks(toolCallbacks.toArray(new ToolCallback[0]));
         }
 
-        // Apply native output_format when outputSchema is present, plus any
-        // consumer-supplied model_params (max_tokens/temperature/top_p/model).
-        // Build options whenever EITHER a schema OR model_params are present so
-        // the numeric/model overrides reach the wire even without a schema.
-        boolean hasModelParams = LlmProviderHandler.hasAnyModelParam(options);
-        if (outputSchema != null || hasModelParams) {
+        // Always build AnthropicChatOptions so the effective model (declared model or
+        // a vendor-matched per-call override) is set on EVERY request. output_format
+        // is added when an outputSchema is present; consumer-supplied model_params are
+        // applied too.
+        AnthropicChatOptions.Builder optionsBuilder = AnthropicChatOptions.builder();
+        if (outputSchema != null) {
+            // Isolate ONLY the schema serialization: a schema failure must not
+            // prevent applyModelParams/options(...) from running, otherwise the
+            // declared model is dropped and the request falls back to Spring AI's default.
             try {
-                AnthropicChatOptions.Builder optionsBuilder = AnthropicChatOptions.builder();
-                if (outputSchema != null) {
-                    Map<String, Object> sanitizedSchema = outputSchema.sanitize();
-                    String schemaJson = TOOL_CALLBACK_MAPPER.writeValueAsString(sanitizedSchema);
-                    optionsBuilder.outputSchema(schemaJson);
-                }
-                applyModelParams(optionsBuilder, options);
-
-                requestSpec.options(optionsBuilder.build());
-                if (outputSchema != null) {
-                    log.debug("Applied Anthropic output_format with schema: {}", outputSchema.name());
-                }
+                Map<String, Object> sanitizedSchema = outputSchema.sanitize();
+                String schemaJson = TOOL_CALLBACK_MAPPER.writeValueAsString(sanitizedSchema);
+                optionsBuilder.outputSchema(schemaJson);
+                log.debug("Applied Anthropic output_format with schema: {}", outputSchema.name());
             } catch (Exception e) {
-                log.warn("Failed to apply Anthropic options (schema={}): {}",
-                    outputSchema != null ? outputSchema.name() : "none", e.getMessage());
+                log.warn("Failed to apply Anthropic output_schema for {}: {}, proceeding without it",
+                    outputSchema.name(), e.getMessage());
             }
         }
+        applyModelParams(optionsBuilder, options);
+        requestSpec.options(optionsBuilder.build());
 
         // Execute the request — if outputFormat was applied and the API rejects it,
         // retry with HINT-mode instructions instead of native output_format
