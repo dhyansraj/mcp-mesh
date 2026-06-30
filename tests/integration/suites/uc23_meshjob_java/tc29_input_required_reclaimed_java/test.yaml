@@ -1,0 +1,208 @@
+# tc29_input_required_reclaimed_java — Java port of
+# uc21_meshjob/tc29_input_required_reclaimed (#1229, C1).
+#
+# Proves the new Java requestInput() MeshJob primitive (JNA -> C-FFI ->
+# shared Rust core, added in this branch) works end-to-end: it transitions
+# a job to input_required, then — because the producer parks silently
+# without heartbeating and the consumer never answers — the lease lapses
+# and the (now input_required-scoped) lease-recovery sweep reclaims it.
+#
+# Before this fix, ReclaimExpiredLeaseJobs / ResetOrphanedJobs only matched
+# status=working rows, so a job parked in input_required whose producer
+# stopped heartbeating was stranded forever. The fix widens the filter to
+# StatusIn(working, input_required). With max_retries=0 the reclaim is
+# terminal on the first lapse: status=failed,
+# error="lease expired: no completion within lease window".
+#
+# Flow:
+#   - The producer's awaitsInputForever task transitions the row to
+#     input_required (via controller.requestInput(...) on the injected
+#     JobController) then parks on recvEvent for an "answer" that never
+#     arrives, posting NO progress (a progress delta would extend the lease).
+#   - The consumer's commissionAwaitsInput submits with a small
+#     max_duration=2 (short lease window) and max_retries=0, and never
+#     posts the answer.
+#   - The lease lapses ~2s after claim; the next sweep tick (fast-sweep
+#     routine, ~10s) runs ReclaimExpiredLeaseJobs which now sees the
+#     input_required row, and — budget exhausted (max_retries=0) — marks it
+#     failed with "lease expired: ...".
+#
+# Uses the EXISTING start_registry_with_fast_sweep routine (NO stale
+# timeout) so the failure is unambiguously lease-reclaim, not the stale
+# phase.
+#
+# Asserts:
+#   - the job first reaches status=input_required (proves requestInput worked)
+#   - terminal status == failed
+#   - error CONTAINS "lease expired"
+#   - error does NOT contain "stale:"  (distinguishes C1 from C2)
+#   - owner_instance_id null (slot freed by the reclaim)
+
+name: "MeshJob Java: input_required job with expired lease is reclaimed (failed on exhausted budget)"
+description: "Java producer parks a job in input_required via requestInput() without heartbeating; lease-recovery sweep (now input_required-scoped) marks it failed 'lease expired' with max_retries=0"
+tags:
+  - meshjob
+  - java
+  - issue-1229
+  - input-required
+  - retry
+  - slow
+timeout: 360
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-java /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-java /workspace/
+
+  - name: "Install provider deps"
+    handler: maven-install
+    path: /workspace/long-task-provider-java
+    timeout: 600
+
+  - name: "Install consumer deps"
+    handler: maven-install
+    path: /workspace/long-task-consumer-java
+    timeout: 600
+
+  # Fast sweep, NO stale timeout — the failure must be lease-reclaim only.
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider (port 9120)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
+
+  - name: "Wait for Java provider healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] && exit 0; sleep 2
+      done
+      echo "ERROR: provider not healthy"
+      meshctl logs long-task-provider-java 2>&1 | tail -50 || true
+      exit 1
+    timeout: 150
+
+  - name: "Start consumer (port 9121)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-java --env MCP_MESH_HTTP_PORT=9121 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  # Liveness only: wait until both named agents are registered AND healthy
+  # (Java startup is slow and can flap). DI resolution is covered by the
+  # settle window (MCP_MESH_SETTLE_TIMEOUT=60 on the consumer).
+  - name: "Wait for provider + consumer healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(curl -s http://localhost:8000/agents)
+        OK=1
+        S=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] || OK=0
+        S=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] || OK=0
+        if [ "$OK" = "1" ]; then
+          echo "all agents healthy after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: agents not healthy within 120s"
+      meshctl logs long-task-provider-java 2>&1 | tail -50 || true
+      meshctl logs long-task-consumer-java 2>&1 | tail -50 || true
+      curl -s http://localhost:8000/agents | jq '.agents[] | {name, status, last_seen}'
+      exit 1
+    timeout: 150
+
+  # Small max_duration=2 sizes the lease window; max_retries=0 (hard-coded
+  # in the consumer tool) makes the reclaim terminal on the first lapse.
+  # The answer event is never posted.
+  - name: "Submit awaits_input_forever (max_duration=2, max_retries=0)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_awaits_input '{"user_id":"alice","max_duration":2}'
+    capture: submit_resp
+    timeout: 60
+
+  - name: "Extract job_id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESP='${captured.submit_resp}'
+      JOB_ID=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .job_id')
+      echo "JOB_ID=$JOB_ID"
+    capture: job_id_extract
+
+  # Poll until the row reaches input_required — proves the producer claimed
+  # the job and transitioned it via requestInput() (the precondition the C1
+  # fix is about). The row stays input_required only briefly before the
+  # lease lapses, so poll fast and capture the first hit.
+  - name: "Poll until the job is input_required"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      echo "JOB_ID=${JOB_ID}"
+      for i in $(seq 1 30); do
+        ST=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.status')
+        echo "poll ${i}: status=${ST}"
+        if [ "$ST" = "input_required" ]; then
+          echo "REACHED_INPUT_REQUIRED=1"
+          exit 0
+        fi
+        # If it already went terminal failed (sweep won the race against our
+        # poll), that's still consistent with the reclaim — surface it and
+        # let the terminal assertions below decide.
+        if [ "$ST" = "failed" ]; then
+          echo "ALREADY_FAILED_BEFORE_POLL_SAW_INPUT_REQUIRED=1"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: job never reached input_required within 30s"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status,error,owner_instance_id,lease_expires_at}'
+      exit 1
+    capture: input_required_poll
+    timeout: 45
+
+  # Lease window (max_duration=2) + a couple fast-sweep ticks (~10s) +
+  # headroom. The provider is kept healthy so this is the lease-reclaim
+  # path, not the orphan path.
+  - name: "Wait for the lease-recovery sweep to fire"
+    handler: wait
+    seconds: 12
+
+  - name: "Final status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      echo "JOB_ID=${JOB_ID}"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status,error,owner_instance_id,lease_expires_at,attempt_count}'
+    capture: final_status
+
+assertions:
+  - expr: "${captured.input_required_poll} contains 'REACHED_INPUT_REQUIRED=1'"
+    message: "the job must reach input_required before the lease lapses — proves requestInput() transitioned the row"
+  - expr: "${captured.final_status} contains '\"status\": \"failed\"'"
+    message: "input_required job whose lease lapsed with no retry budget must be marked failed"
+  - expr: "${captured.final_status} contains 'lease expired'"
+    message: "error must be the canonical 'lease expired' reason from the lease-recovery sweep"
+  - expr: "${captured.final_status} not contains 'stale:'"
+    message: "this is the lease-reclaim path (C1), NOT the stale-ceiling path (C2) — no stale timeout is set here"
+  - expr: "${captured.final_status} contains '\"owner_instance_id\": null'"
+    message: "lease reclaim must clear owner_instance_id (slot freed)"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

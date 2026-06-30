@@ -479,6 +479,63 @@ agent.addTool({
   },
 });
 
+// ---------------------------------------------------------------------------
+// input_required lease-reclaim producer (tc28 / C1, #1229)
+// ---------------------------------------------------------------------------
+//
+// TS port of uc21_meshjob/fixtures/long-task-provider/main.py
+// (awaits_input_forever). The injected JobController exposes
+// `requestInput(prompt?)` — the SDK primitive (napi binding to the shared
+// Rust core) that transitions the owned job to `input_required` (status-only,
+// non-terminal, flushed immediately). It uses the controller's own job
+// context + lease ownership, so no registry-URL / instance-id plumbing.
+//
+// After signalling input_required the handler parks on recvEvent for an
+// "answer" event that never arrives, posting NO progress. Because progress
+// deltas are what extend the lease, the silent park lets the lease lapse so
+// the registry's ReclaimExpiredLeaseJobs phase (now input_required-scoped)
+// can reap it — the whole point of the C1 test.
+// ---------------------------------------------------------------------------
+agent.addTool({
+  name: "awaits_input_forever",
+  capability: "awaits_input_forever",
+  task: true,
+  meshJobParamIndex: 1,
+  description:
+    "Transitions the job to input_required via requestInput(), then parks on recvEvent for an answer that never arrives — never posts progress, never completes.",
+  parameters: z.object({ user_id: z.string() }),
+  execute: async ({ user_id }, job: MeshJob | null = null) => {
+    if (!job?.requestInput) {
+      return { status: "no_job_ctx" };
+    }
+    // Transition the row to input_required via the SDK primitive (the injected
+    // controller is the lease owner, so no manual owner-check plumbing needed).
+    await job.requestInput(`waiting on input for ${user_id}`);
+    // Park waiting for an "answer" event the consumer never posts.
+    // CRITICAL: do NOT call updateProgress here — a progress delta would
+    // extend the lease and defeat the lease-reclaim test. recvEvent is a
+    // pure long-poll read; it does not heartbeat the lease. We loop on the
+    // long-poll so the handler stays parked well past the lease window; the
+    // registry reaps the row out from under us via ReclaimExpiredLeaseJobs.
+    if (!job.recvEvent) {
+      return { status: "no_recv_event" };
+    }
+    for (let i = 0; i < 60; i++) {
+      const event = await job.recvEvent(["answer"], 15);
+      if (event !== null) {
+        // An answer arrived (not expected in the C1 test) — complete so the
+        // fixture is still well-behaved if ever exercised that way.
+        const payload = { status: "got_answer", payload: event.payload };
+        if (job.complete) {
+          await job.complete(payload);
+        }
+        return payload;
+      }
+    }
+    return { status: "never_answered" };
+  },
+});
+
 console.log(
   `long-task-provider-ts uc22 fixture defined on port ${HTTP_PORT}. Waiting for auto-start...`,
 );

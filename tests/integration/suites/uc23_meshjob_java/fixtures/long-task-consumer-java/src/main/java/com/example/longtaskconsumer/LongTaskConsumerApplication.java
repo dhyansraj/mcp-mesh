@@ -788,4 +788,51 @@ public class LongTaskConsumerApplication {
             return response;
         }
     }
+
+    // -------------------------------------------------------------------
+    // input_required lease-reclaim submitter (tc29 / C1, #1229)
+    // -------------------------------------------------------------------
+    //
+    // Java port of uc21's commission_awaits_input
+    // (uc21_meshjob/fixtures/long-task-consumer/main.py). Submits the
+    // awaits_input_forever producer with a SMALL max_duration (sizes the
+    // lease window) and max_retries=0 (makes the lease lapse terminal on
+    // the first reclaim pass: status=failed, error="lease expired: ...").
+    // Returns the job_id immediately and NEVER posts the "answer" event
+    // the producer is parked on, so the row sits in input_required until
+    // the registry's lease-recovery sweep reaps it.
+    // -------------------------------------------------------------------
+    @MeshTool(
+        capability = "commission_awaits_input",
+        description = "Submit awaits_input_forever with a small max_duration and max_retries=0; never posts the answer.",
+        dependencies = @Selector(capability = "awaits_input_forever")
+    )
+    public Map<String, Object> commissionAwaitsInput(
+            @Param(value = "user_id", required = false) String userId,
+            @Param(value = "max_duration", required = false) Integer maxDuration,
+            MeshJob awaitsInputForever) throws Exception {
+        if (!(awaitsInputForever instanceof MeshJobSubmitter submitter)) {
+            Map<String, Object> err = new LinkedHashMap<>();
+            err.put("error", "awaits_input_forever submitter not injected");
+            return err;
+        }
+        String user = userId == null ? "alice" : userId;
+        // Small max_duration sizes the LEASE window so it lapses quickly
+        // once the producer parks in input_required without heartbeating.
+        // max_retries=0 makes the lease lapse terminal on the first reclaim
+        // pass, avoiding a reset->reclaim race a non-zero retry budget would
+        // introduce. We deliberately NEVER post the "answer" event the
+        // producer is parked on.
+        int duration = maxDuration == null ? 2 : maxDuration;
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("user_id", user);
+        MeshJobSubmitter.SubmitOptions opts = new MeshJobSubmitter.SubmitOptions(
+            payload, null, duration, 0, null);
+        try (JobProxy proxy = submitter.submit(opts).get()) {
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("job_id", proxy.jobId());
+            return response;
+        }
+    }
 }
