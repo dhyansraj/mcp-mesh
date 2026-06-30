@@ -85,7 +85,7 @@ class ProviderModelParamsTest {
 
             ChatOptions opts = captor.getValue().getOptions();
             assertInstanceOf(OpenAiChatOptions.class, opts);
-            assertEquals(1234, opts.getMaxTokens());
+            assertEquals(1234, ((OpenAiChatOptions) opts).getMaxCompletionTokens());
             assertEquals(0.42, opts.getTemperature(), 1e-9);
             assertEquals(0.9, opts.getTopP(), 1e-9);
         }
@@ -127,7 +127,8 @@ class ProviderModelParamsTest {
             handler.generateWithTools(model, userMessages(), List.of(), null, null, Map.of());
 
             ChatOptions opts = captor.getValue().getOptions();
-            assertNull(opts.getMaxTokens(), "absent max_tokens must not be force-set");
+            assertNull(((OpenAiChatOptions) opts).getMaxCompletionTokens(),
+                "absent max_tokens must not be force-set");
             assertNull(opts.getTemperature(), "absent temperature must not be force-set");
             assertNull(opts.getTopP(), "absent top_p must not be force-set");
             assertNull(opts.getModel(), "absent model must not be force-set");
