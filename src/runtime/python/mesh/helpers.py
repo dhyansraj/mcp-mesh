@@ -1303,6 +1303,11 @@ def _build_iteration_completion_args(
     if model_params:
         completion_args.update(model_params)
 
+    # Restricted OpenAI models (o-series / gpt-5 non-chat) reject explicit
+    # temperature/top_p — strip them here so neither the native adapter nor
+    # the LiteLLM fallback forwards them.
+    _sanitize_sampling_params(completion_args, effective_model)
+
     if stream:
         existing_stream_opts = completion_args.get("stream_options") or {}
         completion_args["stream"] = True
@@ -2304,6 +2309,40 @@ def _infer_big3_vendor_from_bare_name(model: str) -> str | None:
     return None
 
 
+def _sanitize_sampling_params(
+    completion_args: dict[str, Any], effective_model: str
+) -> None:
+    """Drop ``temperature``/``top_p`` from ``completion_args`` in place when the
+    effective OpenAI model rejects them (o-series / gpt-5 non-chat).
+
+    OpenAI reasoning models and the gpt-5 family (except gpt-5-chat) return
+    HTTP 400 for any explicit ``temperature``/``top_p``. Pop them with a WARN
+    (soft-fail, mesh philosophy) so the LiteLLM call never forwards them. The
+    classifier strips the vendor prefix and matches only OpenAI restricted
+    names, so this is a safe no-op for gemini/anthropic and for unrestricted
+    OpenAI models (gpt-4o, gpt-4.1, gpt-5-chat-latest). Only present params are
+    touched — mesh sends no default temperature, so an unset value is left
+    unset.
+    """
+    from _mcp_mesh.engine.native_clients._native_client_helpers import (
+        restricts_sampling_params,
+    )
+
+    if not restricts_sampling_params(effective_model):
+        return
+    for key in ("temperature", "top_p"):
+        if completion_args.get(key) is not None:
+            value = completion_args.pop(key)
+            logger.warning(
+                "OpenAI model %s rejects %s; omitting %s=%s "
+                "(only the default is supported)",
+                effective_model,
+                key,
+                key,
+                value,
+            )
+
+
 def llm_provider(
     model: str,
     capability: str = "llm",
@@ -2684,6 +2723,11 @@ def llm_provider(
             if model_params_copy:
                 completion_args.update(model_params_copy)
 
+            # Restricted OpenAI models (o-series / gpt-5 non-chat) reject
+            # explicit temperature/top_p — strip them before native/LiteLLM
+            # dispatch (and before the fallback args derive from these).
+            _sanitize_sampling_params(completion_args, effective_model)
+
             # Strip internal mesh control flags before they reach LiteLLM.
             # These are set by handlers (e.g., ClaudeHandler HINT mode) and
             # would otherwise cause provider APIs to reject the request with
@@ -2994,6 +3038,11 @@ def llm_provider(
                 completion_args["tools"] = effective_tools
             if model_params_copy:
                 completion_args.update(model_params_copy)
+
+            # Restricted OpenAI models (o-series / gpt-5 non-chat) reject
+            # explicit temperature/top_p — strip them before native/LiteLLM
+            # streaming dispatch.
+            _sanitize_sampling_params(completion_args, effective_model)
 
             # Strip internal mesh control flags before they reach LiteLLM
             # (mirrors the buffered legacy path). Captured values are not
