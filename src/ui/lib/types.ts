@@ -246,6 +246,11 @@ export interface TrafficResponse {
   edge_stats: EdgeStat[];
   agent_stats: AgentStat[];
   model_stats: ModelStat[];
+  /**
+   * True when a busy window exceeded the read cap and the returned aggregates
+   * are partial (sampled). The Traffic page surfaces a muted "partial" note.
+   */
+  truncated?: boolean;
 }
 
 /**

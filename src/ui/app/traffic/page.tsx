@@ -95,7 +95,7 @@ function Sparkline({
 }
 
 export default function TrafficPage() {
-  const [window, setWindow] = useState<TrafficWindow>("all");
+  const [timeWindow, setTimeWindow] = useState<TrafficWindow>("all");
 
   const [edgeStats, setEdgeStats] = useState<EdgeStat[]>([]);
   const [agentStats, setAgentStats] = useState<AgentStat[]>([]);
@@ -103,6 +103,7 @@ export default function TrafficPage() {
   const [totalCalls, setTotalCalls] = useState(0);
   const [totalErrors, setTotalErrors] = useState(0);
   const [enabled, setEnabled] = useState(true);
+  const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
   const [refetching, setRefetching] = useState(false);
@@ -117,7 +118,7 @@ export default function TrafficPage() {
   // the selected window changed in the meantime (stale-guard).
   useEffect(() => {
     let cancelled = false;
-    const requestedWindow = window;
+    const requestedWindow = timeWindow;
 
     // A fresh window must not inherit the previous window's trend or numbers.
     historyRef.current = new Map();
@@ -127,9 +128,10 @@ export default function TrafficPage() {
       if (!isInitial) setRefetching(true);
       try {
         const data = await getTraffic(requestedWindow);
-        if (cancelled || requestedWindow !== window) return;
+        if (cancelled || requestedWindow !== timeWindow) return;
 
         setEnabled(data.enabled);
+        setTruncated(!!data.truncated);
         setTotalCalls(data.total_calls);
         setTotalErrors(data.total_errors);
         setModelStats(data.model_stats || []);
@@ -147,10 +149,14 @@ export default function TrafficPage() {
         setTick((t) => t + 1);
         setError(null);
       } catch (err) {
-        if (cancelled || requestedWindow !== window) return;
-        setError(err instanceof Error ? err : new Error(String(err)));
+        if (cancelled || requestedWindow !== timeWindow) return;
+        if (isInitial) {
+          setError(err instanceof Error ? err : new Error(String(err)));
+        }
+        // Background poll failure: keep the last good data on screen; do not
+        // trip the full-page error and do not clear any stats state.
       } finally {
-        if (!cancelled && requestedWindow === window) {
+        if (!cancelled && requestedWindow === timeWindow) {
           setLoading(false);
           setRefetching(false);
         }
@@ -164,7 +170,7 @@ export default function TrafficPage() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [window, reloadKey]);
+  }, [timeWindow, reloadKey]);
 
   // Aggregated stats for overview cards
   const overview = useMemo(() => {
@@ -210,8 +216,8 @@ export default function TrafficPage() {
       <Segmented
         aria-label="Traffic time range"
         options={WINDOW_OPTIONS}
-        value={window}
-        onChange={setWindow}
+        value={timeWindow}
+        onChange={setTimeWindow}
       />
     </div>
   );
@@ -347,7 +353,14 @@ export default function TrafficPage() {
         {/* Section 2: Per-Edge Traffic Table */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Per-Edge Traffic</CardTitle>
+            <div className="flex items-center gap-2">
+              <CardTitle className="text-base">Per-Edge Traffic</CardTitle>
+              {truncated && (
+                <span className="inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-500">
+                  Partial — window exceeded the sample cap
+                </span>
+              )}
+            </div>
           </CardHeader>
           <CardContent>
             {sortedEdges.length === 0 ? (

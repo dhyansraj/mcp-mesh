@@ -832,11 +832,13 @@ func (tm *TracingManager) GetAccumulator() *TraceAccumulator {
 // RangeEventsSince reads trace events from the stream whose entry IDs are at or
 // after (now - window), parsed into TraceEvents. It leverages the stream's
 // millisecond-timestamped entry IDs for a time-bounded XRANGE (no full scan)
-// and caps the total returned via maxEntries. Returns (nil, nil) when tracing
-// is disabled or the consumer is not connected.
-func (tm *TracingManager) RangeEventsSince(window time.Duration, maxEntries, batchCount int) ([]*TraceEvent, error) {
+// and caps the total returned via maxEntries. The truncated bool reports whether
+// the maxEntries cap was hit before the window was fully read (newest entries are
+// retained). Returns (nil, false, nil) when tracing is disabled or the consumer
+// is not connected.
+func (tm *TracingManager) RangeEventsSince(window time.Duration, maxEntries, batchCount int) ([]*TraceEvent, bool, error) {
 	if !tm.enabled || tm.consumer == nil {
-		return nil, nil
+		return nil, false, nil
 	}
 	startMs := time.Now().Add(-window).UnixMilli()
 	if startMs < 0 {

@@ -372,16 +372,25 @@ func (sc *StreamConsumer) TrimStream() (int64, error) {
 // the live consumer uses. Stream entry IDs are millisecond timestamps, so a
 // startID of "<unix-millis>-0" yields a time-bounded read that never scans the
 // whole stream. maxEntries caps the total returned defensively so a wide window
-// cannot OOM; reads are paged in batches of batchCount using the exclusive
-// "(id" cursor. Returns (nil, nil) when the consumer is not connected.
-func (sc *StreamConsumer) RangeEvents(startID string, maxEntries, batchCount int) ([]*TraceEvent, error) {
+// cannot OOM.
+//
+// To keep the most RECENT entries under that cap (busy windows with >maxEntries
+// entries must not drop the newest calls), it reads newest-first via XREVRANGE
+// from "+" walking DOWN toward startID, advancing the cursor to the exclusive
+// predecessor of the last-seen (oldest-in-page) ID. If the cap is hit before the
+// range is exhausted, truncated is true. The collected events (newest→oldest)
+// are reversed in place before returning so callers receive them in chronological
+// (oldest→newest) order, matching the live consumer's feed order.
+//
+// Returns (nil, false, nil) when the consumer is not connected.
+func (sc *StreamConsumer) RangeEvents(startID string, maxEntries, batchCount int) ([]*TraceEvent, bool, error) {
 	sc.mu.RLock()
 	client := sc.client
 	state := sc.connectionState
 	sc.mu.RUnlock()
 
 	if client == nil || state != StateConnected {
-		return nil, nil
+		return nil, false, nil
 	}
 
 	if maxEntries <= 0 {
@@ -392,14 +401,15 @@ func (sc *StreamConsumer) RangeEvents(startID string, maxEntries, batchCount int
 	}
 
 	events := make([]*TraceEvent, 0, batchCount)
-	cursor := startID
+	cursor := "+"
+	truncated := false
 
 	for len(events) < maxEntries {
 		ctx, cancel := context.WithTimeout(sc.ctx, 10*time.Second)
-		msgs, err := client.XRangeN(ctx, sc.streamName, cursor, "+", int64(batchCount)).Result()
+		msgs, err := client.XRevRangeN(ctx, sc.streamName, cursor, startID, int64(batchCount)).Result()
 		cancel()
 		if err != nil {
-			return events, fmt.Errorf("failed to XRANGE stream %s: %w", sc.streamName, err)
+			return events, false, fmt.Errorf("failed to XREVRANGE stream %s: %w", sc.streamName, err)
 		}
 		if len(msgs) == 0 {
 			break
@@ -414,19 +424,29 @@ func (sc *StreamConsumer) RangeEvents(startID string, maxEntries, batchCount int
 			}
 			events = append(events, event)
 			if len(events) >= maxEntries {
+				// Capped before reaching startID: the window has more entries
+				// than we returned, so callers should treat totals as partial.
+				truncated = true
 				break
 			}
 		}
 
-		// Fewer than a full batch means we reached the end of the range.
+		// Fewer than a full batch means we reached the end (startID) of the range.
 		if len(msgs) < batchCount {
 			break
 		}
-		// Advance the cursor past the last-seen ID (exclusive) for the next page.
+		// Advance the cursor past the last-seen (oldest-in-page) ID (exclusive)
+		// for the next, older page.
 		cursor = "(" + msgs[len(msgs)-1].ID
 	}
 
-	return events, nil
+	// XREVRANGE collected newest→oldest; reverse in place so callers get
+	// chronological (oldest→newest) order, matching the live processMessage feed.
+	for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
+		events[i], events[j] = events[j], events[i]
+	}
+
+	return events, truncated, nil
 }
 
 // handleConnectionError records connection failure and updates state

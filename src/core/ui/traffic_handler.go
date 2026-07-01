@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"log"
 	"strconv"
 	"time"
@@ -19,6 +20,20 @@ const (
 	windowReadBatch  = 1000
 )
 
+// trafficCacheTTL bounds how long a windowed (1h/1d) result is reused. It is
+// deliberately SHORTER than the dashboard's 5s poll interval so consecutive
+// polls from a single viewer see fresh data while concurrent viewers (and
+// duplicate in-flight polls) share one XRANGE+replay pass.
+const trafficCacheTTL = 2 * time.Second
+
+// trafficCacheEntry is a cached windowed /trace/traffic result keyed by
+// window+limit. Only the windowed (1h/1d) path is cached; window=all reads are
+// cheap live aggregates and error responses are never cached.
+type trafficCacheEntry struct {
+	response  TrafficResponse
+	expiresAt time.Time
+}
+
 // TrafficResponse is the /trace/traffic payload. edge_stats/agent_stats/model_stats
 // carry the exact element shapes produced by TraceAccumulator.GetEdgeStats,
 // MetricsProcessor.GetAgentMetrics and MetricsProcessor.GetModelMetrics, so the
@@ -31,6 +46,10 @@ type TrafficResponse struct {
 	EdgeStats   []tracing.EdgeStats `json:"edge_stats"`
 	AgentStats  []AgentMetricsData  `json:"agent_stats"`
 	ModelStats  []ModelMetricsData  `json:"model_stats"`
+	// Truncated is set on windowed responses when the maxWindowEntries cap was
+	// hit before the whole window was read; the newest entries are retained, so
+	// totals reflect the most recent slice of a busier window.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // parseWindow maps a window query value to a duration. The bool result reports
@@ -154,7 +173,16 @@ func (s *Server) handleTraffic(c *gin.Context) {
 	}
 
 	// window=1h/1d: bounded XRANGE + replay through fresh throwaway instances.
-	events, err := s.tracingManager.RangeEventsSince(window, maxWindowEntries, windowReadBatch)
+	// Short-TTL cache: a windowed result is relatively expensive to rebuild, so
+	// serve a recent one (younger than trafficCacheTTL) to concurrent viewers and
+	// duplicate polls instead of re-running RangeEventsSince + replayWindow.
+	cacheKey := fmt.Sprintf("%s:%d", normalizedWindow, limit)
+	if cached, ok := s.getTrafficCache(cacheKey); ok {
+		c.JSON(200, cached)
+		return
+	}
+
+	events, truncated, err := s.tracingManager.RangeEventsSince(window, maxWindowEntries, windowReadBatch)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -171,7 +199,7 @@ func (s *Server) handleTraffic(c *gin.Context) {
 		models = []ModelMetricsData{}
 	}
 
-	c.JSON(200, TrafficResponse{
+	resp := TrafficResponse{
 		Enabled:     true,
 		Window:      normalizedWindow,
 		TotalCalls:  totalCalls,
@@ -179,5 +207,30 @@ func (s *Server) handleTraffic(c *gin.Context) {
 		EdgeStats:   edges,
 		AgentStats:  agents,
 		ModelStats:  models,
-	})
+		Truncated:   truncated,
+	}
+	s.setTrafficCache(cacheKey, resp)
+	c.JSON(200, resp)
+}
+
+// getTrafficCache returns a cached windowed response when present and unexpired.
+func (s *Server) getTrafficCache(key string) (TrafficResponse, bool) {
+	s.trafficCacheMu.Lock()
+	defer s.trafficCacheMu.Unlock()
+	entry, ok := s.trafficCache[key]
+	if !ok || time.Now().After(entry.expiresAt) {
+		return TrafficResponse{}, false
+	}
+	return entry.response, true
+}
+
+// setTrafficCache stores a windowed response under a trafficCacheTTL window. The
+// Redis read + replay happens outside the lock; only the store is guarded here.
+func (s *Server) setTrafficCache(key string, resp TrafficResponse) {
+	s.trafficCacheMu.Lock()
+	defer s.trafficCacheMu.Unlock()
+	s.trafficCache[key] = trafficCacheEntry{
+		response:  resp,
+		expiresAt: time.Now().Add(trafficCacheTTL),
+	}
 }
