@@ -95,6 +95,7 @@ func NewServer(config *UIConfig, entService *registry.EntService, tracingManager
 		api.GET("/trace/edge-stats", s.handleEdgeStats)
 		api.GET("/trace/agent-stats", s.handleAgentStats)
 		api.GET("/trace/model-stats", s.handleModelStats)
+		api.GET("/trace/traffic", s.handleTraffic)
 		api.GET("/trace/list", s.handleTraceList)
 		api.GET("/trace/search", s.handleTraceSearch)
 		api.GET("/trace/:trace_id", s.handleTraceGet)

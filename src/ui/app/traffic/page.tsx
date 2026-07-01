@@ -10,8 +10,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useMesh } from "@/lib/mesh-context";
-import { formatBytes, formatTokenCount } from "@/lib/api";
+import { Segmented } from "@/components/ui/segmented";
+import { formatBytes, formatTokenCount, getTraffic } from "@/lib/api";
+import { AgentStat, EdgeStat, ModelStat, TrafficWindow } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
   Activity,
@@ -25,6 +26,13 @@ import {
 } from "lucide-react";
 
 const MAX_HISTORY = 30;
+const POLL_INTERVAL_MS = 5000;
+
+const WINDOW_OPTIONS: { value: TrafficWindow; label: string }[] = [
+  { value: "1h", label: "1h" },
+  { value: "1d", label: "1d" },
+  { value: "all", label: "All" },
+];
 
 function getErrorRateColor(rate: number): string {
   if (rate === 0) return "text-green-400";
@@ -87,28 +95,79 @@ function Sparkline({
 }
 
 export default function TrafficPage() {
-  const { edgeStats, agentStats, modelStats, loading, error, refresh, totalCalls: totalCallsFromContext, totalErrors: totalErrorsFromContext } = useMesh();
+  const [window, setWindow] = useState<TrafficWindow>("all");
+
+  const [edgeStats, setEdgeStats] = useState<EdgeStat[]>([]);
+  const [agentStats, setAgentStats] = useState<AgentStat[]>([]);
+  const [modelStats, setModelStats] = useState<ModelStat[]>([]);
+  const [totalCalls, setTotalCalls] = useState(0);
+  const [totalErrors, setTotalErrors] = useState(0);
+  const [enabled, setEnabled] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+  const [refetching, setRefetching] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   // Sparkline history ring buffer
   const historyRef = useRef<Map<string, number[]>>(new Map());
   const [, setTick] = useState(0);
 
+  // Windowed pull: fetch on mount, on window change, and on a poll interval.
+  // Each fetch captures the window it was issued for and drops its result if
+  // the selected window changed in the meantime (stale-guard).
   useEffect(() => {
-    if (edgeStats.length === 0) return;
-    for (const edge of edgeStats) {
-      const key = `${edge.source}->${edge.target}`;
-      const history = historyRef.current.get(key) || [];
-      history.push(edge.avg_latency_ms);
-      if (history.length > MAX_HISTORY) history.shift();
-      historyRef.current.set(key, history);
-    }
-    setTick((t) => t + 1);
-  }, [edgeStats]);
+    let cancelled = false;
+    const requestedWindow = window;
+
+    // A fresh window must not inherit the previous window's trend or numbers.
+    historyRef.current = new Map();
+    setLoading(true);
+
+    const load = async (isInitial: boolean) => {
+      if (!isInitial) setRefetching(true);
+      try {
+        const data = await getTraffic(requestedWindow);
+        if (cancelled || requestedWindow !== window) return;
+
+        setEnabled(data.enabled);
+        setTotalCalls(data.total_calls);
+        setTotalErrors(data.total_errors);
+        setModelStats(data.model_stats || []);
+        setAgentStats(data.agent_stats || []);
+
+        const edges = data.edge_stats || [];
+        setEdgeStats(edges);
+        for (const edge of edges) {
+          const key = `${edge.source}->${edge.target}`;
+          const history = historyRef.current.get(key) || [];
+          history.push(edge.avg_latency_ms);
+          if (history.length > MAX_HISTORY) history.shift();
+          historyRef.current.set(key, history);
+        }
+        setTick((t) => t + 1);
+        setError(null);
+      } catch (err) {
+        if (cancelled || requestedWindow !== window) return;
+        setError(err instanceof Error ? err : new Error(String(err)));
+      } finally {
+        if (!cancelled && requestedWindow === window) {
+          setLoading(false);
+          setRefetching(false);
+        }
+      }
+    };
+
+    load(true);
+    const interval = setInterval(() => load(false), POLL_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [window, reloadKey]);
 
   // Aggregated stats for overview cards
   const overview = useMemo(() => {
-    const totalCalls = totalCallsFromContext;
-    const totalErrors = totalErrorsFromContext;
     const successRate = totalCalls > 0 ? ((1 - totalErrors / totalCalls) * 100) : 100;
 
     const totalTokens = agentStats.reduce(
@@ -122,7 +181,7 @@ export default function TrafficPage() {
     );
 
     return { totalCalls, successRate, totalTokens, totalData };
-  }, [edgeStats, agentStats, totalCallsFromContext, totalErrorsFromContext]);
+  }, [agentStats, totalCalls, totalErrors]);
 
   // Sorted edges by route name
   const sortedEdges = useMemo(() => {
@@ -143,10 +202,28 @@ export default function TrafficPage() {
     return [...modelStats].sort((a, b) => a.model.localeCompare(b.model));
   }, [modelStats]);
 
+  const headerActions = (
+    <div className="flex items-center gap-3">
+      {refetching && !loading && (
+        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+      )}
+      <Segmented
+        aria-label="Traffic time range"
+        options={WINDOW_OPTIONS}
+        value={window}
+        onChange={setWindow}
+      />
+    </div>
+  );
+
   if (loading) {
     return (
       <div className="flex flex-col h-full">
-        <Header title="Traffic" subtitle="Network traffic and usage metrics" />
+        <Header
+          title="Traffic"
+          subtitle="Network traffic and usage metrics"
+          actions={headerActions}
+        />
         <div className="flex flex-1 items-center justify-center">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
         </div>
@@ -157,8 +234,15 @@ export default function TrafficPage() {
   if (error) {
     return (
       <div className="flex flex-col h-full">
-        <Header title="Traffic" subtitle="Network traffic and usage metrics" />
-        <ConnectionError error={error} onRetry={refresh} />
+        <Header
+          title="Traffic"
+          subtitle="Network traffic and usage metrics"
+          actions={headerActions}
+        />
+        <ConnectionError
+          error={error}
+          onRetry={() => setReloadKey((k) => k + 1)}
+        />
       </div>
     );
   }
@@ -219,8 +303,21 @@ export default function TrafficPage() {
 
   return (
     <div className="flex flex-col h-full">
-      <Header title="Traffic" subtitle="Network traffic and usage metrics" />
+      <Header
+        title="Traffic"
+        subtitle="Network traffic and usage metrics"
+        actions={headerActions}
+      />
       <div className="flex-1 space-y-6 p-6 overflow-auto">
+        {!enabled && (
+          <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+            <RadioTower className="h-4 w-4 opacity-60" />
+            <span>
+              Distributed tracing is disabled — no traffic metrics are being
+              recorded.
+            </span>
+          </div>
+        )}
         {/* Section 1: Traffic Overview */}
         <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
           {overviewStats.map((stat) => (

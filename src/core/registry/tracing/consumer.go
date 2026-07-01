@@ -367,6 +367,68 @@ func (sc *StreamConsumer) TrimStream() (int64, error) {
 	return removed, nil
 }
 
+// RangeEvents reads trace events from the stream whose entry IDs fall in
+// [startID, "+"], parsing each into a TraceEvent via the same FromRedisMap path
+// the live consumer uses. Stream entry IDs are millisecond timestamps, so a
+// startID of "<unix-millis>-0" yields a time-bounded read that never scans the
+// whole stream. maxEntries caps the total returned defensively so a wide window
+// cannot OOM; reads are paged in batches of batchCount using the exclusive
+// "(id" cursor. Returns (nil, nil) when the consumer is not connected.
+func (sc *StreamConsumer) RangeEvents(startID string, maxEntries, batchCount int) ([]*TraceEvent, error) {
+	sc.mu.RLock()
+	client := sc.client
+	state := sc.connectionState
+	sc.mu.RUnlock()
+
+	if client == nil || state != StateConnected {
+		return nil, nil
+	}
+
+	if maxEntries <= 0 {
+		maxEntries = 50000
+	}
+	if batchCount <= 0 || batchCount > maxEntries {
+		batchCount = maxEntries
+	}
+
+	events := make([]*TraceEvent, 0, batchCount)
+	cursor := startID
+
+	for len(events) < maxEntries {
+		ctx, cancel := context.WithTimeout(sc.ctx, 10*time.Second)
+		msgs, err := client.XRangeN(ctx, sc.streamName, cursor, "+", int64(batchCount)).Result()
+		cancel()
+		if err != nil {
+			return events, fmt.Errorf("failed to XRANGE stream %s: %w", sc.streamName, err)
+		}
+		if len(msgs) == 0 {
+			break
+		}
+
+		for _, m := range msgs {
+			event := &TraceEvent{}
+			if perr := event.FromRedisMap(m.Values); perr != nil {
+				// Skip malformed entries, mirroring the consumer's per-message
+				// error tolerance.
+				continue
+			}
+			events = append(events, event)
+			if len(events) >= maxEntries {
+				break
+			}
+		}
+
+		// Fewer than a full batch means we reached the end of the range.
+		if len(msgs) < batchCount {
+			break
+		}
+		// Advance the cursor past the last-seen ID (exclusive) for the next page.
+		cursor = "(" + msgs[len(msgs)-1].ID
+	}
+
+	return events, nil
+}
+
 // handleConnectionError records connection failure and updates state
 func (sc *StreamConsumer) handleConnectionError(err error) {
 	sc.mu.Lock()
