@@ -147,7 +147,7 @@ mcp-mesh-redis:
 mcp-mesh-registry:
   image:
     repository: mcpmesh/registry
-    tag: "2.6" # Minor version tracks latest patch
+    tag: "2.7" # Minor version tracks latest patch
   registry:
     # Database configuration (connects to PostgreSQL). The endpoint and
     # credentials are inherited from global.postgres above; set

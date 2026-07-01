@@ -45,7 +45,7 @@ image:
   repository: mcpmesh/python-runtime
   pullPolicy: IfNotPresent
   # Minor version tag tracks latest patch (0.8 → 0.8.x)
-  tag: "2.6"
+  tag: "2.7"
 
 # Pull secrets for this chart's pods, merged with global.imagePullSecrets
 # (deduplicated by name). Standard shape:

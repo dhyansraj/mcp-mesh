@@ -111,7 +111,7 @@ meshctl scaffold --compose --observability
 
 # Or deploy to Kubernetes (OCI registry)
 helm install my-mesh oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 2.6.0 -n mcp-mesh --create-namespace
+  --version 2.7.0 -n mcp-mesh --create-namespace
 ```
 
 ### 5. Built-in Observability

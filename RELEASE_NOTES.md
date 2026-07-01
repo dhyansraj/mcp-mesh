@@ -1,6 +1,68 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.6.0...HEAD)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.7.0...HEAD)
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.6.0...v2.7.0)
+
+## v2.7.0 (2026-07-01)
+
+Correct LLM-provider behavior for the newest OpenAI models across every runtime, proactive MeshJob reaping with a human-in-the-loop input primitive, and observability parity.
+
+v2.6 sharpened dependency resolution and brought Java's `@mesh.llm` to parity; v2.7 makes the provider layer *correct* for OpenAI's reasoning and gpt-5 models — which reject the sampling parameters and `max_tokens` field earlier models accept — and does it identically across Java, Python, and TypeScript. Alongside, MeshJob gains a proactive stale-job sweep and a `request_input()` primitive for human-in-the-loop pauses, and two long-standing observability gaps close: LLM token-usage telemetry now emits from Java and TypeScript consumers, and the dashboard's Traffic view gains a time-range filter.
+
+### 🤖 Reasoning- and gpt-5-model provider correctness (#1240, #1241, #1242, #1243, #1237, #1239)
+
+OpenAI's o-series (o1/o3/o4) and gpt-5 models reject `temperature`/`top_p` other than the default and reject the deprecated `max_tokens` field — so a provider that forwarded consumer `model_params` verbatim failed every call against those models. All three runtimes now gate these parameters against the effective model, using one identical classifier (o1/o3/o4 and `gpt-5*` except `gpt-5-chat*`), verified against the live API.
+
+- **Sampling-param gating** — `temperature`/`top_p` are omitted (with a runtime warning, soft-fail) for restricted models and applied unchanged for every other model and vendor. Java (#1240) and Python (#1241) gate in-tree; TypeScript (#1243) gates at the mesh layer so it no longer depends on the vendor SDK version to strip them.
+- **`max_tokens` → `max_completion_tokens`** — restricted OpenAI models require the newer field. Java always emits `max_completion_tokens` (#1239); Python translates a supplied `max_tokens` on both the native-SDK and LiteLLM paths (#1242); TypeScript's `maxOutputTokens` abstraction already maps correctly per model.
+- **Java providers now honor their declared model** (#1240) — the handlers only ever set the request model on a per-call override, so a provider declaring `@MeshLlmProvider(model="openai/gpt-4o")` silently ran on the framework's default model instead. The declared model is now applied on every request across the OpenAI, Gemini, and Anthropic handlers, which also makes per-vendor multi-model providers work.
+- **Vendor errors are no longer swallowed** (#1237) — a failed Java generation surfaced as the opaque `Error: LLM generation failed`; the underlying vendor error (status and message) now propagates to the caller instead of being logged and discarded, so provider failures are diagnosable.
+
+### ⏸️ MeshJob stale-job reaping + `request_input()` (#1234, #1244)
+
+MeshJob gains proactive lifecycle recovery and a human-in-the-loop primitive.
+
+- **Proactive stale-job reaping** — abandoned or orphaned jobs (owner gone, or stuck non-terminal) no longer accumulate against constrained producers. A background sweep fails jobs that exceed a default total-runtime ceiling and posts a synthetic `stale` event so a handler parked on `recv_event(["stale"])` observes the reaping. Opt-in via **`MCP_MESH_JOB_STALE_TIMEOUT`** (a duration, default off), applied only to jobs that set no explicit `total_deadline`.
+- **The ceiling honors a job's `max_duration`** (#1244) — the effective ceiling is `max(MCP_MESH_JOB_STALE_TIMEOUT, max_duration)`, so a job that declared a long per-attempt duration is never reaped before it elapses. `total_deadline` remains the full opt-out.
+- **`request_input()`** — a new cross-runtime SDK primitive (Python, TypeScript, Java) that transitions a running job to `input_required` and parks it for a consumer answer via `recv_event`, giving MeshJob handlers a first-class human-in-the-loop pause. The registry reclaims a parked job whose lease lapses just like a working one.
+
+### 📊 LLM token-usage telemetry parity (#1232)
+
+Java and TypeScript `@mesh.llm` consumers now stamp LLM token-usage metrics (`llm_input_tokens` / `llm_output_tokens` / `llm_total_tokens` / `llm_model`) onto the consumer span, so the dashboard's "Token Usage by Model" panel and per-agent Tokens In/Out populate for Java- and TypeScript-consumer apps as they already did for Python. Both runtimes were extracting usage internally but never publishing it to a span.
+
+### 🧩 Java structured-output schema + wiring diagnostics (#1233)
+
+- **Closed/required response-model schema** — a Java `@mesh.llm` response-model record derived a loose (nullable-by-default) schema, so a vendor could silently drop fields. The schema is now closed and required-unless-`Optional`, matching the typed-consumer contract.
+- **Unwired-slot warning** — an unresolved MeshJob submitter / dependency slot ("N/N resolved" is not the same as injected) now warns at runtime, surfacing a silently-null slot instead of failing opaquely at call time.
+
+### 📈 Traffic time-range filter (#1245)
+
+The dashboard's Traffic page gains a **1h / 1d / All** segmented control. Per-edge and per-agent aggregates for a bounded window are computed on demand by re-reading the timestamped `mesh:trace` stream (tail-first, bounded), so a window scopes the whole page — summary cards, per-edge table, and token/model stats — rather than only ever showing all-time counters. Windowed accuracy is bounded by `MCP_MESH_TRACE_RETENTION`; a window that exceeds the read cap is flagged as partial.
+
+### 🧹 `meshctl list` down-agent retention (#1226)
+
+A down agent with no unresolved dependents no longer lingers as an alarming red row — the registry retires it from the health-relevant view once nothing depends on it, so `meshctl list` reflects the live topology instead of stale down-agent noise.
+
+### 📦 MCP SDK bumps (#1235)
+
+- **Java MCP SDK 1.1.0 → 1.1.3** — maintenance/security patch (SSE-client transport validation, HTTP 405 handling); no breaking changes.
+- **TypeScript `fastmcp` v3 → v4** — the v4 line; the sole v4 breaking change (an `OAuthProxy` redirect-URI default) does not apply to the mesh runtime.
+
+### ⚠️ Upgrade notes
+
+**LLM providers:**
+
+- **Java LLM providers now use their declared model** (#1240). A provider that declared a model but unknowingly relied on the framework default now issues requests against the declared model. If a provider was implicitly running on the default, its effective model changes to what it declared — set `@MeshLlmProvider(model=...)` to the intended model.
+- **Reasoning / gpt-5 models: `temperature`/`top_p` are omitted** (#1240, #1241, #1243) with a warning when a consumer sets them against an o-series or non-chat gpt-5 model (those models reject non-default values). Behavior for every other model is unchanged.
+
+**MeshJob:**
+
+- **`MCP_MESH_JOB_STALE_TIMEOUT` is opt-in and off by default** (#1234). When set, non-terminal jobs with no `total_deadline` that exceed `max(stale_timeout, max_duration)` are failed with a `stale:` reason. Give a long job an explicit `total_deadline` to opt out entirely, or size `max_duration` to its real runtime (#1244).
+
+**MCP SDKs:**
+
+- **TypeScript `fastmcp` is now v4** (#1235). If you import `OAuthProxy` directly, note v4 no longer defaults `allowedRedirectUriPatterns`; the mesh runtime itself is unaffected.
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.5.0...v2.6.0)
 
