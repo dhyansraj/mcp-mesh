@@ -228,6 +228,70 @@ export function extractModelName(model: string): string {
 }
 
 /**
+ * Whether an OpenAI model restricts ``temperature``/``top_p`` to their default
+ * value (rejecting any explicit setting with HTTP 400).
+ *
+ * OpenAI o-series reasoning models (o1/o3/o4) and the gpt-5 family (except
+ * gpt-5-chat) accept ONLY the default sampling params. Verified against the
+ * live API:
+ *   - REJECT: gpt-5, gpt-5-mini, gpt-5-nano, o1, o3-mini, o4-mini
+ *   - ACCEPT: gpt-4o, gpt-4.1, gpt-5-chat-latest
+ *
+ * Accepts a bare or ``vendor/``-qualified model string (e.g. "openai/o3-mini").
+ * Returns true when ``temperature``/``topP`` should be omitted. Mirrors the
+ * Java ``OpenAiHandler.restrictsSamplingParams`` and Python
+ * ``restricts_sampling_params``.
+ */
+export function restrictsSamplingParams(model: string | undefined | null): boolean {
+  if (!model) return false;
+  let m = model.toLowerCase();
+  const slash = m.indexOf("/");
+  if (slash >= 0) m = m.slice(slash + 1); // strip vendor prefix e.g. "openai/o3-mini"
+  // o-series reasoning models reject temperature/top_p
+  if (
+    m === "o1" || m === "o3" || m === "o4" ||
+    m.startsWith("o1-") || m.startsWith("o3-") || m.startsWith("o4-")
+  ) {
+    return true;
+  }
+  // gpt-5 family restricts temperature/top_p to default — except gpt-5-chat*
+  if (m.startsWith("gpt-5") && !m.startsWith("gpt-5-chat")) return true;
+  return false;
+}
+
+/**
+ * Remove ``temperature``/``topP`` from a fully-assembled request options object
+ * for OpenAI models that reject non-default sampling params (see
+ * {@link restrictsSamplingParams}). No-op for unrestricted models and when the
+ * param is absent (mesh sends no default unless configured).
+ *
+ * This is version-independent hardening: it makes mesh self-contained rather
+ * than silently relying on @ai-sdk/openai to strip these, and surfaces mesh's
+ * OWN warning (the SDK's `warnings` array is not surfaced by mesh). One warning
+ * is logged per omitted param. Does NOT touch maxOutputTokens.
+ */
+export function sanitizeSamplingParams(
+  options: { temperature?: number; topP?: number },
+  model: string | undefined | null,
+): void {
+  if (!restrictsSamplingParams(model)) return;
+  if (options.temperature !== undefined) {
+    console.warn(
+      `OpenAI model ${model} rejects temperature=${options.temperature}; ` +
+        `omitting it (only the default is supported)`
+    );
+    delete options.temperature;
+  }
+  if (options.topP !== undefined) {
+    console.warn(
+      `OpenAI model ${model} rejects top_p=${options.topP}; ` +
+        `omitting it (only the default is supported)`
+    );
+    delete options.topP;
+  }
+}
+
+/**
  * Coerce an arbitrary value to a positive integer iteration cap, or undefined
  * when it is unset/invalid (NaN, non-finite, <= 0, or floors to 0). Floors
  * BEFORE the > 0 check so fractional values in (0,1) are rejected, not zeroed.
@@ -927,6 +991,18 @@ export function llmProvider(config: LlmProviderConfig): {
       requestOptions.topP = modelParams.top_p as number;
     }
 
+    // Version-independent hardening: OpenAI o-series (o1/o3/o4) and gpt-5
+    // (except gpt-5-chat) reject non-default temperature/top_p with HTTP 400.
+    // Strip them from the fully-assembled options BEFORE handing off to the
+    // SDK (rather than relying on @ai-sdk/openai to strip them silently), and
+    // surface mesh's own warning. Sanitizing requestOptions here covers BOTH
+    // generateText call sites (the manual agentic loop and the plain/Gemini
+    // path both consume requestOptions) AND the generateObject structured path,
+    // which reads temperature/topP off requestOptions below. Matches Java
+    // OpenAiHandler / Python restricts_sampling_params. maxOutputTokens is left
+    // untouched (the SDK maps it per-model).
+    sanitizeSamplingParams(requestOptions, effectiveModelName);
+
     // Pass responseFormat from handler's prepareRequest to generateText via providerOptions.
     // This enables native structured output (response_format) alongside tools in generateText(),
     // which generateObject() doesn't support. The handler sets responseFormat when in strict mode.
@@ -997,15 +1073,36 @@ export function llmProvider(config: LlmProviderConfig): {
       // Required for OpenAI/Gemini structured output, and enables future Claude support
       const strictSchema = makeSchemaStrict(cleanSchema as Record<string, unknown>, { addAllRequired: true });
 
-      const objectResult = await generateObject({
+      // temperature/topP inherit from requestOptions, which has already been
+      // run through sanitizeSamplingParams above — so for restricted OpenAI
+      // models these are already stripped (undefined) here. Only include a key
+      // when it is actually set so the vendor call carries NO temperature/topP
+      // for restricted models (mirrors Java/Python omission, not "pass null").
+      const generateObjectOptions: {
+        model: unknown;
+        messages: unknown[];
+        schema: unknown;
+        schemaName?: string;
+        maxOutputTokens?: number;
+        temperature?: number;
+        topP?: number;
+      } = {
         model: aiModel,
         messages: convertedMessages,
         schema: jsonSchema(strictSchema),
         schemaName: outputTypeName,
-        maxOutputTokens: requestOptions.maxOutputTokens,
-        temperature: requestOptions.temperature,
-        topP: requestOptions.topP,
-      });
+      };
+      if (requestOptions.maxOutputTokens !== undefined) {
+        generateObjectOptions.maxOutputTokens = requestOptions.maxOutputTokens;
+      }
+      if (requestOptions.temperature !== undefined) {
+        generateObjectOptions.temperature = requestOptions.temperature;
+      }
+      if (requestOptions.topP !== undefined) {
+        generateObjectOptions.topP = requestOptions.topP;
+      }
+
+      const objectResult = await generateObject(generateObjectOptions);
 
       latencyMs = Date.now() - startTime;
       debug(
