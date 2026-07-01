@@ -1,4 +1,4 @@
-import { AgentsResponse, DashboardEvent, EdgeStatsResponse, EventsHistoryResponse, HealthResponse, JobsQuery, JobsResponse, RecentTracesResponse, RegistryEventInfo, SchemasResponse, SchemaUsage, TraceDetail } from "./types";
+import { AgentsResponse, DashboardEvent, EdgeStatsResponse, EventsHistoryResponse, HealthResponse, JobsQuery, JobsResponse, RecentTracesResponse, RegistryEventInfo, SchemasResponse, SchemaUsage, TraceDetail, TrafficResponse, TrafficWindow } from "./types";
 import { getApiBase } from "./config";
 
 const API_BASE = getApiBase();
@@ -208,6 +208,24 @@ export async function getTraceDetail(traceId: string): Promise<TraceDetail> {
 export async function getEdgeStats(limit: number = 20): Promise<EdgeStatsResponse> {
   const res = await fetch(`${API_BASE}/trace/edge-stats?limit=${limit}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Failed to fetch edge stats: ${res.status}`);
+  return res.json();
+}
+
+/**
+ * Windowed traffic aggregates. `window=all` returns live all-time stats;
+ * "1h"/"1d" return trailing-window aggregates. Element shapes match the
+ * live EdgeStat/AgentStat/ModelStat, so the Traffic page reuses the same
+ * rendering code with a swapped data source.
+ */
+export async function getTraffic(
+  window: TrafficWindow,
+  limit: number = 20
+): Promise<TrafficResponse> {
+  const res = await fetch(
+    `${API_BASE}/trace/traffic?window=${window}&limit=${limit}`,
+    { cache: "no-store" }
+  );
+  if (!res.ok) throw new Error(`Failed to fetch traffic: ${res.status}`);
   return res.json();
 }
 

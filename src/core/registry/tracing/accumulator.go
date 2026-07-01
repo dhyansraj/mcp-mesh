@@ -292,12 +292,12 @@ func (at *activeTrace) buildSnapshot(completed bool) *TraceSnapshot {
 		}
 
 		ss := SnapshotSpan{
-			SpanID:    s.SpanID,
-			AgentName: s.AgentName,
-			Operation: s.Operation,
+			SpanID:     s.SpanID,
+			AgentName:  s.AgentName,
+			Operation:  s.Operation,
 			DurationMs: s.DurationMS,
-			Success:   s.Success,
-			Runtime:   s.Runtime,
+			Success:    s.Success,
+			Runtime:    s.Runtime,
 		}
 
 		if s.ParentSpan != nil {
@@ -585,6 +585,56 @@ func (ta *TraceAccumulator) finalizeReadyTraces() {
 	// Publish outside of mu lock
 	for _, evt := range completedEvents {
 		ta.publishLive(evt)
+	}
+}
+
+// FinalizeAllActive force-finalizes every currently-active trace immediately,
+// bypassing the grace period. It runs the same edge-detection + finalizeTrace
+// path as finalizeReadyTraces, so edge stats and total finalized/error counters
+// end up identical to the live consumer's — just without the async wait.
+//
+// This exists for windowed replay over a throwaway accumulator: after feeding a
+// bounded batch of stream events, the caller flushes all in-flight traces so the
+// aggregates (edges, totals) are complete. It is NOT used on the live
+// accumulator, which relies on the grace period to absorb late cross-process
+// spans.
+func (ta *TraceAccumulator) FinalizeAllActive() {
+	ta.mu.Lock()
+	defer ta.mu.Unlock()
+
+	for id, at := range ta.activeTraces {
+		// Detect cross-agent edges from all spans (mirrors finalizeReadyTraces).
+		for _, s := range at.Spans {
+			if s.ParentSpan == nil || s.DurationMS == nil {
+				continue
+			}
+			parentAgent, ok := at.SpanAgent[*s.ParentSpan]
+			if ok && parentAgent != s.AgentName {
+				ta.recordEdge(parentAgent, s.AgentName, *s.DurationMS, s.Success)
+			}
+		}
+
+		// Finalize into ring buffer + totals, preferring the root span.
+		if at.RootSpan != nil {
+			ta.finalizeTrace(at, at.RootSpan)
+		} else {
+			var rootSpan *TraceEvent
+			for _, s := range at.Spans {
+				if s.ParentSpan == nil {
+					rootSpan = s
+					break
+				}
+			}
+			if rootSpan == nil && len(at.Spans) > 0 {
+				rootSpan = at.Spans[0]
+			}
+			if rootSpan != nil {
+				ta.finalizeTrace(at, rootSpan)
+			} else {
+				delete(ta.activeTraces, id)
+			}
+		}
+		delete(ta.dirtyTraces, id)
 	}
 }
 

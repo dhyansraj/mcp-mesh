@@ -49,24 +49,24 @@ type TracingManager struct {
 
 // TracingConfig holds configuration for distributed tracing
 type TracingConfig struct {
-	Enabled              bool          `json:"enabled"`
-	RedisURL             string        `json:"redis_url"`
-	StreamName           string        `json:"stream_name"`
-	ConsumerGroup        string        `json:"consumer_group"`
-	ConsumerName         string        `json:"consumer_name"`
-	BatchSize            int64         `json:"batch_size"`
-	BlockTimeout         time.Duration `json:"block_timeout"`
-	TraceTimeout         time.Duration `json:"trace_timeout"`
-	TraceRetention       time.Duration `json:"trace_retention"`
-	ExporterType         string        `json:"exporter_type"`
-	PrettyConsoleOutput  bool          `json:"pretty_console_output"`
-	JSONOutputDirectory  string        `json:"json_output_directory,omitempty"`
-	EnableStats          bool          `json:"enable_stats"`
+	Enabled             bool          `json:"enabled"`
+	RedisURL            string        `json:"redis_url"`
+	StreamName          string        `json:"stream_name"`
+	ConsumerGroup       string        `json:"consumer_group"`
+	ConsumerName        string        `json:"consumer_name"`
+	BatchSize           int64         `json:"batch_size"`
+	BlockTimeout        time.Duration `json:"block_timeout"`
+	TraceTimeout        time.Duration `json:"trace_timeout"`
+	TraceRetention      time.Duration `json:"trace_retention"`
+	ExporterType        string        `json:"exporter_type"`
+	PrettyConsoleOutput bool          `json:"pretty_console_output"`
+	JSONOutputDirectory string        `json:"json_output_directory,omitempty"`
+	EnableStats         bool          `json:"enable_stats"`
 	// Generic telemetry endpoints (OTLP compatible)
-	TelemetryEndpoint    string        `json:"telemetry_endpoint,omitempty"`
-	TelemetryProtocol    string        `json:"telemetry_protocol,omitempty"`
+	TelemetryEndpoint string `json:"telemetry_endpoint,omitempty"`
+	TelemetryProtocol string `json:"telemetry_protocol,omitempty"`
 	// Tempo query endpoint for fetching traces (HTTP API)
-	TempoQueryURL        string        `json:"tempo_query_url,omitempty"`
+	TempoQueryURL string `json:"tempo_query_url,omitempty"`
 }
 
 // NewTracingManager creates a new tracing manager with the given configuration
@@ -88,7 +88,7 @@ func NewTracingManager(config *TracingConfig) (*TracingManager, error) {
 
 	// Determine if we should use stream-through mode (for OTLP/telemetry backends)
 	manager.streamThroughMode = strings.ToLower(config.ExporterType) == "otlp" ||
-								strings.ToLower(config.ExporterType) == "telemetry"
+		strings.ToLower(config.ExporterType) == "telemetry"
 
 	mode := "correlation"
 	if manager.streamThroughMode {
@@ -827,6 +827,25 @@ func (tm *TracingManager) GetEdgeStats(limit int) ([]EdgeStats, error) {
 // disabled or not in stream-through mode).
 func (tm *TracingManager) GetAccumulator() *TraceAccumulator {
 	return tm.accumulator
+}
+
+// RangeEventsSince reads trace events from the stream whose entry IDs are at or
+// after (now - window), parsed into TraceEvents. It leverages the stream's
+// millisecond-timestamped entry IDs for a time-bounded XRANGE (no full scan)
+// and caps the total returned via maxEntries. The truncated bool reports whether
+// the maxEntries cap was hit before the window was fully read (newest entries are
+// retained). Returns (nil, false, nil) when tracing is disabled or the consumer
+// is not connected.
+func (tm *TracingManager) RangeEventsSince(window time.Duration, maxEntries, batchCount int) ([]*TraceEvent, bool, error) {
+	if !tm.enabled || tm.consumer == nil {
+		return nil, false, nil
+	}
+	startMs := time.Now().Add(-window).UnixMilli()
+	if startMs < 0 {
+		startMs = 0
+	}
+	startID := strconv.FormatInt(startMs, 10) + "-0"
+	return tm.consumer.RangeEvents(startID, maxEntries, batchCount)
 }
 
 // GetTotalFinalized returns the total number of finalized traces from the accumulator.

@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"mcp-mesh/src/core/registry"
@@ -30,6 +31,9 @@ type Server struct {
 	tracePoller         *TracePoller
 	configuredIndexHTML []byte
 	version             string
+
+	trafficCacheMu sync.Mutex
+	trafficCache   map[string]trafficCacheEntry
 }
 
 // NewServer creates a new UI server that serves the embedded SPA and proxies
@@ -65,6 +69,7 @@ func NewServer(config *UIConfig, entService *registry.EntService, tracingManager
 		eventPoller:      eventPoller,
 		tracingManager:   tracingManager,
 		metricsProcessor: metricsProcessor,
+		trafficCache:     make(map[string]trafficCacheEntry),
 	}
 
 	// If tracing is enabled, create a trace poller for dashboard events
@@ -95,6 +100,7 @@ func NewServer(config *UIConfig, entService *registry.EntService, tracingManager
 		api.GET("/trace/edge-stats", s.handleEdgeStats)
 		api.GET("/trace/agent-stats", s.handleAgentStats)
 		api.GET("/trace/model-stats", s.handleModelStats)
+		api.GET("/trace/traffic", s.handleTraffic)
 		api.GET("/trace/list", s.handleTraceList)
 		api.GET("/trace/search", s.handleTraceSearch)
 		api.GET("/trace/:trace_id", s.handleTraceGet)

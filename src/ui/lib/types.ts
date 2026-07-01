@@ -229,6 +229,30 @@ export interface EdgeStatsResponse {
   edge_count: number;
 }
 
+export type TrafficWindow = "1h" | "1d" | "all";
+
+/**
+ * Windowed traffic aggregates from GET /api/trace/traffic?window=&limit=.
+ * The element shapes are identical to the live EdgeStat/AgentStat/ModelStat
+ * types, so the Traffic page renders them through the same code paths.
+ * `window=all` returns live all-time aggregates; `enabled:false` (with empty
+ * arrays) when distributed tracing is off.
+ */
+export interface TrafficResponse {
+  enabled: boolean;
+  window: TrafficWindow;
+  total_calls: number;
+  total_errors: number;
+  edge_stats: EdgeStat[];
+  agent_stats: AgentStat[];
+  model_stats: ModelStat[];
+  /**
+   * True when a busy window exceeded the read cap and the returned aggregates
+   * are partial (sampled). The Traffic page surfaces a muted "partial" note.
+   */
+  truncated?: boolean;
+}
+
 /**
  * Issue #973: MeshJob observability types. Mirrors the Job + JobsListResponse
  * schemas in api/mcp-mesh-registry.openapi.yaml — time fields are UNIX-epoch
