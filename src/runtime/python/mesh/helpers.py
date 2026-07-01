@@ -2312,20 +2312,27 @@ def _infer_big3_vendor_from_bare_name(model: str) -> str | None:
 def _sanitize_sampling_params(
     completion_args: dict[str, Any], effective_model: str
 ) -> None:
-    """Drop ``temperature``/``top_p`` from ``completion_args`` in place when the
-    effective OpenAI model rejects them (o-series / gpt-5 non-chat).
+    """Rewrite restricted-model sampling params in ``completion_args`` in place
+    when the effective OpenAI model rejects them (o-series / gpt-5 non-chat).
 
     OpenAI reasoning models and the gpt-5 family (except gpt-5-chat) return
-    HTTP 400 for any explicit ``temperature``/``top_p``. Pop them with a WARN
-    (soft-fail, mesh philosophy) so the LiteLLM call never forwards them. The
-    classifier strips the vendor prefix and matches only OpenAI restricted
-    names, so this is a safe no-op for gemini/anthropic and for unrestricted
-    OpenAI models (gpt-4o, gpt-4.1, gpt-5-chat-latest). Only present params are
-    touched — mesh sends no default temperature, so an unset value is left
-    unset.
+    HTTP 400 for any explicit ``temperature``/``top_p`` and for the raw
+    ``max_tokens`` param. For those models this:
+
+      * pops ``temperature``/``top_p`` (only the default is accepted), and
+      * translates ``max_tokens`` → ``max_completion_tokens`` (unless a
+        ``max_completion_tokens`` is already present, which wins), popping the
+        raw ``max_tokens`` so it never reaches the wire.
+
+    Each rewrite emits a WARN (soft-fail, mesh philosophy). The classifier
+    strips the vendor prefix and matches only OpenAI restricted names, so this
+    is a safe no-op for gemini/anthropic and for unrestricted OpenAI models
+    (gpt-4o, gpt-4.1, gpt-5-chat-latest). Only present params are touched —
+    mesh sends no defaults, so an unset value is left unset.
     """
     from _mcp_mesh.engine.native_clients._native_client_helpers import (
         restricts_sampling_params,
+        translate_max_tokens_for_restricted,
     )
 
     if not restricts_sampling_params(effective_model):
@@ -2341,6 +2348,11 @@ def _sanitize_sampling_params(
                 key,
                 value,
             )
+    # Restricted models reject the raw ``max_tokens`` (HTTP 400) — they require
+    # ``max_completion_tokens``. Shared with the native OpenAI adapter so the
+    # two paths cannot drift. LiteLLM auto-maps this today, but mesh translates
+    # explicitly to stay self-contained.
+    translate_max_tokens_for_restricted(completion_args, effective_model, logger)
 
 
 def llm_provider(

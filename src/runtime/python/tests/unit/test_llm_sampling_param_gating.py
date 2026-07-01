@@ -65,6 +65,49 @@ class TestSanitizeSamplingParams:
         assert any("temperature" in m for m in warnings)
         assert any("top_p" in m for m in warnings)
 
+    def test_restricted_model_moves_max_tokens(self):
+        args = {"model": "o3-mini", "max_tokens": 256}
+        _sanitize_sampling_params(args, "o3-mini")
+        assert "max_tokens" not in args
+        assert args["max_completion_tokens"] == 256
+
+    def test_restricted_prefixed_model_moves_max_tokens(self):
+        args = {"max_tokens": 128}
+        _sanitize_sampling_params(args, "openai/gpt-5-mini")
+        assert "max_tokens" not in args
+        assert args["max_completion_tokens"] == 128
+
+    def test_restricted_model_both_supplied_keeps_max_completion_tokens(self):
+        args = {"max_tokens": 256, "max_completion_tokens": 512}
+        _sanitize_sampling_params(args, "o3-mini")
+        assert "max_tokens" not in args
+        assert args["max_completion_tokens"] == 512
+
+    def test_unrestricted_model_keeps_max_tokens(self):
+        args = {"max_tokens": 256}
+        _sanitize_sampling_params(args, "gpt-4o")
+        assert args["max_tokens"] == 256
+        assert "max_completion_tokens" not in args
+
+    def test_gemini_model_max_tokens_noop(self):
+        args = {"max_tokens": 256}
+        _sanitize_sampling_params(args, "gemini/gemini-2.5-flash")
+        assert args["max_tokens"] == 256
+        assert "max_completion_tokens" not in args
+
+    def test_restricted_model_no_max_tokens_is_noop(self):
+        args = {"model": "o3-mini"}
+        _sanitize_sampling_params(args, "o3-mini")
+        assert "max_tokens" not in args
+        assert "max_completion_tokens" not in args
+
+    def test_restricted_model_warns_on_max_tokens(self, caplog):
+        args = {"max_tokens": 256}
+        with caplog.at_level(logging.WARNING):
+            _sanitize_sampling_params(args, "o3-mini")
+        warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("max_tokens" in m and "max_completion_tokens" in m for m in warnings)
+
 
 # ---------------------------------------------------------------------------
 # _build_iteration_completion_args integration
