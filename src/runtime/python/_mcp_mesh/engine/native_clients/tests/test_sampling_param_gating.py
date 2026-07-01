@@ -16,6 +16,7 @@ import pytest
 
 from _mcp_mesh.engine.native_clients._native_client_helpers import (
     restricts_sampling_params,
+    translate_max_tokens_for_restricted,
 )
 
 
@@ -165,3 +166,42 @@ class TestNativeMaxTokensTranslation:
             self._build("openai/o3-mini", max_tokens=256)
         warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
         assert any("max_tokens" in m and "max_completion_tokens" in m for m in warnings)
+
+
+# ---------------------------------------------------------------------------
+# Shared helper: translate_max_tokens_for_restricted (direct, in place)
+# ---------------------------------------------------------------------------
+
+
+class TestTranslateMaxTokensForRestricted:
+    def _log(self):
+        import logging
+
+        return logging.getLogger("test_translate_max_tokens")
+
+    def test_restricted_moves_max_tokens(self):
+        params = {"max_tokens": 256}
+        translate_max_tokens_for_restricted(params, "openai/o3-mini", self._log())
+        assert params == {"max_completion_tokens": 256}
+
+    def test_restricted_both_supplied_keeps_max_completion_tokens(self):
+        params = {"max_tokens": 256, "max_completion_tokens": 512}
+        translate_max_tokens_for_restricted(params, "openai/o3-mini", self._log())
+        assert params == {"max_completion_tokens": 512}
+
+    def test_unrestricted_is_noop(self):
+        params = {"max_tokens": 256}
+        translate_max_tokens_for_restricted(params, "openai/gpt-4o", self._log())
+        assert params == {"max_tokens": 256}
+
+    def test_gemini_is_noop(self):
+        params = {"max_tokens": 256}
+        translate_max_tokens_for_restricted(
+            params, "gemini/gemini-2.5-flash", self._log()
+        )
+        assert params == {"max_tokens": 256}
+
+    def test_absent_max_tokens_is_noop(self):
+        params = {"max_completion_tokens": 512}
+        translate_max_tokens_for_restricted(params, "openai/o3-mini", self._log())
+        assert params == {"max_completion_tokens": 512}

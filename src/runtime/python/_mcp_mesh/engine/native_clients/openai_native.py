@@ -46,6 +46,7 @@ from ._native_client_helpers import (
     reset_unsupported_kwargs_dedupe,
     resolve_request_timeout,
     restricts_sampling_params,
+    translate_max_tokens_for_restricted,
     warn_unsupported_kwarg_once,
 )
 
@@ -506,27 +507,14 @@ def _build_create_kwargs(
                 value,
             )
             continue
-        # Restricted models reject the raw ``max_tokens`` (HTTP 400) — they
-        # require ``max_completion_tokens``. Translate the caller-supplied
-        # value into ``max_completion_tokens`` (unless one is already present,
-        # which wins) and never emit ``max_tokens`` on the wire.
-        if restricted and key == "max_tokens":
-            if request_params.get("max_completion_tokens") is None:
-                create_kwargs["max_completion_tokens"] = value
-                logger.warning(
-                    "OpenAI model %s rejects max_tokens; using "
-                    "max_completion_tokens instead",
-                    model,
-                )
-            else:
-                logger.warning(
-                    "OpenAI model %s rejects max_tokens; dropping max_tokens=%s "
-                    "in favor of the supplied max_completion_tokens",
-                    model,
-                    value,
-                )
-            continue
         create_kwargs[key] = value
+
+    # Restricted models reject the raw ``max_tokens`` (HTTP 400) — they require
+    # ``max_completion_tokens``. Translate any forwarded ``max_tokens`` into
+    # ``max_completion_tokens`` (unless one is already present, which wins) and
+    # never emit ``max_tokens`` on the wire. Shared with the LiteLLM path so
+    # the two cannot drift.
+    translate_max_tokens_for_restricted(create_kwargs, model, logger)
 
     # WARN once when ``n>1`` is observed. OpenAI's SDK accepts ``n=k>1`` and
     # returns k candidates in ``choices[0..k-1]``, but ``_adapt_response``

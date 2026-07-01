@@ -2332,6 +2332,7 @@ def _sanitize_sampling_params(
     """
     from _mcp_mesh.engine.native_clients._native_client_helpers import (
         restricts_sampling_params,
+        translate_max_tokens_for_restricted,
     )
 
     if not restricts_sampling_params(effective_model):
@@ -2348,26 +2349,10 @@ def _sanitize_sampling_params(
                 value,
             )
     # Restricted models reject the raw ``max_tokens`` (HTTP 400) — they require
-    # ``max_completion_tokens``. Move a caller-supplied ``max_tokens`` into
-    # ``max_completion_tokens`` (unless one is already present, which wins) and
-    # pop the raw ``max_tokens`` so it never reaches the wire. LiteLLM auto-maps
-    # this today, but mesh translates explicitly to stay self-contained.
-    if completion_args.get("max_tokens") is not None:
-        value = completion_args.pop("max_tokens")
-        if completion_args.get("max_completion_tokens") is None:
-            completion_args["max_completion_tokens"] = value
-            logger.warning(
-                "OpenAI model %s rejects max_tokens; using "
-                "max_completion_tokens instead",
-                effective_model,
-            )
-        else:
-            logger.warning(
-                "OpenAI model %s rejects max_tokens; dropping max_tokens=%s "
-                "in favor of the supplied max_completion_tokens",
-                effective_model,
-                value,
-            )
+    # ``max_completion_tokens``. Shared with the native OpenAI adapter so the
+    # two paths cannot drift. LiteLLM auto-maps this today, but mesh translates
+    # explicitly to stay self-contained.
+    translate_max_tokens_for_restricted(completion_args, effective_model, logger)
 
 
 def llm_provider(

@@ -86,6 +86,39 @@ def restricts_sampling_params(model: str | None) -> bool:
     return False
 
 
+def translate_max_tokens_for_restricted(
+    params: dict[str, Any], model: str | None, logger: logging.Logger
+) -> None:
+    """For OpenAI restricted models (o-series / gpt-5 non-chat), move a
+    supplied ``max_tokens`` into ``max_completion_tokens`` (unless one is
+    already present, which wins) and drop the raw ``max_tokens`` so it never
+    reaches the wire — those models return HTTP 400 for raw ``max_tokens``.
+    Operates in place on ``params``. No-op for unrestricted / non-OpenAI
+    models and when ``max_tokens`` is absent. Soft-fail WARN, mesh philosophy.
+    Shared by the native OpenAI adapter and the LiteLLM path so their behavior
+    cannot drift.
+    """
+    if not restricts_sampling_params(model):
+        return
+    if params.get("max_tokens") is None:
+        return
+    value = params.pop("max_tokens")
+    if params.get("max_completion_tokens") is None:
+        params["max_completion_tokens"] = value
+        logger.warning(
+            "OpenAI model %s rejects max_tokens; using "
+            "max_completion_tokens instead",
+            model,
+        )
+    else:
+        logger.warning(
+            "OpenAI model %s rejects max_tokens; dropping max_tokens=%s "
+            "in favor of the supplied max_completion_tokens",
+            model,
+            value,
+        )
+
+
 def resolve_request_timeout(
     request_params: dict[str, Any],
     *,
