@@ -514,13 +514,23 @@ export DEFAULT_EVICTION_THRESHOLD=60  # Evict stale agents (seconds)
 # rows). Event rows are governed by a separate hardcoded 100k row cap.
 export MCP_MESH_RETENTION=1h
 
+# Registry sweep cadence — how often the periodic job/agent sweep runs
+# (reaping, lease recovery, retention purges). Go duration string (e.g.
+# "30s", "5m", "1m30s"). Default: 5m. A shorter interval makes reaping
+# and retention purges run more promptly at the cost of extra sweep
+# scans; production deployments typically leave this unset.
+export MCP_MESH_SWEEP_INTERVAL=5m
+
 # MeshJob default total-runtime ceiling. Go duration string (e.g. "2h",
 # "30m"). Applies a DEFAULT total_deadline — measured from a job's
 # submission time — to jobs that did NOT set their own total_deadline; a
 # job that exceeds it is marked failed with a "stale: ..." reason and a
-# synthetic `stale` event. Jobs that set their own total_deadline are
-# unaffected. Default: off (unset / "0") — jobs without an explicit
-# total_deadline run unbounded, subject only to lease recovery.
+# synthetic `stale` event. The effective ceiling for a job is
+# max(MCP_MESH_JOB_STALE_TIMEOUT, max_duration) — it never reaps a job
+# before its own declared per-attempt max_duration elapses. Jobs that
+# set their own total_deadline are fully exempt. Default: off (unset /
+# "0") — jobs without an explicit total_deadline run unbounded, subject
+# only to lease recovery.
 export MCP_MESH_JOB_STALE_TIMEOUT=2h
 
 # CORS

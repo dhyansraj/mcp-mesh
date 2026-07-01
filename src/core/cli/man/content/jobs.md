@@ -137,7 +137,7 @@ async def commission_report(
 | Keyword            | Type             | Purpose                                                 |
 | ------------------ | ---------------- | ------------------------------------------------------- |
 | `**args`           | per-tool         | Forwarded as the tool's input arguments                 |
-| `max_duration`     | `int` (seconds)  | Per-attempt soft timeout (provider runtime + cron sweep)|
+| `max_duration`     | `int` (seconds)  | Per-attempt soft timeout; also sizes the lease window and floors the stale ceiling |
 | `max_retries`      | `int`            | Retries beyond initial attempt (Sidekiq convention)     |
 | `total_deadline`   | `int` (seconds)  | Hard ceiling across all attempts (registry enforces)    |
 | `owner_instance_id`| `str`            | Pin to a specific replica (rarely needed)               |
@@ -427,14 +427,23 @@ intervention:
 - **Default stale ceiling (opt-in).** Set `MCP_MESH_JOB_STALE_TIMEOUT`
   (a duration, e.g. `2h`) on the registry to apply a *default*
   total-runtime ceiling, measured from submission, to jobs that did
-  **not** set their own `total_deadline`. Such a job is marked `failed`
-  with a `stale: ...` error once it exceeds the ceiling. Unset (the
-  default) leaves the feature off — jobs without an explicit
-  `total_deadline` run unbounded (subject only to lease recovery).
-  Jobs that set their own `total_deadline` are unaffected.
+  **not** set their own `total_deadline`. The effective ceiling for a
+  job is `max(MCP_MESH_JOB_STALE_TIMEOUT, max_duration)` — it never
+  reaps a job before its own declared per-attempt `max_duration` has
+  elapsed. Such a job is marked `failed` with a `stale: ...` error once
+  it exceeds the ceiling. Unset (the default) leaves the feature off —
+  jobs without an explicit `total_deadline` run unbounded (subject only
+  to lease recovery). Jobs that set their own `total_deadline` are fully
+  exempt.
 
 Reaping is observable in-handler via a synthetic `stale` event — see
 **Event injection** below.
+
+**Long-running (hours) jobs.** Set `max_duration` to the job's real
+per-attempt runtime — this sizes the lease window AND floors the stale
+ceiling — and/or emit periodic progress to keep the lease renewed. Set
+`total_deadline` if you want a hard total-runtime bound across all
+attempts, or to opt out of the registry-wide stale ceiling entirely.
 
 ## Out-of-band inspection
 

@@ -222,7 +222,7 @@ public class LongTaskConsumerApplication {
 public record SubmitOptions(
     Object args,                  // Map of args forwarded to the tool
     String ownerInstanceId,       // optional: pin to a replica
-    Integer maxDuration,          // per-attempt soft timeout (seconds)
+    Integer maxDuration,          // per-attempt soft timeout (sec); also sizes the lease + floors the stale ceiling
     Integer maxRetries,           // retries beyond initial attempt
     Integer totalDeadline         // hard ceiling across attempts (seconds)
 ) { }
@@ -613,14 +613,23 @@ intervention:
 - **Default stale ceiling (opt-in).** Set `MCP_MESH_JOB_STALE_TIMEOUT`
   (a duration, e.g. `2h`) on the registry to apply a *default*
   total-runtime ceiling, measured from submission, to jobs that did
-  **not** set their own `totalDeadline`. Such a job is marked `failed`
-  with a `stale: ...` error once it exceeds the ceiling. Unset (the
-  default) leaves the feature off — jobs without an explicit
-  `totalDeadline` run unbounded (subject only to lease recovery). Jobs
-  that set their own `totalDeadline` are unaffected.
+  **not** set their own `totalDeadline`. The effective ceiling for a
+  job is `max(MCP_MESH_JOB_STALE_TIMEOUT, maxDuration)` — it never reaps
+  a job before its own declared per-attempt `maxDuration` has elapsed.
+  Such a job is marked `failed` with a `stale: ...` error once it
+  exceeds the ceiling. Unset (the default) leaves the feature off —
+  jobs without an explicit `totalDeadline` run unbounded (subject only
+  to lease recovery). Jobs that set their own `totalDeadline` are fully
+  exempt.
 
 Reaping is observable in-handler via a synthetic `stale` event — see
 **Event injection** above.
+
+**Long-running (hours) jobs.** Set `maxDuration` to the job's real
+per-attempt runtime — this sizes the lease window AND floors the stale
+ceiling — and/or emit periodic progress to keep the lease renewed. Set
+`totalDeadline` if you want a hard total-runtime bound across all
+attempts, or to opt out of the registry-wide stale ceiling entirely.
 
 ## Out-of-band inspection
 

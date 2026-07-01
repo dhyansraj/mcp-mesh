@@ -1403,10 +1403,17 @@ const staleJobError = "stale: no total_deadline set and exceeded MCP_MESH_JOB_ST
 // total_deadline are left to ExpireDeadlinedJobs (the total_deadline IS NULL
 // filter below excludes them).
 //
+// The effective stale ceiling for a job is max(staleTimeout, max_duration):
+// never shorter than the job's own declared per-attempt duration. A job that
+// declared a max_duration longer than the operator-wide default has expressed
+// intent to run that long, so the registry-wide default must not undercut it.
 // For every non-terminal job with a NULL total_deadline whose submitted_at is
-// older than `now - staleTimeout`, the row is marked failed with the
-// `stale:` reason and its lease/owner cleared. No new terminal state is
-// introduced — `failed` + the reason string IS the signal.
+// older than `now - max(staleTimeout, max_duration)`, the row is marked failed
+// with the `stale:` reason and its lease/owner cleared. No new terminal state
+// is introduced — `failed` + the reason string IS the signal. (The query below
+// uses `now - staleTimeout` as its cutoff — the widest net, since
+// max(staleTimeout, max_duration) >= staleTimeout — and the per-candidate loop
+// then skips any row not yet past its own effective ceiling.)
 //
 // Each reap uses the guarded-update discipline (WHERE id=? AND status NOT IN
 // terminal AND total_deadline IS NULL) so a concurrent completion / explicit
@@ -1443,6 +1450,22 @@ func (s *EntService) ExpireStaleJobs(ctx context.Context, staleTimeout time.Dura
 
 	staled := 0
 	for _, j := range candidates {
+		// Honor the job's own declared per-attempt duration: never reap as stale
+		// before submitted_at + max(staleTimeout, max_duration). A job that declared
+		// a max_duration longer than the operator's default ceiling has expressed
+		// intent to run that long — the registry-wide default must not undercut it.
+		// (max_duration also sizes the lease window, so a wedged job is still caught
+		// by lease reclaim; total_deadline remains the way to opt out entirely.)
+		effective := staleTimeout
+		if j.MaxDuration != nil && *j.MaxDuration > 0 {
+			if md := time.Duration(*j.MaxDuration) * time.Second; md > effective {
+				effective = md
+			}
+		}
+		if j.SubmittedAt.After(now.Add(-effective)) {
+			continue // not yet past this job's own effective ceiling
+		}
+
 		// The guarded status flip AND the synthetic `stale` event insert run
 		// in ONE transaction per row: either both commit or neither does.
 		// Unlike cancel — where the cancel HTTP-forward is the primary signal

@@ -469,6 +469,26 @@ loop reaps orphaned jobs (owner crashed, lease expired) and enforces
 so any consumer that holds the `job_id` sees the latest state on the
 next poll regardless of which replica owns the job.
 
+### Default stale ceiling (opt-in)
+
+Operators can set `MCP_MESH_JOB_STALE_TIMEOUT` (a Go duration, e.g.
+`2h`) on the registry to apply a *default* total-runtime ceiling —
+measured from submission — to jobs that did **not** set their own
+`total_deadline`. A job that set `total_deadline` is fully exempt; the
+per-job hard bound already governs it. The effective ceiling for a job
+is `max(MCP_MESH_JOB_STALE_TIMEOUT, max_duration)`: the registry never
+reaps a job before its own declared per-attempt `max_duration` has
+elapsed, since a longer `max_duration` expresses intent to run that
+long. Reaped jobs are marked `failed` with a `stale: ...` reason and a
+synthetic `stale` event. Unset (the default) leaves the feature off —
+such jobs run unbounded, subject only to lease recovery.
+
+For a job that runs for hours: set `max_duration` to its real
+per-attempt runtime (this sizes the lease AND floors the stale
+ceiling) and/or emit periodic progress to keep the lease renewed. Set
+`total_deadline` if you want a hard total-runtime bound across all
+attempts, or to opt out of the registry-wide stale ceiling entirely.
+
 The **agent runtime** is a thin client. On the producer side, it
 maintains a claim queue per `task=true` capability (`UPDATE jobs SET
 owner_instance_id = $self WHERE capability = $cap AND status =
