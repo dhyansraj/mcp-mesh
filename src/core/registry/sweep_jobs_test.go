@@ -7,6 +7,7 @@ package registry
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -980,8 +981,10 @@ func TestSweep_ExpireStaleJobs_NoDeadlineReaped(t *testing.T) {
 	if got.Status != job.StatusFailed {
 		t.Errorf("expected status=failed, got %s", got.Status)
 	}
-	if got.Error == nil || *got.Error != staleJobError {
-		t.Errorf("expected error %q, got %v", staleJobError, got.Error)
+	if got.Error == nil ||
+		!strings.Contains(*got.Error, "stale:") ||
+		!strings.Contains(*got.Error, "MCP_MESH_JOB_STALE_TIMEOUT") {
+		t.Errorf("expected stale-timeout reason, got %v", got.Error)
 	}
 	if got.LeaseExpiresAt != nil {
 		t.Errorf("expected lease cleared, got %v", got.LeaseExpiresAt)
@@ -1082,8 +1085,10 @@ func TestSweep_ExpireStaleJobs_MaxDurationGreaterThanStale_Elapsed(t *testing.T)
 	if got.Status != job.StatusFailed {
 		t.Errorf("expected status=failed, got %s", got.Status)
 	}
-	if got.Error == nil || *got.Error != staleJobError {
-		t.Errorf("expected error %q, got %v", staleJobError, got.Error)
+	if got.Error == nil ||
+		!strings.Contains(*got.Error, "stale:") ||
+		!strings.Contains(*got.Error, "max_duration") {
+		t.Errorf("expected max_duration reason, got %v", got.Error)
 	}
 	if got.LeaseExpiresAt != nil {
 		t.Errorf("expected lease cleared, got %v", got.LeaseExpiresAt)
@@ -1366,7 +1371,9 @@ func TestSweep_ExpireStaleJobs_Idempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload job: %v", err)
 	}
-	if got.Error == nil || *got.Error != staleJobError {
-		t.Errorf("expected stale error preserved, got %v", got.Error)
+	if got.Error == nil ||
+		!strings.Contains(*got.Error, "stale:") ||
+		!strings.Contains(*got.Error, "MCP_MESH_JOB_STALE_TIMEOUT") {
+		t.Errorf("expected stale-timeout reason preserved, got %v", got.Error)
 	}
 }

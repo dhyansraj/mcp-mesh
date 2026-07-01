@@ -1389,11 +1389,19 @@ func (s *EntService) ExpireDeadlinedJobs(ctx context.Context) (int, error) {
 	return expired, nil
 }
 
-// staleJobError is the error string stamped on jobs reaped by
-// ExpireStaleJobs. Mirrors the "deadline_exceeded" / "orphaned: ..."
-// reason-string style so operators can grep all sweep-reap paths the same
-// way.
-const staleJobError = "stale: no total_deadline set and exceeded MCP_MESH_JOB_STALE_TIMEOUT default ceiling"
+// staleReason builds the failure reason for a stale-reaped job, naming the
+// ceiling that actually bound it. effective = max(staleTimeout, max_duration);
+// when max_duration is larger it, not the operator default, is the limit the
+// job exceeded — so the message must reflect that rather than always blaming
+// MCP_MESH_JOB_STALE_TIMEOUT. Both variants keep the leading "stale:" so
+// operators can grep all sweep-reap paths and consumers keying on the prefix
+// still work.
+func staleReason(effective, staleTimeout time.Duration) string {
+	if effective > staleTimeout {
+		return fmt.Sprintf("stale: no total_deadline set and exceeded max_duration (%s)", effective)
+	}
+	return fmt.Sprintf("stale: no total_deadline set and exceeded the MCP_MESH_JOB_STALE_TIMEOUT ceiling (%s)", staleTimeout)
+}
 
 // ExpireStaleJobs enforces a DEFAULT total-runtime ceiling for jobs that did
 // NOT set their own total_deadline. It is the opt-in companion to
@@ -1466,6 +1474,8 @@ func (s *EntService) ExpireStaleJobs(ctx context.Context, staleTimeout time.Dura
 			continue // not yet past this job's own effective ceiling
 		}
 
+		reason := staleReason(effective, staleTimeout)
+
 		// The guarded status flip AND the synthetic `stale` event insert run
 		// in ONE transaction per row: either both commit or neither does.
 		// Unlike cancel — where the cancel HTTP-forward is the primary signal
@@ -1486,7 +1496,7 @@ func (s *EntService) ExpireStaleJobs(ctx context.Context, staleTimeout time.Dura
 					job.TotalDeadlineIsNil(),
 				).
 				SetStatus(job.StatusFailed).
-				SetError(staleJobError).
+				SetError(reason).
 				ClearLeaseExpiresAt().
 				ClearOwnerInstanceID().
 				SetLastHeartbeatAt(now).
@@ -1506,7 +1516,7 @@ func (s *EntService) ExpireStaleJobs(ctx context.Context, staleTimeout time.Dura
 				tx,
 				j.ID,
 				"stale",
-				map[string]interface{}{"reason": "stale", "detail": staleJobError},
+				map[string]interface{}{"reason": "stale", "detail": reason},
 				nil,
 				"",
 			); evErr != nil {
