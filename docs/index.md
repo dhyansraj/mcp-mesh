@@ -87,7 +87,7 @@ Build multi-agent systems that are production-ready from day one. Mesh handles t
     <dependency>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-        <version>2.6.0</version>
+        <version>2.7.0</version>
     </dependency>
     ```
 
@@ -364,7 +364,7 @@ A `kubectl`-style command-line tool that follows you from first agent to product
     <dependency>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-        <version>2.6.0</version>
+        <version>2.7.0</version>
     </dependency>
     ```
 
@@ -383,10 +383,10 @@ A `kubectl`-style command-line tool that follows you from first agent to product
 === "Docker Images"
 
     ```bash
-    docker pull mcpmesh/registry:2.6.0
-    docker pull mcpmesh/python-runtime:2.6.0
-    docker pull mcpmesh/java-runtime:2.6.0
-    docker pull mcpmesh/typescript-runtime:2.6.0
+    docker pull mcpmesh/registry:2.7.0
+    docker pull mcpmesh/python-runtime:2.7.0
+    docker pull mcpmesh/java-runtime:2.7.0
+    docker pull mcpmesh/typescript-runtime:2.7.0
     ```
 
     Official container images for production deployments.
@@ -412,7 +412,7 @@ A `kubectl`-style command-line tool that follows you from first agent to product
 
 ## :star: Project Status
 
-- **Latest Release**: v2.6.0 (March 2026)
+- **Latest Release**: v2.7.0 (March 2026)
 - **License**: MIT
 - **Languages**: Python 3.11+, TypeScript/Node.js 18+, and Java 17+ (runtime), Go 1.23+ (registry)
 - **Status**: Production-ready, actively developed

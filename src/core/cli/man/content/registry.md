@@ -170,7 +170,7 @@ The registry supports multiple replicas for high availability. All replicas shar
 ```bash
 # Scale registry replicas
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 2.6.0 \
+  --version 2.7.0 \
   -n mcp-mesh --create-namespace \
   --set registry.replicas=3
 ```
