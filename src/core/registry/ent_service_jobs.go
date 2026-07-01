@@ -1389,11 +1389,19 @@ func (s *EntService) ExpireDeadlinedJobs(ctx context.Context) (int, error) {
 	return expired, nil
 }
 
-// staleJobError is the error string stamped on jobs reaped by
-// ExpireStaleJobs. Mirrors the "deadline_exceeded" / "orphaned: ..."
-// reason-string style so operators can grep all sweep-reap paths the same
-// way.
-const staleJobError = "stale: no total_deadline set and exceeded MCP_MESH_JOB_STALE_TIMEOUT default ceiling"
+// staleReason builds the failure reason for a stale-reaped job, naming the
+// ceiling that actually bound it. effective = max(staleTimeout, max_duration);
+// when max_duration is larger it, not the operator default, is the limit the
+// job exceeded — so the message must reflect that rather than always blaming
+// MCP_MESH_JOB_STALE_TIMEOUT. Both variants keep the leading "stale:" so
+// operators can grep all sweep-reap paths and consumers keying on the prefix
+// still work.
+func staleReason(effective, staleTimeout time.Duration) string {
+	if effective > staleTimeout {
+		return fmt.Sprintf("stale: no total_deadline set and exceeded max_duration (%s)", effective)
+	}
+	return fmt.Sprintf("stale: no total_deadline set and exceeded the MCP_MESH_JOB_STALE_TIMEOUT ceiling (%s)", staleTimeout)
+}
 
 // ExpireStaleJobs enforces a DEFAULT total-runtime ceiling for jobs that did
 // NOT set their own total_deadline. It is the opt-in companion to
@@ -1403,10 +1411,17 @@ const staleJobError = "stale: no total_deadline set and exceeded MCP_MESH_JOB_ST
 // total_deadline are left to ExpireDeadlinedJobs (the total_deadline IS NULL
 // filter below excludes them).
 //
+// The effective stale ceiling for a job is max(staleTimeout, max_duration):
+// never shorter than the job's own declared per-attempt duration. A job that
+// declared a max_duration longer than the operator-wide default has expressed
+// intent to run that long, so the registry-wide default must not undercut it.
 // For every non-terminal job with a NULL total_deadline whose submitted_at is
-// older than `now - staleTimeout`, the row is marked failed with the
-// `stale:` reason and its lease/owner cleared. No new terminal state is
-// introduced — `failed` + the reason string IS the signal.
+// older than `now - max(staleTimeout, max_duration)`, the row is marked failed
+// with the `stale:` reason and its lease/owner cleared. No new terminal state
+// is introduced — `failed` + the reason string IS the signal. (The query below
+// uses `now - staleTimeout` as its cutoff — the widest net, since
+// max(staleTimeout, max_duration) >= staleTimeout — and the per-candidate loop
+// then skips any row not yet past its own effective ceiling.)
 //
 // Each reap uses the guarded-update discipline (WHERE id=? AND status NOT IN
 // terminal AND total_deadline IS NULL) so a concurrent completion / explicit
@@ -1443,6 +1458,24 @@ func (s *EntService) ExpireStaleJobs(ctx context.Context, staleTimeout time.Dura
 
 	staled := 0
 	for _, j := range candidates {
+		// Honor the job's own declared per-attempt duration: never reap as stale
+		// before submitted_at + max(staleTimeout, max_duration). A job that declared
+		// a max_duration longer than the operator's default ceiling has expressed
+		// intent to run that long — the registry-wide default must not undercut it.
+		// (max_duration also sizes the lease window, so a wedged job is still caught
+		// by lease reclaim; total_deadline remains the way to opt out entirely.)
+		effective := staleTimeout
+		if j.MaxDuration != nil && *j.MaxDuration > 0 {
+			if md := time.Duration(*j.MaxDuration) * time.Second; md > effective {
+				effective = md
+			}
+		}
+		if j.SubmittedAt.After(now.Add(-effective)) {
+			continue // not yet past this job's own effective ceiling
+		}
+
+		reason := staleReason(effective, staleTimeout)
+
 		// The guarded status flip AND the synthetic `stale` event insert run
 		// in ONE transaction per row: either both commit or neither does.
 		// Unlike cancel — where the cancel HTTP-forward is the primary signal
@@ -1463,7 +1496,7 @@ func (s *EntService) ExpireStaleJobs(ctx context.Context, staleTimeout time.Dura
 					job.TotalDeadlineIsNil(),
 				).
 				SetStatus(job.StatusFailed).
-				SetError(staleJobError).
+				SetError(reason).
 				ClearLeaseExpiresAt().
 				ClearOwnerInstanceID().
 				SetLastHeartbeatAt(now).
@@ -1483,7 +1516,7 @@ func (s *EntService) ExpireStaleJobs(ctx context.Context, staleTimeout time.Dura
 				tx,
 				j.ID,
 				"stale",
-				map[string]interface{}{"reason": "stale", "detail": staleJobError},
+				map[string]interface{}{"reason": "stale", "detail": reason},
 				nil,
 				"",
 			); evErr != nil {

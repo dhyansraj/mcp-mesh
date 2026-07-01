@@ -257,17 +257,36 @@ export DEFAULT_EVICTION_THRESHOLD=60
 # that are no longer referenced by any capability — purged when both
 # orphan and older than this retention window; #842).
 export MCP_MESH_RETENTION=1h
+
+# How often the periodic job/agent sweep runs (reaping, lease recovery,
+# retention purges). Go duration string (e.g. "30s", "5m", "1m30s").
+# Default: 5m. A shorter interval makes reaping and retention purges run
+# more promptly at the cost of extra sweep scans; production deployments
+# typically leave this unset.
+export MCP_MESH_SWEEP_INTERVAL=5m
+
+# MeshJob default total-runtime ceiling. Go duration string (e.g. "2h",
+# "30m"). Applies a DEFAULT total_deadline — measured from a job's
+# submission time — to jobs that did NOT set their own total_deadline; a
+# job that exceeds it is marked failed with a "stale: ..." reason and a
+# synthetic `stale` event. The effective ceiling for a job is
+# max(MCP_MESH_JOB_STALE_TIMEOUT, max_duration) — it never reaps a job
+# before its own declared per-attempt max_duration elapses. Jobs that
+# set their own total_deadline are fully exempt. Default: off (unset /
+# "0") — jobs without an explicit total_deadline run unbounded, subject
+# only to lease recovery.
+export MCP_MESH_JOB_STALE_TIMEOUT=2h
 ```
 
 **Notes:**
 
-- The sweep runs on a hardcoded 5-minute interval, so actual purge can
-  lag retention by up to ~5 minutes.
-- Setting `MCP_MESH_RETENTION` shorter than 5m (e.g. `1m`) will not
-  speed up the purge cadence — it only affects when an agent becomes
-  eligible for purge.
-- Hardcoded internal constants: sweep interval = 5m, event hard cap =
-  100,000 rows.
+- The sweep runs every `MCP_MESH_SWEEP_INTERVAL` (default 5m), so actual
+  purge can lag retention by up to one sweep interval.
+- Setting `MCP_MESH_RETENTION` shorter than the sweep interval (e.g.
+  `1m` with the default 5m sweep) will not speed up the purge cadence —
+  it only affects when an agent becomes eligible for purge. Lower
+  `MCP_MESH_SWEEP_INTERVAL` to tighten the cadence.
+- Internal constant: event hard cap = 100,000 rows.
 
 ### Logging and Debug
 

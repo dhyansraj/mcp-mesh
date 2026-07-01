@@ -7,6 +7,7 @@ package registry
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -980,8 +981,10 @@ func TestSweep_ExpireStaleJobs_NoDeadlineReaped(t *testing.T) {
 	if got.Status != job.StatusFailed {
 		t.Errorf("expected status=failed, got %s", got.Status)
 	}
-	if got.Error == nil || *got.Error != staleJobError {
-		t.Errorf("expected error %q, got %v", staleJobError, got.Error)
+	if got.Error == nil ||
+		!strings.Contains(*got.Error, "stale:") ||
+		!strings.Contains(*got.Error, "MCP_MESH_JOB_STALE_TIMEOUT") {
+		t.Errorf("expected stale-timeout reason, got %v", got.Error)
 	}
 	if got.LeaseExpiresAt != nil {
 		t.Errorf("expected lease cleared, got %v", got.LeaseExpiresAt)
@@ -992,6 +995,195 @@ func TestSweep_ExpireStaleJobs_NoDeadlineReaped(t *testing.T) {
 
 	if n := countJobEventsOfType(t, client, j.ID, "stale"); n != 1 {
 		t.Errorf("expected exactly 1 synthetic stale event, got %d", n)
+	}
+}
+
+// seedMaxDuration sets max_duration (seconds) on an already-seeded job row.
+func seedMaxDuration(t *testing.T, client *ent.Client, jobID string, seconds int) {
+	t.Helper()
+	if _, err := client.Job.UpdateOneID(jobID).
+		SetMaxDuration(seconds).
+		Save(context.Background()); err != nil {
+		t.Fatalf("seed max_duration on %s: %v", jobID, err)
+	}
+}
+
+// TestSweep_ExpireStaleJobs_MaxDurationGreaterThanStale_NotYetElapsed verifies
+// the effective ceiling is max(staleTimeout, max_duration): a job that declared
+// a max_duration LONGER than the operator's stale timeout, aged PAST the stale
+// timeout but BEFORE its own max_duration, is NOT reaped — it is still within
+// its declared per-attempt duration.
+func TestSweep_ExpireStaleJobs_MaxDurationGreaterThanStale_NotYetElapsed(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 24 * time.Hour, JobStaleTimeout: 1 * time.Hour}
+	client, _, sweep, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	seedAgent(t, client, "longjob-owner", agent.StatusHealthy, now)
+	owner := "longjob-owner"
+	// staleTimeout=1h, max_duration=3h. submitted_at 2h ago: past the 1h
+	// stale timeout but within the 3h declared duration → effective ceiling
+	// is 3h, so NOT yet reaped.
+	j := seedJobRow(t, client, "job-long-working", "render", &owner, job.StatusWorking, 1, 3, now.Add(-2*time.Hour))
+	seedMaxDuration(t, client, j.ID, int((3 * time.Hour).Seconds()))
+
+	res, err := sweep.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if res.jobsStaled != 0 {
+		t.Errorf("expected 0 staled (within declared max_duration), got %d", res.jobsStaled)
+	}
+
+	got, err := client.Job.Get(ctx, j.ID)
+	if err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if got.Status != job.StatusWorking {
+		t.Errorf("expected status=working preserved, got %s", got.Status)
+	}
+	if got.OwnerInstanceID == nil || *got.OwnerInstanceID != owner {
+		t.Errorf("expected owner preserved, got %v", got.OwnerInstanceID)
+	}
+	if n := countJobEventsOfType(t, client, j.ID, "stale"); n != 0 {
+		t.Errorf("expected no stale event (still working), got %d", n)
+	}
+}
+
+// TestSweep_ExpireStaleJobs_MaxDurationGreaterThanStale_Elapsed verifies the
+// same long job IS reaped once aged PAST its own max_duration: failed + stale
+// event, lease/owner cleared.
+func TestSweep_ExpireStaleJobs_MaxDurationGreaterThanStale_Elapsed(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 24 * time.Hour, JobStaleTimeout: 1 * time.Hour}
+	client, _, sweep, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	seedAgent(t, client, "longjob-done-owner", agent.StatusHealthy, now)
+	owner := "longjob-done-owner"
+	// staleTimeout=1h, max_duration=3h. submitted_at 4h ago: past the 3h
+	// effective ceiling → reaped.
+	j := seedJobRow(t, client, "job-long-elapsed", "render", &owner, job.StatusWorking, 1, 3, now.Add(-4*time.Hour))
+	seedMaxDuration(t, client, j.ID, int((3 * time.Hour).Seconds()))
+
+	res, err := sweep.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if res.jobsStaled != 1 {
+		t.Errorf("expected 1 staled (past declared max_duration), got %d", res.jobsStaled)
+	}
+
+	got, err := client.Job.Get(ctx, j.ID)
+	if err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if got.Status != job.StatusFailed {
+		t.Errorf("expected status=failed, got %s", got.Status)
+	}
+	if got.Error == nil ||
+		!strings.Contains(*got.Error, "stale:") ||
+		!strings.Contains(*got.Error, "max_duration") {
+		t.Errorf("expected max_duration reason, got %v", got.Error)
+	}
+	if got.LeaseExpiresAt != nil {
+		t.Errorf("expected lease cleared, got %v", got.LeaseExpiresAt)
+	}
+	if got.OwnerInstanceID != nil {
+		t.Errorf("expected owner cleared, got %v", *got.OwnerInstanceID)
+	}
+	if n := countJobEventsOfType(t, client, j.ID, "stale"); n != 1 {
+		t.Errorf("expected exactly 1 stale event, got %d", n)
+	}
+}
+
+// TestSweep_ExpireStaleJobs_MaxDurationLessThanStale_Reaped verifies existing
+// behavior is preserved when max_duration is SHORTER than the stale timeout:
+// the effective ceiling stays at staleTimeout, so a job aged past staleTimeout
+// is reaped even though its own (shorter) max_duration would also have passed.
+func TestSweep_ExpireStaleJobs_MaxDurationLessThanStale_Reaped(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 24 * time.Hour, JobStaleTimeout: 1 * time.Hour}
+	client, _, sweep, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	seedAgent(t, client, "shortmd-owner", agent.StatusHealthy, now)
+	owner := "shortmd-owner"
+	// staleTimeout=1h, max_duration=10m (< stale). submitted_at 2h ago: past
+	// staleTimeout → effective ceiling is 1h → reaped (max_duration doesn't
+	// shorten the ceiling).
+	j := seedJobRow(t, client, "job-short-md", "render", &owner, job.StatusWorking, 1, 3, now.Add(-2*time.Hour))
+	seedMaxDuration(t, client, j.ID, int((10 * time.Minute).Seconds()))
+
+	res, err := sweep.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if res.jobsStaled != 1 {
+		t.Errorf("expected 1 staled (past staleTimeout), got %d", res.jobsStaled)
+	}
+
+	got, err := client.Job.Get(ctx, j.ID)
+	if err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if got.Status != job.StatusFailed {
+		t.Errorf("expected status=failed, got %s", got.Status)
+	}
+	if n := countJobEventsOfType(t, client, j.ID, "stale"); n != 1 {
+		t.Errorf("expected 1 stale event, got %d", n)
+	}
+}
+
+// TestSweep_ExpireStaleJobs_MaxDurationWithTotalDeadlineExempt verifies a job
+// that ALSO set total_deadline remains exempt from the stale phase even with a
+// max_duration set — total_deadline is still the way to opt out entirely.
+func TestSweep_ExpireStaleJobs_MaxDurationWithTotalDeadlineExempt(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 24 * time.Hour, JobStaleTimeout: 1 * time.Hour}
+	client, _, sweep, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	seedAgent(t, client, "md-deadline-owner", agent.StatusHealthy, now)
+	owner := "md-deadline-owner"
+	// max_duration=3h AND a future total_deadline: total_deadline IS NULL
+	// filter excludes it from the stale phase; deadline not yet passed so
+	// ExpireDeadlinedJobs skips it too.
+	j := seedJobRow(t, client, "job-md-deadline", "render", &owner, job.StatusWorking, 1, 3, now.Add(-2*time.Hour))
+	// total_deadline in the FUTURE relative to wall-clock (ExpireDeadlinedJobs
+	// uses time.Now(), not the mock clock) so the deadline phase skips it too.
+	if _, err := client.Job.UpdateOneID(j.ID).
+		SetMaxDuration(int((3 * time.Hour).Seconds())).
+		SetTotalDeadline(time.Now().UTC().Add(1 * time.Hour)).
+		Save(ctx); err != nil {
+		t.Fatalf("seed max_duration+deadline: %v", err)
+	}
+
+	res, err := sweep.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if res.jobsStaled != 0 {
+		t.Errorf("expected 0 staled (total_deadline exempts), got %d", res.jobsStaled)
+	}
+
+	got, err := client.Job.Get(ctx, j.ID)
+	if err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if got.Status != job.StatusWorking {
+		t.Errorf("expected status=working preserved, got %s", got.Status)
+	}
+	if n := countJobEventsOfType(t, client, j.ID, "stale"); n != 0 {
+		t.Errorf("expected no stale event, got %d", n)
 	}
 }
 
@@ -1179,7 +1371,9 @@ func TestSweep_ExpireStaleJobs_Idempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload job: %v", err)
 	}
-	if got.Error == nil || *got.Error != staleJobError {
-		t.Errorf("expected stale error preserved, got %v", got.Error)
+	if got.Error == nil ||
+		!strings.Contains(*got.Error, "stale:") ||
+		!strings.Contains(*got.Error, "MCP_MESH_JOB_STALE_TIMEOUT") {
+		t.Errorf("expected stale-timeout reason preserved, got %v", got.Error)
 	}
 }

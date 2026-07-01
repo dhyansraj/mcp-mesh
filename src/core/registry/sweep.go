@@ -83,9 +83,12 @@ type SweepConfig struct {
 	Retention time.Duration
 
 	// JobStaleTimeout is a DEFAULT total-runtime ceiling applied to jobs that
-	// did NOT set their own total_deadline, measured from submitted_at. 0
-	// (the default) DISABLES the stale-job phase entirely — it is opt-in, so
-	// most deployments scan zero rows. See ExpireStaleJobs.
+	// did NOT set their own total_deadline, measured from submitted_at. The
+	// effective ceiling for any given job is max(JobStaleTimeout, max_duration)
+	// — never shorter than the job's own declared per-attempt duration, so a
+	// registry-wide default can't reap a genuine long job before its declared
+	// duration elapses. 0 (the default) DISABLES the stale-job phase entirely —
+	// it is opt-in, so most deployments scan zero rows. See ExpireStaleJobs.
 	JobStaleTimeout time.Duration
 }
 
@@ -382,7 +385,9 @@ func (s *SweepJob) runOnce(ctx context.Context) (sweepResult, error) {
 
 		// Default total-runtime ceiling (opt-in: MCP_MESH_JOB_STALE_TIMEOUT,
 		// 0 = disabled). Applies a default total_deadline measured from
-		// submitted_at to jobs that did NOT set their own. Runs AFTER the
+		// submitted_at to jobs that did NOT set their own — but the effective
+		// ceiling for each job is max(JobStaleTimeout, max_duration), so a job's
+		// declared per-attempt duration is never undercut. Runs AFTER the
 		// lease-reclaim and explicit-deadline phases so a row those already
 		// retired isn't double-processed (the guarded update would no-op
 		// anyway, but skipping the scan keeps the common disabled case free).

@@ -119,11 +119,19 @@ async def commission_submit_only(
     user_id: str,
     sections: list[str],
     max_retries: int = 1,
-    max_duration: int = 60,
+    max_duration: Optional[int] = None,
     generate_report: MeshJob = None,
 ) -> dict:
     if generate_report is None:
         return {"error": "generate_report submitter not injected"}
+    # max_duration is Optional: when the caller omits it (None), we pass None
+    # to submit() so the registry applies its DEFAULT lease (300s). This is
+    # what the C2 stale-reaping test (tc28) needs — a job with NO explicit
+    # max_duration whose effective stale ceiling is just
+    # MCP_MESH_JOB_STALE_TIMEOUT, while the 300s default lease stays alive so
+    # only the stale sweep (not the lease-reclaim sweep) can reap it. When a
+    # caller DOES pass max_duration (e.g. tc30), it flows through verbatim and
+    # raises the effective ceiling to max(stale_timeout, max_duration).
     proxy = await generate_report.submit(
         user_id=user_id,
         sections=sections,

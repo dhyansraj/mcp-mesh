@@ -9,12 +9,23 @@
 # marked ``failed`` with error ``"stale: ..."``, its lease/owner cleared, and
 # a synthetic ``stale`` JobEvent posted.
 #
+# The stale sweep now HONORS a job's own ``max_duration``: the effective
+# runtime ceiling is ``max(MCP_MESH_JOB_STALE_TIMEOUT, max_duration)``. A job
+# whose ``max_duration`` exceeds the stale timeout is therefore NOT reaped
+# until its ``max_duration`` elapses (this protects genuine long jobs from a
+# registry-wide stale timeout — see tc30 for that shielding proof).
+#
 # Setup that isolates the STALE phase from the lease / orphan / deadline
 # phases (so a pass unambiguously proves the stale phase reaped the row):
 #   - commission_submit_only submits generate_report with NO total_deadline
 #     (so ExpireDeadlinedJobs can't touch it — its filter requires a non-null
-#     total_deadline) and a LARGE max_duration=60 (so the LEASE does not
-#     expire first — else ReclaimExpiredLeaseJobs / C1 would catch it).
+#     total_deadline) and — crucially — with NO ``max_duration``. With no
+#     max_duration the effective stale ceiling is just
+#     ``max(3s, 0) = 3s = MCP_MESH_JOB_STALE_TIMEOUT``, so the running job IS
+#     subject to the 3s ceiling. Omitting max_duration makes the lease fall
+#     back to the registry DEFAULT of 300s, so the LEASE stays alive well past
+#     the ~20s run — ReclaimExpiredLeaseJobs / C1 can't reach it first, and
+#     only the stale sweep reaps the row.
 #   - the job runs ~20s (10 sections * ~2s) — well past the 3s stale cutoff —
 #     so it is still ``working`` when the stale sweep fires.
 #   - the provider is kept HEALTHY (never killed): a dead owner would let
@@ -29,8 +40,8 @@
 #   - the events log CONTAINS a {type: "stale"} entry whose payload mentions
 #     reason/stale
 
-name: "MeshJob: stale-job sweep reaps a long job with no total_deadline"
-description: "Job with no total_deadline + large max_duration runs past MCP_MESH_JOB_STALE_TIMEOUT=3s; stale sweep marks it failed with 'stale:' and posts a synthetic stale event"
+name: "MeshJob: stale-job sweep reaps a long job with no total_deadline and no max_duration"
+description: "Job with no total_deadline and no max_duration runs past MCP_MESH_JOB_STALE_TIMEOUT=3s (effective ceiling max(3s,0)=3s); stale sweep marks it failed with 'stale:' and posts a synthetic stale event"
 tags:
   - meshjob
   - python
@@ -95,16 +106,18 @@ test:
     capture: wait_registration
     timeout: 90
 
-  # NO total_deadline (commission_submit_only never sets one) + a large
-  # max_duration so the lease can't lapse first. 10 sections * ~2s ≈ 20s of
-  # work — well past the 3s stale ceiling, so the job is still working when
-  # the stale sweep fires.
-  - name: "Submit generate_report with NO total_deadline, max_duration=60"
+  # NO total_deadline (commission_submit_only never sets one) and NO
+  # max_duration — so the effective stale ceiling is max(3s, 0) = 3s. Omitting
+  # max_duration makes the lease fall back to the registry default (300s), so
+  # the lease can't lapse during the ~20s run and only the stale sweep can
+  # reap the row. 10 sections * ~2s ≈ 20s of work — well past the 3s stale
+  # ceiling, so the job is still working when the stale sweep fires.
+  - name: "Submit generate_report with NO total_deadline and NO max_duration"
     handler: shell
     workdir: /workspace
     command: |
       meshctl call commission_submit_only \
-        '{"user_id":"alice","sections":["a","b","c","d","e","f","g","h","i","j"],"max_retries":0,"max_duration":60}'
+        '{"user_id":"alice","sections":["a","b","c","d","e","f","g","h","i","j"],"max_retries":0}'
     capture: submit_resp
     timeout: 30
 
