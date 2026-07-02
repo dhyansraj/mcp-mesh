@@ -364,7 +364,12 @@ class TestOutputConfigShortCircuitContentFallback:
         from mesh.helpers import _provider_agentic_loop
 
         # The model returned no parsable text — extractor will yield None.
+        # Null out every non-text carrier so the recovery step also finds
+        # nothing (MagicMock auto-vivifies attributes otherwise), exercising
+        # the genuine "nothing recoverable → emit ''" path.
         msg = _message(content=None, tool_calls=None)
+        msg.parsed = None
+        msg.provider_specific_fields = None
 
         with patch(
             "asyncio.to_thread", new=AsyncMock(return_value=_response(msg))
@@ -395,3 +400,255 @@ class TestOutputConfigShortCircuitContentFallback:
         # The critical assertion: never ``None``, always ``""``.
         assert result["content"] == ""
         assert result["content"] is not None
+
+
+class TestOutputConfigNonTextCarrierRecovery:
+    """Newer litellm output_config transforms can leave ``message.content``
+    empty while the structured JSON rides in a non-text carrier (``parsed`` /
+    ``provider_specific_fields`` / ``tool_calls``). The loop must recover it
+    before building the envelope; when nothing is recoverable it must WARN
+    (naming the model + mode) and still return ``content: ""``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_recovers_from_parsed_when_content_empty(self):
+        from mesh.helpers import _provider_agentic_loop
+
+        msg = _message(content=None, tool_calls=None)
+        msg.parsed = {"destination": "Paris", "days": 5}
+        msg.provider_specific_fields = None
+
+        with patch(
+            "asyncio.to_thread", new=AsyncMock(return_value=_response(msg))
+        ), patch(
+            "mesh.helpers._maybe_run_synthetic_fallback", new=AsyncMock()
+        ), patch(
+            "mesh.helpers._maybe_run_hint_fallback", new=AsyncMock()
+        ):
+            result = await _provider_agentic_loop(
+                effective_model="anthropic/claude-sonnet-4-6",
+                messages=[{"role": "user", "content": "Plan a Paris trip."}],
+                tools=[],
+                tool_endpoints={},
+                model_params={
+                    "_mesh_output_config_mode": True,
+                    "_mesh_output_config_schema": _trip_schema(),
+                    "_mesh_output_config_output_type_name": "Trip",
+                },
+                litellm_kwargs={},
+                vendor="anthropic",
+            )
+
+        assert json.loads(result["content"]) == {"destination": "Paris", "days": 5}
+
+    @pytest.mark.asyncio
+    async def test_recovers_from_provider_specific_fields(self):
+        from mesh.helpers import _provider_agentic_loop
+
+        msg = _message(content=None, tool_calls=None)
+        msg.parsed = None
+        msg.provider_specific_fields = {
+            "parsed": {"destination": "Tokyo", "days": 3}
+        }
+
+        with patch(
+            "asyncio.to_thread", new=AsyncMock(return_value=_response(msg))
+        ), patch(
+            "mesh.helpers._maybe_run_synthetic_fallback", new=AsyncMock()
+        ), patch(
+            "mesh.helpers._maybe_run_hint_fallback", new=AsyncMock()
+        ):
+            result = await _provider_agentic_loop(
+                effective_model="anthropic/claude-sonnet-4-6",
+                messages=[{"role": "user", "content": "Plan a Tokyo trip."}],
+                tools=[],
+                tool_endpoints={},
+                model_params={
+                    "_mesh_output_config_mode": True,
+                    "_mesh_output_config_schema": _trip_schema(),
+                    "_mesh_output_config_output_type_name": "Trip",
+                },
+                litellm_kwargs={},
+                vendor="anthropic",
+            )
+
+        assert json.loads(result["content"]) == {"destination": "Tokyo", "days": 3}
+
+    @pytest.mark.asyncio
+    async def test_warns_and_returns_empty_when_nothing_recoverable(self, caplog):
+        from mesh.helpers import _provider_agentic_loop
+
+        msg = _message(content=None, tool_calls=None)
+        msg.parsed = None
+        msg.provider_specific_fields = None
+
+        with patch(
+            "asyncio.to_thread", new=AsyncMock(return_value=_response(msg))
+        ), patch(
+            "mesh.helpers._maybe_run_synthetic_fallback", new=AsyncMock()
+        ), patch(
+            "mesh.helpers._maybe_run_hint_fallback", new=AsyncMock()
+        ):
+            with caplog.at_level("WARNING", logger="mesh.helpers"):
+                result = await _provider_agentic_loop(
+                    effective_model="anthropic/claude-sonnet-4-6",
+                    messages=[{"role": "user", "content": "Q?"}],
+                    tools=[],
+                    tool_endpoints={},
+                    model_params={
+                        "_mesh_output_config_mode": True,
+                        "_mesh_output_config_schema": _trip_schema(),
+                        "_mesh_output_config_output_type_name": "Trip",
+                    },
+                    litellm_kwargs={},
+                    vendor="anthropic",
+                )
+
+        # Still returns an envelope with content "".
+        assert result["content"] == ""
+        # WARN names the output type, the model, and the empty-carrier reason.
+        warn_msgs = [
+            r.getMessage() for r in caplog.records if r.levelname == "WARNING"
+        ]
+        assert any(
+            "Trip" in m
+            and "claude-sonnet-4-6" in m
+            and "no recoverable structured carrier" in m
+            for m in warn_msgs
+        ), f"Expected empty-carrier WARN; got: {warn_msgs}"
+
+
+class TestRecoverStructuredContentHelper:
+    """Direct unit coverage for ``_recover_structured_content_from_message``."""
+
+    def test_recovers_from_parsed(self):
+        from mesh.helpers import _recover_structured_content_from_message
+
+        msg = _message(content=None, tool_calls=None)
+        msg.parsed = {"answer": "42"}
+        msg.provider_specific_fields = None
+        assert json.loads(_recover_structured_content_from_message(msg)) == {
+            "answer": "42"
+        }
+
+    def test_recovers_empty_dict_from_provider_specific_fields(self):
+        """A legitimately falsy structured payload (empty dict) MUST still be
+        recovered as ``"{}"`` — the carrier check is presence-based
+        (``is not None``), not truthiness."""
+        from mesh.helpers import _recover_structured_content_from_message
+
+        msg = _message(content=None, tool_calls=None)
+        msg.parsed = None
+        msg.provider_specific_fields = {"parsed": {}}
+        assert _recover_structured_content_from_message(msg) == "{}"
+
+    def test_parsed_takes_priority_over_provider_specific_fields(self):
+        """When BOTH ``parsed`` and ``provider_specific_fields`` are present,
+        ``parsed`` wins (it is the first-class Structured Outputs carrier)."""
+        from mesh.helpers import _recover_structured_content_from_message
+
+        msg = _message(content=None, tool_calls=None)
+        msg.parsed = {"answer": "from_parsed"}
+        msg.provider_specific_fields = {"parsed": {"answer": "from_psf"}}
+        assert json.loads(_recover_structured_content_from_message(msg)) == {
+            "answer": "from_parsed"
+        }
+
+    def test_ignores_tool_calls_carrier(self):
+        """``tool_calls`` are NOT a recovery carrier — on a tool-call turn the
+        arguments are the invocation, not the answer. With only tool_calls and
+        no parsed/psf, recovery returns ``None``."""
+        from mesh.helpers import _recover_structured_content_from_message
+
+        msg = _message(
+            content=None,
+            tool_calls=[
+                _tool_call("c1", "get_weather", '{"city": "NYC"}')
+            ],
+        )
+        msg.parsed = None
+        msg.provider_specific_fields = None
+        assert _recover_structured_content_from_message(msg) is None
+
+    def test_returns_none_when_nothing_recoverable(self):
+        from mesh.helpers import _recover_structured_content_from_message
+
+        msg = _message(content=None, tool_calls=None)
+        msg.parsed = None
+        msg.provider_specific_fields = None
+        assert _recover_structured_content_from_message(msg) is None
+
+
+class TestIntermediateToolCallReplayUnchanged:
+    """item-1 protected surface: an intermediate tool-call turn whose adapter
+    ``content`` is ``None`` (the common real-tool-call-with-no-preamble case)
+    MUST be replayed to the model with ``content: ""`` — never with fabricated
+    JSON tool args. Guards against the reverted adapter tool-arg fallback
+    re-appearing and polluting the assistant history.
+    """
+
+    @pytest.mark.asyncio
+    async def test_tool_call_turn_replayed_with_empty_content(self):
+        from mesh.helpers import _provider_agentic_loop
+
+        # Iter 1: real tool call, no text preamble (content=None).
+        # Iter 2: final text answer terminates the loop.
+        tool_call_msg = _message(
+            content=None,
+            tool_calls=[_tool_call("call_1", "get_weather", '{"city": "NYC"}')],
+        )
+        final_msg = _message(content="It's sunny.", tool_calls=None)
+
+        async def _passthrough(*, final_content, message, response, **kwargs):
+            return final_content, message, response
+
+        completion = AsyncMock(
+            side_effect=[_response(tool_call_msg), _response(final_msg)]
+        )
+        with patch("asyncio.to_thread", new=completion), patch(
+            "mesh.helpers._execute_tool_calls_for_iteration",
+            new=AsyncMock(
+                return_value=(
+                    [
+                        {
+                            "role": "tool",
+                            "tool_call_id": "call_1",
+                            "content": "sunny",
+                        }
+                    ],
+                    [],
+                )
+            ),
+        ), patch(
+            "mesh.helpers._maybe_run_synthetic_fallback",
+            new=AsyncMock(side_effect=_passthrough),
+        ), patch(
+            "mesh.helpers._maybe_run_hint_fallback",
+            new=AsyncMock(side_effect=_passthrough),
+        ):
+            await _provider_agentic_loop(
+                effective_model="anthropic/claude-sonnet-4-6",
+                messages=[{"role": "user", "content": "Weather in NYC?"}],
+                tools=[
+                    {"type": "function", "function": {"name": "get_weather"}}
+                ],
+                tool_endpoints={"get_weather": "http://weather"},
+                model_params={},
+                litellm_kwargs={},
+                max_iterations=5,
+                vendor="anthropic",
+            )
+
+        # Inspect the conversation replayed on iteration 2.
+        second_call_messages = completion.await_args_list[1].kwargs["messages"]
+        assistant_tool_turns = [
+            m
+            for m in second_call_messages
+            if m.get("role") == "assistant" and m.get("tool_calls")
+        ]
+        assert assistant_tool_turns, (
+            "expected the intermediate tool-call assistant turn in the replay"
+        )
+        # The critical assertion: content is the empty string, NOT fabricated
+        # JSON tool args.
+        assert assistant_tool_turns[0]["content"] == ""

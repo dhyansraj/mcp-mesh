@@ -53,6 +53,7 @@ import {
   MaxIterationsError,
   LLMAPIError,
   ToolExecutionError,
+  ResponseParseError,
 } from "./errors.js";
 import { resolveMediaInputs } from "./media/index.js";
 import {
@@ -149,11 +150,20 @@ export class MeshDelegatedProvider implements LlmProvider {
   private endpoint: string;
   private functionName: string;
   private parallelToolCalls: boolean;
+  // Raw wire payload of the most recent complete() reply, retained so run() can
+  // surface it in the empty-content diagnostic (the normalized assistant message
+  // drops non-answer keys like "error").
+  private _lastRawResponse: string | undefined;
 
   constructor(endpoint: string, functionName: string, parallelToolCalls: boolean = false) {
     this.endpoint = endpoint;
     this.functionName = functionName;
     this.parallelToolCalls = parallelToolCalls;
+  }
+
+  /** Raw wire payload of the last complete() reply (for diagnostics). */
+  get lastRawResponse(): string | undefined {
+    return this._lastRawResponse;
   }
 
   /**
@@ -308,12 +318,14 @@ export class MeshDelegatedProvider implements LlmProvider {
     if (typeof content !== "string") {
       throw new Error("Invalid response from mesh provider");
     }
+    // Retain the raw wire payload for the empty-content diagnostic in run().
+    this._lastRawResponse = content;
 
     // Parse the LLM provider response
     // Format: { role, content, tool_calls?, _mesh_usage? }
     const meshResponse = JSON.parse(content) as {
-      role: string;
-      content: string;
+      role?: string;
+      content?: unknown;
       tool_calls?: Array<{
         id: string;
         type: "function";
@@ -321,6 +333,45 @@ export class MeshDelegatedProvider implements LlmProvider {
       }>;
       _mesh_usage?: { prompt_tokens: number; completion_tokens: number };
     };
+
+    // Normalize the envelope's content to a string. Providers should send the
+    // answer as a string, but two malformed-but-recoverable shapes occur:
+    //   1. content is a raw object — the structured answer leaked unserialized.
+    //      Serialize it so downstream schema parsing sees valid JSON.
+    //   2. the map has neither "content" nor "role" — a bare structured answer
+    //      returned without the envelope; treat the whole map as the answer.
+    //      Guard: maps carrying reserved wire keys (tool_calls / _mesh_usage) or
+    //      a TRUTHY "error" are NOT answers — leave empty so run()'s empty-content
+    //      diagnostic surfaces the real payload (e.g. a vendor error) rather than
+    //      a misleading schema-validation failure. An `error: null` value is a
+    //      plain model field, so a falsy error does not disqualify a bare answer.
+    let normalizedContent: string;
+    const rawContent = meshResponse.content;
+    const meshMap = meshResponse as Record<string, unknown>;
+    const looksBareAnswer =
+      !("content" in meshResponse) &&
+      !("role" in meshResponse) &&
+      !("tool_calls" in meshResponse) &&
+      !("_mesh_usage" in meshResponse) &&
+      !meshMap.error;
+    if (typeof rawContent === "string") {
+      normalizedContent = rawContent;
+    } else if (rawContent !== null && typeof rawContent === "object") {
+      console.warn(
+        "[mesh.llm] Provider sent structured (object) content; normalizing to a JSON string"
+      );
+      normalizedContent = JSON.stringify(rawContent);
+    } else if (looksBareAnswer) {
+      console.warn(
+        "[mesh.llm] Provider returned a bare structured answer without an envelope; treating the whole map as content"
+      );
+      normalizedContent = JSON.stringify(meshResponse);
+    } else {
+      // content is null/undefined inside a real envelope — legal (tool calls,
+      // max-token cutoff). Leave empty; run() surfaces a diagnostic if this
+      // becomes the final answer under a response schema.
+      normalizedContent = "";
+    }
 
     // Validate role - LLM responses should always be "assistant"
     let validatedRole: "assistant" = "assistant";
@@ -341,7 +392,7 @@ export class MeshDelegatedProvider implements LlmProvider {
           index: 0,
           message: {
             role: validatedRole,
-            content: meshResponse.content,
+            content: normalizedContent,
             tool_calls: meshResponse.tool_calls,
           },
           finish_reason: meshResponse.tool_calls ? "tool_calls" : "stop",
@@ -752,6 +803,22 @@ export class MeshLlmAgent<T = string> {
       model,
       provider: this.getProviderName(context),
     };
+
+    // Empty final content under a response schema is not a parse problem — the
+    // provider reply carried no answer (lost upstream). Blame that honestly and
+    // include the raw payload, rather than an opaque "could not extract JSON".
+    if (finalContent === "" && this.config.returnSchema) {
+      // Prefer the raw wire payload (carries non-answer keys like "error");
+      // fall back to the normalized assistant message.
+      const rawPayload =
+        (provider instanceof MeshDelegatedProvider
+          ? provider.lastRawResponse
+          : undefined) ?? JSON.stringify(messages[messages.length - 1] ?? {});
+      throw new ResponseParseError(
+        `Provider reply had empty content; nothing to parse as the response schema. Raw response payload: ${rawPayload.slice(0, 500)}`,
+        rawPayload
+      );
+    }
 
     // Parse and validate response
     return this.responseParser.parse(finalContent);

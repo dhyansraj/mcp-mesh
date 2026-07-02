@@ -549,6 +549,30 @@ def _build_create_kwargs(
 # ---------------------------------------------------------------------------
 
 
+def _parsed_to_json_str(parsed: Any) -> str | None:
+    """Serialize an OpenAI Structured-Outputs ``message.parsed`` payload to a
+    JSON string.
+
+    ``parsed`` may be a Pydantic model (``model_dump_json``), a plain dict, or
+    already a string. Returns ``None`` when there is nothing to recover or the
+    payload can't be serialized.
+    """
+    if parsed is None:
+        return None
+    if isinstance(parsed, str):
+        return parsed
+    dump = getattr(parsed, "model_dump_json", None)
+    if callable(dump):
+        try:
+            return dump()
+        except Exception:  # noqa: BLE001 - defensive; fall through to json
+            pass
+    try:
+        return json.dumps(parsed)
+    except (TypeError, ValueError):
+        return None
+
+
 def _adapt_response(raw: Any) -> _Response:
     """Translate openai.ChatCompletion → litellm-shape ``_Response``.
 
@@ -615,6 +639,18 @@ def _adapt_response(raw: Any) -> _Response:
                 tool_calls.append(
                     _ToolCall(id=tc_id, name=tc_name or "", arguments=tc_args or "")
                 )
+
+            # Structured output can arrive in a non-text carrier: OpenAI's
+            # Structured Outputs (``.parse``) surfaces the answer on
+            # ``message.parsed`` with ``content=None`` and no tool_calls. A
+            # non-refusal ``content=None`` collapses to ``""`` downstream and
+            # degrades into an opaque "failed to parse" error, so recover it as
+            # a string here (refusals were already raised above). Gated on the
+            # absence of tool_calls: on an ordinary tool-call turn ``content``
+            # is legitimately ``None`` and MUST stay ``None`` so it isn't
+            # replayed as a synthetic text block on the next iteration.
+            if text is None and not tool_calls:
+                text = _parsed_to_json_str(getattr(msg, "parsed", None))
         finish_reason = getattr(first_choice, "finish_reason", None) or "stop"
 
     message = _Message(

@@ -1537,6 +1537,21 @@ class TestAdaptResponse:
         assert out.choices[0].message.content == "Calling weather..."
         assert len(out.choices[0].message.tool_calls) == 1
 
+    def test_function_call_only_leaves_content_none(self):
+        """A functionCall-only response (no text Part) MUST leave
+        ``content=None``. The call args are the tool invocation, not the
+        answer: fabricating ``content`` from them would leak a synthetic JSON
+        text block into the replayed assistant history on the next agentic
+        iteration."""
+        raw = _make_gemini_response(
+            function_calls=[{"name": "get_weather", "args": {"city": "NYC"}}],
+            finish_reason="STOP",
+        )
+        out = gemini_native._adapt_response(raw, model="gemini-2.5-flash")
+        msg = out.choices[0].message
+        assert msg.content is None
+        assert msg.tool_calls[0].function.name == "get_weather"
+
     def test_usage_metadata_field_name_mapping(self):
         raw = _make_gemini_response(
             text="hi",
