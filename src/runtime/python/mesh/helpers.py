@@ -997,6 +997,67 @@ def _extract_text_from_message_content(content: Any) -> str:
     return str(content)
 
 
+def _coerce_content_to_str(content: Any) -> str:
+    """Guarantee an MCP tool-result envelope's ``content`` is a string.
+
+    The mesh contract is "content always carries the answer as a string";
+    consumers (Java ``extractContent``, TypeScript, Python) JSON-parse string
+    content and turn a Map/dict into ``""``. Structured-output carriers can
+    surface the answer as a dict, so serialize non-strings defensively before
+    they reach the envelope. ``None`` becomes ``""`` (the historical default).
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    try:
+        # ``default=str`` coerces stray non-serializable leaves (datetimes,
+        # Pydantic models, etc.) so the result stays valid JSON rather than a
+        # Python repr.
+        return json.dumps(content, default=str)
+    except (TypeError, ValueError):
+        # Last resort (e.g. circular refs): emit the repr AS a JSON string so
+        # ``content`` is still valid JSON a consumer can parse.
+        return json.dumps(str(content))
+
+
+def _recover_structured_content_from_message(message: Any) -> str | None:
+    """Recover a structured answer that a provider/litellm transform left out
+    of ``message.content``.
+
+    Some upstream paths — notably newer litellm routing Claude ``output_config``
+    — deliver the structured JSON in a non-text carrier: a ``parsed`` attribute
+    or ``provider_specific_fields``. Returns the answer as a JSON string, or
+    ``None`` when nothing is recoverable (caller then emits ``content: ""`` with
+    a WARN).
+
+    Only called at the no-tool-calls final-answer sites: ``tool_calls`` are NOT
+    consulted here because on an ordinary tool-call turn the arguments are the
+    tool invocation, not the answer — surfacing them as ``content`` would leak
+    fabricated text into the replayed assistant history.
+    """
+    # 1) ``parsed`` (OpenAI Structured Outputs shape, sometimes forwarded).
+    parsed = getattr(message, "parsed", None)
+    if parsed is not None:
+        dump = getattr(parsed, "model_dump_json", None)
+        if callable(dump):
+            try:
+                return dump()
+            except Exception:  # noqa: BLE001 - defensive; fall through
+                pass
+        return _coerce_content_to_str(parsed)
+
+    # 2) ``provider_specific_fields`` (litellm passthrough bag).
+    psf = getattr(message, "provider_specific_fields", None)
+    if isinstance(psf, dict):
+        for key in ("parsed", "structured_output", "output"):
+            val = psf.get(key)
+            if val is not None:
+                return _coerce_content_to_str(val)
+
+    return None
+
+
 # Vendors that do NOT support images in tool/function result messages.
 # OpenAI strictly rejects images in role:tool messages.
 # For these vendors, images are accumulated and sent as one user message
@@ -1561,7 +1622,10 @@ async def _provider_agentic_loop(
 
                 message_dict: dict[str, Any] = {
                     "role": getattr(message, "role", "assistant"),
-                    "content": synthetic_args,
+                    # Enforce the string-content contract: a synthetic-tool
+                    # answer surfaced as a dict would be dropped to "" by
+                    # dict-unaware consumers (e.g. Java ``extractContent``).
+                    "content": _coerce_content_to_str(synthetic_args),
                 }
                 if hasattr(response, "usage") and response.usage:
                     message_dict["_mesh_usage"] = _build_mesh_usage(
@@ -1666,6 +1730,37 @@ async def _provider_agentic_loop(
                             "output_config.format normally enforces this) — "
                             "surfacing the raw text to the caller without retry",
                             output_config_output_type_name,
+                        )
+
+                # Non-text-carrier recovery: newer litellm output_config
+                # transforms can leave ``message.content`` empty while the
+                # structured JSON rides in ``parsed`` /
+                # ``provider_specific_fields``. Recover it so ``content`` still
+                # carries the answer; otherwise WARN loudly (naming the model
+                # and mode) so this never silently degrades into a downstream
+                # "failed to parse as <Model>" mystery.
+                if not final_content:
+                    recovered = _recover_structured_content_from_message(message)
+                    if recovered:
+                        final_content = recovered
+                        if loop_logger:
+                            loop_logger.info(
+                                "Native output_config mode for '%s': recovered "
+                                "structured content from a non-text carrier "
+                                "(model=%s)",
+                                output_config_output_type_name,
+                                effective_model,
+                            )
+                    else:
+                        (loop_logger or logger).warning(
+                            "Native output_config mode for '%s' (model=%s): "
+                            "empty content and no recoverable structured carrier "
+                            "(parsed/provider_specific) — emitting "
+                            "content='' ; downstream will fail to parse. "
+                            "Raw message: %.500r",
+                            output_config_output_type_name,
+                            effective_model,
+                            message,
                         )
 
                 message_dict: dict[str, Any] = {
@@ -2829,7 +2924,9 @@ def llm_provider(
                         )
                     message_dict = {
                         "role": getattr(message, "role", "assistant"),
-                        "content": synthetic_args,
+                        # Enforce the string-content contract (see the buffered
+                        # provider loop's synthetic path for rationale).
+                        "content": _coerce_content_to_str(synthetic_args),
                     }
                     if hasattr(response, "usage") and response.usage:
                         message_dict["_mesh_usage"] = _build_mesh_usage(
@@ -2874,6 +2971,36 @@ def llm_provider(
                                 "the caller without retry",
                                 output_config_output_type_name,
                             )
+                        # Non-text-carrier recovery (mirrors the agentic loop):
+                        # recover the structured answer from a non-text carrier
+                        # when ``message.content`` is empty, else WARN loudly so
+                        # it never silently degrades into a downstream parse
+                        # failure.
+                        if not final_content:
+                            recovered = _recover_structured_content_from_message(
+                                message
+                            )
+                            if recovered:
+                                final_content = recovered
+                                logger.info(
+                                    "Native output_config mode for '%s': "
+                                    "recovered structured content from a "
+                                    "non-text carrier (model=%s)",
+                                    output_config_output_type_name,
+                                    effective_model,
+                                )
+                            else:
+                                logger.warning(
+                                    "Native output_config mode for '%s' "
+                                    "(model=%s): empty content and no "
+                                    "recoverable structured carrier "
+                                    "(parsed/provider_specific) — "
+                                    "emitting content='' ; downstream will fail "
+                                    "to parse. Raw message: %.500r",
+                                    output_config_output_type_name,
+                                    effective_model,
+                                    message,
+                                )
                         # Fall through to the message_dict construction below
                         # (skip both HINT and synthetic fallbacks).
                     else:

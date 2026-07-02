@@ -460,6 +460,59 @@ class TestCompleteResponseShape:
         assert response.usage.prompt_tokens == 20
         assert response.usage.completion_tokens == 8
 
+    @pytest.mark.asyncio
+    async def test_tool_use_only_leaves_content_none(self):
+        """A tool_use-only turn (no TextBlock) MUST leave ``content=None``.
+
+        The tool_use arguments are the tool invocation, not the answer:
+        fabricating ``content`` from them would leak a synthetic JSON text
+        block into the replayed assistant history on the next agentic
+        iteration (token inflation, model drift, broken turn shape). The
+        legitimate structured-final case is handled by the loop's synthetic
+        path / non-text-carrier recovery, not here.
+        """
+        api_resp = _make_anthropic_message(
+            text=None,
+            tool_uses=[
+                {
+                    "id": "toolu_fmt",
+                    "name": "get_weather",
+                    "input": {"city": "NYC"},
+                }
+            ],
+        )
+        cls_mock, _, _ = _patched_async_anthropic(api_resp)
+        with patch("anthropic.AsyncAnthropic", cls_mock):
+            response = await anthropic_native.complete(
+                {"messages": [{"role": "user", "content": "Q?"}]},
+                model="anthropic/claude-sonnet-4-5",
+                api_key="sk-test",
+            )
+
+        msg = response.choices[0].message
+        # content stays None; the tool_call carries the invocation.
+        assert msg.content is None
+        assert msg.tool_calls[0].function.name == "get_weather"
+
+    @pytest.mark.asyncio
+    async def test_text_and_tool_use_keeps_text_content(self):
+        """When a TextBlock is present alongside a tool_use, ``content`` is
+        the text (unchanged happy path)."""
+        api_resp = _make_anthropic_message(
+            text="Here you go:",
+            tool_uses=[
+                {"id": "toolu_1", "name": "get_weather", "input": {"city": "NYC"}}
+            ],
+        )
+        cls_mock, _, _ = _patched_async_anthropic(api_resp)
+        with patch("anthropic.AsyncAnthropic", cls_mock):
+            response = await anthropic_native.complete(
+                {"messages": [{"role": "user", "content": "Q?"}]},
+                model="anthropic/claude-sonnet-4-5",
+                api_key="sk-test",
+            )
+        assert response.choices[0].message.content == "Here you go:"
+
 
 # ---------------------------------------------------------------------------
 # Backend selection

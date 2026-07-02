@@ -541,6 +541,101 @@ class TestCompleteResponseShape:
         assert response.choices[0].finish_reason == "tool_calls"
 
     @pytest.mark.asyncio
+    async def test_content_none_recovers_from_parsed_when_no_tool_calls(self):
+        """OpenAI Structured Outputs (``.parse``) surfaces the answer on
+        ``message.parsed`` with ``content=None`` and no tool_calls — recover
+        it as a JSON string."""
+        message = SimpleNamespace(
+            role="assistant",
+            content=None,
+            tool_calls=None,
+            parsed={"answer": "42"},
+        )
+        choice = SimpleNamespace(index=0, message=message, finish_reason="stop")
+        usage = SimpleNamespace(
+            prompt_tokens=1, completion_tokens=1, total_tokens=2
+        )
+        api_resp = SimpleNamespace(
+            choices=[choice], usage=usage, model="gpt-4o-mini"
+        )
+        cls_mock, _, _ = _patched_async_openai(api_resp)
+        with patch("openai.AsyncOpenAI", cls_mock):
+            response = await openai_native.complete(
+                {"messages": [{"role": "user", "content": "Q?"}]},
+                model="openai/gpt-4o-mini",
+                api_key="sk-test",
+            )
+
+        assert json.loads(response.choices[0].message.content) == {"answer": "42"}
+
+    @pytest.mark.asyncio
+    async def test_parsed_ignored_when_tool_calls_present(self):
+        """On a tool-call turn ``content`` MUST stay ``None`` even if a
+        ``parsed`` field is also present. The parsed recovery is gated on the
+        absence of tool_calls so an ordinary tool-call turn's content is not
+        fabricated (which would pollute the replayed assistant history)."""
+        message = SimpleNamespace(
+            role="assistant",
+            content=None,
+            tool_calls=[
+                SimpleNamespace(
+                    id="call_1",
+                    type="function",
+                    function=SimpleNamespace(
+                        name="get_weather", arguments='{"city": "NYC"}'
+                    ),
+                )
+            ],
+            parsed={"answer": "42"},
+        )
+        choice = SimpleNamespace(
+            index=0, message=message, finish_reason="tool_calls"
+        )
+        usage = SimpleNamespace(
+            prompt_tokens=1, completion_tokens=1, total_tokens=2
+        )
+        api_resp = SimpleNamespace(
+            choices=[choice], usage=usage, model="gpt-4o-mini"
+        )
+        cls_mock, _, _ = _patched_async_openai(api_resp)
+        with patch("openai.AsyncOpenAI", cls_mock):
+            response = await openai_native.complete(
+                {"messages": [{"role": "user", "content": "Q?"}]},
+                model="openai/gpt-4o-mini",
+                api_key="sk-test",
+            )
+
+        out_msg = response.choices[0].message
+        assert out_msg.content is None
+        assert out_msg.tool_calls[0].function.name == "get_weather"
+
+    @pytest.mark.asyncio
+    async def test_text_present_wins_over_parsed_for_content(self):
+        """Happy path: when ``content`` text is present it is used verbatim —
+        the parsed recovery must not override it."""
+        message = SimpleNamespace(
+            role="assistant",
+            content="Here you go:",
+            tool_calls=None,
+            parsed={"answer": "42"},
+        )
+        choice = SimpleNamespace(index=0, message=message, finish_reason="stop")
+        usage = SimpleNamespace(
+            prompt_tokens=1, completion_tokens=1, total_tokens=2
+        )
+        api_resp = SimpleNamespace(
+            choices=[choice], usage=usage, model="gpt-4o-mini"
+        )
+        cls_mock, _, _ = _patched_async_openai(api_resp)
+        with patch("openai.AsyncOpenAI", cls_mock):
+            response = await openai_native.complete(
+                {"messages": [{"role": "user", "content": "Q?"}]},
+                model="openai/gpt-4o-mini",
+                api_key="sk-test",
+            )
+        assert response.choices[0].message.content == "Here you go:"
+
+    @pytest.mark.asyncio
     async def test_response_with_no_usage_does_not_crash(self):
         """Some OpenAI-compatible backends omit usage on certain calls. The
         adapter must tolerate it (usage=None) instead of crashing."""
@@ -567,6 +662,39 @@ class TestCompleteResponseShape:
 
         assert response.choices[0].message.content == "hi"
         assert response.usage is None
+
+
+class TestParsedToJsonStr:
+    """Unit coverage for ``_parsed_to_json_str`` — the OpenAI Structured
+    Outputs ``message.parsed`` serializer used by the content recovery path."""
+
+    def test_none_returns_none(self):
+        assert openai_native._parsed_to_json_str(None) is None
+
+    def test_str_passthrough(self):
+        assert openai_native._parsed_to_json_str('{"a": 1}') == '{"a": 1}'
+
+    def test_dict_serialized(self):
+        assert json.loads(openai_native._parsed_to_json_str({"a": 1})) == {"a": 1}
+
+    def test_pydantic_model_uses_model_dump_json(self):
+        class _Model:
+            def model_dump_json(self):
+                return '{"a": 1}'
+
+        assert openai_native._parsed_to_json_str(_Model()) == '{"a": 1}'
+
+    def test_dict_with_non_serializable_leaf_recovers_via_default_str(self):
+        """A plain dict carrying a non-JSON-serializable leaf (e.g. datetime)
+        must still recover as valid JSON (``default=str``), not collapse to
+        ``None``."""
+        import datetime as _dt
+
+        result = openai_native._parsed_to_json_str(
+            {"when": _dt.datetime(2026, 1, 2, 3, 4, 5)}
+        )
+        assert result is not None
+        assert json.loads(result) == {"when": "2026-01-02 03:04:05"}
 
 
 # ---------------------------------------------------------------------------

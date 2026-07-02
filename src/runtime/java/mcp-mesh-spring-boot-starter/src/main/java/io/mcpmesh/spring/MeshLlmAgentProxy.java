@@ -424,6 +424,12 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         private long accumulatedOutputTokens = 0;
         private String effectiveModel = null;
 
+        // Raw provider envelope of the final (no-tool-calls) response, captured so
+        // generate(Class) can surface it when content resolves to empty and the
+        // structured parse fails — the honest signal is "empty content", not
+        // "failed to parse as <Model>".
+        private Map<String, Object> lastRawResponse = null;
+
         // --- Messages ---
 
         @Override
@@ -572,6 +578,15 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
 
             String response = generate();
 
+            // Empty content is not a parse problem — the provider reply carried no
+            // answer (lost upstream). Blame that honestly and include the raw
+            // envelope so the failure is diagnosable, rather than a misleading
+            // "Failed to parse LLM response as <Model>".
+            if (response == null || response.isBlank()) {
+                throw new RuntimeException("Failed to parse LLM response as " + responseType.getSimpleName()
+                    + ": provider reply had empty content. Raw response payload: " + rawResponseSnippet());
+            }
+
             try {
                 return responseModelMapper.readValue(response, responseType);
             } catch (JacksonException e) {
@@ -583,8 +598,27 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                         log.warn("Failed to parse extracted JSON: {}", e2.getMessage());
                     }
                 }
-                throw new RuntimeException("Failed to parse LLM response as " + responseType.getSimpleName(), e);
+                throw new RuntimeException("Failed to parse LLM response as " + responseType.getSimpleName()
+                    + ". Raw response payload: " + rawResponseSnippet(), e);
             }
+        }
+
+        /**
+         * Truncated JSON repr (~500 chars) of the raw provider envelope from the
+         * final response, for parse-failure diagnostics. Falls back to a marker
+         * when no envelope was captured (e.g. max-iterations exit).
+         */
+        private String rawResponseSnippet() {
+            if (lastRawResponse == null) {
+                return "<none>";
+            }
+            String json;
+            try {
+                json = objectMapper.writeValueAsString(lastRawResponse);
+            } catch (JacksonException e) {
+                json = String.valueOf(lastRawResponse);
+            }
+            return json.length() > 500 ? json.substring(0, 500) + "..." : json;
         }
 
         @Override
@@ -795,6 +829,7 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
             accumulatedInputTokens = 0;
             accumulatedOutputTokens = 0;
             effectiveModel = null;
+            lastRawResponse = null;
             try {
             int iteration = 0;
             while (iteration < maxIterations) {
@@ -845,6 +880,7 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                 List<Map<String, Object>> toolCalls = extractToolCalls(response);
 
                 if (toolCalls.isEmpty()) {
+                    lastRawResponse = response;
                     return extractContent(response);
                 }
 
@@ -1259,7 +1295,64 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                 }
             }
         }
+        // Recovery: the structured answer leaked unserialized as a Map instead of
+        // a JSON string. Serialize it verbatim (no parseNestedContent — this Map
+        // IS the answer, not a provider wrapper to unwrap).
+        if (content instanceof Map<?, ?> map) {
+            return serializeContent(map, "structured (Map) content");
+        }
+        // Bare structured answer returned without the {role, content} envelope:
+        // no "content" key and no "role" key — treat the whole map as the answer.
+        // Guard: maps carrying reserved wire keys (tool_calls / _mesh_usage) or a
+        // TRUTHY "error" are NOT answers. Fall through to "" so the empty-content
+        // diagnostic surfaces the real payload (e.g. a vendor error) instead of a
+        // misleading schema-validation failure, and so a tool-call turn's replayed
+        // assistant content never carries the whole map (incl. tool_calls). An
+        // "error": null value is a plain model field, so a falsy error is allowed.
+        if (!response.containsKey("content")
+                && !response.containsKey("role")
+                && !response.containsKey("tool_calls")
+                && !response.containsKey("_mesh_usage")
+                && !isTruthy(response.get("error"))) {
+            return serializeContent(response, "a bare structured answer without an envelope");
+        }
         return "";
+    }
+
+    /** Loose truthiness mirroring the other runtimes: null / blank string / empty
+     * collection / false / zero are falsy; everything else is truthy. */
+    private static boolean isTruthy(Object value) {
+        if (value == null) {
+            return false;
+        }
+        if (value instanceof String s) {
+            return !s.isBlank();
+        }
+        if (value instanceof Boolean b) {
+            return b;
+        }
+        if (value instanceof Number n) {
+            return n.doubleValue() != 0.0;
+        }
+        if (value instanceof Map<?, ?> m) {
+            return !m.isEmpty();
+        }
+        if (value instanceof Collection<?> c) {
+            return !c.isEmpty();
+        }
+        return true;
+    }
+
+    /** Serialize recovered non-string content to a JSON string; "" if serialization fails. */
+    private String serializeContent(Object value, String description) {
+        try {
+            String json = objectMapper.writeValueAsString(value);
+            log.warn("Mesh provider sent {}; normalized to a JSON string", description);
+            return json;
+        } catch (JacksonException e) {
+            log.warn("Failed to serialize {} from mesh provider: {}", description, e.getMessage());
+            return "";
+        }
     }
 
     /**
@@ -1337,13 +1430,32 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
             try {
                 Map<String, Object> parsed = objectMapper.readValue(trimmed, Map.class);
-                // If it has a "content" field, extract it (this is the LLM's actual response)
-                if (parsed.containsKey("content")) {
+                // Provider envelope wrapper? (carries a content/role marker.) Mirror
+                // the top-level extractContent recovery so a nested envelope — the
+                // MCP content[0].text carrying the serialized {role, content} object
+                // — is handled symmetrically instead of returning the wrapper JSON.
+                if (parsed.containsKey("content") || parsed.containsKey("role")) {
                     Object innerContent = parsed.get("content");
                     if (innerContent instanceof String s) {
                         log.debug("Extracted inner content from LLM provider wrapper");
                         return s;
                     }
+                    if (innerContent instanceof Map<?, ?> innerMap) {
+                        return serializeContent(innerMap,
+                            "structured (Map) content nested in a provider wrapper");
+                    }
+                    // No usable string/map content (null, empty, tool-call turn, or a
+                    // truthy nested error) — return "" so empty-content diagnostics
+                    // fire instead of feeding the wrapper JSON to the schema parser.
+                    return "";
+                }
+                // Not an envelope. A bare payload carrying reserved wire keys or a
+                // truthy "error" is NOT an answer either — surface it via empty-
+                // content diagnostics rather than returning the error/tool JSON.
+                if (parsed.containsKey("tool_calls")
+                        || parsed.containsKey("_mesh_usage")
+                        || isTruthy(parsed.get("error"))) {
+                    return "";
                 }
             } catch (JacksonException e) {
                 // Not valid JSON, return as-is

@@ -43,6 +43,19 @@ logger = logging.getLogger(__name__)
 _CONTEXT_NOT_PROVIDED = object()
 
 
+def _dumps_safe(value: Any) -> str:
+    """JSON-serialize a recovered content value, hardened like the provider's
+    ``_coerce_content_to_str``: ``default=str`` coerces stray non-serializable
+    leaves (datetimes, Pydantic models, …) so a single bad leaf can't abort
+    recovery; a final fallback emits the repr AS a JSON string for the circular-
+    ref case so ``content`` still parses.
+    """
+    try:
+        return json.dumps(value, default=str)
+    except (TypeError, ValueError):
+        return json.dumps(str(value))
+
+
 # ---------------------------------------------------------------------------
 # Mock LiteLLM response types for mesh-delegated provider responses
 # ---------------------------------------------------------------------------
@@ -79,14 +92,66 @@ class _MockToolCall:
 class _MockMessage:
     """Mock message matching LiteLLM ModelResponse.choices[].message."""
 
-    __slots__ = ("content", "role", "tool_calls")
+    __slots__ = ("content", "role", "tool_calls", "_raw")
 
     def __init__(self, message_dict: dict):
-        self.content = message_dict.get("content")
+        # Retain the original wire dict for empty-content diagnostics — model_dump()
+        # only echoes {role, content, tool_calls} and would drop non-answer keys
+        # (e.g. "error") that the diagnostic must surface.
+        self._raw = message_dict
+        content = message_dict.get("content")
+        # Providers should send the answer as a string. Two malformed-but-
+        # recoverable shapes occur in the field:
+        #   1. content is a raw dict — the structured answer leaked
+        #      unserialized. Serialize it so downstream parsing sees JSON.
+        #   2. the map has neither "content" nor "role" — a bare structured
+        #      answer returned without the envelope; treat the whole map as
+        #      the answer. Guard: maps carrying reserved wire keys (tool_calls /
+        #      _mesh_usage) or a TRUTHY "error" are NOT answers — leave content
+        #      empty so the honest empty-content diagnostic surfaces the real
+        #      payload (e.g. a vendor error) instead of a misleading schema-
+        #      validation failure. ("error": null is a plain model field, so a
+        #      falsy error does not disqualify a bare answer.)
+        if isinstance(content, dict):
+            logger.debug(
+                "Provider sent structured (dict) content; "
+                "normalizing to a JSON string"
+            )
+            content = _dumps_safe(content)
+        elif (
+            content is None
+            and "content" not in message_dict
+            and "role" not in message_dict
+            and not (message_dict.keys() & {"tool_calls", "_mesh_usage"})
+            and not message_dict.get("error")
+        ):
+            logger.debug(
+                "Provider returned a bare structured answer without an "
+                "envelope; treating the whole map as content"
+            )
+            content = _dumps_safe(message_dict)
+        self.content = content
         self.role = message_dict.get("role", "assistant")
         self.tool_calls = None
-        if "tool_calls" in message_dict and message_dict["tool_calls"]:
-            self.tool_calls = [_MockToolCall(tc) for tc in message_dict["tool_calls"]]
+        raw_tool_calls = message_dict.get("tool_calls")
+        if raw_tool_calls:
+            # Only construct tool calls from entries that look real (carry an
+            # "id" and a "function"); ignore malformed entries with a debug log
+            # rather than crashing the whole call on a KeyError.
+            self.tool_calls = [
+                _MockToolCall(tc)
+                for tc in raw_tool_calls
+                if isinstance(tc, dict) and "id" in tc and "function" in tc
+            ]
+            skipped = len(raw_tool_calls) - len(self.tool_calls)
+            if skipped:
+                logger.debug(
+                    "Ignored %d malformed tool_calls entry(ies) "
+                    "missing 'id'/'function'",
+                    skipped,
+                )
+            if not self.tool_calls:
+                self.tool_calls = None
 
     def model_dump(self) -> dict:
         dump: dict[str, Any] = {"role": self.role, "content": self.content}
@@ -605,9 +670,12 @@ class MeshLlmAgent:
                         "content": message_dict,
                     }
 
+            # content may be a non-string (dict) on the malformed-but-recoverable
+            # path — str() keeps this preview slice safe (normalization happens in
+            # _MockMessage).
             logger.debug(
                 f"📥 Received response from mesh provider: "
-                f"content={(message_dict.get('content') or '')[:200]}..., "
+                f"content={str(message_dict.get('content') or '')[:200]}..., "
                 f"tool_calls={len(message_dict.get('tool_calls') or [])}"
             )
 
@@ -1046,7 +1114,9 @@ class MeshLlmAgent:
                 )
 
                 # Parse the response
-                result = self._parse_response(assistant_message.content)
+                result = self._parse_response(
+                    assistant_message.content, raw_response=assistant_message
+                )
 
                 # Issue #311: Calculate latency and attach _mesh_meta
                 latency_ms = (time.perf_counter() - start_time) * 1000
@@ -1207,7 +1277,9 @@ class MeshLlmAgent:
 
         return resolved
 
-    def _parse_response(self, content: Optional[str]) -> Any:
+    def _parse_response(
+        self, content: Optional[str], raw_response: Optional[Any] = None
+    ) -> Any:
         """
         Parse LLM response into output type.
 
@@ -1217,6 +1289,9 @@ class MeshLlmAgent:
         Args:
             content: Response content from LLM (may be None — a legal
                 OpenAI-shape final message, e.g. on max-token cutoffs)
+            raw_response: Optional raw provider message (LiteLLM ModelResponse
+                message or _MockMessage) used to enrich the empty-content
+                diagnostic with the raw payload.
 
         Returns:
             Raw string (if output_type is str) or parsed Pydantic model instance
@@ -1224,19 +1299,23 @@ class MeshLlmAgent:
         Raises:
             ResponseParseError: If response doesn't match output_type schema or invalid JSON
         """
-        # content=None is a legal final-message shape (e.g. max-token
+        # content None/"" is a legal final-message shape (e.g. max-token
         # cutoffs). For str output, normalize to "". For structured output,
         # raise a proper parse error instead of letting None propagate into
-        # the parser as a TypeError (issue #1162).
-        if content is None:
+        # the parser as a TypeError (issue #1162). Surface the raw payload so
+        # the failure blames the empty reply, not the response schema.
+        if content is None or content == "":
             if self.output_type is str:
                 return ""
             raise ResponseParseError(
-                raw_content="",
+                raw_content=self._raw_response_snippet(raw_response),
                 expected_schema=getattr(
                     self.output_type, "__name__", str(self.output_type)
                 ),
-                validation_errors="model returned empty content (content=None)",
+                validation_errors=(
+                    "provider reply had empty content "
+                    "(the LLM answer was lost upstream)"
+                ),
             )
 
         # For str return type, return content directly without parsing
@@ -1244,6 +1323,27 @@ class MeshLlmAgent:
             return content
 
         return ResponseParser.parse(content, self.output_type)
+
+    @staticmethod
+    def _raw_response_snippet(raw_response: Optional[Any]) -> str:
+        """Truncated repr (~500 chars) of the raw provider message for diagnostics.
+
+        Prefers the original wire dict (``_MockMessage._raw``) so non-answer keys
+        like ``error`` show up; falls back to ``model_dump()`` for real LiteLLM
+        messages on the direct path.
+        """
+        if raw_response is None:
+            return ""
+        raw = getattr(raw_response, "_raw", None)
+        if raw is not None:
+            # _dumps_safe never raises: default=str coerces stray leaves and a
+            # final fallback handles circular refs, so the preview is always useful.
+            return _dumps_safe(raw)[:500]
+        try:
+            return _dumps_safe(raw_response.model_dump())[:500]
+        except Exception:
+            # model_dump() itself blew up (not a serialization issue) — last resort.
+            return str(raw_response)[:500]
 
     @staticmethod
     def _merge_streamed_tool_calls(buffered: list[Any]) -> list[dict]:

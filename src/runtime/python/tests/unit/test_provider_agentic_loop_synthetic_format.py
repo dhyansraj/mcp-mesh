@@ -729,3 +729,69 @@ class TestStreamingLoopSyntheticRecognition:
         # Mesh internal flags MUST NOT reach the wire.
         assert "_mesh_synthetic_format_tool" not in sent
         assert "_mesh_synthetic_format_tool_name" not in sent
+
+
+# ---------------------------------------------------------------------------
+# String-content contract: the synthetic path's envelope ``content`` must
+# always be a string. Consumers (Java ``extractContent``, TS, Python)
+# JSON-parse string content and drop a Map/dict to "". ``synthetic_args`` is
+# a JSON string today, but ``_coerce_content_to_str`` is the guard that keeps
+# a future dict from silently leaking into the envelope.
+# ---------------------------------------------------------------------------
+
+
+class TestCoerceContentToStr:
+    def test_str_passthrough(self):
+        from mesh.helpers import _coerce_content_to_str
+
+        assert _coerce_content_to_str('{"a": 1}') == '{"a": 1}'
+
+    def test_none_becomes_empty_string(self):
+        from mesh.helpers import _coerce_content_to_str
+
+        assert _coerce_content_to_str(None) == ""
+
+    def test_dict_is_json_serialized(self):
+        from mesh.helpers import _coerce_content_to_str
+
+        assert json.loads(_coerce_content_to_str({"a": 1})) == {"a": 1}
+
+
+class TestSyntheticEnvelopeContentIsString:
+    @pytest.mark.asyncio
+    async def test_dict_synthetic_args_serialized_to_string(self, monkeypatch):
+        """Regression guard: even if the synthetic-args extractor were to
+        return a raw dict, the envelope's ``content`` must be a string."""
+        from mesh.helpers import _provider_agentic_loop
+
+        # Disable the schema-validation retry so this test isolates the
+        # envelope-coercion behavior (the retry path is exercised elsewhere).
+        monkeypatch.setenv("MCP_MESH_LLM_SYNTHETIC_RETRY_MAX", "0")
+
+        msg = _message(
+            content=None,
+            tool_calls=[_tool_call("toolu_1", SYNTHETIC_TOOL_NAME, "{}")],
+        )
+
+        with patch(
+            "asyncio.to_thread", new=AsyncMock(return_value=_response(msg))
+        ), patch(
+            # Force the (hypothetical) dict shape to exercise the coercion.
+            "mesh.helpers._extract_synthetic_format_arguments",
+            return_value=({"answer": "42"}, "toolu_1"),
+        ):
+            result = await _provider_agentic_loop(
+                effective_model="anthropic/claude-sonnet-4-5",
+                messages=[{"role": "user", "content": "Q?"}],
+                tools=[],
+                tool_endpoints={},
+                model_params={
+                    "_mesh_synthetic_format_tool_name": SYNTHETIC_TOOL_NAME,
+                    "_mesh_synthetic_format_tool": _synthetic_tool(),
+                },
+                litellm_kwargs={},
+                vendor="anthropic",
+            )
+
+        assert isinstance(result["content"], str)
+        assert json.loads(result["content"]) == {"answer": "42"}
