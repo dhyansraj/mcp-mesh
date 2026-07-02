@@ -568,7 +568,10 @@ def _parsed_to_json_str(parsed: Any) -> str | None:
         except Exception:  # noqa: BLE001 - defensive; fall through to json
             pass
     try:
-        return json.dumps(parsed)
+        # ``default=str`` coerces stray non-serializable leaves (datetimes,
+        # nested Pydantic models, etc.) so a plain-dict payload still recovers
+        # instead of collapsing to ``None``.
+        return json.dumps(parsed, default=str)
     except (TypeError, ValueError):
         return None
 

@@ -684,6 +684,18 @@ class TestParsedToJsonStr:
 
         assert openai_native._parsed_to_json_str(_Model()) == '{"a": 1}'
 
+    def test_dict_with_non_serializable_leaf_recovers_via_default_str(self):
+        """A plain dict carrying a non-JSON-serializable leaf (e.g. datetime)
+        must still recover as valid JSON (``default=str``), not collapse to
+        ``None``."""
+        import datetime as _dt
+
+        result = openai_native._parsed_to_json_str(
+            {"when": _dt.datetime(2026, 1, 2, 3, 4, 5)}
+        )
+        assert result is not None
+        assert json.loads(result) == {"when": "2026-01-02 03:04:05"}
+
 
 # ---------------------------------------------------------------------------
 # Backend selection / per-call client construction

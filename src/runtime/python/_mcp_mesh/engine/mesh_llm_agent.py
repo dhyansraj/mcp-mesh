@@ -1335,11 +1335,14 @@ class MeshLlmAgent:
         if raw_response is None:
             return ""
         raw = getattr(raw_response, "_raw", None)
+        if raw is not None:
+            # _dumps_safe never raises: default=str coerces stray leaves and a
+            # final fallback handles circular refs, so the preview is always useful.
+            return _dumps_safe(raw)[:500]
         try:
-            if raw is not None:
-                return json.dumps(raw)[:500]
-            return json.dumps(raw_response.model_dump())[:500]
+            return _dumps_safe(raw_response.model_dump())[:500]
         except Exception:
+            # model_dump() itself blew up (not a serialization issue) — last resort.
             return str(raw_response)[:500]
 
     @staticmethod

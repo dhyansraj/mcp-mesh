@@ -211,6 +211,22 @@ class TestEmptyContentRawPayloadDiagnostic:
         agent = _make_agent(_none_content_provider, str)
         assert agent._parse_response("") == ""
 
+    def test_raw_payload_non_serializable_still_useful(self):
+        # A non-JSON leaf in the raw payload must not collapse the snippet to an
+        # object repr — _dumps_safe coerces it (default=str) so the diagnostic
+        # still summarizes the payload.
+        from datetime import datetime
+
+        agent = _make_agent(_none_content_provider, StrictModel)
+        raw = _MockMessage(
+            {"role": "assistant", "content": None, "when": datetime(2026, 7, 2)}
+        )
+        with pytest.raises(llm_errors.ResponseParseError) as exc_info:
+            agent._parse_response(None, raw_response=raw)
+        err = exc_info.value
+        assert "2026" in err.raw_content
+        assert "object at 0x" not in err.raw_content
+
 
 class TestResponseParseErrorUnification:
     def test_single_class_aliased_for_back_compat(self):

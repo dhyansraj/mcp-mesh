@@ -190,6 +190,56 @@ class MeshLlmAgentProxyContentRecoveryTest {
     }
 
     // -------------------------------------------------------------------------
+    // Nested provider-wrapper recovery: a String / content[0].text carrying a
+    // serialized {role, content} envelope (parseNestedContent path) mirrors the
+    // top-level guards instead of returning the wrapper JSON verbatim.
+    // -------------------------------------------------------------------------
+
+    /** Wraps a serialized envelope as the (string) content of an outer response. */
+    private String extractFromNestedWrapper(Object innerEnvelope) throws Exception {
+        String wrapper = mapper.writeValueAsString(innerEnvelope);
+        return invokeExtractContent(Map.of("role", "assistant", "content", wrapper));
+    }
+
+    @Test
+    @DisplayName("nested wrapper with string content → inner string returned (regression)")
+    void nestedWrapperStringContentUnchanged() throws Exception {
+        assertEquals("hello world", extractFromNestedWrapper(
+            Map.of("role", "assistant", "content", "hello world")));
+    }
+
+    @Test
+    @DisplayName("nested wrapper with dict content → inner map serialized")
+    void nestedWrapperMapContentSerialized() throws Exception {
+        String result = extractFromNestedWrapper(
+            Map.of("role", "assistant", "content", Map.of("answer", "42")));
+        Reply parsed = mapper.readValue(result, Reply.class);
+        assertEquals("42", parsed.answer());
+    }
+
+    @Test
+    @DisplayName("nested bare error payload → empty (diagnostics), not the wrapper JSON")
+    void nestedTruthyErrorDegradesToEmpty() throws Exception {
+        assertEquals("", extractFromNestedWrapper(
+            Map.of("error", "rate limited by vendor")));
+    }
+
+    @Test
+    @DisplayName("nested envelope with role but no usable content → empty (diagnostics)")
+    void nestedEnvelopeNoContentDegradesToEmpty() throws Exception {
+        assertEquals("", extractFromNestedWrapper(
+            Map.of("role", "assistant", "error", "rate limited")));
+    }
+
+    @Test
+    @DisplayName("genuine nested JSON answer (no wrapper markers) passes through unchanged")
+    void nestedGenuineJsonAnswerUnchanged() throws Exception {
+        String result = extractFromNestedWrapper(Map.of("answer", "42"));
+        Reply parsed = mapper.readValue(result, Reply.class);
+        assertEquals("42", parsed.answer());
+    }
+
+    // -------------------------------------------------------------------------
     // generate(Class) empty-content diagnostic (end-to-end via MockWebServer)
     // -------------------------------------------------------------------------
 

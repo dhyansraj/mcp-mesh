@@ -1430,13 +1430,32 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
             try {
                 Map<String, Object> parsed = objectMapper.readValue(trimmed, Map.class);
-                // If it has a "content" field, extract it (this is the LLM's actual response)
-                if (parsed.containsKey("content")) {
+                // Provider envelope wrapper? (carries a content/role marker.) Mirror
+                // the top-level extractContent recovery so a nested envelope — the
+                // MCP content[0].text carrying the serialized {role, content} object
+                // — is handled symmetrically instead of returning the wrapper JSON.
+                if (parsed.containsKey("content") || parsed.containsKey("role")) {
                     Object innerContent = parsed.get("content");
                     if (innerContent instanceof String s) {
                         log.debug("Extracted inner content from LLM provider wrapper");
                         return s;
                     }
+                    if (innerContent instanceof Map<?, ?> innerMap) {
+                        return serializeContent(innerMap,
+                            "structured (Map) content nested in a provider wrapper");
+                    }
+                    // No usable string/map content (null, empty, tool-call turn, or a
+                    // truthy nested error) — return "" so empty-content diagnostics
+                    // fire instead of feeding the wrapper JSON to the schema parser.
+                    return "";
+                }
+                // Not an envelope. A bare payload carrying reserved wire keys or a
+                // truthy "error" is NOT an answer either — surface it via empty-
+                // content diagnostics rather than returning the error/tool JSON.
+                if (parsed.containsKey("tool_calls")
+                        || parsed.containsKey("_mesh_usage")
+                        || isTruthy(parsed.get("error"))) {
+                    return "";
                 }
             } catch (JacksonException e) {
                 // Not valid JSON, return as-is
