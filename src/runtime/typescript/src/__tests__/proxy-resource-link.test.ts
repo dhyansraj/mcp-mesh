@@ -166,9 +166,11 @@ describe("extractContent", () => {
   });
 
   describe("edge cases", () => {
-    it("should return string for empty content array", () => {
+    it("should return null for an empty content array with no structuredContent (#1250)", () => {
+      // Behavior change: empty content means "no value" (null), not "".
+      // Recovery from structuredContent is covered in proxy-empty-content.test.ts.
       const result = extractContent({ content: [] });
-      expect(result).toBe("");
+      expect(result).toBeNull();
     });
 
     it("should return string for single text item", () => {

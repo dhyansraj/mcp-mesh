@@ -618,6 +618,7 @@ public class McpHttpClient {
                     // Detect whether all content items are text-only or mixed (resource_link, image, etc.)
                     String textContent = null;
                     List<Map<String, Object>> mixedContent = null;
+                    boolean emptyContent = false;
                     if (result.has("content") && result.get("content").isArray()) {
                         JsonNode content = result.get("content");
                         if (content.size() > 0) {
@@ -651,6 +652,12 @@ public class McpHttpClient {
                                     textContent = firstContent.get("text").asText();
                                 }
                             }
+                        } else {
+                            // Empty content array (#1250): a provider returning None or
+                            // an empty collection serializes to zero content blocks.
+                            // Recover the value from structuredContent below instead of
+                            // mangling the whole MCP envelope.
+                            emptyContent = true;
                         }
                     }
 
@@ -665,6 +672,18 @@ public class McpHttpClient {
                         @SuppressWarnings("unchecked")
                         T mixed = (T) mixedContent;
                         return mixed;
+                    }
+
+                    // Empty content array (#1250): recover the return value from
+                    // structuredContent when present, otherwise treat the empty
+                    // content as "no value" (null) — matching a None/null return
+                    // from any provider. Never treeToValue the raw MCP envelope.
+                    if (emptyContent) {
+                        JsonNode recovered = recoverStructuredContent(result);
+                        if (recovered == null || recovered.isNull()) {
+                            return null;
+                        }
+                        return deserializeResult(null, recovered, returnType);
                     }
 
                     // Deserialize based on return type
@@ -1298,38 +1317,92 @@ public class McpHttpClient {
      * @param returnType  The target type for deserialization (null for dynamic typing)
      * @return The deserialized result
      */
+    /**
+     * Recover a return value from an MCP result's {@code structuredContent}
+     * when the {@code content} array is empty (#1250).
+     *
+     * <p>FastMCP wraps non-object returns as {@code {"result": X}} and tags the
+     * wrapping with a {@code fastmcp.wrap_result} meta marker. The wrapper is
+     * unwrapped ONLY when the marker is present AND {@code structuredContent} is
+     * an object whose keys are exactly {@code {"result"}} — sibling keys are
+     * never dropped. Otherwise {@code structuredContent} is used as-is. Kept
+     * byte-identical with the Python and TypeScript consumers.
+     *
+     * @return the recovered JSON node, or {@code null} when there is no
+     *         {@code structuredContent} to recover from.
+     */
+    private JsonNode recoverStructuredContent(JsonNode result) {
+        if (!result.has("structuredContent")) {
+            return null;
+        }
+        JsonNode sc = result.get("structuredContent");
+        if (sc == null || sc.isNull()) {
+            return null;
+        }
+        if (isFastMcpWrapResult(result)
+                && sc.isObject()
+                && sc.size() == 1
+                && sc.has("result")) {
+            return sc.get("result");
+        }
+        return sc;
+    }
+
+    /**
+     * Detect FastMCP's {@code wrap_result} meta marker on an MCP result. The
+     * marker lives under {@code _meta.fastmcp.wrap_result} (the MCP spec alias);
+     * some serializers emit {@code meta} instead, so {@code _meta} is preferred
+     * and {@code meta} is the fallback — including when {@code _meta} is present
+     * but null/non-object (falsy fallback, matching Python/TypeScript).
+     */
+    private boolean isFastMcpWrapResult(JsonNode result) {
+        JsonNode meta = result.get("_meta");
+        if (meta == null || !meta.isObject()) {
+            meta = result.get("meta");
+        }
+        if (meta == null || !meta.isObject()) {
+            return false;
+        }
+        JsonNode fastmcp = meta.get("fastmcp");
+        if (fastmcp == null || !fastmcp.isObject()) {
+            return false;
+        }
+        JsonNode wrap = fastmcp.get("wrap_result");
+        return wrap != null && wrap.asBoolean(false);
+    }
+
     @SuppressWarnings("unchecked")
     private <T> T deserializeResult(String textContent, JsonNode resultNode, Type returnType) {
         try {
             // If we have text content, try to deserialize it
             if (textContent != null) {
-                if (returnType != null) {
-                    Class<?> rawType = getRawType(returnType);
+                // A literal Object target imposes no shape, so it uses the exact
+                // same dynamic parse as the untyped (returnType == null) path.
+                // Gate on `returnType == Object.class` — NOT getRawType(...) ==
+                // Object.class — because getRawType falls back to Object.class for
+                // erased/unresolvable targets (TypeVariable/WildcardType), which
+                // must instead reach the strict readValue below (#1250 / uc32).
+                if (returnType == null || returnType == Object.class) {
+                    return deserializeDynamic(textContent);
+                }
 
-                    // Handle primitive wrappers and String specially
-                    if (rawType == String.class) {
-                        return (T) textContent;
-                    } else if (rawType == Integer.class || rawType == int.class) {
-                        return (T) Integer.valueOf(textContent);
-                    } else if (rawType == Long.class || rawType == long.class) {
-                        return (T) Long.valueOf(textContent);
-                    } else if (rawType == Double.class || rawType == double.class) {
-                        return (T) Double.valueOf(textContent);
-                    } else if (rawType == Boolean.class || rawType == boolean.class) {
-                        return (T) Boolean.valueOf(textContent);
-                    } else {
-                        // Try to parse as JSON for complex types
-                        return objectMapper.readValue(textContent,
-                            objectMapper.getTypeFactory().constructType(returnType));
-                    }
+                Class<?> rawType = getRawType(returnType);
+
+                // Handle primitive wrappers and String specially
+                if (rawType == String.class) {
+                    return (T) textContent;
+                } else if (rawType == Integer.class || rawType == int.class) {
+                    return (T) Integer.valueOf(textContent);
+                } else if (rawType == Long.class || rawType == long.class) {
+                    return (T) Long.valueOf(textContent);
+                } else if (rawType == Double.class || rawType == double.class) {
+                    return (T) Double.valueOf(textContent);
+                } else if (rawType == Boolean.class || rawType == boolean.class) {
+                    return (T) Boolean.valueOf(textContent);
                 } else {
-                    // No type specified - try JSON parsing, fallback to string
-                    try {
-                        return (T) objectMapper.readValue(textContent,
-                            new TypeReference<Map<String, Object>>() {});
-                    } catch (Exception e) {
-                        return (T) textContent;
-                    }
+                    // Try to parse as JSON for complex types
+                    return objectMapper.readValue(textContent,
+                        objectMapper.getTypeFactory().constructType(returnType));
                 }
             }
 
@@ -1353,6 +1426,26 @@ public class McpHttpClient {
                 return (T) textContent;
             }
             throw new RuntimeException("Failed to deserialize result", e);
+        }
+    }
+
+    /**
+     * Deserialize text content when the target imposes no shape — the untyped
+     * (returnType == null) path and a literal {@code McpMeshTool<Object>} share
+     * this single parse semantics.
+     *
+     * <p>Parses generically: JSON objects become {@code Map}, arrays become
+     * {@code List}, and JSON scalars become their boxed type. Falls back to the
+     * raw string only when the text is not parseable JSON — notably {@code ""},
+     * which round-trips to {@code ""} instead of throwing "No content to map"
+     * (#1250 / uc32).
+     */
+    @SuppressWarnings("unchecked")
+    private <T> T deserializeDynamic(String textContent) {
+        try {
+            return (T) objectMapper.readValue(textContent, Object.class);
+        } catch (Exception e) {
+            return (T) textContent;
         }
     }
 

@@ -761,8 +761,9 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
 
                 log.debug("Executing tool {} at endpoint {} with args: {}", toolName, endpoint, argsJson);
 
-                // callTool returns List<Map> for mixed content (text + resource_link),
-                // String for text-only results
+                // callTool returns a String for text-only results, a List<Map>
+                // for mixed content (text + resource_link), and — for JSON tool
+                // outputs on the untyped/dynamic path — a parsed Map/List/scalar.
                 Object result = mcpClient.callTool(endpoint, toolName, args);
 
                 // Resolve resource_links to provider-native multimodal content
@@ -777,7 +778,13 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                     }
                 }
 
-                String resultStr = result != null ? result.toString() : "";
+                // Strings pass through verbatim; any parsed JSON value (Map,
+                // List, scalar) is re-serialized as JSON so the LLM sees valid
+                // JSON — never Java collection/toString() rendering (which would
+                // drop quotes and structure, e.g. ["a","b"] -> [a, b]).
+                String resultStr = result == null ? ""
+                    : result instanceof String ? (String) result
+                    : objectMapper.writeValueAsString(result);
 
                 log.debug("Tool {} result: {}", toolName, resultStr.length() > 200 ? resultStr.substring(0, 200) + "..." : resultStr);
                 return resultStr;

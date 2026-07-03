@@ -144,6 +144,41 @@ describe("Gemini multi-step loop with real generateText (#1160)", () => {
     expect(response.tool_calls).toBeUndefined();
   });
 
+  it("logs no [multi_content] for a null tool result and still completes (#1250)", async () => {
+    // A tool returning empty content now surfaces as null. The provider's
+    // object branch is guarded against null, so it must NOT log a bogus
+    // [multi_content] line; the loop still runs the follow-up generation.
+    const prev = process.env.MCP_MESH_DEBUG_MODE;
+    process.env.MCP_MESH_DEBUG_MODE = "true";
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      modelHarness.results = [TOOL_CALL_STEP, TEXT_STEP];
+      modelHarness.calls = 0;
+      callMcpToolMock.mockReset();
+      callMcpToolMock.mockResolvedValue(null);
+
+      const tool = llmProvider({ model: "gemini/gemini-2.5-flash", capability: "llm" });
+      const raw = await tool.execute(meshToolRequest({ max_iterations: 3 }) as never);
+      const response = JSON.parse(raw) as Record<string, unknown>;
+
+      expect(callMcpToolMock).toHaveBeenCalledTimes(1);
+
+      const multiContentLogged = logSpy.mock.calls.some((args) =>
+        args.some((a) => typeof a === "string" && a.includes("[multi_content]"))
+      );
+      expect(multiContentLogged).toBe(false);
+
+      expect(response.content).toBe("It is sunny in Paris.");
+    } finally {
+      logSpy.mockRestore();
+      if (prev === undefined) {
+        delete process.env.MCP_MESH_DEBUG_MODE;
+      } else {
+        process.env.MCP_MESH_DEBUG_MODE = prev;
+      }
+    }
+  });
+
   it("honors the forwarded cap: max_iterations=1 stops after the tool-call step", async () => {
     const tool = llmProvider({ model: "gemini/gemini-2.5-flash", capability: "llm" });
     const raw = await tool.execute(meshToolRequest({ max_iterations: 1 }) as never);

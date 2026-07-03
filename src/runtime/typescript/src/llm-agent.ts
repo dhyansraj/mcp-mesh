@@ -61,7 +61,6 @@ import {
   streamMcpTool,
   DEFAULT_CALL_OPTIONS,
   type CallOptions,
-  type MultiContentResult,
 } from "./proxy.js";
 import { isTimeoutError } from "./timeout-utils.js";
 import { envMaxIterations, sanitizeMaxIterations } from "./llm-provider.js";
@@ -290,7 +289,7 @@ export class MeshDelegatedProvider implements LlmProvider {
 
     // Call the mesh provider via MCP. callMcpTool throws a plain Error on
     // failure — re-wrap into LLMAPIError to preserve the public error type.
-    let content: string | MultiContentResult;
+    let content: unknown;
     try {
       content = await callMcpTool(
         this.endpoint,
@@ -313,13 +312,19 @@ export class MeshDelegatedProvider implements LlmProvider {
       throw new LLMAPIError(0, message, `mesh:${this.endpoint}`);
     }
 
+    // Retain the raw wire payload for the empty-content diagnostic in run(),
+    // BEFORE the type guard. An empty-content reply now surfaces as null
+    // (#1250) rather than "", so the guard below would otherwise throw without
+    // ever recording the payload — a diagnostic regression vs the old
+    // JSON.parse("") SyntaxError path, which set this first.
+    this._lastRawResponse =
+      typeof content === "string" ? content : JSON.stringify(content);
+
     // The mesh provider returns a single text content item whose text is the
     // LLM provider response JSON. callMcpTool joins/extracts it to a string.
     if (typeof content !== "string") {
       throw new Error("Invalid response from mesh provider");
     }
-    // Retain the raw wire payload for the empty-content diagnostic in run().
-    this._lastRawResponse = content;
 
     // Parse the LLM provider response
     // Format: { role, content, tool_calls?, _mesh_usage? }
@@ -1175,7 +1180,7 @@ export function createLlmToolProxy(
       maxResponseSize: Number.MAX_SAFE_INTEGER,
     };
 
-    let result: string | MultiContentResult;
+    let result: unknown;
     try {
       result = await callMcpTool(
         toolInfo.endpoint,
@@ -1203,11 +1208,14 @@ export function createLlmToolProxy(
       return null;
     }
     // Parse JSON if possible, otherwise return the raw string.
-    try {
-      return JSON.parse(result);
-    } catch {
-      return result;
+    if (typeof result === "string") {
+      try {
+        return JSON.parse(result);
+      } catch {
+        return result;
+      }
     }
+    return result;
   };
 
   // Safely parse inputSchema - don't let malformed JSON break proxy creation

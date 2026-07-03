@@ -823,6 +823,22 @@ class UnifiedMCPProxy:
 
                 # Extract content from MCP result
                 if not mcp_result.content:
+                    # Empty content can still carry structuredContent (issue
+                    # #1250): a typed provider that returns [] emits empty
+                    # content + structuredContent {"result": []}. Recover the
+                    # value rather than collapsing it to None. A genuine None
+                    # return has neither, so it stays None.
+                    # Explicit ``is not None`` selection (not ``or``): a
+                    # falsy-but-present payload like ``{}`` must be recovered
+                    # as ``{}``, not dropped to the next candidate / None.
+                    structured = getattr(mcp_result, "structuredContent", None)
+                    if structured is None:
+                        structured = getattr(mcp_result, "structured_content", None)
+                    if structured is not None:
+                        meta = getattr(mcp_result, "meta", None)
+                        if meta is None:
+                            meta = getattr(mcp_result, "_meta", None)
+                        return self._recover_structured_content(structured, meta)
                     return None
 
                 # Handle single content item (most common)
@@ -932,6 +948,39 @@ class UnifiedMCPProxy:
             self.logger.warning(f"⚠️ Content conversion failed: {e}")
             return str(content_item)
 
+    @staticmethod
+    def _is_wrap_result_meta(meta: Any) -> bool:
+        """Whether ``meta`` carries FastMCP's ``fastmcp.wrap_result`` marker.
+
+        FastMCP wraps non-object structured output (e.g. a ``list`` return)
+        as ``{"result": <value>}`` and flags it via
+        ``_meta = {"fastmcp": {"wrap_result": True}}``. Only when this marker
+        is present do we unwrap the single ``"result"`` key — a legitimate
+        tool payload that happens to be ``{"result": ...}`` (no marker) is
+        left intact.
+        """
+        if not isinstance(meta, dict):
+            return False
+        fastmcp_meta = meta.get("fastmcp")
+        return isinstance(fastmcp_meta, dict) and bool(
+            fastmcp_meta.get("wrap_result")
+        )
+
+    def _recover_structured_content(self, structured: Any, meta: Any) -> Any:
+        """Recover a Python value from ``structuredContent`` (issue #1250).
+
+        Unwraps FastMCP's ``{"result": X}`` envelope only when the
+        ``fastmcp.wrap_result`` meta marker is present; otherwise returns the
+        structured content as-is (never guesses at unwrapping).
+        """
+        if (
+            self._is_wrap_result_meta(meta)
+            and isinstance(structured, dict)
+            and set(structured.keys()) == {"result"}
+        ):
+            return structured["result"]
+        return structured
+
     def _convert_structured_content(self, structured_content: Any) -> Any:
         """Convert structured content to Python dict."""
         if isinstance(structured_content, dict):
@@ -980,6 +1029,19 @@ class UnifiedMCPProxy:
             content_list = result["content"]
 
             if not content_list:
+                # Empty content may still carry structuredContent (issue
+                # #1250): recover the value before collapsing to None. A
+                # genuine None return has neither content nor
+                # structuredContent, so it stays None.
+                structured = result.get("structuredContent")
+                if structured is not None:
+                    # Explicit ``is not None`` selection so a falsy-but-present
+                    # ``_meta`` (e.g. ``{}``) is not silently swapped for the
+                    # legacy ``meta`` key.
+                    meta = result.get("_meta")
+                    if meta is None:
+                        meta = result.get("meta")
+                    return self._recover_structured_content(structured, meta)
                 return None
 
             # Single content item - extract and parse

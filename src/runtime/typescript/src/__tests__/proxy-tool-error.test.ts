@@ -183,13 +183,14 @@ describe("callMcpTool tool-level error surfacing (isError)", () => {
     expect(sseValue).toBe("0");
   });
 
-  it("resolves an empty-content SSE result as empty string", async () => {
+  it("resolves an empty-content SSE result as null (#1250)", async () => {
+    // Behavior change: an empty content array means "no value" (null), not "".
     mockFetch(() => sseResponse([{ result: { content: [] } }]));
 
     const value = await callMcpTool(
       ENDPOINT, TOOL, { a: 1 }, DEFAULT_CALL_OPTIONS, CAPABILITY
     );
-    expect(value).toBe("");
+    expect(value).toBeNull();
   });
 
   it("still resolves successful SSE results (sanity)", async () => {
