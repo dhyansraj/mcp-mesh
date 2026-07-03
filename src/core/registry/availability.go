@@ -285,6 +285,15 @@ func extractRequiredEdges(metadata map[string]interface{}) map[string]map[string
 // (capability name -> set of required dep capability names) from all currently
 // registered capabilities, EXCLUDING those owned by excludeAgentID (whose edges
 // are about to be replaced by the in-flight registration/heartbeat).
+//
+// Scale note: this is a full capability scan, filtered in-memory to the rows
+// that actually declare required edges (requiredDepCapabilities drops the rest).
+// It is reached ONLY by a register/heartbeat that itself declares ≥1 required
+// edge (see checkRequiredCycles' gate and guardedCapabilityWrite) — required
+// deps are opt-in and uncommon, so the scan is off the hot path. The dependency
+// specs live in a JSON blob column with no portable index for a cheaper
+// server-side filter, and a cache+invalidation layer isn't justified at registry
+// capability counts; a gated in-memory scan is the deliberate trade-off.
 func (s *EntService) requiredEdgeGraphExcluding(ctx context.Context, excludeAgentID string) (map[string]map[string]bool, error) {
 	caps, err := s.entDB.Capability.Query().WithAgent().All(ctx)
 	if err != nil {
@@ -394,18 +403,22 @@ func detectRequiredCycle(graph map[string]map[string]bool) []string {
 }
 
 // checkRequiredCycles rejects a registration/heartbeat whose required
-// dependencies would close a required-edge cycle. It merges the incoming agent's
-// required edges onto the current cluster graph (minus the agent's own prior
-// edges) and reports the first cycle found, naming the loop. Cycles that route
-// through an optional edge are legal and never appear here (optional deps aren't
-// added to the graph).
+// dependencies would close a required-edge cycle. A write declaring no required
+// edges cannot close a cycle, so the graph build is skipped entirely.
 func (s *EntService) checkRequiredCycles(ctx context.Context, agentID string, metadata map[string]interface{}) error {
 	incoming := extractRequiredEdges(metadata)
 	if len(incoming) == 0 {
-		// No required edges declared by this agent — it cannot close a required
-		// cycle. Skip the graph build entirely.
 		return nil
 	}
+	return s.checkRequiredCyclesForEdges(ctx, agentID, incoming)
+}
+
+// checkRequiredCyclesForEdges merges the incoming agent's required edges onto the
+// current cluster graph (minus the agent's own prior edges) and reports the first
+// cycle found, naming the loop. Cycles that route through an optional edge are
+// legal and never appear here (optional deps aren't added to the graph). Callers
+// must have already confirmed incoming is non-empty.
+func (s *EntService) checkRequiredCyclesForEdges(ctx context.Context, agentID string, incoming map[string]map[string]bool) error {
 	graph, err := s.requiredEdgeGraphExcluding(ctx, agentID)
 	if err != nil {
 		return fmt.Errorf("cycle check: failed to load capability graph: %w", err)
@@ -423,4 +436,36 @@ func (s *EntService) checkRequiredCycles(ctx context.Context, agentID string, me
 		return fmt.Errorf("required dependency cycle: %s", loop)
 	}
 	return nil
+}
+
+// guardedCapabilityWrite serializes the required-edge cycle check with the
+// capability write in fn under cycleWriteMu, releasing the lock via defer so a
+// panic in either the check or fn can't strand it (PR #1255 finding 1).
+//
+// The lock — and the whole-graph scan the check performs — is taken ONLY when
+// this write declares ≥1 required edge. A zero-required-edge write cannot close
+// a cycle and cannot affect a concurrent check's verdict (its rows contribute no
+// required edges to any graph), so it skips both the lock and the scan entirely,
+// making required-free meshes pay nothing (PR #1255 finding 2).
+//
+// Returns the cycle-rejection error (fn NOT run) and fn's error separately so
+// each caller can shape its own error/response.
+func (s *EntService) guardedCapabilityWrite(
+	ctx context.Context,
+	agentID string,
+	metadata map[string]interface{},
+	fn func() error,
+) (cycleErr, writeErr error) {
+	incoming := extractRequiredEdges(metadata)
+	if len(incoming) == 0 {
+		return nil, fn()
+	}
+
+	s.cycleWriteMu.Lock()
+	defer s.cycleWriteMu.Unlock()
+
+	if err := s.checkRequiredCyclesForEdges(ctx, agentID, incoming); err != nil {
+		return err, nil
+	}
+	return nil, fn()
 }

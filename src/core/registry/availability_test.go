@@ -2,7 +2,9 @@ package registry
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -609,5 +611,47 @@ func TestAvailability_MemoEvaluatesEachNodeOnce(t *testing.T) {
 	}
 	if len(eval.memo) != 4 {
 		t.Errorf("expected exactly 4 memoized nodes (D evaluated once), got %d: %v", len(eval.memo), eval.memo)
+	}
+}
+
+// --- 12. guarded-write concurrency smoke (findings 1 & 3) -------------------
+
+// Exercises guardedCapabilityWrite under -race: a mix of required-edge writes
+// (which take the lock + graph scan) and zero-required-edge writes (which skip
+// both via the gate) running concurrently must all complete without deadlock or
+// panic-stranded lock, and must never persist a required cycle. Deterministic
+// assertions on which write wins are avoided (timing-dependent); the invariant
+// checked is "no cycle survives".
+func TestGuardedWrite_ConcurrentRegistrations_NoDeadlockNoCycle(t *testing.T) {
+	s := setupTestService(t)
+	regAgent(t, s, "anchor", "cap-anchor", depSpec("cap-x0", true)) // anchor required→cap-x0
+
+	var wg sync.WaitGroup
+	for i := 0; i < 24; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			cap := fmt.Sprintf("cap-x%d", n)
+			if n%2 == 0 {
+				// Required-edge write: cap-x{n} required→cap-anchor. For n==0 this
+				// closes the cycle with the anchor and must be rejected; others are
+				// accepted. Either way: no deadlock, lock released.
+				_ = tryRegAgent(s, fmt.Sprintf("agent-x%d", n), cap, depSpec("cap-anchor", true))
+			} else {
+				// Zero-required-edge write: skips the lock+scan gate entirely.
+				_ = tryRegAgent(s, fmt.Sprintf("agent-x%d", n), cap)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	// Invariant: the required-edge graph must remain acyclic (the cycle-closing
+	// cap-x0 registration must have been rejected, not persisted).
+	graph, err := s.requiredEdgeGraphExcluding(context.Background(), "__none__")
+	if err != nil {
+		t.Fatalf("graph load: %v", err)
+	}
+	if cycle := detectRequiredCycle(graph); cycle != nil {
+		t.Errorf("a required cycle survived concurrent registration: %v", cycle)
 	}
 }

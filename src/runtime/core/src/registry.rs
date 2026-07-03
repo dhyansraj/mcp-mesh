@@ -577,9 +577,20 @@ impl RegistryClient {
             // heartbeat status is "success" (Go registry ent_service.go); only
             // the explicit "error" value signals rejection. Surface it as Err so
             // the runtime's failure arm emits registration_failed and the SDK
-            // logs the reason loudly. This is soft-fail: the run loop's Retry
-            // arm re-attempts each interval (repeat-loud), never loop-fatal —
-            // matching existing transient-error handling.
+            // logs the reason loudly.
+            //
+            // DELIBERATE: a semantic rejection (a misconfiguration like a
+            // required-dependency cycle) is treated exactly like a transient
+            // failure — NOT specially capped or deduped. Both route through
+            // `on_full_heartbeat_failure` → `HeartbeatState::Reconnecting` →
+            // the run loop's Retry arm, whose backoff is already bounded:
+            // `calculate_backoff` is exponential (base * 2^retry_attempt),
+            // capped at `max_backoff` (default 30s) with equal jitter. So the
+            // "repeat-loud" cadence self-throttles to one alert per ~max_backoff
+            // rather than hammering. Keeping the retry (instead of going fatal)
+            // is the mesh soft-fail contract: the operator fixes the cycle and
+            // the agent heals on the next attempt with no restart, and the loud
+            // per-attempt log guarantees the misconfig is never silently missed.
             if parsed.status == "error" {
                 warn!(
                     "Registry rejected agent '{}': {}",

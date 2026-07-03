@@ -321,7 +321,7 @@ class TestRoutePerimeter503:
         assert "required perimeter INACTIVE" in caplog.text
         assert "weather-api" in caplog.text
 
-    def _make_stream_wrapper(self, stream_handler):
+    def _make_stream_wrapper(self, stream_handler, caplog=None):
         injector = DependencyInjector()
         with patch(
             "_mcp_mesh.engine.dependency_injector.analyze_injection_strategy",
@@ -332,6 +332,19 @@ class TestRoutePerimeter503:
                 ["weather-api"],
                 route_required_caps=["weather-api"],
             )
+
+    def test_streaming_required_route_warns_perimeter_not_enforced(self, caplog):
+        """A streaming route with required deps warns that 503 is not enforced."""
+
+        async def stream_handler(weather=None):
+            yield "chunk-a"
+
+        with caplog.at_level("WARNING"):
+            self._make_stream_wrapper(stream_handler)
+
+        assert "required perimeter NOT enforced" in caplog.text
+        assert "streaming" in caplog.text
+        assert "weather-api" in caplog.text
 
     def test_streaming_route_satisfied_dep_streams(self):
         """Streaming route with the required dep AVAILABLE streams normally."""

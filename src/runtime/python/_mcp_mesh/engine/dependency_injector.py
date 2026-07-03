@@ -1494,10 +1494,57 @@ class DependencyInjector:
 
             return minimal_wrapper
 
+        # Issue #1249 perimeter (shared by the async + sync dependency_wrapper
+        # closures): return a 503 JSONResponse when a required @mesh.route dep
+        # is unavailable at call time (naming the capability), else None so the
+        # handler runs. Called AFTER the settle wait / injection, so a
+        # still-settling dep gets its full window and caller-supplied mocks are
+        # honored. Only @mesh.route sets ``_route_required_caps``; @mesh.tool
+        # never does, so this is a no-op there.
+        def _route_perimeter_response(injected_deps, kwargs):
+            if not _has_route_required:
+                return None
+            unavailable = _first_unavailable_required(
+                func_id,
+                _route_required_caps,
+                injected_deps,
+                self.get_dependency,
+                kwargs,
+                settle_params,
+            )
+            if unavailable is None:
+                return None
+            from fastapi.responses import JSONResponse
+
+            wrapper_logger.warning(
+                f"🚫 Route '{func.__name__}': required dependency "
+                f"'{unavailable}' unavailable — returning 503"
+            )
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "dependency_unavailable",
+                    "capability": unavailable,
+                },
+            )
+
         # Determine if we need async wrapper
         need_async_wrapper = inspect.iscoroutinefunction(func)
 
         if is_stream:
+            # Issue #1249: the perimeter 503 is BYPASSED BY DESIGN on the
+            # stream path (an SSE/streaming response can't carry a pre-body
+            # 503 without breaking the stream). A streaming route that declares
+            # required deps keeps soft-fail semantics — flag it so the author
+            # knows enforcement is off for this route.
+            if _has_route_required:
+                _req_caps = [c for c in _route_required_caps if c is not None]
+                logger.warning(
+                    f"⚠️ Route '{func.__name__}': required perimeter NOT "
+                    f"enforced — streaming routes bypass the 503 perimeter by "
+                    f"design, so required {_req_caps} are soft-fail (None "
+                    f"injected) rather than 503 when unavailable."
+                )
             dependency_wrapper = _make_stream_wrapper(
                 func,
                 mesh_positions,
@@ -1538,33 +1585,12 @@ class DependencyInjector:
                     wrapper_logger,
                 )
 
-                # Issue #1249 perimeter: @mesh.route with required deps returns
-                # 503 (naming the capability) before user code when a required
-                # proxy is unavailable at call time. Runs AFTER the settle wait
-                # above, so a still-settling dep gets its full window first.
-                if _has_route_required:
-                    _unavailable = _first_unavailable_required(
-                        func_id,
-                        _route_required_caps,
-                        dependency_wrapper._mesh_injected_deps,
-                        self.get_dependency,
-                        kwargs,
-                        settle_params,
-                    )
-                    if _unavailable is not None:
-                        from fastapi.responses import JSONResponse
-
-                        wrapper_logger.warning(
-                            f"🚫 Route '{func.__name__}': required dependency "
-                            f"'{_unavailable}' unavailable — returning 503"
-                        )
-                        return JSONResponse(
-                            status_code=503,
-                            content={
-                                "error": "dependency_unavailable",
-                                "capability": _unavailable,
-                            },
-                        )
+                # Issue #1249 perimeter (shared helper; runs after settle).
+                _perimeter = _route_perimeter_response(
+                    dependency_wrapper._mesh_injected_deps, kwargs
+                )
+                if _perimeter is not None:
+                    return _perimeter
 
                 from ..tracing.execution_tracer import ExecutionTracer
                 from .job_dispatch import maybe_dispatch_as_job
@@ -1623,30 +1649,12 @@ class DependencyInjector:
                     wrapper_logger,
                 )
 
-                # Issue #1249 perimeter (sync route handler variant).
-                if _has_route_required:
-                    _unavailable = _first_unavailable_required(
-                        func_id,
-                        _route_required_caps,
-                        dependency_wrapper._mesh_injected_deps,
-                        self.get_dependency,
-                        kwargs,
-                        settle_params,
-                    )
-                    if _unavailable is not None:
-                        from fastapi.responses import JSONResponse
-
-                        wrapper_logger.warning(
-                            f"🚫 Route '{func.__name__}': required dependency "
-                            f"'{_unavailable}' unavailable — returning 503"
-                        )
-                        return JSONResponse(
-                            status_code=503,
-                            content={
-                                "error": "dependency_unavailable",
-                                "capability": _unavailable,
-                            },
-                        )
+                # Issue #1249 perimeter (shared helper; sync route variant).
+                _perimeter = _route_perimeter_response(
+                    dependency_wrapper._mesh_injected_deps, kwargs
+                )
+                if _perimeter is not None:
+                    return _perimeter
 
                 from ..tracing.execution_tracer import ExecutionTracer
 
