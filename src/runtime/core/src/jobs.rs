@@ -751,8 +751,7 @@ impl JobController {
         // same cursor, both `list_job_events` with the same `after`, and both
         // return the SAME head event across the `.await`), while calls on
         // DIFFERENT filters run concurrently — a 60s type-A long-poll must not
-        // block a type-B call. Acquire BEFORE the deadline check so a fast
-        // same-filter clone-vs-clone race ordering is deterministic.
+        // block a type-B call.
         let key = Self::filter_key(&types);
         let filter_lock = {
             let mut locks = self.recv_locks.lock().expect("recv_locks poisoned");
@@ -761,9 +760,49 @@ impl JobController {
                 .or_insert_with(|| Arc::new(Mutex::new(())))
                 .clone()
         };
-        let _guard = filter_lock.lock().await;
 
+        // Compute the deadline at ENTRY — BEFORE awaiting the per-filter lock
+        // — so time spent QUEUED behind a same-filter long-poll counts against
+        // the caller's OWN budget (issue #1252 review). Acquiring the lock
+        // first and only THEN starting the clock let a queued same-filter
+        // caller run for lock-wait + full-budget, blowing past its `timeout`.
         let deadline = timeout.map(|t| Instant::now() + t);
+
+        // Snapshot this execution's cancel/supersession token so the lock
+        // acquisition below can be raced against it: a cancelled execution
+        // must NOT sit parked on the per-filter lock waiting out a sibling's
+        // 60s long-poll. Watch THIS execution's OWN frame (keyed by claim
+        // epoch); a legacy controller (no epoch) watches the top-of-stack.
+        let queue_cancel_token = match self.claim_epoch {
+            Some(epoch) => cancel_registry::get_state_for_epoch(&self.job_id, epoch),
+            None => cancel_registry::get_state(&self.job_id),
+        }
+        .map(|(cancel, _ended)| cancel);
+
+        // Acquire the per-filter serialization lock, racing it against BOTH
+        // the caller's remaining budget (return `Ok(None)` on exhaustion — the
+        // same shape a normal long-poll timeout takes) AND the cancel token
+        // (return `Cancelled`). `wait_on_optional_cancel` never completes when
+        // there is no token; the deadline branch never completes when
+        // `timeout` is `None` — so an untimed, uncancellable call simply awaits
+        // the lock. Once acquired, the loop below derives every poll's budget
+        // from `deadline`, so wait-on-lock time is already subtracted.
+        let _guard = {
+            let deadline_sleep = async {
+                match deadline {
+                    Some(d) => tokio::time::sleep_until(d).await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
+            tokio::select! {
+                biased;
+                _ = wait_on_optional_cancel(&queue_cancel_token) => {
+                    return Err(JobError::Cancelled)
+                }
+                _ = deadline_sleep => return Ok(None),
+                g = filter_lock.lock() => g,
+            }
+        };
         // Tracks the start of the current contiguous transient-failure
         // window for the same recovery semantics as `JobProxy::wait`.
         let mut transient_failure_started: Option<Instant> = None;
@@ -1423,6 +1462,17 @@ mod tests {
 
     // ---- mock backend -------------------------------------------------------
 
+    /// Test gate for [`MockBackend::list_job_events`]. When installed, an
+    /// EMPTY result page fires `entered` and then parks on `release` — letting
+    /// a test PROVE a `recv_event` long-poll is in-flight (and thus holding
+    /// its per-filter lock) before a second call starts, closing the "did the
+    /// two calls actually overlap?" gap. `release` is level-triggered: once
+    /// cancelled, subsequent empty pages return without blocking.
+    struct ListGate {
+        entered: tokio::sync::Notify,
+        release: CancellationToken,
+    }
+
     /// What `get_job` should return for the next call.
     enum GetJobInjection {
         /// Return the in-memory job state normally.
@@ -1476,6 +1526,10 @@ mod tests {
         always_transient: AtomicUsize, // 0 = false, 1 = true
         /// If set, every `get_job` returns NotFound (non-transient).
         always_not_found: AtomicUsize,
+        /// Optional test gate: when installed, `list_job_events` parks on an
+        /// EMPTY result page so a test can hold a `recv_event` long-poll open
+        /// deterministically. See [`ListGate`].
+        list_gate: StdMutex<Option<Arc<ListGate>>>,
     }
 
     impl MockBackend {
@@ -1497,7 +1551,19 @@ mod tests {
                 transient_remaining: AtomicUsize::new(0),
                 always_transient: AtomicUsize::new(0),
                 always_not_found: AtomicUsize::new(0),
+                list_gate: StdMutex::new(None),
             })
+        }
+        /// Install a gate so the next `list_job_events` calls that hit an EMPTY
+        /// page fire `entered` then park on `release`. Returns the gate so the
+        /// test can await `entered` and later `release.cancel()` to unblock.
+        fn install_list_gate(&self) -> Arc<ListGate> {
+            let gate = Arc::new(ListGate {
+                entered: tokio::sync::Notify::new(),
+                release: CancellationToken::new(),
+            });
+            *self.list_gate.lock().unwrap() = Some(gate.clone());
+            gate
         }
         fn push_event(&self, job_id: &str, event_type: &str, payload: serde_json::Value) {
             let mut all = self.events.lock().unwrap();
@@ -1808,18 +1874,6 @@ mod tests {
                     }
                 }
             }
-            let all = self.events.lock().unwrap();
-            let list = match all.get(job_id) {
-                Some(l) => l,
-                None => {
-                    // No events yet for this job — registry returns empty
-                    // (NOT NotFound — `not found` is the job-row state).
-                    return Ok(JobEventListResponse {
-                        events: vec![],
-                        next_after: after,
-                    });
-                }
-            };
             // Canonicalize the `types` filter exactly as the registry does
             // (`ent_handlers_jobs.go`): trim each entry and drop empties. An
             // absent filter, an empty list, or a list of only empty/whitespace
@@ -1833,23 +1887,49 @@ mod tests {
                         .collect()
                 })
                 .unwrap_or_default();
-            let mut out: Vec<JobEvent> = list
-                .iter()
-                .filter(|e| e.seq > after)
-                .filter(|e| {
-                    active_types.is_empty()
-                        || active_types.iter().any(|t| *t == e.event_type.as_str())
-                })
-                .take(limit)
-                .cloned()
-                .collect();
-            // Default `next_after` to the caller's watermark when nothing
-            // matched; otherwise advance to the last returned seq.
-            let next_after = out.last().map(|e| e.seq).unwrap_or(after);
-            // Mock semantics: no actual long-poll. Tests that need wait
-            // behaviour drive the clock manually.
-            // (We don't drain — list_job_events is read-only.)
+            let (mut out, next_after) = {
+                let all = self.events.lock().unwrap();
+                match all.get(job_id) {
+                    // No events yet for this job — registry returns empty
+                    // (NOT NotFound — `not found` is the job-row state).
+                    None => (Vec::<JobEvent>::new(), after),
+                    Some(list) => {
+                        let out: Vec<JobEvent> = list
+                            .iter()
+                            .filter(|e| e.seq > after)
+                            .filter(|e| {
+                                active_types.is_empty()
+                                    || active_types
+                                        .iter()
+                                        .any(|t| *t == e.event_type.as_str())
+                            })
+                            .take(limit)
+                            .cloned()
+                            .collect();
+                        // Default `next_after` to the caller's watermark when
+                        // nothing matched; otherwise advance to the last seq.
+                        let next_after = out.last().map(|e| e.seq).unwrap_or(after);
+                        (out, next_after)
+                    }
+                }
+            };
             out.shrink_to_fit();
+            // Test gate: on an EMPTY page, signal that this long-poll is
+            // in-flight (the caller's `recv_event` is holding its per-filter
+            // lock) and park until the test releases. Level-triggered, so once
+            // released later empty pages fall straight through. The events
+            // guard is dropped above before this await (no std mutex across
+            // await). Mock semantics otherwise: no real long-poll — tests that
+            // need wait behaviour drive the clock manually.
+            if out.is_empty() {
+                let gate = self.list_gate.lock().unwrap().clone();
+                if let Some(g) = gate {
+                    if !g.release.is_cancelled() {
+                        g.entered.notify_one();
+                        g.release.cancelled().await;
+                    }
+                }
+            }
             Ok(JobEventListResponse {
                 events: out,
                 next_after,
@@ -3711,24 +3791,35 @@ mod tests {
         assert_eq!(e2.seq, 2, "Some([]) shares the unfiltered cursor with None");
     }
 
+    /// Grab a clone of the per-filter serialization lock for `types` off a
+    /// controller, mirroring `recv_event`'s own lookup. Holding the returned
+    /// mutex simulates a same-filter long-poll in flight (that filter's slot
+    /// is occupied) WITHOUT racing a spawned task to the lock, so the tests
+    /// below have a deterministic "call 1 is provably pending" precondition.
+    fn filter_lock_of(ctrl: &JobController, types: &Option<Vec<String>>) -> Arc<Mutex<()>> {
+        let key = JobController::filter_key(types);
+        let mut locks = ctrl.recv_locks.lock().unwrap();
+        locks
+            .entry(key)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
     #[tokio::test]
     async fn recv_event_different_filters_do_not_block_each_other() {
-        // Per-filter locks (not one global lock): a long-polling recv on
-        // filter A (no A events) must NOT block a filter-B call that has an
-        // event ready. This is the intra-controller analogue of
-        // `recv_event_lock_is_per_controller`.
+        // Per-filter locks (not one global lock): a filter-A long-poll must
+        // NOT block a filter-B call that has an event ready. We PROVABLY
+        // occupy filter A's slot by holding its lock for the whole test (the
+        // deterministic stand-in for an in-flight A long-poll), then assert a
+        // filter-B call still completes immediately.
         let (backend, ctrl) = make_controller("j-nofilterblock").await;
         backend.push_event("j-nofilterblock", "B", serde_json::json!({})); // seq 1
 
-        let ctrl_a = ctrl.clone();
-        let a_handle = tokio::spawn(async move {
-            // No A events — this parks for its full 500ms budget.
-            ctrl_a
-                .recv_event(Some(vec!["A".into()]), Some(Duration::from_millis(500)))
-                .await
-        });
+        let filter_a = Some(vec!["A".into()]);
+        let a_lock = filter_lock_of(&ctrl, &filter_a);
+        let _a_held = a_lock.lock().await; // filter A provably occupied
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let b = ctrl
             .recv_event(Some(vec!["B".into()]), Some(Duration::from_secs(2)))
             .await
@@ -3738,46 +3829,132 @@ mod tests {
         assert_eq!(b.seq, 1);
         assert!(
             elapsed < Duration::from_millis(400),
-            "filter B must not serialise behind filter A's long-poll (elapsed={:?})",
+            "filter B must not serialise behind filter A's held lock (elapsed={:?})",
             elapsed,
         );
-        let _ = a_handle.await.unwrap();
     }
 
     #[tokio::test]
-    async fn recv_event_same_filter_monotonic_under_concurrency() {
-        // Two concurrent recv_event calls on clones with the SAME filter must
-        // observe DISTINCT seqs (same-filter lock serializes the
-        // load→list→store window) and the cursor advances monotonically.
+    async fn recv_event_same_filter_serializes_under_proven_overlap() {
+        // Two same-filter recvs must observe DISTINCT, ordered seqs — never a
+        // duplicate. A mock gate makes call 1 PROVABLY parked in its long-poll
+        // (holding the per-filter lock) before call 2 starts, so the calls
+        // genuinely overlap: without the lock both would read cursor 0 and
+        // return seq 1.
         let (backend, ctrl) = make_controller("j-concfilter").await;
+        let gate = backend.install_list_gate();
+
+        let ctrl1 = ctrl.clone();
+        let call1 = tokio::spawn(async move {
+            ctrl1
+                .recv_event(Some(vec!["A".into()]), Some(Duration::from_secs(5)))
+                .await
+                .unwrap()
+                .unwrap()
+        });
+        // Call 1 is now provably parked on an empty page, holding filter A's
+        // lock. Only NOW publish the events and start the queued call 2.
+        gate.entered.notified().await;
         backend.push_event("j-concfilter", "A", serde_json::json!({})); // seq 1
         backend.push_event("j-concfilter", "A", serde_json::json!({})); // seq 2
 
-        let ctrl_a = ctrl.clone();
-        let ctrl_b = ctrl.clone();
-        let a = tokio::spawn(async move {
-            ctrl_a
-                .recv_event(Some(vec!["A".into()]), Some(Duration::from_secs(2)))
+        let ctrl2 = ctrl.clone();
+        let call2 = tokio::spawn(async move {
+            ctrl2
+                .recv_event(Some(vec!["A".into()]), Some(Duration::from_secs(5)))
                 .await
                 .unwrap()
                 .unwrap()
         });
-        let b = tokio::spawn(async move {
-            ctrl_b
-                .recv_event(Some(vec!["A".into()]), Some(Duration::from_secs(2)))
-                .await
-                .unwrap()
-                .unwrap()
-        });
-        let ev_a = a.await.unwrap();
-        let ev_b = b.await.unwrap();
-        let seen: std::collections::HashSet<i64> = [ev_a.seq, ev_b.seq].into_iter().collect();
+
+        // Release call 1's gated poll: it advances the cursor to seq 1, then
+        // call 2 serializes behind it and must see seq 2 (never a duplicate 1).
+        gate.release.cancel();
+
+        let ev1 = call1.await.unwrap();
+        let ev2 = call2.await.unwrap();
+        assert_eq!(ev1.seq, 1, "the in-flight caller consumes seq 1");
         assert_eq!(
-            seen,
-            [1, 2].into_iter().collect(),
-            "same-filter concurrent callers must collectively observe {{1,2}}, got {:?}",
-            seen
+            ev2.seq, 2,
+            "the queued caller must serialize behind it and see seq 2, not a duplicate"
         );
+    }
+
+    #[tokio::test]
+    async fn recv_event_queued_same_filter_times_out_at_own_budget() {
+        // COMMENT-1 fix: a same-filter recv queued behind an in-flight
+        // long-poll must time out at ~ITS OWN budget, not lock-wait + budget.
+        // We hold filter A's lock for the whole test (an in-flight A long-poll
+        // that never releases); a second A recv with a 300ms budget must
+        // return Ok(None) at ~300ms rather than blocking forever on the lock.
+        let (_backend, ctrl) = make_controller("j-lockbudget").await;
+        let filter_a = Some(vec!["A".into()]);
+        let a_lock = filter_lock_of(&ctrl, &filter_a);
+        let _a_held = a_lock.lock().await;
+
+        let start = Instant::now();
+        let r = ctrl
+            .recv_event(filter_a.clone(), Some(Duration::from_millis(300)))
+            .await;
+        let elapsed = start.elapsed();
+        assert!(
+            matches!(r, Ok(None)),
+            "a queued caller must time out as Ok(None), got {:?}",
+            r
+        );
+        assert!(
+            elapsed >= Duration::from_millis(250) && elapsed < Duration::from_millis(900),
+            "must time out at ~its own 300ms budget, not lock-wait + budget (elapsed={:?})",
+            elapsed
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn recv_event_queued_on_lock_returns_cancelled_promptly() {
+        // COMMENT-1 fix: an execution cancelled WHILE queued on the per-filter
+        // lock must return Cancelled promptly — not sit parked until the
+        // holder's (up to 60s) long-poll releases. We hold filter A's lock for
+        // the whole test; a second A recv queues behind it, then the job's
+        // cancel token fires and the queued recv must surface Cancelled.
+        let (_backend, ctrl) =
+            make_controller_with_epoch("j-lockcancel", Some(1), 1).await;
+        let token = CancellationToken::new();
+        let generation = cancel_registry::register_active_job_with_epoch(
+            "j-lockcancel",
+            token.clone(),
+            Some(1),
+        );
+
+        let filter_a = Some(vec!["A".into()]);
+        let a_lock = filter_lock_of(&ctrl, &filter_a);
+        let _a_held = a_lock.lock().await;
+
+        let ctrl_clone = ctrl.clone();
+        let recv = tokio::spawn(async move {
+            ctrl_clone
+                .recv_event(Some(vec!["A".into()]), Some(Duration::from_secs(10)))
+                .await
+        });
+        // Let the recv park on the held lock, then fire the cancel.
+        sleep(Duration::from_millis(80)).await;
+        token.cancel();
+
+        let started = Instant::now();
+        let result = tokio::time::timeout(Duration::from_secs(3), recv)
+            .await
+            .expect("recv queued on the lock must return promptly on cancel")
+            .unwrap();
+        assert!(
+            matches!(result, Err(JobError::Cancelled)),
+            "a cancel while queued on the lock must surface Cancelled, got {:?}",
+            result
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "must return promptly, took {:?}",
+            started.elapsed()
+        );
+        cancel_registry::unregister_active_job("j-lockcancel", generation);
     }
 
     // ---- Mock-vs-registry contract test (refuted-D3 divergence guard) -------

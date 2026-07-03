@@ -68,25 +68,10 @@ test:
     workdir: /workspace
     capture: start_provider
 
-  # Wait for provider to register
-  - name: "Wait for provider registration"
-    handler: shell
-    workdir: /workspace
-    command: |
-      echo "Waiting for claude-provider to start and register..."
-      for i in $(seq 1 120); do
-        if meshctl list 2>/dev/null | grep -q "claude-provider"; then
-          echo "claude-provider registered after ~$((i*2))s"
-          exit 0
-        fi
-        sleep 2
-      done
-      echo "ERROR: claude-provider did not register within 240s"
-      meshctl list 2>/dev/null || true
-      meshctl logs claude-provider 2>/dev/null | tail -30 || true
-      exit 1
-    capture: wait_provider
-    timeout: 260
+  # Wait for provider to register (liveness-only shared routine)
+  - routine: global.wait_for_agents_registered
+    params:
+      agents: claude-provider
 
   # Start analyst agent with tracing enabled (depends on provider)
   - name: "Start analyst agent"
@@ -95,33 +80,13 @@ test:
     workdir: /workspace
     capture: start_analyst
 
-  # Wait for analyst to register and resolve LLM provider dependency
-  - name: "Wait for analyst registration"
-    handler: shell
-    workdir: /workspace
-    command: |
-      echo "Waiting for analyst agent to start and resolve LLM dependency..."
-      for i in $(seq 1 120); do
-        # Check if analyst is registered and has LLM provider resolved (1/1 deps)
-        if meshctl list 2>/dev/null | grep -q "analyst.*1/1"; then
-          echo "analyst registered and LLM provider resolved after ~$((i*2))s"
-          exit 0
-        fi
-        # Also check if it shows as healthy without deps indicator
-        if meshctl list 2>/dev/null | grep -q "analyst.*healthy"; then
-          echo "analyst registered as healthy after ~$((i*2))s"
-          exit 0
-        fi
-        sleep 2
-      done
-      echo "ERROR: analyst agent did not register properly within 240s"
-      echo "=== Agent list ==="
-      meshctl list 2>/dev/null || true
-      echo "=== analyst logs ==="
-      meshctl logs analyst 2>/dev/null | tail -30 || true
-      exit 1
-    capture: wait_analyst
-    timeout: 260
+  # Wait for the analyst to register — LIVENESS-ONLY (settle-grace design,
+  # issue #1193): the old loop's "1/1" dep condition was against convention;
+  # dependency resolution is covered at call time by the runtime's settle
+  # window (the chat step's first call blocks until deps settle).
+  - routine: global.wait_for_agents_registered
+    params:
+      agents: analyst
 
   # Verify all agents are running
   - name: "List agents"

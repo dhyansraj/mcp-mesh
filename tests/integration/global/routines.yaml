@@ -272,6 +272,54 @@ routines:
   # UTILITIES
   #############################################################################
 
+  # LIVENESS-ONLY registration wait (settle-grace design, issue #1193):
+  # polls `meshctl list` until every named agent APPEARS. Deliberately does
+  # NOT gate on dependency resolution ("1/1") or health status — dependency
+  # resolution is covered at call time by the runtime's settle window (the
+  # consumer's first mesh call blocks until deps settle). Do NOT add
+  # dep-aware conditions here.
+  #
+  # Matching is a case-insensitive substring grep per name against the
+  # meshctl list output (case-insensitive so display-cased ids like the
+  # api-gateway's "API ..." row match too).
+  wait_for_agents_registered:
+    description: "Poll meshctl list until all named agents appear (liveness-only, 240s deadline)"
+    params:
+      agents:
+        type: string
+        required: true
+        description: "Space-separated agent names to await in meshctl list"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: |
+          EXPECTED="${params.agents}"
+          TOTAL=$(echo "$EXPECTED" | wc -w | tr -d ' ')
+          echo "Waiting for $TOTAL agent(s) to register: $EXPECTED"
+          for i in $(seq 1 120); do
+            LIST=$(meshctl list 2>/dev/null || true)
+            COUNT=0
+            for agent in $EXPECTED; do
+              if echo "$LIST" | grep -qi "$agent"; then
+                COUNT=$((COUNT + 1))
+              fi
+            done
+            if [ "$COUNT" -ge "$TOTAL" ]; then
+              echo "All $TOTAL agent(s) registered after ~$((i*2))s"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "ERROR: only $COUNT/$TOTAL agent(s) registered within 240s (expected: $EXPECTED)"
+          meshctl list 2>/dev/null || true
+          for agent in $EXPECTED; do
+            echo "=== logs: $agent ==="
+            meshctl logs "$agent" 2>/dev/null | tail -30 || true
+          done
+          exit 1
+        capture: wait_agents_registered
+        timeout: 260
+
   # Cleanup workspace
   cleanup_workspace:
     description: "Remove all files from workspace directory"
