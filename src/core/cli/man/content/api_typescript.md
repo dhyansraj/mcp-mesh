@@ -173,6 +173,26 @@ app.post(
 );
 ```
 
+## Required Dependencies
+
+To skip the hand-written `null`-check above, mark the dependency `required`. When a required dependency is unavailable at request time, the framework's own middleware returns **503** with body `{"error":"dependency_unavailable","capability":"<cap>"}` before your handler runs (after the settle window):
+
+```typescript
+app.post(
+  "/greet",
+  mesh.route(
+    [{ capability: "greeting", required: true }],
+    async (req, res, { greeting }) => {
+      // framework guarantees greeting is live
+      const result = await greeting({ name: req.body.name });
+      res.json({ message: result.text });
+    },
+  ),
+);
+```
+
+See `meshctl man dependency-injection --typescript` for the full availability model, transitive propagation, and cycle rules.
+
 ## See Also
 
 - `meshctl man decorators` - All mesh decorators and functions

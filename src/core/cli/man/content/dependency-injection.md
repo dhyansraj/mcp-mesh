@@ -195,6 +195,68 @@ async def get_time(date_service: mesh.McpMeshTool = None):
     return datetime.now().isoformat()  # Fallback
 ```
 
+## Required Dependencies
+
+By default a dependency is optional: an unresolved dependency injects `None`, and the agent still starts, registers, and serves (soft-fail). Mark an edge `required` to opt that single edge into strictness:
+
+```python
+@app.tool()
+@mesh.tool(
+    capability="report",
+    dependencies=[
+        {"capability": "data_service", "required": True},
+        {"capability": "formatter"},  # optional (default)
+    ],
+)
+async def generate_report(
+    data_svc: mesh.McpMeshTool = None,
+    formatter: mesh.McpMeshTool = None,
+) -> str: ...
+```
+
+`required` defaults to `False` and combines with the other selector fields (`tags`, `version`, `expected_type`). It is carried on the wire only when `True`.
+
+### Availability Semantics
+
+The registry computes a capability-availability predicate:
+
+> a capability is **available** ⇔ its owning agent is healthy **AND** every one of its `required` dependencies resolves to an available provider (full tag / version / schema matching)
+
+The predicate is **transitive**: in a required chain `A → B → C`, if `C` goes down then `B` becomes unavailable and `A` becomes unavailable in turn. Optional edges never propagate — strictness flows only along edges you mark `required`, so the soft-fail default is preserved everywhere else.
+
+An unavailable capability is excluded from resolution exactly like an unhealthy provider — it drops out at the resolver's `health` stage. Consumers holding a proxy to it see the proxy flip to `None` through the same background dependency-update channel that already delivers topology changes — no code changes, no SDK upgrade required.
+
+### Route Perimeter (503)
+
+Mesh-internal calls go through proxies; external HTTP callers to a `@mesh.route` do not. When a route declares a required dependency that is unavailable at call time, the framework's own wrapper returns **503** — before your handler runs, after the settle window — with the body:
+
+```json
+{ "error": "dependency_unavailable", "capability": "data_service" }
+```
+
+503 rather than 404 so monitoring alarms on 5xx, load-balancer health checks eject the instance, and clients see a retryable "unavailable" instead of a permanent "missing". A caller that supplies its own value for the slot (a test override) is honored and skips the check.
+
+**Streaming routes** (`is_stream=True`) bypass the 503 perimeter by design — an in-flight stream cannot carry a pre-body 503 — so a streaming route's required deps stay soft-fail (`None` injected). The framework logs a warning at registration so the author knows enforcement is off for that route.
+
+### Cycle Rule
+
+A cycle among `required` edges can never converge (both ends stay unavailable forever), so the registry rejects the registration/heartbeat that would close one, loudly naming the loop:
+
+```
+required dependency cycle: analyst → enricher → analyst
+```
+
+The rejected agent logs `Agent registration failed: required dependency cycle: …` and keeps retrying on each heartbeat until the loop is broken. Cycles routed through an **optional** edge remain legal — that is the bootstrapping path.
+
+### Observing Availability
+
+The agents/capabilities API carries two derived fields per capability:
+
+- `available` — the predicate above (boolean)
+- `unavailable_reason` — set when `available` is false; names the first broken edge with its constraint detail, e.g. `required dep 'weather-api' unresolved (no provider matches tags=[+prod])`, `required dep 'data_service' unavailable (provider agent-7 unhealthy)`, or `agent unhealthy` when the owning agent is itself down.
+
+The capability stays visible in the registry, UI, and `meshctl` (availability is distinct from presence), so the reason chain is a diagnostic upgrade, not a disappearance.
+
 ## Proxy Configuration
 
 Per-dependency proxy options (timeout, retry, streaming, session affinity, auth, custom headers, etc.) are configured via `dependency_kwargs`. See `meshctl man proxies` for the full options table.

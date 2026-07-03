@@ -1,0 +1,23 @@
+# uc34 java-route-consumer configuration (issue #1249 route perimeter)
+
+spring:
+  application:
+    name: java-route-consumer
+  main:
+    banner-mode: "off"
+
+server:
+  port: ${MCP_MESH_HTTP_PORT:9201}
+
+mesh:
+  registry:
+    url: ${MCP_MESH_REGISTRY_URL:http://localhost:8000}
+  agent:
+    name: ${MCP_MESH_AGENT_NAME:java-route-consumer}
+    namespace: ${MCP_MESH_NAMESPACE:default}
+
+logging:
+  level:
+    root: INFO
+    io.mcpmesh: DEBUG
+    com.example: DEBUG

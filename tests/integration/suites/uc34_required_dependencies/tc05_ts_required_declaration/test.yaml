@@ -1,0 +1,191 @@
+# tc05_ts_required_declaration — TypeScript parity for the issue #1249
+# required-dependency declaration chain.
+#
+# Topology: Python base-provider (base-cap) + TS ts-required-consumer whose
+# ts-req-cap tool declares { capability: "base-cap", required: true } via the
+# object DependencySpec form.
+#
+# Design guarantees under test:
+#   1. The TS SDK carries required=true over the wire (decorator ->
+#      NormalizedDependency -> heartbeat payload) and the registration is
+#      accepted: ts-req-cap resolves and reads available==true while the
+#      provider is up. (If the flag were dropped, step 3 could never flip.)
+#   2. Kill the provider -> the registry's derived availability marks
+#      ts-req-cap available==false with an unavailable_reason naming the
+#      broken base-cap edge — driven purely by the REGISTRY predicate; the
+#      TS agent itself stays registered and healthy.
+#   3. Restart the provider -> ts-req-cap re-derives available==true with no
+#      consumer restart.
+#
+# Timing: default health debounce (~3 missed heartbeats, ~15-25s) — every
+# transition polled with a deadline, never a fixed sleep. Registration waits
+# are liveness-only (issue #1193); no dep-resolution waits.
+
+name: "Required deps: TS {capability, required: true} declaration drives registry availability"
+description: "TS consumer requires base-cap: ts-req-cap available=true baseline, flips false (reason names base-cap) when the Python provider dies while the TS agent stays healthy, recovers on restart"
+tags:
+  - integration
+  - typescript
+  - python
+  - registry
+  - required-deps
+  - availability
+  - issue-1249
+  - slow
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_typescript_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/base-provider /workspace/
+      cp -rL /uc-artifacts/ts-required-consumer /workspace/
+
+  - name: "Install provider deps"
+    handler: pip-install
+    path: /workspace/base-provider
+
+  - name: "Install consumer deps"
+    handler: npm-install
+    path: /workspace/ts-required-consumer
+
+  - name: "Start base-provider (port 9101)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start base-provider/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  - name: "Start ts-required-consumer (port 9051)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start ts-required-consumer/src/index.ts --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  # Liveness only (issue #1193).
+  - routine: global.wait_for_agents_registered
+    params:
+      agents: "base-provider ts-required-consumer"
+
+  # Baseline: the required edge RESOLVES — proving the TS registration with
+  # required=true was accepted and matched (guarantee 1).
+  - name: "Wait for ts-req-cap baseline (available=true)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AVAIL=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name == "ts-required-consumer") | .capabilities[] | select(.name == "ts-req-cap") | .available' 2>/dev/null || echo "")
+        if [ "$AVAIL" = "true" ]; then
+          echo "TSCAP_AVAILABLE=1 after ~$((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: ts-req-cap never became available=true within 120s (last=$AVAIL)"
+      curl -s http://localhost:8000/agents | jq '.agents[] | select(.name == "ts-required-consumer")' 2>/dev/null || true
+      meshctl logs ts-required-consumer 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_ts_baseline
+    timeout: 140
+
+  - name: "Capture baseline /agents snapshot"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:8000/agents
+    capture: agents_baseline
+
+  - name: "Kill base-provider"
+    handler: shell
+    workdir: /workspace
+    command: meshctl stop base-provider
+    capture: kill_provider
+
+  # Guarantee 2: the registry-derived verdict flips — the discriminator that
+  # required=true actually crossed the wire from the TS SDK (an optional edge
+  # would leave ts-req-cap available=true forever and time out HERE).
+  - name: "Wait for ts-req-cap to flip unavailable"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AVAIL=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name == "ts-required-consumer") | .capabilities[] | select(.name == "ts-req-cap") | .available' 2>/dev/null || echo "")
+        if [ "$AVAIL" = "false" ]; then
+          echo "TSCAP_UNAVAILABLE=1 after ~$((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: ts-req-cap never flipped to available=false within 120s (last=$AVAIL) — did the TS SDK drop required=true on the wire?"
+      curl -s http://localhost:8000/agents | jq '.agents[] | select(.name == "ts-required-consumer")' 2>/dev/null || true
+      exit 1
+    capture: wait_ts_unavailable
+    timeout: 140
+
+  - name: "Capture outage /agents snapshot"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:8000/agents
+    capture: agents_outage
+
+  - name: "Restart base-provider"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start base-provider/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  # Guarantee 3: organic recovery, no consumer restart.
+  - name: "Wait for ts-req-cap recovery (available=true)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 75); do
+        AVAIL=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name == "ts-required-consumer") | .capabilities[] | select(.name == "ts-req-cap") | .available' 2>/dev/null || echo "")
+        if [ "$AVAIL" = "true" ]; then
+          echo "TSCAP_RECOVERED=1 after ~$((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: ts-req-cap never recovered to available=true within 150s (last=$AVAIL)"
+      curl -s http://localhost:8000/agents | jq '.agents[] | select(.name == "ts-required-consumer")' 2>/dev/null || true
+      exit 1
+    capture: wait_ts_recovery
+    timeout: 170
+
+  - name: "Capture recovery /agents snapshot"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:8000/agents
+    capture: agents_recovery
+
+assertions:
+  # IDIOM: equality INSIDE the jq filter, '== true' outside; no '}' in
+  # interpolation bodies.
+
+  - expr: "${captured.wait_ts_baseline} contains 'TSCAP_AVAILABLE=1'"
+    message: "ts-req-cap must resolve to available=true with the provider up — the required declaration must not break TS registration"
+  - expr: "${captured.wait_ts_unavailable} contains 'TSCAP_UNAVAILABLE=1'"
+    message: "killing the provider must flip ts-req-cap to available=false — proves required=true crossed the wire from the TS SDK"
+  - expr: "${captured.wait_ts_recovery} contains 'TSCAP_RECOVERED=1'"
+    message: "restarting the provider must flip ts-req-cap back to available=true with no consumer restart"
+
+  # Baseline: available, no reason
+  - expr: "${jq:captured.agents_baseline:(.agents[] | select(.name == \"ts-required-consumer\") | .capabilities[] | select(.name == \"ts-req-cap\") | .available == true and .unavailable_reason == null)} == 'true'"
+    message: "baseline: ts-req-cap must be available with no unavailable_reason"
+
+  # Outage: unavailable with the broken edge named, agent itself untouched
+  - expr: "${jq:captured.agents_outage:(.agents[] | select(.name == \"ts-required-consumer\") | .capabilities[] | select(.name == \"ts-req-cap\") | .available == false)} == 'true'"
+    message: "ts-req-cap must be available=false while its required base-cap edge is broken"
+  - expr: "${jq:captured.agents_outage:(.agents[] | select(.name == \"ts-required-consumer\") | .capabilities[] | select(.name == \"ts-req-cap\") | .unavailable_reason // \"\" | contains(\"base-cap\"))} == 'true'"
+    message: "ts-req-cap's unavailable_reason must name the broken required edge (base-cap)"
+  - expr: "${jq:captured.agents_outage:(.agents[] | select(.name == \"ts-required-consumer\") | .status == \"healthy\")} == 'true'"
+    message: "the TS consumer agent must stay HEALTHY — unavailability is capability-level derived state, not agent health"
+
+  # Recovery: available again, reason cleared
+  - expr: "${jq:captured.agents_recovery:(.agents[] | select(.name == \"ts-required-consumer\") | .capabilities[] | select(.name == \"ts-req-cap\") | .available == true and .unavailable_reason == null)} == 'true'"
+    message: "recovery: ts-req-cap must be available again with the reason cleared"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

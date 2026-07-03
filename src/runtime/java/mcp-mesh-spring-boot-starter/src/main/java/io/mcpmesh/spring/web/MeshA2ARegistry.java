@@ -10,11 +10,9 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -141,37 +139,54 @@ public class MeshA2ARegistry {
      * schema-compatibility stage (issue #1089).
      */
     public List<AgentSpec.DependencySpec> getUniqueDependencySpecs() {
-        Set<String> seenCapabilities = new HashSet<>();
-        List<AgentSpec.DependencySpec> specs = new ArrayList<>();
+        // Keyed by capability, insertion-ordered. Issue #1249: required WINS on
+        // merge — see the conflict branch below.
+        Map<String, AgentSpec.DependencySpec> byCapability = new LinkedHashMap<>();
         var jsonMapper = JsonMapper.builder().build();
         // Issue #547 Phase 4: cluster-wide strict knob promotes WARN→BLOCK.
         boolean clusterStrict = MeshSchemaSupport.clusterStrictEnabled();
         for (SurfaceMetadata surface : getAllSurfaces()) {
             for (MeshRouteRegistry.DependencySpec dep : surface.dependencies()) {
-                if (seenCapabilities.add(dep.getCapability())) {
-                    AgentSpec.DependencySpec agentDep = new AgentSpec.DependencySpec();
-                    agentDep.setCapability(dep.getCapability());
-                    if (dep.hasTags()) {
-                        // Issue #1158: tags is contractually a JSON-array string
-                        // (the Rust core JSON-parses it; a comma-joined string
-                        // silently degrades to "no tag constraint").
-                        try {
-                            agentDep.setTags(jsonMapper.writeValueAsString(dep.getTags()));
-                        } catch (Exception e) {
-                            log.warn("Failed to serialize tags for dependency '{}' — registering with no tag constraint: {}",
-                                dep.getCapability(), e.getMessage());
-                            agentDep.setTags("[]");
-                        }
+                AgentSpec.DependencySpec existing = byCapability.get(dep.getCapability());
+                if (existing != null) {
+                    // Issue #1249: dedupe is otherwise first-wins, but surface
+                    // iteration order is nondeterministic — a required=true
+                    // declaration must never be dropped because a non-required
+                    // declaration of the same capability was visited first.
+                    if (dep.isRequired() && !existing.isRequired()) {
+                        log.warn("Capability '{}' is declared by multiple @MeshA2A dependencies "
+                                + "with conflicting required flags — upgrading the deduped dependency "
+                                + "to required=true (required wins on merge)",
+                            dep.getCapability());
+                        existing.setRequired(true);
                     }
-                    if (dep.hasVersion()) {
-                        agentDep.setVersion(dep.getVersion());
-                    }
-                    MeshRouteRegistry.applySchemaMatching(agentDep, dep, clusterStrict);
-                    specs.add(agentDep);
+                    continue;
                 }
+                AgentSpec.DependencySpec agentDep = new AgentSpec.DependencySpec();
+                agentDep.setCapability(dep.getCapability());
+                if (dep.hasTags()) {
+                    // Issue #1158: tags is contractually a JSON-array string
+                    // (the Rust core JSON-parses it; a comma-joined string
+                    // silently degrades to "no tag constraint").
+                    try {
+                        agentDep.setTags(jsonMapper.writeValueAsString(dep.getTags()));
+                    } catch (Exception e) {
+                        log.warn("Failed to serialize tags for dependency '{}' — registering with no tag constraint: {}",
+                            dep.getCapability(), e.getMessage());
+                        agentDep.setTags("[]");
+                    }
+                }
+                if (dep.hasVersion()) {
+                    agentDep.setVersion(dep.getVersion());
+                }
+                // Issue #1249: carry required through to the spec JSON
+                // (omitted when false via NON_DEFAULT on the AgentSpec dep).
+                agentDep.setRequired(dep.isRequired());
+                MeshRouteRegistry.applySchemaMatching(agentDep, dep, clusterStrict);
+                byCapability.put(dep.getCapability(), agentDep);
             }
         }
-        return specs;
+        return new ArrayList<>(byCapability.values());
     }
 
     /**

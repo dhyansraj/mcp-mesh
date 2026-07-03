@@ -6,9 +6,9 @@
 //! - Sends events to the Python SDK via channels
 //! - Tracks topology changes and emits dependency events
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, watch, RwLock};
 use tokio::time::sleep;
 use tracing::{info, trace, warn};
@@ -137,6 +137,21 @@ pub struct AgentRuntime {
     /// `watch::Receiver` and wakes when this transitions to `Some(n>0)`.
     /// Initialized to `None` (no pending work known).
     pending_jobs_tx: watch::Sender<Option<u32>>,
+    /// Minimum interval between dependency reconcile re-emissions (issue
+    /// #1256). On a full heartbeat the pure edge-diff only emits an event
+    /// when an endpoint actually changes and records the edge as delivered
+    /// on `send()` — i.e. on *enqueue*, not on *apply*. If that event is
+    /// ever dropped downstream of the channel (e.g. a cancelled pull at the
+    /// pyo3 boundary before #1256's fix), the diff gate would suppress it
+    /// forever. The reconcile pass re-emits the FULL set of currently
+    /// resolved dependencies so any lost edge self-heals. It is throttled by
+    /// this interval so bursts of full heartbeats (topology churn) don't
+    /// produce a re-emit storm; re-applying an unchanged endpoint is
+    /// idempotent on the SDK side.
+    reconcile_interval: Duration,
+    /// Timestamp of the last dependency reconcile re-emission (`None` until
+    /// the first). See [`Self::reconcile_interval`].
+    last_dep_reconcile: Option<Instant>,
 }
 
 impl AgentRuntime {
@@ -176,6 +191,8 @@ impl AgentRuntime {
             command_rx,
             force_full_heartbeat: false,
             pending_jobs_tx,
+            reconcile_interval: Duration::from_secs(10),
+            last_dep_reconcile: None,
         })
     }
 
@@ -655,6 +672,9 @@ impl AgentRuntime {
             self.topology.dependencies.remove(&key);
         }
 
+        // Track the keys emitted by the edge-diff this cycle so the reconcile
+        // pass below doesn't double-emit them.
+        let mut just_emitted: HashSet<DepKey> = HashSet::new();
         for (key, value, is_new) in added_or_changed {
             let event = if is_new {
                 MeshEvent::dependency_available(
@@ -686,7 +706,53 @@ impl AgentRuntime {
                 continue;
             }
 
+            just_emitted.insert(key.clone());
             self.topology.dependencies.insert(key, value);
+        }
+
+        // Reconcile pass (issue #1256): the edge-diff above records an edge as
+        // delivered when `send()` succeeds — i.e. on enqueue, not on apply. If
+        // a dependency event is ever dropped downstream of the channel, the
+        // diff gate would suppress it forever and the consumer's proxy stays
+        // unbound. To self-heal, periodically re-emit the FULL set of
+        // currently resolved dependencies (idempotent on the SDK side).
+        //
+        // Throttled by `reconcile_interval` so bursts of full heartbeats
+        // (topology churn) don't produce a re-emit storm. Only re-emits edges
+        // that are already recorded in `topology` (i.e. believed-delivered);
+        // brand-new edges are left to the diff gate's own next-heartbeat retry
+        // so a genuinely-failed `send` isn't masked. Skips edges just emitted
+        // above to avoid a double-emit within the same heartbeat.
+        let reconcile_due = self
+            .last_dep_reconcile
+            .map(|t| t.elapsed() >= self.reconcile_interval)
+            .unwrap_or(true);
+        if reconcile_due {
+            self.last_dep_reconcile = Some(Instant::now());
+            for (key, value) in &new_deps {
+                if just_emitted.contains(key) {
+                    continue;
+                }
+                if !self.topology.dependencies.contains_key(key) {
+                    continue;
+                }
+                let event = MeshEvent::dependency_available(
+                    value.capability.clone(),
+                    value.endpoint.clone(),
+                    value.function_name.clone(),
+                    value.agent_id.clone(),
+                    key.requesting_function.clone(),
+                    key.dep_index,
+                    value.kwargs.clone(),
+                );
+                if let Err(e) = self.event_tx.send(event).await {
+                    warn!(
+                        "Reconcile: failed to re-emit dependency '{}' at {}:{}: {}; \
+                         will retry on next reconcile",
+                        value.capability, key.requesting_function, key.dep_index, e
+                    );
+                }
+            }
         }
     }
 
@@ -1159,5 +1225,155 @@ mod tests {
             "no heartbeat may be sent after shutdown arrived during backoff"
         );
         unregister.assert_async().await;
+    }
+
+    // ---- Issue #1256: diff-gate reconcile self-heal ----
+
+    fn reconcile_spec() -> crate::spec::AgentSpec {
+        crate::spec::AgentSpec::new(
+            "reconcile-agent".to_string(),
+            "http://127.0.0.1:1".to_string(),
+            "1.0.0".to_string(),
+            "".to_string(),
+            8080,
+            "localhost".to_string(),
+            "default".to_string(),
+            None,
+            None,
+            None,
+            None,
+            5,
+            None,
+        )
+    }
+
+    fn resolved_single(
+        capability: &str,
+        endpoint: &str,
+    ) -> HashMap<String, Vec<crate::registry::ResolvedDependency>> {
+        let mut m = HashMap::new();
+        m.insert(
+            "consumer_fn".to_string(),
+            vec![crate::registry::ResolvedDependency {
+                agent_id: "provider-agent".to_string(),
+                endpoint: endpoint.to_string(),
+                function_name: "provider_fn".to_string(),
+                capability: capability.to_string(),
+                status: "available".to_string(),
+                ttl: 0,
+                kwargs: None,
+            }],
+        );
+        m
+    }
+
+    async fn new_reconcile_runtime(
+        event_tx: mpsc::Sender<MeshEvent>,
+    ) -> AgentRuntime {
+        let (_shutdown_tx, shutdown_rx) = mpsc::channel(1);
+        let (_command_tx, command_rx) = mpsc::channel(10);
+        let shared_state = Arc::new(RwLock::new(HandleState::default()));
+        AgentRuntime::new(
+            reconcile_spec(),
+            RuntimeConfig::default(),
+            event_tx,
+            shared_state,
+            shutdown_rx,
+            command_rx,
+        )
+        .await
+        .expect("runtime construction should succeed")
+    }
+
+    fn drain_available(rx: &mut mpsc::Receiver<MeshEvent>) -> usize {
+        use crate::events::EventType;
+        let mut count = 0;
+        while let Ok(ev) = rx.try_recv() {
+            if ev.event_type == EventType::DependencyAvailable
+                || ev.event_type == EventType::DependencyChanged
+            {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// Issue #1256: once the reconcile interval has elapsed, a full heartbeat
+    /// whose edge-diff sees NO change must still re-emit the currently-resolved
+    /// dependency — this is what makes a silently-dropped event self-heal.
+    #[tokio::test]
+    async fn dependency_reconcile_reemits_after_interval() {
+        let (event_tx, mut event_rx) = mpsc::channel(100);
+        let mut runtime = new_reconcile_runtime(event_tx).await;
+
+        let resolved = resolved_single("weather", "http://provider:9000");
+
+        // First heartbeat: the diff gate emits the new edge exactly once.
+        runtime.process_dependency_changes(&resolved).await;
+        assert_eq!(drain_available(&mut event_rx), 1, "new edge emits once");
+
+        // Simulate the reconcile interval having elapsed.
+        runtime.last_dep_reconcile =
+            Some(Instant::now() - runtime.reconcile_interval - Duration::from_secs(1));
+
+        // Same resolved set: the diff gate sees no change, but the reconcile
+        // pass re-emits the resolved dependency (self-heal of a lost event).
+        runtime.process_dependency_changes(&resolved).await;
+        assert_eq!(
+            drain_available(&mut event_rx),
+            1,
+            "reconcile must re-emit the resolved dependency after the interval"
+        );
+    }
+
+    /// Issue #1256: within the throttle window a full heartbeat whose edge-diff
+    /// sees no change must emit NOTHING — no re-emit storm, idempotent.
+    #[tokio::test]
+    async fn dependency_reconcile_throttled_no_storm() {
+        let (event_tx, mut event_rx) = mpsc::channel(100);
+        let mut runtime = new_reconcile_runtime(event_tx).await;
+
+        let resolved = resolved_single("weather", "http://provider:9000");
+
+        // First heartbeat: emits once and stamps last_dep_reconcile = now.
+        runtime.process_dependency_changes(&resolved).await;
+        assert_eq!(drain_available(&mut event_rx), 1);
+
+        // Immediately re-process the SAME set without advancing the clock:
+        // diff gate suppresses (no change) and reconcile is throttled.
+        runtime.process_dependency_changes(&resolved).await;
+        assert_eq!(
+            drain_available(&mut event_rx),
+            0,
+            "no re-emit within the reconcile throttle window (idempotence)"
+        );
+    }
+
+    /// A genuine endpoint change is still emitted by the edge-diff regardless
+    /// of the reconcile throttle, and is not double-emitted by reconcile in
+    /// the same cycle.
+    #[tokio::test]
+    async fn dependency_change_emits_once_even_when_reconcile_due() {
+        let (event_tx, mut event_rx) = mpsc::channel(100);
+        let mut runtime = new_reconcile_runtime(event_tx).await;
+
+        runtime
+            .process_dependency_changes(&resolved_single("weather", "http://provider:9000"))
+            .await;
+        assert_eq!(drain_available(&mut event_rx), 1);
+
+        // Force reconcile to be due, then change the endpoint.
+        runtime.last_dep_reconcile =
+            Some(Instant::now() - runtime.reconcile_interval - Duration::from_secs(1));
+        runtime
+            .process_dependency_changes(&resolved_single("weather", "http://provider:9999"))
+            .await;
+        // Exactly one event: the diff emits the change; reconcile skips the
+        // just-emitted key.
+        assert_eq!(
+            drain_available(&mut event_rx),
+            1,
+            "a changed edge emits exactly once even when reconcile is due"
+        );
     }
 }

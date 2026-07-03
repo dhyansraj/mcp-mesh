@@ -1,0 +1,17 @@
+# UC-level routines for uc34_required_dependencies (issue #1249).
+#
+# All availability transitions in this UC ride the registry's DEFAULT health
+# debounce (~3 missed heartbeats, ~15-25s) — no knob-cranked registry routine
+# on purpose: #1249's derived availability must hold under stock timing, and
+# every TC polls with a deadline instead of sleeping fixed. The registry is
+# auto-started by the first `meshctl start`.
+
+routines:
+  # Stop everything started by this test (agents + registry).
+  stop_all:
+    description: "Stop all mesh processes started by this test"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: meshctl stop 2>/dev/null || true
+        ignore_errors: true

@@ -226,6 +226,14 @@ Unlike traditional DI where injection happens once at startup, DDDI continuously
 
 When a dependency is unavailable, DDDI injects `None` (Python), `null` (TypeScript/Java) instead of throwing an exception. Agents are designed to check availability and provide fallback behavior.
 
+Strictness is opt-in, per edge. Mark a dependency **required** — `{"capability": "x", "required": True}` (Python), `{ capability: "x", required: true }` (TypeScript), `@Selector(required = true)` / `@MeshDependency(required = true)` (Java) — and the registry folds that edge into a transitive availability predicate:
+
+> a capability is **available** ⇔ its owning agent is healthy **AND** every one of its `required` dependencies resolves to an available provider
+
+An unavailable capability is excluded from resolution exactly like an unhealthy provider, and that exclusion propagates to its own consumers through the existing dependency-update channel — so downstream proxies flip with no code changes. Optional edges never propagate (soft-fail stays the default everywhere you do not opt in). For HTTP routes, the framework's own wrapper returns `503 {"error":"dependency_unavailable","capability":...}` when a required dependency is unavailable at request time. Cycles among required edges can never converge, so the registry rejects the registration that would close one, naming the loop (`required dependency cycle: a → b → a`); cycles through an optional edge stay legal for bootstrapping.
+
+See the language dependency-injection pages for declaration syntax and the full model.
+
 ### Protocol-Agnostic Proxies
 
 Injected proxies abstract away the communication protocol. Today they use MCP over HTTP; tomorrow they could use gRPC or WebSockets without any changes to agent code.

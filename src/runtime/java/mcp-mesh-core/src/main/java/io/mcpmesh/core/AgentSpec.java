@@ -596,6 +596,21 @@ public class AgentSpec {
         @JsonProperty("match_mode")
         private String matchMode;
 
+        /**
+         * Issue #1249: opt-in strictness for this dependency edge. When
+         * {@code true}, the registry factors this edge into transitive
+         * capability availability (own agent healthy AND every required dep
+         * available). Default {@code false} (soft-fail). Serialized only when
+         * {@code true} — {@link JsonInclude.Include#NON_DEFAULT} drops the
+         * default {@code false} so existing payloads are byte-identical and
+         * the Rust core's {@code skip_serializing_if} wire style is mirrored
+         * (the core deserializes the omitted field back to {@code false} via
+         * {@code #[serde(default)]}).
+         */
+        @JsonProperty("required")
+        @JsonInclude(JsonInclude.Include.NON_DEFAULT)
+        private boolean required = false;
+
         public DependencySpec() {
         }
 
@@ -637,6 +652,11 @@ public class AgentSpec {
 
         public DependencySpec matchMode(String matchMode) {
             this.matchMode = matchMode;
+            return this;
+        }
+
+        public DependencySpec required(boolean required) {
+            this.required = required;
             return this;
         }
 
@@ -688,6 +708,14 @@ public class AgentSpec {
 
         public void setMatchMode(String matchMode) {
             this.matchMode = matchMode;
+        }
+
+        public boolean isRequired() {
+            return required;
+        }
+
+        public void setRequired(boolean required) {
+            this.required = required;
         }
     }
 

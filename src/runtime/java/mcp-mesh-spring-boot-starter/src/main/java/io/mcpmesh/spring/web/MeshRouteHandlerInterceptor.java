@@ -1,5 +1,6 @@
 package io.mcpmesh.spring.web;
 
+import io.mcpmesh.core.MeshObjectMappers;
 import io.mcpmesh.spring.MeshDependencyInjector;
 import io.mcpmesh.spring.tracing.ExecutionTracer;
 import io.mcpmesh.spring.tracing.SpanScope;
@@ -12,6 +13,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.HandlerInterceptor;
+import tools.jackson.databind.ObjectMapper;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -37,6 +39,10 @@ import java.util.concurrent.atomic.AtomicReference;
 public class MeshRouteHandlerInterceptor implements HandlerInterceptor {
 
     private static final Logger log = LoggerFactory.getLogger(MeshRouteHandlerInterceptor.class);
+
+    /** Serializes the issue #1249 perimeter 503 body as real JSON (safe for
+     * any characters a capability name might carry). */
+    private static final ObjectMapper JSON = MeshObjectMappers.create();
 
     /**
      * Request attribute key for resolved dependencies map.
@@ -115,6 +121,13 @@ public class MeshRouteHandlerInterceptor implements HandlerInterceptor {
         // Resolve dependencies
         Map<String, McpMeshTool> resolvedDeps = new LinkedHashMap<>();
         boolean allResolved = true;
+        // Issue #1249 perimeter: capability of the first UNAVAILABLE dependency
+        // declared required=true. When non-null after resolution, the route
+        // returns 503 (naming the capability) before user code — regardless of
+        // failOnMissingDependency. External HTTP callers don't traverse mesh
+        // proxies, so the required predicate is evaluated here at the boundary
+        // from the proxy state the agent already holds locally.
+        String firstUnavailableRequiredCap = null;
 
         io.mcpmesh.spring.MeshSettleState settleState =
             io.mcpmesh.spring.MeshSettleState.getInstance();
@@ -147,16 +160,50 @@ public class MeshRouteHandlerInterceptor implements HandlerInterceptor {
                     log.warn("Dependency '{}' not available for route {}",
                         dep.getCapability(), handlerMethodId);
                     allResolved = false;
+                    if (dep.isRequired() && firstUnavailableRequiredCap == null) {
+                        firstUnavailableRequiredCap = dep.getCapability();
+                    }
                 }
             } catch (Exception e) {
                 log.error("Failed to resolve dependency '{}': {}",
                     dep.getCapability(), e.getMessage());
                 allResolved = false;
+                // Fail-closed: a resolution exception on a required dep counts
+                // as unavailable and intentionally trips the perimeter 503 —
+                // never let a required edge fall through on error.
+                if (dep.isRequired() && firstUnavailableRequiredCap == null) {
+                    firstUnavailableRequiredCap = dep.getCapability();
+                }
             }
         }
 
         // Store resolved dependencies in request
         request.setAttribute(MESH_DEPENDENCIES_ATTR, resolvedDeps);
+
+        // Issue #1249 perimeter 503: a dependency declared required=true is
+        // unavailable at call time — return 503 with the capability reason
+        // BEFORE user code runs. Mirrors the Python route wrapper's
+        // {"error":"dependency_unavailable","capability":...} contract and takes
+        // precedence over the coarse failOnMissingDependency backstop below.
+        if (firstUnavailableRequiredCap != null) {
+            log.warn("Route '{}': required dependency '{}' unavailable — returning 503",
+                handlerMethodId, firstUnavailableRequiredCap);
+            spanScope.withError(new RuntimeException(
+                "Required dependency unavailable: " + firstUnavailableRequiredCap));
+            spanScope.close();
+            request.removeAttribute(MESH_SPAN_SCOPE_ATTR);
+            response.setStatus(HttpStatus.SERVICE_UNAVAILABLE.value());
+            response.setContentType("application/json");
+            // Build the body through Jackson (insertion-ordered map) so a
+            // capability name containing e.g. a quote can't corrupt the JSON.
+            // Shape is identical to the Python contract:
+            //   {"error":"dependency_unavailable","capability":"<cap>"}
+            Map<String, String> errorBody = new LinkedHashMap<>();
+            errorBody.put("error", "dependency_unavailable");
+            errorBody.put("capability", firstUnavailableRequiredCap);
+            response.getWriter().write(JSON.writeValueAsString(errorBody));
+            return false;
+        }
 
         // Handle missing dependencies
         if (!allResolved && metadata.isFailOnMissingDependency()) {

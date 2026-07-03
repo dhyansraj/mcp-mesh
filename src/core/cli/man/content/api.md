@@ -136,6 +136,19 @@ async def greet(request: Request, greeting: McpMeshTool = None):
     return {"message": result.get("text")}
 ```
 
+## Required Dependencies
+
+To skip the hand-written `None`-check above, mark the dependency `required`. When a required dependency is unavailable at request time, the framework's own wrapper returns **503** with body `{"error":"dependency_unavailable","capability":"<cap>"}` before your handler runs (after the settle window):
+
+```python
+@mesh.route(dependencies=[{"capability": "greeting", "required": True}])
+async def greet(request: Request, greeting: McpMeshTool = None):
+    result = await greeting(name="World")  # framework guarantees greeting is live
+    return {"message": result.get("text")}
+```
+
+Streaming routes bypass the 503 perimeter by design and keep soft-fail semantics — check `None` there. See `meshctl man dependency-injection` for the full availability model, transitive propagation, and cycle rules.
+
 ## See Also
 
 - `meshctl man decorators` - All mesh decorators

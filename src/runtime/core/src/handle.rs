@@ -9,6 +9,7 @@
 use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{mpsc, Mutex, RwLock};
 
 use crate::events::{HealthStatus, MeshEvent};
@@ -85,6 +86,42 @@ impl AgentHandle {
     pub fn event_rx(&self) -> Arc<Mutex<mpsc::Receiver<MeshEvent>>> {
         self.event_rx.clone()
     }
+
+    /// Cancel-safe pull of the next mesh event, with an internal liveness
+    /// timeout.
+    ///
+    /// Returns:
+    /// - `Some(event)` when an event is available;
+    /// - `Some(MeshEvent::shutdown())` when the runtime channel has closed;
+    /// - `None` when `timeout` elapsed with no event (a loop-liveness tick so
+    ///   callers can re-check their own shutdown flag).
+    ///
+    /// # Cancel-safety invariant
+    /// This function never removes a message from the channel that it does not
+    /// return. `mpsc::Receiver::recv` is cancel-safe, and `tokio::time::timeout`
+    /// only drops the `recv` future when the timer wins the race — at which
+    /// point `recv` has not yet dequeued anything. This is the whole point of
+    /// pushing the timeout *inside* the future (issue #1256): the previous
+    /// design wrapped `next_event()` in an external `asyncio.wait_for(...)`,
+    /// whose cancellation could fire in the window *after* `recv` dequeued a
+    /// message but *before* it crossed the pyo3→asyncio boundary, silently
+    /// dropping that event and permanently stalling a dependency edge. With
+    /// the timeout internal, callers loop on plain `.await`s and no event is
+    /// ever cancelled mid-delivery.
+    pub async fn pull_next_event(
+        event_rx: Arc<Mutex<mpsc::Receiver<MeshEvent>>>,
+        timeout: Duration,
+    ) -> Option<MeshEvent> {
+        let mut rx = event_rx.lock().await;
+        match tokio::time::timeout(timeout, rx.recv()).await {
+            Ok(Some(event)) => Some(event),
+            // Channel closed — surface the shutdown sentinel so the caller
+            // can break its loop, matching the pre-existing contract.
+            Ok(None) => Some(MeshEvent::shutdown()),
+            // Timer won the race; recv did not dequeue anything (cancel-safe).
+            Err(_) => None,
+        }
+    }
 }
 
 /// Python-specific methods for AgentHandle
@@ -93,12 +130,24 @@ impl AgentHandle {
 impl AgentHandle {
     /// Wait for and return the next mesh event.
     ///
-    /// This is an async method that blocks until an event is available.
-    /// Returns None when the runtime has shut down.
+    /// This is an async method that resolves either with the next event or,
+    /// after a short internal liveness timeout, with `None`. `None` means "no
+    /// event yet" — the caller should loop and re-check its own shutdown flag,
+    /// then call `next_event()` again. A `shutdown` event is returned when the
+    /// runtime channel closes.
+    ///
+    /// # Cancel-safety (issue #1256)
+    /// The timeout lives *inside* this future (see [`Self::pull_next_event`]),
+    /// so callers MUST NOT wrap this in an external `asyncio.wait_for(...)`
+    /// cancellation: doing so can drop a dequeued event in the window between
+    /// the mpsc pop and delivery to Python, permanently stalling a dependency
+    /// edge. Loop on plain `await handle.next_event()` and branch on `None`.
     ///
     /// # Example (Python)
     /// ```python
     /// event = await handle.next_event()
+    /// if event is None:
+    ///     continue  # liveness tick; re-check shutdown and loop
     /// if event.event_type == "dependency_available":
     ///     print(f"Dependency {event.capability} at {event.endpoint}")
     /// ```
@@ -106,14 +155,7 @@ impl AgentHandle {
         let event_rx = self.event_rx.clone();
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let mut rx = event_rx.lock().await;
-            match rx.recv().await {
-                Some(event) => Ok(event),
-                None => {
-                    // Channel closed, return shutdown event
-                    Ok(MeshEvent::shutdown())
-                }
-            }
+            Ok(AgentHandle::pull_next_event(event_rx, Duration::from_secs(1)).await)
         })
     }
 
@@ -404,6 +446,85 @@ mod tests {
 
         handle.shutdown_async().await;
         assert!(handle.is_shutdown_requested_async().await);
+    }
+
+    /// Issue #1256: the event pull must be cancel-safe across its internal
+    /// liveness timeout. A slow consumer that lets many timeout ticks elapse
+    /// between events must still observe EVERY event — none may be dropped in
+    /// the recv→deliver window. Uses a 1ms timeout so the consumer takes many
+    /// `None` ticks between the producer's events.
+    #[tokio::test]
+    async fn test_next_event_pull_is_cancel_safe_across_timeout_ticks() {
+        use crate::events::EventType;
+
+        let (event_tx, event_rx) = mpsc::channel(100);
+        let event_rx = Arc::new(Mutex::new(event_rx));
+
+        let n = 25u32;
+        let producer = tokio::spawn(async move {
+            for i in 0..n {
+                // Delay straddles the pull timeout so the consumer sees many
+                // `None` ticks between deliveries.
+                tokio::time::sleep(Duration::from_millis(3)).await;
+                event_tx
+                    .send(MeshEvent::dependency_available(
+                        format!("cap-{i}"),
+                        "http://endpoint".to_string(),
+                        "func".to_string(),
+                        "agent".to_string(),
+                        "requesting_fn".to_string(),
+                        0,
+                        None,
+                    ))
+                    .await
+                    .unwrap();
+            }
+            // Dropping the sender closes the channel; recv drains buffered
+            // messages first, then yields the shutdown sentinel.
+        });
+
+        let mut got = 0u32;
+        loop {
+            match AgentHandle::pull_next_event(event_rx.clone(), Duration::from_millis(1)).await {
+                Some(ev) if ev.event_type == EventType::Shutdown => break,
+                Some(_) => got += 1,
+                None => {} // liveness tick — keep looping
+            }
+        }
+
+        producer.await.unwrap();
+        assert_eq!(
+            got, n,
+            "no event may be lost across internal timeout ticks (cancel-safety)"
+        );
+    }
+
+    /// A pull against an idle channel must resolve to `None` (a liveness tick)
+    /// once the internal timeout elapses — not block forever.
+    #[tokio::test]
+    async fn test_next_event_pull_times_out_to_none_when_idle() {
+        let (_event_tx, event_rx) = mpsc::channel::<MeshEvent>(4);
+        let event_rx = Arc::new(Mutex::new(event_rx));
+
+        let result = AgentHandle::pull_next_event(event_rx, Duration::from_millis(20)).await;
+        assert!(result.is_none(), "idle channel must yield a None liveness tick");
+    }
+
+    /// When the channel closes, the pull must surface the shutdown sentinel
+    /// (not `None`) so the caller breaks its loop.
+    #[tokio::test]
+    async fn test_next_event_pull_returns_shutdown_on_close() {
+        use crate::events::EventType;
+
+        let (event_tx, event_rx) = mpsc::channel::<MeshEvent>(4);
+        let event_rx = Arc::new(Mutex::new(event_rx));
+        drop(event_tx);
+
+        let result = AgentHandle::pull_next_event(event_rx, Duration::from_secs(5)).await;
+        match result {
+            Some(ev) => assert_eq!(ev.event_type, EventType::Shutdown),
+            None => panic!("closed channel must yield a shutdown event, not a timeout tick"),
+        }
     }
 
     #[test]

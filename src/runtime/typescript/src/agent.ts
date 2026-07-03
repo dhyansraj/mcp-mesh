@@ -1638,6 +1638,9 @@ export class MeshAgent {
                 expectedSchemaCanonical: expectedCanonical,
                 expectedSchemaHash: expectedHash,
                 matchMode: dep.matchMode,
+                // Issue #1249: only carry `required` when opted in (absent →
+                // false) so existing heartbeats stay byte-identical.
+                required: dep.required ? true : undefined,
               };
             }
           ),

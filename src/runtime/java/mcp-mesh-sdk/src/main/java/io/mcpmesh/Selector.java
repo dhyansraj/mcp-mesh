@@ -91,6 +91,29 @@ public @interface Selector {
     String version() default "";
 
     /**
+     * Whether this dependency edge is <b>required</b> (issue #1249).
+     *
+     * <p>Opt-in strictness, default {@code false} (soft-fail: an unresolved
+     * dependency injects a {@code null}/unavailable proxy and the agent still
+     * starts and registers). When {@code true}, the registry factors this edge
+     * into transitive capability availability — the depending capability is
+     * marked unavailable (and that unavailability propagates to <i>its</i>
+     * consumers through the existing dependency-update channel) whenever this
+     * required dependency's capability is unavailable.
+     *
+     * <p>Only carried on the wire when {@code true}; {@code false} is omitted
+     * from the registration payload to match the optional-field style of
+     * {@link #version()}.
+     *
+     * <p><b>Scope:</b> meaningful only where a {@code Selector} declares a
+     * dependency edge (e.g. {@link MeshTool#dependencies()}). It is IGNORED on
+     * {@code @MeshLlm} {@code providerSelector} / {@code filter} selectors —
+     * those pick an LLM provider / tool-filter set, not a mesh dependency
+     * edge, so there is no availability predicate to feed.
+     */
+    boolean required() default false;
+
+    /**
      * Optional expected response type for schema-aware capability matching (issue #547).
      *
      * <p>Pair with {@link #schemaMode()}. The Java consumer's expected type is
