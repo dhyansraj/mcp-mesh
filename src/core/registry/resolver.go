@@ -170,7 +170,7 @@ func (s *EntService) ResolveLLMToolsFromMetadata(ctx context.Context, agentID st
 // findHealthyProviderWithTTL finds a healthy provider using TTL check and strict matching using Ent queries.
 // Backwards-compatible wrapper around findHealthyProviderWithTrace; the trace is discarded.
 func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResolution {
-	resolution, _ := s.findHealthyProviderWithTrace(dep)
+	resolution, _ := s.findHealthyProviderWithTrace(dep, newAvailEval())
 	return resolution
 }
 
@@ -199,8 +199,17 @@ type scoredCandidateWithHealth struct {
 // matched via the indexed DB query — but it's kept for diagnostic clarity.
 // The schema stage filters per #547 when the consumer opts in via dep.MatchMode;
 // otherwise it's a pass-through.
-func (s *EntService) findHealthyProviderWithTrace(dep Dependency) (*DependencyResolution, *AuditTrace) {
+//
+// eval carries the required-dependency evaluation state (issue #1249): the DFS
+// stack (so a required-edge evaluation cycle fails closed instead of recursing
+// forever) and the per-evaluation verdict memo (so shared nodes in diamond
+// subgraphs are evaluated once, not once per path). It threads through the
+// health stage's availability check. Top-level callers pass a fresh newAvailEval().
+func (s *EntService) findHealthyProviderWithTrace(dep Dependency, eval *availEval) (*DependencyResolution, *AuditTrace) {
 	ctx := context.Background()
+	if eval == nil {
+		eval = newAvailEval()
+	}
 
 	s.logger.Debug("Looking for provider for capability: %s, version: %s, tags: %v", dep.Capability, dep.Version, dep.Tags)
 
@@ -270,6 +279,21 @@ func (s *EntService) findHealthyProviderWithTrace(dep Dependency) (*DependencyRe
 			tc.UnhealthyReason = ReasonUnhealthy
 			tc.UnhealthyDetails = map[string]interface{}{
 				"status": cap.Edges.Agent.Status.String(),
+			}
+		} else if reason := s.capabilityUnavailableReason(ctx, cap.Edges.Agent.ID, cap, eval); reason != "" {
+			// Availability predicate (#1249): a healthy agent whose required
+			// deps don't RESOLVE (full tag/version/schema matching, transitively)
+			// makes this capability unavailable. Evict it at the health stage so
+			// consumers exclude it via the exact same channel that handles a dead
+			// provider — no new event type. Optional deps never reach here
+			// (requiredDepEntries filters them out). Transitive recursion is
+			// implicit: capabilityUnavailableReason re-enters this resolver for
+			// each required edge, and only candidates that are themselves
+			// available survive this stage.
+			tc.Healthy = false
+			tc.UnhealthyReason = ReasonUnavailable
+			tc.UnhealthyDetails = map[string]interface{}{
+				"reason": reason,
 			}
 		}
 		all = append(all, tc)
@@ -542,7 +566,7 @@ func (s *EntService) resolveSingleWithTrace(spec DependencySpec) (*DependencyRes
 		ExpectedSchemaCanonical: spec.ExpectedSchemaCanonical,
 		MatchMode:               spec.MatchMode,
 	}
-	return s.findHealthyProviderWithTrace(dep)
+	return s.findHealthyProviderWithTrace(dep, newAvailEval())
 }
 
 // resolveAtPosition handles resolution for a single position in the dependency array.

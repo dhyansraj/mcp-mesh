@@ -270,6 +270,11 @@ pub struct DependencyRegistration {
     pub expected_schema_hash: Option<String>,
     #[serde(rename = "matchMode", skip_serializing_if = "Option::is_none")]
     pub match_mode: Option<String>,
+    /// Issue #1249: opt-in strictness for this dependency edge. Factored into
+    /// the registry's transitive capability-availability computation. Omitted
+    /// from the wire payload when false to match the optional-field style.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
 }
 
 /// Helper to check if tags array is empty
@@ -354,6 +359,8 @@ impl HeartbeatRequest {
                         expected_schema_canonical: d.expected_schema_canonical.as_ref().and_then(|s| serde_json::from_str(s).ok()),
                         expected_schema_hash: d.expected_schema_hash.clone(),
                         match_mode: d.match_mode.clone(),
+                        // Issue #1249: carry the required flag onto the wire.
+                        required: d.required,
                     })
                     .collect(),
                 input_schema: t.input_schema.as_ref().and_then(|s| serde_json::from_str(s).ok()),
@@ -564,6 +571,37 @@ impl RegistryClient {
 
             let parsed: HeartbeatResponse = serde_json::from_str(&body)?;
 
+            // Issue #1249: the registry rejects a registration SEMANTICALLY
+            // with HTTP 200 + {"status":"error","message":...} (e.g. a required
+            // dependency cycle). HTTP success alone is not enough — the normal
+            // heartbeat status is "success" (Go registry ent_service.go); only
+            // the explicit "error" value signals rejection. Surface it as Err so
+            // the runtime's failure arm emits registration_failed and the SDK
+            // logs the reason loudly.
+            //
+            // DELIBERATE: a semantic rejection (a misconfiguration like a
+            // required-dependency cycle) is treated exactly like a transient
+            // failure — NOT specially capped or deduped. Both route through
+            // `on_full_heartbeat_failure` → `HeartbeatState::Reconnecting` →
+            // the run loop's Retry arm, whose backoff is already bounded:
+            // `calculate_backoff` is exponential (base * 2^retry_attempt),
+            // capped at `max_backoff` (default 30s) with equal jitter. So the
+            // "repeat-loud" cadence self-throttles to one alert per ~max_backoff
+            // rather than hammering. Keeping the retry (instead of going fatal)
+            // is the mesh soft-fail contract: the operator fixes the cycle and
+            // the agent heals on the next attempt with no restart, and the loud
+            // per-attempt log guarantees the misconfig is never silently missed.
+            if parsed.status == "error" {
+                warn!(
+                    "Registry rejected agent '{}': {}",
+                    request.agent_id, parsed.message
+                );
+                return Err(RegistryError::RegistryError {
+                    status: 200,
+                    message: parsed.message,
+                });
+            }
+
             // Log detailed tool info
             for (func_id, tools) in &parsed.llm_tools {
                 info!(
@@ -649,7 +687,7 @@ impl RegistryClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spec::ToolSpec;
+    use crate::spec::{DependencySpec, ToolSpec};
     use crate::tls::TlsMode;
 
     /// Build a TLS-off config for tests that need a `RegistryClient`.
@@ -746,6 +784,84 @@ mod tests {
         // forward it as Some(...) (see test_heartbeat_request_description_round_trip
         // below for the empty-string → None case).
         assert_eq!(request.description.as_deref(), Some("Test"));
+    }
+
+    #[test]
+    fn test_dependency_required_reaches_wire() {
+        // Issue #1249: full hop — DependencySpec(required=true) must survive
+        // the DependencySpec → DependencyRegistration conversion in from_spec
+        // and appear as "required": true in the serialized heartbeat payload;
+        // required=false is omitted (skip_serializing_if).
+        let spec = AgentSpec::new(
+            "req-agent".to_string(),
+            "http://localhost:8100".to_string(),
+            "1.0.0".to_string(),
+            "Test".to_string(),
+            9000,
+            "localhost".to_string(),
+            "default".to_string(),
+            None,
+            None,
+            Some(vec![ToolSpec::new(
+                "analyst".to_string(),
+                "analysis".to_string(),
+                "1.0.0".to_string(),
+                "".to_string(),
+                None,
+                Some(vec![
+                    DependencySpec::new(
+                        "weather-api".to_string(),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        true,
+                    ),
+                    DependencySpec::new(
+                        "cache".to_string(),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        false,
+                    ),
+                ]),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )]),
+            None,
+            5,
+            None,
+        );
+
+        let request = HeartbeatRequest::from_spec(&spec, HealthStatus::Healthy);
+        let deps = &request.tools[0].dependencies;
+        assert_eq!(deps.len(), 2);
+        assert!(deps[0].required);
+        assert!(!deps[1].required);
+
+        // Serialize the whole request and inspect the wire shape of each dep.
+        let json = serde_json::to_value(&request).unwrap();
+        let wire_deps = &json["tools"][0]["dependencies"];
+        assert_eq!(wire_deps[0]["capability"], "weather-api");
+        assert_eq!(wire_deps[0]["required"], serde_json::json!(true));
+        // required=false is omitted from the wire.
+        assert_eq!(wire_deps[1]["capability"], "cache");
+        assert!(
+            wire_deps[1].get("required").is_none(),
+            "required=false must be omitted from the wire, got {}",
+            wire_deps[1]
+        );
     }
 
     #[test]
@@ -929,6 +1045,82 @@ mod tests {
         let r = client.fast_heartbeat_check("agent-x").await;
         assert_eq!(r.status, FastHeartbeatStatus::TopologyChanged);
         assert_eq!(r.pending_jobs, Some(4));
+    }
+
+    /// Build a minimal HeartbeatRequest for send_heartbeat tests.
+    fn minimal_request(agent_id: &str, endpoint: &str) -> HeartbeatRequest {
+        let spec = AgentSpec::new(
+            agent_id.to_string(),
+            endpoint.to_string(),
+            "1.0.0".to_string(),
+            "".to_string(),
+            8080,
+            "localhost".to_string(),
+            "default".to_string(),
+            None,
+            None,
+            None,
+            None,
+            5,
+            None,
+        );
+        HeartbeatRequest::from_spec(&spec, HealthStatus::Healthy)
+    }
+
+    #[tokio::test]
+    async fn send_heartbeat_maps_status_error_to_err() {
+        // Issue #1249: registry rejects with HTTP 200 + {"status":"error",...}
+        // (e.g. a required dependency cycle). send_heartbeat must surface it as
+        // Err carrying the message so the runtime emits registration_failed.
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("POST", "/heartbeat")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{"status":"error","message":"required dependency cycle: analyst -> enricher -> analyst","agent_id":"cyc-agent"}"#,
+            )
+            .create_async()
+            .await;
+
+        let client = RegistryClient::new(&server.url(), &test_tls_off()).unwrap();
+        let req = minimal_request("cyc-agent", &server.url());
+        let result = client.send_heartbeat(&req).await;
+
+        match result {
+            Err(RegistryError::RegistryError { status, message }) => {
+                assert_eq!(status, 200);
+                assert!(
+                    message.contains("required dependency cycle"),
+                    "message must carry the registry reason, got: {message}"
+                );
+            }
+            other => panic!("expected semantic RegistryError, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn send_heartbeat_success_status_stays_ok() {
+        // A normal heartbeat status is "success" (Go registry) — must NOT be
+        // mistaken for a rejection.
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("POST", "/heartbeat")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{"status":"success","message":"ok","agent_id":"ok-agent"}"#,
+            )
+            .create_async()
+            .await;
+
+        let client = RegistryClient::new(&server.url(), &test_tls_off()).unwrap();
+        let req = minimal_request("ok-agent", &server.url());
+        let result = client.send_heartbeat(&req).await;
+
+        let parsed = result.expect("healthy heartbeat must stay Ok");
+        assert_eq!(parsed.status, "success");
+        assert_eq!(parsed.agent_id, "ok-agent");
     }
 
     #[test]

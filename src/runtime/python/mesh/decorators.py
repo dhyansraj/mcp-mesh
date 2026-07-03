@@ -1097,6 +1097,15 @@ def tool(
                     if dep_version is not None and not isinstance(dep_version, str):
                         raise ValueError("dependency version must be a string")
 
+                    # Issue #1249: opt-in strictness per dependency edge. When
+                    # True, the registry factors this edge into transitive
+                    # capability availability. Default False (soft-fail) keeps
+                    # the existing null-proxy behaviour. Bool-only; string-form
+                    # deps default to False (handled above).
+                    dep_required = dep.get("required", False)
+                    if not isinstance(dep_required, bool):
+                        raise ValueError("dependency required must be a boolean")
+
                     # Issue #547 Phase 1D: optional consumer-side schema declaration.
                     # expected_type may be a Python type (Pydantic model, dataclass,
                     # TypedDict, primitive, etc.) OR a pre-built JSON Schema dict.
@@ -1115,6 +1124,10 @@ def tool(
                     }
                     if dep_version is not None:
                         dependency_dict["version"] = dep_version
+                    # Only carry ``required`` when opted in (absent → false),
+                    # matching the optional-field style of ``version`` above.
+                    if dep_required:
+                        dependency_dict["required"] = True
 
                     if expected_type is not None:
                         # Default match_mode to "subset" (most permissive opt-in)
@@ -1710,12 +1723,21 @@ def route(
                     if dep_version is not None and not isinstance(dep_version, str):
                         raise ValueError("dependency version must be a string")
 
+                    # Issue #1249: required edge (default False). For routes,
+                    # a required dep whose proxy is unavailable at call time
+                    # trips the perimeter 503 before user code runs.
+                    dep_required = dep.get("required", False)
+                    if not isinstance(dep_required, bool):
+                        raise ValueError("dependency required must be a boolean")
+
                     dependency_dict = {
                         "capability": dep["capability"],
                         "tags": dep_tags,
                     }
                     if dep_version is not None:
                         dependency_dict["version"] = dep_version
+                    if dep_required:
+                        dependency_dict["required"] = True
                     validated_dependencies.append(dependency_dict)
                 else:
                     raise ValueError("dependencies must be strings or dictionaries")
@@ -1775,13 +1797,24 @@ def route(
             # Extract dependency names for injector
             dependency_names = [dep["capability"] for dep in validated_dependencies]
 
+            # Issue #1249: capability name per dependency slot that is
+            # required (perimeter 503), None otherwise — index-aligned with
+            # dependency_names. Only @mesh.route wires this; @mesh.tool does
+            # not (mesh-internal calls are chain-gated, not perimeter-gated).
+            route_required_caps = [
+                dep["capability"] if dep.get("required") else None
+                for dep in validated_dependencies
+            ]
+
             # Log the original function pointer
             logger.debug(
                 f"🔸 ORIGINAL route function pointer: {target} at {hex(id(target))}"
             )
 
             injector = get_global_injector()
-            wrapped = injector.create_injection_wrapper(target, dependency_names)
+            wrapped = injector.create_injection_wrapper(
+                target, dependency_names, route_required_caps=route_required_caps
+            )
 
             # Log the wrapper function pointer
             logger.debug(

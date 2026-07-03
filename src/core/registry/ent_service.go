@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -114,6 +115,12 @@ type DependencySpec struct {
 	Version         string     `json:"version,omitempty"`
 	Namespace       string     `json:"namespace,omitempty"`
 
+	// Required marks this as a required dependency (issue #1249). When true, the
+	// declaring capability is unavailable unless this dependency resolves to an
+	// available provider (transitively). Defaults false — optional deps never
+	// affect availability.
+	Required bool `json:"required,omitempty"`
+
 	// Schema-aware filtering inputs (issue #547); see Dependency.MatchMode.
 	ExpectedSchemaHash      string                 `json:"expected_schema_hash,omitempty"`
 	ExpectedSchemaCanonical map[string]interface{} `json:"expected_schema_canonical,omitempty"`
@@ -147,6 +154,11 @@ func parseDependencySpec(m map[string]interface{}) DependencySpec {
 
 	if namespace, ok := m["namespace"].(string); ok {
 		spec.Namespace = namespace
+	}
+
+	// Required flag (issue #1249). Defaults false when absent or wrong type.
+	if required, ok := m["required"].(bool); ok {
+		spec.Required = required
 	}
 
 	// Handle tags - can be []interface{} or []string, with nested arrays for OR alternatives
@@ -247,6 +259,17 @@ type EntService struct {
 	// config is warned by LoadSweepConfigFromEnv at startup; here it degrades
 	// silently to disabled.
 	jobStaleTimeout time.Duration
+
+	// cycleWriteMu serializes the required-edge cycle check with the capability
+	// write that follows it (issue #1249). The check reads the current graph and
+	// the write adds this agent's edges; without serialization two concurrent
+	// registrations/heartbeats each closing half of a cycle could both pass their
+	// (pre-write) checks and jointly persist a required cycle. The registry is a
+	// single process, so a coarse in-process mutex around the check+persist window
+	// is the cheapest correct fix — it fully serializes only the capability-write
+	// path, which is not a hot loop (steady-state heartbeats without tools, HEAD
+	// polls, and reads never take it).
+	cycleWriteMu sync.Mutex
 }
 
 // NewEntService creates a new Ent-based registry service instance
@@ -661,77 +684,17 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 	// optional Ent field stays unset).
 	surfaces := extractSurfacesFromMetadata(req.Metadata)
 
-	// Start a transaction for atomicity
-	err := s.entDB.Transaction(ctx, func(tx *ent.Tx) error {
-		// Upsert the agent
-		agentCreate := tx.Agent.Create().
-			SetID(req.AgentID).
-			SetAgentType(agent.AgentType(meta.agentType)).
-			SetRuntime(agent.Runtime(meta.runtime)).
-			SetName(meta.name).
-			SetNamespace(meta.namespace).
-			SetStatus(agent.StatusHealthy).
-			SetUpdatedAt(now)
-
-		if meta.version != "" {
-			agentCreate = agentCreate.SetVersion(meta.version)
-		}
-		// Issue #969: persist agent description when supplied. meta.description
-		// is already trim+truncated by extractAgentMetadata. We only call
-		// SetDescription when the request explicitly carried a description key
-		// — omitting otherwise keeps the column at its default ("") on first
-		// create and avoids forcing a value on schema-driven defaults.
-		if meta.hasDescription {
-			agentCreate = agentCreate.SetDescription(meta.description)
-		}
-		// Issue #972: persist a2a producer/consumer flags only when the request
-		// supplied them. Mirrors the description guard — heartbeats omitting
-		// either key must not clobber a previously-stored true.
-		if meta.hasA2aProducer {
-			agentCreate = agentCreate.SetA2aProducer(meta.a2aProducer)
-		}
-		if meta.hasA2aConsumer {
-			agentCreate = agentCreate.SetA2aConsumer(meta.a2aConsumer)
-		}
-		if meta.httpHost != "" {
-			agentCreate = agentCreate.SetHTTPHost(meta.httpHost)
-		}
-		if meta.httpPort > 0 {
-			agentCreate = agentCreate.SetHTTPPort(meta.httpPort)
-		}
-		if req.EntityID != "" {
-			agentCreate = agentCreate.SetEntityID(req.EntityID)
-		}
-		if surfaces != nil {
-			agentCreate = agentCreate.SetA2aSurfaces(surfaces)
-		}
-
-		// Check if agent already exists and update or create
-		existingAgent, err := tx.Agent.Query().Where(agent.IDEQ(req.AgentID)).Only(ctx)
-		isNewAgent := false
-		if err != nil {
-			if ent.IsNotFound(err) {
-				// Create new agent
-				existingAgent, err = agentCreate.Save(ctx)
-				if err != nil {
-					return fmt.Errorf("failed to create agent: %w", err)
-				}
-				isNewAgent = true
-			} else {
-				return fmt.Errorf("failed to check existing agent: %w", err)
-			}
-		} else {
-			// Enforce entity ownership on register-update path. Mirrors the check in
-			// UpdateHeartbeat — protects against the race where a heartbeat for a
-			// non-existent agent_id escalates into RegisterAgent and an entity
-			// concurrently claims that agent_id; without this check, the rogue
-			// register would silently overwrite EntityID.
-			if err := s.checkEntityOwnership("RegisterAgent", req.AgentID, req.EntityID, existingAgent.EntityID); err != nil {
-				return err
-			}
-
-			// Update existing agent
-			updateBuilder := existingAgent.Update().
+	// Reject registrations that would close a required-dependency cycle
+	// (issue #1249) and serialize the check with the capability write so a
+	// concurrent write can't slip a cycle-closing edge in between (see
+	// guardedCapabilityWrite; lock released via defer, panic-safe). The
+	// post-transaction dependency-resolution work below runs OUTSIDE this scope.
+	cycleErr, err := s.guardedCapabilityWrite(ctx, req.AgentID, req.Metadata, func() error {
+		// Start a transaction for atomicity
+		return s.entDB.Transaction(ctx, func(tx *ent.Tx) error {
+			// Upsert the agent
+			agentCreate := tx.Agent.Create().
+				SetID(req.AgentID).
 				SetAgentType(agent.AgentType(meta.agentType)).
 				SetRuntime(agent.Runtime(meta.runtime)).
 				SetName(meta.name).
@@ -740,73 +703,142 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 				SetUpdatedAt(now)
 
 			if meta.version != "" {
-				updateBuilder = updateBuilder.SetVersion(meta.version)
+				agentCreate = agentCreate.SetVersion(meta.version)
 			}
-			// Issue #969: only overwrite description when the request actually
-			// carried one. Same logic as create — protects an existing value
-			// from being clobbered by a re-register without `description`.
+			// Issue #969: persist agent description when supplied. meta.description
+			// is already trim+truncated by extractAgentMetadata. We only call
+			// SetDescription when the request explicitly carried a description key
+			// — omitting otherwise keeps the column at its default ("") on first
+			// create and avoids forcing a value on schema-driven defaults.
 			if meta.hasDescription {
-				updateBuilder = updateBuilder.SetDescription(meta.description)
+				agentCreate = agentCreate.SetDescription(meta.description)
 			}
-			// Issue #972: same guard as create path — only flip the flag when
-			// the request explicitly supplied it.
+			// Issue #972: persist a2a producer/consumer flags only when the request
+			// supplied them. Mirrors the description guard — heartbeats omitting
+			// either key must not clobber a previously-stored true.
 			if meta.hasA2aProducer {
-				updateBuilder = updateBuilder.SetA2aProducer(meta.a2aProducer)
+				agentCreate = agentCreate.SetA2aProducer(meta.a2aProducer)
 			}
 			if meta.hasA2aConsumer {
-				updateBuilder = updateBuilder.SetA2aConsumer(meta.a2aConsumer)
+				agentCreate = agentCreate.SetA2aConsumer(meta.a2aConsumer)
 			}
 			if meta.httpHost != "" {
-				updateBuilder = updateBuilder.SetHTTPHost(meta.httpHost)
+				agentCreate = agentCreate.SetHTTPHost(meta.httpHost)
 			}
 			if meta.httpPort > 0 {
-				updateBuilder = updateBuilder.SetHTTPPort(meta.httpPort)
+				agentCreate = agentCreate.SetHTTPPort(meta.httpPort)
 			}
 			if req.EntityID != "" {
-				updateBuilder = updateBuilder.SetEntityID(req.EntityID)
+				agentCreate = agentCreate.SetEntityID(req.EntityID)
 			}
 			if surfaces != nil {
-				updateBuilder = updateBuilder.SetA2aSurfaces(surfaces)
+				agentCreate = agentCreate.SetA2aSurfaces(surfaces)
 			}
 
-			existingAgent, err = updateBuilder.Save(ctx)
+			// Check if agent already exists and update or create
+			existingAgent, err := tx.Agent.Query().Where(agent.IDEQ(req.AgentID)).Only(ctx)
+			isNewAgent := false
 			if err != nil {
-				return fmt.Errorf("failed to update agent: %w", err)
+				if ent.IsNotFound(err) {
+					// Create new agent
+					existingAgent, err = agentCreate.Save(ctx)
+					if err != nil {
+						return fmt.Errorf("failed to create agent: %w", err)
+					}
+					isNewAgent = true
+				} else {
+					return fmt.Errorf("failed to check existing agent: %w", err)
+				}
+			} else {
+				// Enforce entity ownership on register-update path. Mirrors the check in
+				// UpdateHeartbeat — protects against the race where a heartbeat for a
+				// non-existent agent_id escalates into RegisterAgent and an entity
+				// concurrently claims that agent_id; without this check, the rogue
+				// register would silently overwrite EntityID.
+				if err := s.checkEntityOwnership("RegisterAgent", req.AgentID, req.EntityID, existingAgent.EntityID); err != nil {
+					return err
+				}
+
+				// Update existing agent
+				updateBuilder := existingAgent.Update().
+					SetAgentType(agent.AgentType(meta.agentType)).
+					SetRuntime(agent.Runtime(meta.runtime)).
+					SetName(meta.name).
+					SetNamespace(meta.namespace).
+					SetStatus(agent.StatusHealthy).
+					SetUpdatedAt(now)
+
+				if meta.version != "" {
+					updateBuilder = updateBuilder.SetVersion(meta.version)
+				}
+				// Issue #969: only overwrite description when the request actually
+				// carried one. Same logic as create — protects an existing value
+				// from being clobbered by a re-register without `description`.
+				if meta.hasDescription {
+					updateBuilder = updateBuilder.SetDescription(meta.description)
+				}
+				// Issue #972: same guard as create path — only flip the flag when
+				// the request explicitly supplied it.
+				if meta.hasA2aProducer {
+					updateBuilder = updateBuilder.SetA2aProducer(meta.a2aProducer)
+				}
+				if meta.hasA2aConsumer {
+					updateBuilder = updateBuilder.SetA2aConsumer(meta.a2aConsumer)
+				}
+				if meta.httpHost != "" {
+					updateBuilder = updateBuilder.SetHTTPHost(meta.httpHost)
+				}
+				if meta.httpPort > 0 {
+					updateBuilder = updateBuilder.SetHTTPPort(meta.httpPort)
+				}
+				if req.EntityID != "" {
+					updateBuilder = updateBuilder.SetEntityID(req.EntityID)
+				}
+				if surfaces != nil {
+					updateBuilder = updateBuilder.SetA2aSurfaces(surfaces)
+				}
+
+				existingAgent, err = updateBuilder.Save(ctx)
+				if err != nil {
+					return fmt.Errorf("failed to update agent: %w", err)
+				}
 			}
-		}
 
-		// Process tools/capabilities if present
-		if tools, ok := req.Metadata["tools"]; ok {
-			if err := s.syncCapabilities(ctx, tx, req.AgentID, tools, meta.runtime); err != nil {
-				return err
-			}
-		}
-
-		// Dependencies will be calculated after transaction commits
-
-		// Create registry event only for new agents (skip for API services)
-		if isNewAgent && meta.agentType != "api" {
-			eventData := map[string]interface{}{
-				"agent_type": meta.agentType,
-				"name":       meta.name,
-				"version":    meta.version,
+			// Process tools/capabilities if present
+			if tools, ok := req.Metadata["tools"]; ok {
+				if err := s.syncCapabilities(ctx, tx, req.AgentID, tools, meta.runtime); err != nil {
+					return err
+				}
 			}
 
-			_, err = tx.RegistryEvent.Create().
-				SetEventType(registryevent.EventTypeRegister).
-				SetAgentID(req.AgentID).
-				SetTimestamp(now).
-				SetData(eventData).
-				Save(ctx)
-			if err != nil {
-				s.logger.Warning("Failed to create registry event: %v", err)
-				// Don't fail the registration over event creation
-			}
-		}
+			// Dependencies will be calculated after transaction commits
 
-		return nil
+			// Create registry event only for new agents (skip for API services)
+			if isNewAgent && meta.agentType != "api" {
+				eventData := map[string]interface{}{
+					"agent_type": meta.agentType,
+					"name":       meta.name,
+					"version":    meta.version,
+				}
+
+				_, err = tx.RegistryEvent.Create().
+					SetEventType(registryevent.EventTypeRegister).
+					SetAgentID(req.AgentID).
+					SetTimestamp(now).
+					SetData(eventData).
+					Save(ctx)
+				if err != nil {
+					s.logger.Warning("Failed to create registry event: %v", err)
+					// Don't fail the registration over event creation
+				}
+			}
+
+			return nil
+		})
 	})
-
+	if cycleErr != nil {
+		return nil, cycleErr
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to register agent: %w", err)
 	}
@@ -1393,82 +1425,98 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 	if req.Metadata != nil {
 		_, hasTools := req.Metadata["tools"]
 		if hasTools {
-			// Update agent metadata and capabilities within transaction
-			err := s.entDB.Transaction(ctx, func(tx *ent.Tx) error {
-				// Extract agent metadata for updates
-				meta := extractAgentMetadata(req.AgentID, req.Metadata)
-				descWarnings = meta.descWarnings
+			// Guard the heartbeat capability-sync against introducing NEW required
+			// edges that close a cycle (issue #1249). A running agent hits this
+			// path on every full heartbeat; the dangerous case is a non-graceful
+			// redeploy (crash + retained row) whose new code declares a
+			// cycle-closing required edge — without this check it would land
+			// silently and become the permanent-unavailable deadlock the
+			// registration-time check exists to prevent. Same rejection shape as
+			// registration: HTTP-200 + status:"error" (the SDK/rust path then
+			// surfaces it). guardedCapabilityWrite serializes the check with the
+			// write and releases the lock via defer (panic-safe, PR #1255).
+			cycleErr, err := s.guardedCapabilityWrite(ctx, req.AgentID, req.Metadata, func() error {
+				// Update agent metadata and capabilities within transaction
+				return s.entDB.Transaction(ctx, func(tx *ent.Tx) error {
+					// Extract agent metadata for updates
+					meta := extractAgentMetadata(req.AgentID, req.Metadata)
+					descWarnings = meta.descWarnings
 
-				// Update status and timestamp unconditionally
-				updateBuilder := tx.Agent.UpdateOneID(existingAgent.ID).
-					SetStatus(agent.StatusHealthy).
-					SetUpdatedAt(now).
-					SetLastFullRefresh(now)
+					// Update status and timestamp unconditionally
+					updateBuilder := tx.Agent.UpdateOneID(existingAgent.ID).
+						SetStatus(agent.StatusHealthy).
+						SetUpdatedAt(now).
+						SetLastFullRefresh(now)
 
-				// Only update metadata fields when the heartbeat provides non-default values,
-				// to avoid overwriting existing agent metadata with extraction defaults.
-				if meta.agentType != "mcp_agent" {
-					updateBuilder = updateBuilder.SetAgentType(agent.AgentType(meta.agentType))
-				}
-				if meta.runtime != "python" {
-					updateBuilder = updateBuilder.SetRuntime(agent.Runtime(meta.runtime))
-				}
-				if meta.name != "" && meta.name != req.AgentID {
-					updateBuilder = updateBuilder.SetName(meta.name)
-				}
-				if meta.namespace != "default" {
-					updateBuilder = updateBuilder.SetNamespace(meta.namespace)
-				}
-
-				if meta.version != "" {
-					updateBuilder = updateBuilder.SetVersion(meta.version)
-				}
-				// Issue #969: persist description on heartbeat too. Only when
-				// supplied — guards an existing value against a heartbeat that
-				// happens to omit the key (the field is optional on the wire).
-				if meta.hasDescription {
-					updateBuilder = updateBuilder.SetDescription(meta.description)
-				}
-				// Issue #972: heartbeat-path guard. Same rule as register —
-				// omitting the key must never clobber a previously-stored true.
-				if meta.hasA2aProducer {
-					updateBuilder = updateBuilder.SetA2aProducer(meta.a2aProducer)
-				}
-				if meta.hasA2aConsumer {
-					updateBuilder = updateBuilder.SetA2aConsumer(meta.a2aConsumer)
-				}
-				if meta.httpHost != "" {
-					updateBuilder = updateBuilder.SetHTTPHost(meta.httpHost)
-				}
-				if meta.httpPort > 0 {
-					updateBuilder = updateBuilder.SetHTTPPort(meta.httpPort)
-				}
-				if req.EntityID != "" {
-					updateBuilder = updateBuilder.SetEntityID(req.EntityID)
-				}
-
-				// A2A surfaces (issue #903). Apply only when the heartbeat
-				// carries a `surfaces` array — otherwise a non-a2a heartbeat
-				// would clobber a previously-stored surfaces list to nil.
-				if hbSurfaces := extractSurfacesFromMetadata(req.Metadata); hbSurfaces != nil {
-					updateBuilder = updateBuilder.SetA2aSurfaces(hbSurfaces)
-				}
-
-				existingAgent, err = updateBuilder.Save(ctx)
-				if err != nil {
-					return fmt.Errorf("failed to update agent: %w", err)
-				}
-
-				// Process tools/capabilities
-				if tools, ok := req.Metadata["tools"]; ok {
-					if err := s.syncCapabilities(ctx, tx, req.AgentID, tools, meta.runtime); err != nil {
-						return err
+					// Only update metadata fields when the heartbeat provides non-default values,
+					// to avoid overwriting existing agent metadata with extraction defaults.
+					if meta.agentType != "mcp_agent" {
+						updateBuilder = updateBuilder.SetAgentType(agent.AgentType(meta.agentType))
 					}
-				}
+					if meta.runtime != "python" {
+						updateBuilder = updateBuilder.SetRuntime(agent.Runtime(meta.runtime))
+					}
+					if meta.name != "" && meta.name != req.AgentID {
+						updateBuilder = updateBuilder.SetName(meta.name)
+					}
+					if meta.namespace != "default" {
+						updateBuilder = updateBuilder.SetNamespace(meta.namespace)
+					}
 
-				return nil
+					if meta.version != "" {
+						updateBuilder = updateBuilder.SetVersion(meta.version)
+					}
+					// Issue #969: persist description on heartbeat too. Only when
+					// supplied — guards an existing value against a heartbeat that
+					// happens to omit the key (the field is optional on the wire).
+					if meta.hasDescription {
+						updateBuilder = updateBuilder.SetDescription(meta.description)
+					}
+					// Issue #972: heartbeat-path guard. Same rule as register —
+					// omitting the key must never clobber a previously-stored true.
+					if meta.hasA2aProducer {
+						updateBuilder = updateBuilder.SetA2aProducer(meta.a2aProducer)
+					}
+					if meta.hasA2aConsumer {
+						updateBuilder = updateBuilder.SetA2aConsumer(meta.a2aConsumer)
+					}
+					if meta.httpHost != "" {
+						updateBuilder = updateBuilder.SetHTTPHost(meta.httpHost)
+					}
+					if meta.httpPort > 0 {
+						updateBuilder = updateBuilder.SetHTTPPort(meta.httpPort)
+					}
+					if req.EntityID != "" {
+						updateBuilder = updateBuilder.SetEntityID(req.EntityID)
+					}
+
+					// A2A surfaces (issue #903). Apply only when the heartbeat
+					// carries a `surfaces` array — otherwise a non-a2a heartbeat
+					// would clobber a previously-stored surfaces list to nil.
+					if hbSurfaces := extractSurfacesFromMetadata(req.Metadata); hbSurfaces != nil {
+						updateBuilder = updateBuilder.SetA2aSurfaces(hbSurfaces)
+					}
+
+					existingAgent, err = updateBuilder.Save(ctx)
+					if err != nil {
+						return fmt.Errorf("failed to update agent: %w", err)
+					}
+
+					// Process tools/capabilities
+					if tools, ok := req.Metadata["tools"]; ok {
+						if err := s.syncCapabilities(ctx, tx, req.AgentID, tools, meta.runtime); err != nil {
+							return err
+						}
+					}
+
+					return nil
+				})
 			})
-
+			// A cycle rejection and a transaction failure surface through the
+			// same status:"error" heartbeat envelope; fold cycleErr into err.
+			if cycleErr != nil {
+				err = cycleErr
+			}
 			if err != nil {
 				return &HeartbeatResponse{
 					Status:    "error",
@@ -1635,7 +1683,10 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 		agents = filteredAgents
 	}
 
-	// Convert to response format
+	// Convert to response format. One availability evaluation (shared verdict
+	// memo, issue #1249) spans the whole response so a capability referenced by
+	// many agents' required chains is evaluated once, not per capability.
+	availEvalShared := newAvailEval()
 	var agentInfos []generated.AgentInfo
 	for _, a := range agents {
 		// Build endpoint
@@ -1712,6 +1763,25 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 			// real @mesh.tool(task=True) producers.
 			if t, ok := cap.Kwargs["task"].(bool); ok && t {
 				capInfo.Task = &t
+			}
+
+			// Derived availability + reason (issue #1249). A capability is
+			// unavailable when its own agent is unhealthy OR any required
+			// dependency is unresolved/unavailable (transitively). The reason
+			// names the first broken required edge; walk the chain by querying
+			// the named dep.
+			available := true
+			var reason string
+			if a.Status != agent.StatusHealthy {
+				available = false
+				reason = "agent unhealthy"
+			} else if r := s.capabilityUnavailableReason(ctx, a.ID, cap, availEvalShared); r != "" {
+				available = false
+				reason = r
+			}
+			capInfo.Available = &available
+			if reason != "" {
+				capInfo.UnavailableReason = &reason
 			}
 
 			capabilities = append(capabilities, capInfo)

@@ -552,8 +552,17 @@ class RouteIntegrationStep(PipelineStep):
                 f"Creating new injection wrapper for route '{endpoint_name}'"
             )
             try:
+                # Issue #1249: carry the required-perimeter caps so a wrapper
+                # created here (rather than reused from @mesh.route decoration)
+                # still enforces the 503 for required deps.
+                route_required_caps = [
+                    dep["capability"] if dep.get("required") else None
+                    for dep in dependencies
+                ]
                 wrapped_handler = injector.create_injection_wrapper(
-                    original_handler, dependency_names
+                    original_handler,
+                    dependency_names,
+                    route_required_caps=route_required_caps,
                 )
 
                 # Preserve original handler metadata on wrapper

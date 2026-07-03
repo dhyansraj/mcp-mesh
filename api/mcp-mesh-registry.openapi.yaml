@@ -1338,6 +1338,16 @@ components:
           minLength: 1
           example: "date_service"
           description: Required capability name
+        required:
+          type: boolean
+          default: false
+          example: false
+          description: |
+            When true, this is a required dependency: the declaring capability is
+            unavailable unless this dependency resolves to an available provider
+            (transitively). Optional deps (the default) never affect availability —
+            they inject null/unavailable proxies and the agent still starts.
+            A cycle of required edges is rejected at registration time.
         tags:
           type: array
           items:
@@ -2269,6 +2279,22 @@ components:
           type: boolean
           example: true
           description: "True if this tool was declared task=True — a long-running MeshJob producer"
+        available:
+          type: boolean
+          example: true
+          description: |
+            Derived availability (issue #1249): true when the owning agent is healthy
+            AND every required dependency of this capability resolves to an available
+            provider (transitively). Optional dependencies never affect this value.
+            Consumers see an unavailable capability exactly as they'd see a dead provider.
+        unavailable_reason:
+          type: string
+          example: "required dep 'weather' unresolved"
+          description: |
+            One-level explanation for why this capability is unavailable (empty when
+            available). Names the first broken required edge, e.g.
+            "required dep 'weather' unavailable (provider weather-agent unhealthy)" or
+            "required dep 'weather' unresolved". Walk the chain by querying the named dep.
 
     # Dependency resolution schema
     DependencyResolutionInfo:

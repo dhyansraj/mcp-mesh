@@ -45,6 +45,9 @@ impl From<JsDependencySpec> for RustDependencySpec {
             js.expected_schema_canonical,
             js.expected_schema_hash,
             js.match_mode,
+            // Issue #1249: TS SDK does not surface `required` yet — default
+            // false keeps existing TypeScript heartbeats byte-identical.
+            false,
         )
     }
 }

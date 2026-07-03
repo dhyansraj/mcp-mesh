@@ -497,6 +497,12 @@ func ConvertMeshAgentRegistrationToMap(reg generated.MeshAgentRegistration) map[
 				depData := map[string]interface{}{
 					"capability": dep.Capability,
 				}
+				// Required flag (issue #1249). Only forwarded when the wire
+				// payload carried it; absence keeps the default (false) in the
+				// stored JSON and downstream parseDependencySpec.
+				if dep.Required != nil {
+					depData["required"] = *dep.Required
+				}
 				if dep.Namespace != nil {
 					depData["namespace"] = *dep.Namespace
 				}

@@ -259,6 +259,8 @@ class HeartbeatPreparationStep(PipelineStep):
                         "tags": [],
                         "version": "",
                         "namespace": "default",
+                        # Issue #1249: string-form deps are never required.
+                        "required": False,
                     }
                 )
             elif isinstance(dep, dict):
@@ -268,6 +270,8 @@ class HeartbeatPreparationStep(PipelineStep):
                         "tags": dep.get("tags", []),
                         "version": dep.get("version", ""),
                         "namespace": dep.get("namespace", "default"),
+                        # Issue #1249: opt-in strictness flag (default False).
+                        "required": bool(dep.get("required", False)),
                     }
                 )
 
