@@ -148,16 +148,20 @@ export function createProxy(
     callParams?: { headers?: Record<string, string> }
   ): Promise<unknown> => {
     const result = await callMcpTool(endpoint, functionName, args, options, capability, callParams?.headers);
-    // Multi-content results are returned as structured objects
+    // Multi-content results (and recovered structuredContent / null) are
+    // returned as structured objects as-is.
     if (typeof result === "object") {
       return result;
     }
     // Parse JSON if possible, otherwise return raw string (matches Python behavior)
-    try {
-      return JSON.parse(result);
-    } catch {
-      return result;
+    if (typeof result === "string") {
+      try {
+        return JSON.parse(result);
+      } catch {
+        return result;
+      }
     }
+    return result;
   };
 
   // Stream options: always honor streamTimeout regardless of the `streaming`
@@ -185,11 +189,14 @@ export function createProxy(
         if (typeof result === "object") {
           return result;
         }
-        try {
-          return JSON.parse(result);
-        } catch {
-          return result;
+        if (typeof result === "string") {
+          try {
+            return JSON.parse(result);
+          } catch {
+            return result;
+          }
         }
+        return result;
       },
       writable: false,
     },
@@ -395,7 +402,7 @@ export async function callMcpTool(
   options: CallOptions,
   capability: string,
   extraHeaders?: Record<string, string>
-): Promise<string | MultiContentResult> {
+): Promise<unknown> {
   const {
     mcpEndpoint,
     bodyStr,
@@ -914,7 +921,7 @@ class ProxyTimeoutError extends Error {
  * Distinct from `sse.ts`'s `parseSSEResponse` (string→object, Rust-core-backed):
  * this consumes a whole `Response` body and returns the extracted content.
  */
-async function readSSEResponseToContent(response: Response): Promise<string | MultiContentResult> {
+async function readSSEResponseToContent(response: Response): Promise<unknown> {
   const reader = response.body?.getReader();
   if (!reader) {
     throw new Error("No response body");
@@ -922,7 +929,7 @@ async function readSSEResponseToContent(response: Response): Promise<string | Mu
 
   const decoder = new TextDecoder();
   let buffer = "";
-  let result: string | MultiContentResult = "";
+  let result: unknown = "";
   let sawResult = false;
   let proxyTimeoutBudget: string | null = null;
   let proxyTimeoutSignaled = false;
@@ -1037,8 +1044,19 @@ export interface MultiContentResult {
  * If ALL content items are text, returns a joined string (backward compat).
  * If mixed content (resource_link, image, embedded_resource, etc.), returns
  * a structured MultiContentResult preserving all content items.
+ *
+ * Return type is `unknown` by design (#1250): an EMPTY content array is
+ * recovered from `structuredContent` and may be any JSON value (object, array,
+ * scalar) or, with no `structuredContent`, `null`. Every consumer must narrow
+ * (string -> JSON.parse; object -> pass through). A precise `JsonValue` union
+ * was considered but rejected: it would force the same narrowing while adding a
+ * large recursive type to the package's public surface and requiring internal
+ * casts of untyped wire data — `unknown` is the honest "inspect me" contract.
+ *
+ * NOTE (behavior change): an empty content array with no `structuredContent`
+ * now yields `null` (previously `""`).
  */
-export function extractContent(result: unknown): string | MultiContentResult {
+export function extractContent(result: unknown): unknown {
   if (typeof result === "string") {
     return result;
   }
@@ -1048,6 +1066,13 @@ export function extractContent(result: unknown): string | MultiContentResult {
 
     // Handle { content: [...] } format
     if (Array.isArray(obj.content)) {
+      // Empty content array (#1250): a provider returning None or an empty
+      // collection serializes to zero content blocks. Recover the value from
+      // structuredContent when present, otherwise treat the empty content as
+      // "no value" (null) — matching a None/null return from any provider.
+      if (obj.content.length === 0) {
+        return recoverStructuredContent(obj);
+      }
       // Check if all items are text-only (type "text" or plain strings)
       const allText = obj.content.every(
         (item: unknown) =>
@@ -1100,6 +1125,51 @@ export function extractContent(result: unknown): string | MultiContentResult {
   }
 
   return String(result);
+}
+
+/**
+ * Recover a return value from an MCP result's `structuredContent` when the
+ * `content` array is empty (#1250).
+ *
+ * FastMCP wraps non-object returns as `{ result: X }` and tags the wrapping
+ * with a `fastmcp.wrap_result` meta marker (under `_meta` per the MCP spec;
+ * some serializers emit `meta`). The wrapper is unwrapped ONLY when the marker
+ * is present AND `structuredContent` is an object whose keys are exactly
+ * `{"result"}` — sibling keys are never dropped. Otherwise `structuredContent`
+ * is returned as-is (including non-object scalars). With no `structuredContent`
+ * at all, returns null: "empty content" means "no value", matching a None/null
+ * return. Kept byte-identical with the Python and Java consumers.
+ */
+function recoverStructuredContent(obj: Record<string, unknown>): unknown {
+  const sc = obj.structuredContent;
+  if (sc === undefined || sc === null) {
+    return null;
+  }
+  // Non-object structuredContent (string/number/boolean) is used as-is.
+  if (typeof sc !== "object") {
+    return sc;
+  }
+  const structured = sc as Record<string, unknown>;
+  const keys = Object.keys(structured);
+  if (isFastMcpWrapResult(obj) && keys.length === 1 && keys[0] === "result") {
+    return structured.result;
+  }
+  return structured;
+}
+
+/**
+ * Detect FastMCP's `wrap_result` meta marker on an MCP result envelope.
+ */
+function isFastMcpWrapResult(obj: Record<string, unknown>): boolean {
+  const meta = (obj._meta ?? obj.meta) as Record<string, unknown> | undefined;
+  if (!meta || typeof meta !== "object") {
+    return false;
+  }
+  const fastmcp = meta.fastmcp as Record<string, unknown> | undefined;
+  if (!fastmcp || typeof fastmcp !== "object") {
+    return false;
+  }
+  return fastmcp.wrap_result === true;
 }
 
 /**

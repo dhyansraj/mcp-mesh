@@ -1,0 +1,195 @@
+# Test Case: Empty return values round-trip (Python provider -> Java consumer)
+# Regression test for issue #1250: a Python tool returning [] broke Java
+# consumers both ways - typed proxies threw Jackson MismatchedInputException,
+# untyped proxies leaked the raw MCP envelope - because FastMCP serialized
+# [] to an empty content array.
+#
+# Contract: [] -> [], {} -> {}, "" -> "", None -> null, [1,2,3] -> [1,2,3].
+# Emptiness and absence are different values.
+#
+# The Java consumer has two probes covering both paths from the issue:
+#   probeRoundtrip        - untyped McpMeshTool (envelope-leak path)
+#   probeTypedEmptyList   - typed McpMeshTool<List<Object>> (Jackson path)
+# Each reports valueJson (compact Jackson JSON of the received value),
+# isNull and valueType. Assertions compare valueJson byte-for-byte.
+#
+# Uses UC-level artifacts from /uc-artifacts
+
+name: "Empty Return Round-Trip: Python provider -> Java consumer"
+description: "Verify [], {}, '', None and [1,2,3] returned by a Python tool arrive unchanged at a Java consumer (typed and untyped proxies)"
+tags:
+  - tools
+  - cross-agent
+  - dependency
+  - empty-values
+  - regression
+  - python
+  - java
+timeout: 480
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/py-empty-provider /workspace/
+      cp -r /uc-artifacts/java-empty-consumer /workspace/
+    capture: copy_output
+
+  # Install Maven dependencies for the Java consumer
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-empty-consumer
+    timeout: 600
+
+  # Start provider. No registration wait before starting the consumer:
+  # the consumer's settle window covers dependency arrival order.
+  - name: "Start empty-value provider (Python)"
+    handler: shell
+    command: "meshctl start py-empty-provider/main.py -d"
+    workdir: /workspace
+    capture: start_provider
+
+  # Start consumer.
+  # MCP_MESH_SETTLE_TIMEOUT=60 (settling-window dependency grace, PR #1200):
+  # calls arriving before the empty_value_source dependency resolves are held
+  # until resolution lands - no fixed dep-resolution sleeps.
+  - name: "Start probe consumer (Java)"
+    handler: shell
+    command: "meshctl start /workspace/java-empty-consumer --env MCP_MESH_SETTLE_TIMEOUT=60 -d"
+    workdir: /workspace
+    capture: start_consumer
+
+  # Liveness only: wait for both agents to REGISTER (meshctl call routes via
+  # the registry). The Java consumer cold-compiles (mvn spring-boot:run) at
+  # start, which can exceed 90s under cluster load - hence the 240s loop.
+  # Dependency resolution is covered by the settle window.
+  - name: "Wait for both agents to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for both agents to register..."
+      for i in $(seq 1 120); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "py-empty-provider" && echo "$AGENTS" | grep -q "java-empty-consumer"; then
+          echo "Both agents registered after ~$((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: agents did not register within 240s"
+      echo "=== Agent logs ==="
+      meshctl logs py-empty-provider 2>/dev/null | tail -50 || true
+      meshctl logs java-empty-consumer 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_registration
+    timeout: 260
+
+  # Probe each boundary value through the untyped injected proxy
+  - name: "Probe empty list (untyped proxy)"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call probeRoundtrip ''{"kind": "empty_list"}'''
+    capture: probe_empty_list
+
+  - name: "Probe empty dict"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call probeRoundtrip ''{"kind": "empty_dict"}'''
+    capture: probe_empty_dict
+
+  - name: "Probe empty string"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call probeRoundtrip ''{"kind": "empty_string"}'''
+    capture: probe_empty_string
+
+  - name: "Probe null value"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call probeRoundtrip ''{"kind": "null_value"}'''
+    capture: probe_null_value
+
+  - name: "Probe non-empty list (regression anchor)"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call probeRoundtrip ''{"kind": "nonempty_list"}'''
+    capture: probe_nonempty_list
+
+  # Typed McpMeshTool<List<Object>> proxy - the Jackson deserialization path
+  - name: "Probe empty list (typed proxy)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call probeTypedEmptyList '{}'"
+    capture: probe_typed_empty_list
+
+assertions:
+  # IDIOM: the equality lives INSIDE the jq filter so the interpolation
+  # yields a bare true/false. tsuite Go-formats extracted values before
+  # comparison ({} -> map[], null -> <nil>, [1,2,3] -> [1 2 3]), so direct
+  # string comparison of extracted values is unreliable. Also, tsuite's
+  # interpolation body cannot contain '}' (parsed as [^}]+), hence the
+  # type+length check for the empty-dict case instead of == "{}".
+
+  # Dependency was injected in every probe (no local-fallback accommodation;
+  # guard kept uniform with tc01/tc02/tc04 so a future fallback path in the
+  # consumer artifact cannot fake a pass)
+  - expr: "${captured.probe_empty_list} not contains 'not injected'"
+    message: "empty_value_source dependency must be injected"
+
+  # [] stays [] - no Jackson exception, no envelope leak, no null
+  - expr: "${jq:captured.probe_empty_list:(.content[0].text | fromjson | .valueJson | fromjson) == []} == 'true'"
+    message: "Empty list must arrive as [] - not null and not a leaked MCP envelope"
+  - expr: "${jq:captured.probe_empty_list:(.content[0].text | fromjson | .isNull) == false} == 'true'"
+    message: "Empty list must NOT collapse to null"
+  - expr: "${jq:captured.probe_empty_list:(.content[0].text | fromjson | .valueType) == \"list\"} == 'true'"
+    message: "Empty list must arrive as a Java List - not a Map (envelope leak)"
+
+  # {} stays {} (object with zero keys - see idiom note re: '}')
+  - expr: "${jq:captured.probe_empty_dict:(.content[0].text | fromjson | .valueJson | fromjson) | (type == \"object\" and length == 0)} == 'true'"
+    message: "Empty dict must arrive as {}"
+  - expr: "${jq:captured.probe_empty_dict:(.content[0].text | fromjson | .isNull) == false} == 'true'"
+    message: "Empty dict must NOT collapse to null"
+
+  # '' stays ''
+  - expr: "${jq:captured.probe_empty_string:(.content[0].text | fromjson | .valueJson | fromjson) == \"\"} == 'true'"
+    message: "Empty string must arrive as ''"
+  - expr: "${jq:captured.probe_empty_string:(.content[0].text | fromjson | .valueType) == \"string\"} == 'true'"
+    message: "Empty string must arrive as a Java String"
+
+  # None stays null (absence preserved - not resurrected as [] or '')
+  - expr: "${jq:captured.probe_null_value:(.content[0].text | fromjson | .isNull) == true} == 'true'"
+    message: "None must arrive as null"
+  - expr: "${jq:captured.probe_null_value:(.content[0].text | fromjson | .valueJson | fromjson) == null} == 'true'"
+    message: "None must serialize as null - not [] or ''"
+
+  # [1,2,3] stays [1,2,3] (regression anchor)
+  - expr: "${jq:captured.probe_nonempty_list:(.content[0].text | fromjson | .valueJson | fromjson) == [1,2,3]} == 'true'"
+    message: "Non-empty list must arrive unchanged as [1,2,3]"
+
+  # Typed List<Object> proxy: [] deserializes to an empty list, no exception
+  - expr: "${captured.probe_typed_empty_list} not contains 'not injected'"
+    message: "empty_value_source dependency must be injected for the typed probe"
+  - expr: "${jq:captured.probe_typed_empty_list:(.content[0].text | fromjson | .valueJson | fromjson) == []} == 'true'"
+    message: "Typed empty list must deserialize to [] - no MismatchedInputException"
+  - expr: "${jq:captured.probe_typed_empty_list:(.content[0].text | fromjson | .isNull) == false} == 'true'"
+    message: "Typed empty list must NOT collapse to null"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*empty" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

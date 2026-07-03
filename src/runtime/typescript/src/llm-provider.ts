@@ -892,12 +892,15 @@ export function llmProvider(config: LlmProviderConfig): {
                   // Return resolved content as structured result for AI SDK
                   return resolved.length === 1 ? resolved[0] : resolved;
                 }
-                if (typeof result === "object") {
+                if (result !== null && typeof result === "object") {
                   debug(`Tool '${toolName}' result: [multi_content]`);
                   return result;
                 }
-                debug(`Tool '${toolName}' result: ${result.substring(0, 200)}`);
-                try { return JSON.parse(result); } catch { return result; }
+                if (typeof result === "string") {
+                  debug(`Tool '${toolName}' result: ${result.substring(0, 200)}`);
+                  try { return JSON.parse(result); } catch { return result; }
+                }
+                return result;
               } catch (err) {
                 const errorMsg = err instanceof Error ? err.message : String(err);
                 debug(`Tool '${toolName}' execution failed: ${errorMsg}`);
@@ -1196,9 +1199,9 @@ export function llmProvider(config: LlmProviderConfig): {
                   "tool",
                 );
                 rawToolResult = rawResult;
-                toolResultStr = typeof rawResult === "object"
-                  ? JSON.stringify(rawResult)
-                  : rawResult;
+                toolResultStr = typeof rawResult === "string"
+                  ? rawResult
+                  : JSON.stringify(rawResult);
                 debug(`Tool '${toolName}' result: ${toolResultStr.substring(0, 200)}`);
               } catch (err) {
                 const errorMsg = err instanceof Error ? err.message : String(err);

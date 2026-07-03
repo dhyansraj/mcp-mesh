@@ -105,6 +105,32 @@ describe("MeshDelegatedProvider.complete() — content normalization", () => {
     expect(await completeWith({ error: "rate limited by vendor" })).toBe("");
   });
 
+  it("empty MCP content → throws but still captures the raw payload (#1250)", async () => {
+    // A delegated provider reply with an EMPTY content array now surfaces as
+    // null. The type guard throws, but _lastRawResponse must be set FIRST so the
+    // run() diagnostic isn't left stale — a regression vs the old JSON.parse("")
+    // path that recorded the payload before throwing.
+    const emptyEnvelope = { jsonrpc: "2.0", id: 1, result: { content: [] } };
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === "content-type" ? "application/json" : null,
+      },
+      text: async () => JSON.stringify(emptyEnvelope),
+      json: async () => emptyEnvelope,
+    })) as unknown as typeof fetch;
+
+    const provider = new MeshDelegatedProvider(ENDPOINT, FN_BUFFERED, false);
+    const messages: LlmMessage[] = [{ role: "user", content: "hi" }];
+    await expect(
+      provider.complete("anthropic/claude-sonnet-4-5", messages)
+    ).rejects.toThrow("Invalid response from mesh provider");
+    expect(provider.lastRawResponse).toBe("null");
+  });
+
   it("bare answer with a null error field is still recovered", async () => {
     const payload = { data: "ok", error: null, verdict: "PASS" };
     expect(await completeWith(payload)).toBe(JSON.stringify(payload));
