@@ -9,7 +9,7 @@ import {
   getStatusBgColor,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { AgentBadges } from "./AgentBadges";
+import { AgentBadges, unavailableBadgeCount } from "./AgentBadges";
 
 interface AgentCardProps {
   agent: Agent;
@@ -30,6 +30,9 @@ function getDepsColor(resolved: number, total: number): string {
 // extend this check too.
 function hasAnyAgentBadge(agent: Agent): boolean {
   if (agent.a2a_producer || agent.a2a_consumer) return true;
+  // Unavailable-capability badge fires when a healthy agent's required
+  // dependency chain is broken (issue #1249); suppressed on unhealthy agents.
+  if (unavailableBadgeCount(agent) > 0) return true;
   // MeshJob badge fires only for real task=true producers (see AgentBadges).
   return Boolean(agent.capabilities?.some((c) => c.task === true));
 }

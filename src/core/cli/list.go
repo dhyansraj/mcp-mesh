@@ -209,6 +209,11 @@ type ToolInfo struct {
 	Dependencies []string       `json:"dependencies,omitempty"`
 	LLMFilter    *LLMToolFilter `json:"llm_filter,omitempty"`
 	LLMProvider  *LLMProvider   `json:"llm_provider,omitempty"`
+	// Derived availability (issue #1249): Available is nil when the registry
+	// doesn't report it (older versions) — treated as available. When false,
+	// UnavailableReason names the first broken required dependency edge.
+	Available         *bool  `json:"available,omitempty"`
+	UnavailableReason string `json:"unavailable_reason,omitempty"`
 }
 
 // Dependency represents a resolved dependency
@@ -424,6 +429,11 @@ type AgentInfoAPI struct {
 		Tags         []string       `json:"tags,omitempty"`
 		LlmFilter    *LLMToolFilter `json:"llm_filter,omitempty"`
 		LlmProvider  *LLMProvider   `json:"llm_provider,omitempty"`
+		// Derived availability + reason (issue #1249). Available is nil on
+		// older registries that don't compute the predicate; nil is treated as
+		// available (unknown) throughout the CLI.
+		Available         *bool   `json:"available,omitempty"`
+		UnavailableReason *string `json:"unavailable_reason,omitempty"`
 	} `json:"capabilities"`
 	DependencyResolutions []struct {
 		FunctionName    string   `json:"function_name"`
@@ -541,6 +551,13 @@ func getDetailedAgents(registryURL string) ([]map[string]interface{}, error) {
 			}
 			if cap.LlmProvider != nil {
 				capMap["llm_provider"] = cap.LlmProvider
+			}
+			// Derived availability + reason (issue #1249).
+			if cap.Available != nil {
+				capMap["available"] = *cap.Available
+			}
+			if cap.UnavailableReason != nil {
+				capMap["unavailable_reason"] = *cap.UnavailableReason
 			}
 			capabilities[j] = capMap
 		}
@@ -725,6 +742,11 @@ func processAgentData(data map[string]interface{}) EnhancedAgent {
 				} else if llmProviderMap, ok := capMap["llm_provider"].(map[string]interface{}); ok {
 					tool.LLMProvider = parseLLMProvider(llmProviderMap)
 				}
+				// Parse derived availability + reason (issue #1249).
+				if avail, ok := capMap["available"].(bool); ok {
+					tool.Available = &avail
+				}
+				tool.UnavailableReason = getString(capMap, "unavailable_reason")
 				agent.Tools = append(agent.Tools, tool)
 			}
 		}
@@ -1161,6 +1183,52 @@ func formatSupersededAnnotation(count int) string {
 	return fmt.Sprintf(" %s(+%d superseded)%s", colorGray, count, colorReset)
 }
 
+// countUnavailableCapabilities returns the number of the agent's capabilities
+// the registry has marked unavailable (issue #1249). A nil Available pointer
+// means the registry didn't report availability (older versions) and is
+// treated as available, so it never contributes to the count.
+func countUnavailableCapabilities(agent EnhancedAgent) int {
+	n := 0
+	for _, tool := range agent.Tools {
+		if tool.Available != nil && !*tool.Available {
+			n++
+		}
+	}
+	return n
+}
+
+// formatUnavailableAnnotation renders the red per-row marker flagging a healthy
+// agent that nonetheless owns one or more unavailable capabilities (issue
+// #1249) — e.g. " (1 capability unavailable)". This is the compact signal that
+// some capability's required dependency chain is broken; the per-capability
+// reason is shown by `meshctl list --verbose` and `--tools=<name>`. Empty when
+// the agent has no unavailable capabilities.
+//
+// Suppressed for a non-live agent: the registry marks EVERY capability of an
+// unhealthy agent available:false with reason "agent unhealthy", which is fully
+// redundant with the row's own red status. The capability-level signal is only
+// interesting on a live agent, where it reveals a broken required-dependency
+// chain the agent status alone wouldn't explain.
+func formatUnavailableAnnotation(agent EnhancedAgent) string {
+	if !isLiveStatus(agent.Status) {
+		return ""
+	}
+	n := countUnavailableCapabilities(agent)
+	if n <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(" %s(%d capabilit%s unavailable)%s",
+		colorRed, n, pluralY(n), colorReset)
+}
+
+// pluralY returns the correct suffix for "capabilit(y|ies)".
+func pluralY(n int) string {
+	if n == 1 {
+		return "y"
+	}
+	return "ies"
+}
+
 // formatListFooter renders the summary line printed after the default table,
 // e.g. "3 agents (3 healthy) - 1 inactive instance hidden (use --all) - 2 superseded hidden".
 // displayed and healthy count distinct declared agent names among the rendered
@@ -1375,6 +1443,13 @@ func printAgentRow(agent EnhancedAgent, nameWidth, runtimeWidth, statusWidth, ty
 		fmt.Printf("%s", annotation)
 	}
 
+	// Unavailable-capability annotation (issue #1249): flags a live agent whose
+	// capability chain is broken. Rendered even for healthy rows, since a
+	// capability can be unavailable while its owning agent is perfectly healthy.
+	if ua := formatUnavailableAnnotation(agent); ua != "" {
+		fmt.Printf("%s", ua)
+	}
+
 	fmt.Println()
 }
 
@@ -1507,7 +1582,16 @@ func printVerboseDetails(agents []EnhancedAgent) {
 		if len(agent.Tools) > 0 {
 			fmt.Printf("  Tools:\n")
 			for _, tool := range agent.Tools {
-				fmt.Printf("    - %s (%s)\n", tool.Name, tool.Capability)
+				if tool.Available != nil && !*tool.Available {
+					reason := tool.UnavailableReason
+					if reason == "" {
+						reason = "required dependency unavailable"
+					}
+					fmt.Printf("    - %s (%s) %s[unavailable: %s]%s\n",
+						tool.Name, tool.Capability, colorRed, reason, colorReset)
+				} else {
+					fmt.Printf("    - %s (%s)\n", tool.Name, tool.Capability)
+				}
 			}
 		}
 
@@ -2254,6 +2338,30 @@ type ToolListItem struct {
 	Version     string `json:"version"`
 	Tags        string `json:"tags"`
 	Endpoint    string `json:"endpoint"`
+	// Derived availability + reason for this capability (issue #1249). Available
+	// is nil when the registry doesn't report it (older versions).
+	Available         *bool  `json:"available,omitempty"`
+	UnavailableReason string `json:"unavailable_reason,omitempty"`
+	// AgentHealthy is the live status of the owning agent, carried so the tools
+	// table can suppress the unavailable marker on unhealthy agents (whose caps
+	// are all available:false with reason "agent unhealthy" — redundant noise).
+	AgentHealthy bool `json:"-"`
+}
+
+// formatToolUnavailableMarker returns the compact red " unavailable" suffix for
+// a tools-table row whose capability the registry has marked unavailable on a
+// LIVE agent (issue #1249). Empty otherwise — including for every capability of
+// an unhealthy agent, where available:false only means "agent unhealthy" and is
+// redundant. The reason stays in the single-tool detail view to keep the table
+// compact.
+func formatToolUnavailableMarker(tool ToolListItem) string {
+	if !tool.AgentHealthy {
+		return ""
+	}
+	if tool.Available != nil && !*tool.Available {
+		return fmt.Sprintf("  %sunavailable%s", colorRed, colorReset)
+	}
+	return ""
 }
 
 // runToolsListCommand handles the --tools flag. When showFramework is false
@@ -2284,12 +2392,15 @@ func runToolsListCommand(registryURL, toolSpec string, jsonOutput, healthyOnly, 
 				continue
 			}
 			toolItem := ToolListItem{
-				ToolName:   funcName,
-				AgentName:  agent.Name,
-				AgentID:    agent.ID,
-				Capability: tool.Capability,
-				Version:    tool.Version,
-				Endpoint:   agent.Endpoint,
+				ToolName:          funcName,
+				AgentName:         agent.Name,
+				AgentID:           agent.ID,
+				Capability:        tool.Capability,
+				Version:           tool.Version,
+				Endpoint:          agent.Endpoint,
+				Available:         tool.Available,
+				UnavailableReason: tool.UnavailableReason,
+				AgentHealthy:      isLiveStatus(agent.Status),
 			}
 			if len(tool.Tags) > 0 {
 				toolItem.Tags = strings.Join(tool.Tags, ",")
@@ -2337,12 +2448,15 @@ func runToolsListCommand(registryURL, toolSpec string, jsonOutput, healthyOnly, 
 			// (e.g. `--tools=__mesh_job_status`), surface it even without
 			// --show-framework. Only the bulk-list path filters by default.
 			toolItem := ToolListItem{
-				ToolName:   funcName,
-				AgentName:  agent.Name,
-				AgentID:    agent.ID,
-				Capability: tool.Capability,
-				Version:    tool.Version,
-				Endpoint:   agent.Endpoint,
+				ToolName:          funcName,
+				AgentName:         agent.Name,
+				AgentID:           agent.ID,
+				Capability:        tool.Capability,
+				Version:           tool.Version,
+				Endpoint:          agent.Endpoint,
+				Available:         tool.Available,
+				UnavailableReason: tool.UnavailableReason,
+				AgentHealthy:      isLiveStatus(agent.Status),
 			}
 			if len(tool.Tags) > 0 {
 				toolItem.Tags = strings.Join(tool.Tags, ",")
@@ -2483,11 +2597,13 @@ func outputToolsList(tools []ToolListItem, jsonOutput bool) error {
 		if tags == "" {
 			tags = "-"
 		}
-		fmt.Printf("%-*s %-*s %-*s %s\n",
+		// Availability marker (issue #1249) is appended after the last column so
+		// it never disturbs the padded columns' alignment.
+		fmt.Printf("%-*s %-*s %-*s %s%s\n",
 			toolWidth, truncateStringForList(tool.ToolName, toolWidth-2),
 			agentWidth, truncateStringForList(tool.AgentID, agentWidth-2),
 			capWidth, truncateStringForList(tool.Capability, capWidth-2),
-			tags)
+			tags, formatToolUnavailableMarker(tool))
 	}
 
 	fmt.Printf("\n%d tool(s) found\n", len(tools))
@@ -2534,6 +2650,12 @@ func outputToolDetails(tool *ToolListItem, agent *EnhancedAgent, registryURL str
 			"version":    tool.Version,
 			"tags":       tool.Tags,
 		}
+		if tool.Available != nil {
+			output["available"] = *tool.Available
+		}
+		if tool.UnavailableReason != "" {
+			output["unavailable_reason"] = tool.UnavailableReason
+		}
 		if mcpTool != nil {
 			output["description"] = mcpTool.Description
 			output["input_schema"] = mcpTool.InputSchema
@@ -2550,6 +2672,20 @@ func outputToolDetails(tool *ToolListItem, agent *EnhancedAgent, registryURL str
 	fmt.Printf("%sTool: %s%s\n", colorBlue, tool.ToolName, colorReset)
 	fmt.Printf("Agent: %s\n", tool.AgentID)
 	fmt.Printf("Capability: %s\n", tool.Capability)
+	// Derived availability + reason (issue #1249). Only printed when the
+	// registry reports it (Available non-nil); the unavailable line names the
+	// broken required-dependency edge so the reason is visible without jq.
+	if tool.Available != nil {
+		if *tool.Available {
+			fmt.Printf("Availability: %savailable%s\n", colorGreen, colorReset)
+		} else {
+			reason := tool.UnavailableReason
+			if reason == "" {
+				reason = "required dependency unavailable"
+			}
+			fmt.Printf("Availability: %sunavailable%s (%s)\n", colorRed, colorReset, reason)
+		}
+	}
 	if mcpTool != nil && mcpTool.Description != "" {
 		fmt.Printf("Description: %s\n", mcpTool.Description)
 	}

@@ -568,6 +568,79 @@ func (s *EntService) ApplyJobDeltas(ctx context.Context, instanceID string, delt
 	return accepted, rejections, nil
 }
 
+// capabilityUnavailableForClaim gates a claim of `capName` by the agent
+// identified by `instanceID` against the transitive required-dependency
+// predicate (issue #1249). It returns the first broken required edge's reason
+// (naming the dep) when the claiming agent's capability is currently
+// UNAVAILABLE, or "" when the claim may proceed.
+//
+// Why gate here: MeshJob claims are pull-based, not proxy-gated — a claim
+// worker would happily pull a job for a capability whose required dependency
+// is down, run the handler, fail on the missing dep, and burn an attempt
+// (max_retries) on a purely topological outage. Skipping the claim leaves the
+// job queued (no owner, no attempt increment, no lease) so it self-heals on a
+// later poll once the dependency recovers — see ClaimNextJob's caller cadence.
+//
+// Scope: this evaluates ONLY the required-dependency half of the predicate
+// (capabilityUnavailableReason), deliberately NOT the claiming agent's own
+// recorded health — the agent is demonstrably alive (it is polling to claim),
+// so a heartbeat-lagged status must not permanently starve it of work.
+// Narrow accepted exception: if the claiming agent ALSO provides one of its own
+// required-dep capabilities and that provider row is itself heartbeat-lagged
+// (registry-unhealthy), the resolver's health stage excludes it and the edge
+// reads as unresolved — so the claim can still be gated indirectly through its
+// own lagged provider row. This is a rare self-referential topology and the
+// gate correctly reflects that the dep is (registry-visibly) unavailable.
+//
+// Fast paths (zero-required-edge capabilities pay ~nothing):
+//   - A claim for a capability this instance does not own as a registered
+//     capability (no matching row — e.g. a legacy/anonymous claimer) is NOT
+//     gated: there are no required edges to evaluate, so pre-#1249 claim
+//     behavior is preserved byte-for-byte.
+//   - A registered capability with no required deps short-circuits inside
+//     capabilityUnavailableReason (its requiredDepEntries loop is empty), so
+//     no provider resolution runs.
+//
+// eval is threaded so the transitive required-dep DAG is memoized (a diamond
+// pays O(nodes+edges), not O(paths)).
+func (s *EntService) capabilityUnavailableForClaim(ctx context.Context, instanceID, capName string, eval *availEval) string {
+	caps, err := s.entDB.Capability.Query().
+		Where(
+			capability.CapabilityEQ(capName),
+			capability.HasAgentWith(agent.IDEQ(instanceID)),
+		).
+		WithAgent().
+		All(ctx)
+	if err != nil {
+		// Fail-open: a gate-query failure must NOT block claims — degrade to the
+		// pre-#1249 ungated behavior rather than starving a live worker on a
+		// transient DB hiccup. Log so the fail-open is observable (distinct from
+		// the silent no-row fallback below, which is normal steady state).
+		s.logger.Warning(
+			"ClaimNextJob gate: capability availability query for %q (instance %q) failed; failing open (claim ungated): %v",
+			capName, instanceID, err,
+		)
+		return ""
+	}
+	if len(caps) == 0 {
+		// Unknown/unowned capability → nothing to gate (no required edges).
+		return ""
+	}
+	// Duplicate same-name capability rows for one agent are pathological, but if
+	// present we gate on ANY broken one: the claim would dispatch to an ambiguous
+	// handler anyway, so the conservative (fail-closed across the set) verdict is
+	// the safe one.
+	for _, cap := range caps {
+		if cap.Edges.Agent == nil {
+			continue
+		}
+		if r := s.capabilityUnavailableReason(ctx, cap.Edges.Agent.ID, cap, eval); r != "" {
+			return r
+		}
+	}
+	return ""
+}
+
 // ClaimNextJob atomically claims a single pending job for the calling
 // instance. Returns (nil, nil) when no work is available — "no work" is
 // not an error (see Resolved Decisions).
@@ -600,6 +673,16 @@ func (s *EntService) ClaimNextJob(ctx context.Context, capability, instanceID st
 
 	now := time.Now().UTC()
 
+	// Claim gating (issue #1249) is evaluated LAZILY — only once a candidate
+	// actually exists to claim (see the gate below). This keeps the idle hot
+	// path (every worker polling per capability every ≤5s, fleet-wide) byte-
+	// identical to pre-#1249: a poll that finds no pending job pays no
+	// availability query and no transitive evaluation. The verdict is invariant
+	// across the retry loop (every candidate shares this capability and claiming
+	// instance), so it is computed at most once per call and reused across race-
+	// loss retries via gateChecked.
+	gateChecked := false
+
 	for attempt := 0; attempt < claimMaxAttempts; attempt++ {
 		candidate, err := s.entDB.Job.Query().
 			Where(
@@ -615,6 +698,24 @@ func (s *EntService) ClaimNextJob(ctx context.Context, capability, instanceID st
 				return nil, nil // No claimable row — caller treats as "no work".
 			}
 			return nil, fmt.Errorf("query candidate: %w", err)
+		}
+
+		// Gate BEFORE the guarded claim UPDATE: don't claim work for a capability
+		// whose required dependencies are currently unavailable — the handler
+		// would only fail on the missing dep and burn an attempt. On skip the job
+		// is left untouched (still queued, owner=NULL, attempt_count unchanged,
+		// no lease) for a later poll once the topology heals. Evaluated once
+		// (gateChecked) with a single availEval so the transitive required-dep DAG
+		// is memoized and race-loss retries re-use the verdict.
+		if !gateChecked {
+			gateChecked = true
+			if reason := s.capabilityUnavailableForClaim(ctx, instanceID, capability, newAvailEval()); reason != "" {
+				s.logger.Debug(
+					"ClaimNextJob: skipping capability %q for instance %q — unavailable: %s",
+					capability, instanceID, reason,
+				)
+				return nil, nil
+			}
 		}
 
 		// Retry-budget guard. We don't push this into the WHERE clause

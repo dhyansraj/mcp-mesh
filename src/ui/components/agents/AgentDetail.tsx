@@ -54,12 +54,24 @@ function renderCapabilityRow(cap: Capability, key: string, framework: boolean) {
             framework
           </Badge>
         )}
+        {cap.available === false && (
+          <Badge
+            variant="outline"
+            className="text-[10px] px-1.5 py-0 bg-red-600/20 text-red-400 border-red-500/30"
+            title={cap.unavailable_reason || "A required dependency chain is broken"}
+          >
+            unavailable
+          </Badge>
+        )}
         {cap.tags?.map((tag) => (
           <Badge key={tag} variant="secondary" className="text-[10px] px-1.5 py-0">
             {tag}
           </Badge>
         ))}
       </div>
+      {cap.available === false && cap.unavailable_reason && (
+        <p className="mt-1 text-xs text-red-400">{cap.unavailable_reason}</p>
+      )}
       {cap.description && (
         <p className="mt-1 text-xs text-muted-foreground">{cap.description}</p>
       )}
