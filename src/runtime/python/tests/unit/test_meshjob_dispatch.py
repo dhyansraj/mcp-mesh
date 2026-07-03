@@ -208,7 +208,7 @@ class TestMaybeDispatchAsJob:
             # Patch the JobController class so we don't need a live
             # registry — the test just verifies the slot is filled.
             class _FakeController:
-                def __init__(self, job_id, instance_id, registry_url):
+                def __init__(self, job_id, instance_id, registry_url, claim_epoch=None):
                     self.job_id = job_id
                     self.instance_id = instance_id
                     self.registry_url = registry_url
@@ -218,7 +218,7 @@ class TestMaybeDispatchAsJob:
             ):
                 # Patch with_job_async to call straight through (so we
                 # don't need the Rust task-local in the test).
-                async def _passthrough(job_id, deadline, awaitable):
+                async def _passthrough(job_id, deadline, awaitable, claim_epoch=None):
                     return await awaitable
 
                 with mock.patch(
@@ -229,6 +229,97 @@ class TestMaybeDispatchAsJob:
             assert isinstance(captured.get("job"), _FakeController)
             assert captured["job"].job_id == "job-test-123"
             assert captured["job"].instance_id == "test-agent-1"
+        finally:
+            TraceContext.set_propagated_headers({})
+
+    @pytest.mark.asyncio
+    async def test_claim_epoch_header_flows_to_controller_and_context(
+        self, monkeypatch
+    ):
+        """Issue #1252: X-Mesh-Claim-Epoch is parsed and threaded into the
+        JobController (for delta / read fencing), the with_job_async call
+        (Rust JobContext), and the Python JobContextSnapshot."""
+        from _mcp_mesh.engine.job_context import current_job
+        from _mcp_mesh.engine.job_dispatch import maybe_dispatch_as_job
+        from _mcp_mesh.tracing.context import TraceContext
+
+        fn = _fixture_with_job
+        fn._mesh_tool_metadata = {"task": True}
+
+        TraceContext.set_propagated_headers(
+            {
+                "x-mesh-job-id": "job-epoch-1",
+                "x-mesh-claim-epoch": "5",
+            }
+        )
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
+        monkeypatch.setenv("MCP_MESH_AGENT_ID", "test-agent-1")
+
+        try:
+            seen: dict = {}
+
+            async def invoke(kw):
+                # The Python snapshot must expose the epoch inside the scope.
+                snap = current_job()
+                seen["snapshot_epoch"] = snap.claim_epoch if snap else "no-snap"
+                return "ok"
+
+            class _FakeController:
+                def __init__(self, job_id, instance_id, registry_url, claim_epoch=None):
+                    seen["controller_epoch"] = claim_epoch
+
+            async def _passthrough(job_id, deadline, awaitable, claim_epoch=None):
+                seen["with_job_async_epoch"] = claim_epoch
+                return await awaitable
+
+            with mock.patch(
+                "mcp_mesh_core.JobController", _FakeController, create=True
+            ), mock.patch(
+                "mcp_mesh_core.with_job_async", _passthrough, create=True
+            ):
+                await maybe_dispatch_as_job(fn, invoke, {"user": "alice"})
+
+            assert seen["controller_epoch"] == 5
+            assert seen["with_job_async_epoch"] == 5
+            assert seen["snapshot_epoch"] == 5
+        finally:
+            TraceContext.set_propagated_headers({})
+
+    @pytest.mark.asyncio
+    async def test_missing_claim_epoch_header_yields_none(self, monkeypatch):
+        """No X-Mesh-Claim-Epoch (push-mode inbound) ⇒ epoch None ⇒ legacy
+        owner-only fencing; the controller/context carry None."""
+        from _mcp_mesh.engine.job_dispatch import maybe_dispatch_as_job
+        from _mcp_mesh.tracing.context import TraceContext
+
+        fn = _fixture_with_job
+        fn._mesh_tool_metadata = {"task": True}
+        TraceContext.set_propagated_headers({"x-mesh-job-id": "job-noepoch"})
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
+        monkeypatch.setenv("MCP_MESH_AGENT_ID", "test-agent-1")
+        try:
+            seen: dict = {}
+
+            async def invoke(kw):
+                return "ok"
+
+            class _FakeController:
+                def __init__(self, job_id, instance_id, registry_url, claim_epoch=None):
+                    seen["controller_epoch"] = claim_epoch
+
+            async def _passthrough(job_id, deadline, awaitable, claim_epoch=None):
+                seen["with_job_async_epoch"] = claim_epoch
+                return await awaitable
+
+            with mock.patch(
+                "mcp_mesh_core.JobController", _FakeController, create=True
+            ), mock.patch(
+                "mcp_mesh_core.with_job_async", _passthrough, create=True
+            ):
+                await maybe_dispatch_as_job(fn, invoke, {"user": "alice"})
+
+            assert seen["controller_epoch"] is None
+            assert seen["with_job_async_epoch"] is None
         finally:
             TraceContext.set_propagated_headers({})
 
@@ -261,7 +352,7 @@ class TestMaybeDispatchAsJob:
                 def __init__(self, *a, **kw):
                     pass
 
-            async def _pass(_jid, _dl, awaitable):
+            async def _pass(_jid, _dl, awaitable, _epoch=None):
                 return await awaitable
 
             with mock.patch(
@@ -321,7 +412,7 @@ class TestMaybeDispatchAsJob:
             async def invoke(_kw):
                 return {"answer": 42}
 
-            async def _pass(_jid, _dl, awaitable):
+            async def _pass(_jid, _dl, awaitable, _epoch=None):
                 return await awaitable
 
             with mock.patch(
@@ -376,7 +467,7 @@ class TestMaybeDispatchAsJob:
                 await ctrl.complete({"explicit": True})
                 return {"return": "value"}
 
-            async def _pass(_jid, _dl, awaitable):
+            async def _pass(_jid, _dl, awaitable, _epoch=None):
                 return await awaitable
 
             with mock.patch(
@@ -448,7 +539,7 @@ class TestRetryOnDispatch:
             async def invoke(_kw):
                 raise OSError("connection refused")
 
-            async def _pass(_jid, _dl, awaitable):
+            async def _pass(_jid, _dl, awaitable, _epoch=None):
                 return await awaitable
 
             with mock.patch(
@@ -514,7 +605,7 @@ class TestRetryOnDispatch:
             async def invoke(_kw):
                 raise ValueError("not transient")
 
-            async def _pass(_jid, _dl, awaitable):
+            async def _pass(_jid, _dl, awaitable, _epoch=None):
                 return await awaitable
 
             with mock.patch(
@@ -572,7 +663,7 @@ class TestRetryOnDispatch:
             async def invoke(_kw):
                 raise OSError("connection refused")
 
-            async def _pass(_jid, _dl, awaitable):
+            async def _pass(_jid, _dl, awaitable, _epoch=None):
                 return await awaitable
 
             with mock.patch(
@@ -634,7 +725,7 @@ class TestRetryOnDispatch:
             async def invoke(_kw):
                 raise OSError("would have matched if retry_on was set")
 
-            async def _pass(_jid, _dl, awaitable):
+            async def _pass(_jid, _dl, awaitable, _epoch=None):
                 return await awaitable
 
             with mock.patch(

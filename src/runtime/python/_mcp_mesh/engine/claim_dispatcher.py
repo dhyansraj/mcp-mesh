@@ -244,6 +244,12 @@ class PythonClaimDispatcher:
             max_dur = claimed.get("max_duration")
             if max_dur:
                 merged["x-mesh-timeout"] = str(int(max_dur))
+            # Seed the claim generation (issue #1252) so the dispatched
+            # handler's JobController fences its deltas + executor reads and a
+            # supersession aborts it. Absent on an old registry ⇒ legacy path.
+            claim_epoch = claimed.get("claim_epoch")
+            if isinstance(claim_epoch, int) and claim_epoch >= 0:
+                merged["x-mesh-claim-epoch"] = str(claim_epoch)
             TraceContext.set_propagated_headers(merged)
         except Exception as e:
             logger.debug(
@@ -251,6 +257,10 @@ class PythonClaimDispatcher:
                 "dispatching without job context",
                 e,
             )
+
+        claim_epoch = claimed.get("claim_epoch")
+        if not (isinstance(claim_epoch, int) and claim_epoch >= 0):
+            claim_epoch = None
 
         try:
             await self.handler(**payload)
@@ -261,9 +271,11 @@ class PythonClaimDispatcher:
                 self.capability,
                 e,
             )
-            await self._report_terminal_fail(job_id, e)
+            await self._report_terminal_fail(job_id, e, claim_epoch)
 
-    async def _report_terminal_fail(self, job_id: str, error: Exception) -> None:
+    async def _report_terminal_fail(
+        self, job_id: str, error: Exception, claim_epoch: Optional[int] = None
+    ) -> None:
         """Best-effort: report failure to registry so the job doesn't
         stay "working" until lease expiry. Failures here are logged and
         swallowed — the registry's stale-agent sweep is the ultimate
@@ -276,7 +288,9 @@ class PythonClaimDispatcher:
         try:
             from mcp_mesh_core import JobController as _JobController
 
-            ctrl = _JobController(job_id, self.instance_id, self.registry_url)
+            ctrl = _JobController(
+                job_id, self.instance_id, self.registry_url, claim_epoch
+            )
             await ctrl.fail(str(error))
         except Exception as inner:
             logger.debug(

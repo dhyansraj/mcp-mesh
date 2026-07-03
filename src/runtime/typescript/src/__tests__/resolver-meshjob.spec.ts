@@ -216,7 +216,7 @@ describe("MeshJob public surface", () => {
     );
 
     const inside = await withJobAsync(
-      { jobId: "job-set", deadlineSecsRemaining: 12.5 },
+      { jobId: "job-set", deadlineSecsRemaining: 12.5, claimEpoch: null },
       async () => {
         const cur = currentJob();
         expect(cur).not.toBeNull();
@@ -235,7 +235,7 @@ describe("MeshJob public surface", () => {
     const { remainingSeconds, withJobAsync } = await import("../job-context.js");
 
     await withJobAsync(
-      { jobId: "job-no-deadline", deadlineSecsRemaining: null },
+      { jobId: "job-no-deadline", deadlineSecsRemaining: null, claimEpoch: null },
       async () => {
         expect(remainingSeconds()).toBeNull();
       }

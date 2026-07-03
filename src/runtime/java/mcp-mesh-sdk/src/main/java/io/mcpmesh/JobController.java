@@ -78,6 +78,24 @@ public final class JobController implements MeshJob, AutoCloseable {
      * @throws MeshException if the native handle cannot be allocated
      */
     public static JobController open(String jobId, String instanceId, String registryUrl) {
+        return open(jobId, instanceId, registryUrl, null);
+    }
+
+    /**
+     * Open a controller fenced to the claim generation the registry minted on
+     * {@code POST /jobs/claim} (issue #1252). Deltas carry the epoch and
+     * executor reads carry {@code (instance_id, epoch)}, so a superseded
+     * re-execution is aborted by the Rust core (its cancel token fires,
+     * surfacing to handlers via {@link #isCancelled()}).
+     *
+     * @param claimEpoch Claim generation from the {@code /jobs/claim} response,
+     *                   or {@code null} for a push-mode inbound job / an old
+     *                   registry (legacy owner-only fencing). Never fabricate a
+     *                   {@code 0} the registry didn't mint.
+     * @see #open(String, String, String)
+     */
+    public static JobController open(String jobId, String instanceId, String registryUrl,
+                                     Long claimEpoch) {
         if (jobId == null || jobId.isEmpty()) {
             throw new IllegalArgumentException("jobId is required");
         }
@@ -89,7 +107,13 @@ public final class JobController implements MeshJob, AutoCloseable {
         }
         MeshCore core = MeshCore.load();
         PointerByReference out = new PointerByReference();
-        int rc = core.mesh_job_controller_new(jobId, instanceId, registryUrl, out);
+        int rc;
+        if (claimEpoch != null) {
+            rc = core.mesh_job_controller_new_with_epoch(
+                jobId, instanceId, registryUrl, claimEpoch, out);
+        } else {
+            rc = core.mesh_job_controller_new(jobId, instanceId, registryUrl, out);
+        }
         if (rc != 0) {
             throw new MeshException("mesh_job_controller_new failed: " + lastError(core));
         }

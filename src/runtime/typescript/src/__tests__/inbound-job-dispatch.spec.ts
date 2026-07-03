@@ -22,15 +22,16 @@ import {
 import { currentJob } from "../job-context.js";
 
 describe("readJobHeaders", () => {
-  it("returns [null, null] when headers is null/undefined", () => {
-    expect(readJobHeaders(null)).toEqual([null, null]);
-    expect(readJobHeaders(undefined)).toEqual([null, null]);
-    expect(readJobHeaders({})).toEqual([null, null]);
+  it("returns [null, null, null] when headers is null/undefined", () => {
+    expect(readJobHeaders(null)).toEqual([null, null, null]);
+    expect(readJobHeaders(undefined)).toEqual([null, null, null]);
+    expect(readJobHeaders({})).toEqual([null, null, null]);
   });
 
   it("extracts job id only when X-Mesh-Timeout is absent", () => {
     expect(readJobHeaders({ "x-mesh-job-id": "job-123" })).toEqual([
       "job-123",
+      null,
       null,
     ]);
   });
@@ -41,7 +42,7 @@ describe("readJobHeaders", () => {
         "x-mesh-job-id": "job-456",
         "x-mesh-timeout": "12.5",
       }),
-    ).toEqual(["job-456", 12.5]);
+    ).toEqual(["job-456", 12.5, null]);
   });
 
   it("ignores malformed timeout (non-numeric / non-positive)", () => {
@@ -50,19 +51,36 @@ describe("readJobHeaders", () => {
         "x-mesh-job-id": "j1",
         "x-mesh-timeout": "abc",
       }),
-    ).toEqual(["j1", null]);
+    ).toEqual(["j1", null, null]);
     expect(
       readJobHeaders({
         "x-mesh-job-id": "j2",
         "x-mesh-timeout": "0",
       }),
-    ).toEqual(["j2", null]);
+    ).toEqual(["j2", null, null]);
     expect(
       readJobHeaders({
         "x-mesh-job-id": "j3",
         "x-mesh-timeout": "-1.5",
       }),
-    ).toEqual(["j3", null]);
+    ).toEqual(["j3", null, null]);
+  });
+
+  it("parses X-Mesh-Claim-Epoch (issue #1252); rejects negatives/malformed", () => {
+    // Valid epoch (including a legitimate 0 the registry minted).
+    expect(
+      readJobHeaders({ "x-mesh-job-id": "j", "x-mesh-claim-epoch": "5" }),
+    ).toEqual(["j", null, 5]);
+    expect(
+      readJobHeaders({ "x-mesh-job-id": "j", "x-mesh-claim-epoch": "0" }),
+    ).toEqual(["j", null, 0]);
+    // Malformed / negative ⇒ null (legacy owner-only, never a fabricated 0).
+    expect(
+      readJobHeaders({ "x-mesh-job-id": "j", "x-mesh-claim-epoch": "-1" }),
+    ).toEqual(["j", null, null]);
+    expect(
+      readJobHeaders({ "x-mesh-job-id": "j", "x-mesh-claim-epoch": "abc" }),
+    ).toEqual(["j", null, null]);
   });
 });
 

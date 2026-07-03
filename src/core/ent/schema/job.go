@@ -39,6 +39,19 @@ func (Job) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("Pins job to a specific replica instance; NULL when unclaimed/orphaned and eligible for re-claim"),
+		// Claim generation / fencing token. Monotonic, incremented by +1 in
+		// the same guarded UPDATE that assigns owner_instance_id on every
+		// successful claim in ClaimNextJob — including a same-instance
+		// re-claim after a lease reclaim. Writes (/jobs/batch deltas) and
+		// executor reads (GET /jobs/{id}/events with identity) carry the
+		// epoch they were issued; the registry rejects a stale (owner, epoch)
+		// pair as `claim_superseded`, fencing a superseded owner even when the
+		// re-claimer is the same instance. Reclaim does NOT bump it — the next
+		// claim does. See MESHJOB_DESIGN.org > Fencing & liveness.
+		field.Int64("claim_epoch").
+			Default(0).
+			NonNegative().
+			Comment("Monotonic claim generation (+1 per successful claim in ClaimNextJob); fences a superseded owner's writes/reads after a reclaim"),
 
 		// State.
 		field.Enum("status").

@@ -23,6 +23,8 @@ type Job struct {
 	Capability string `json:"capability,omitempty"`
 	// Pins job to a specific replica instance; NULL when unclaimed/orphaned and eligible for re-claim
 	OwnerInstanceID *string `json:"owner_instance_id,omitempty"`
+	// Monotonic claim generation (+1 per successful claim in ClaimNextJob); fences a superseded owner's writes/reads after a reclaim
+	ClaimEpoch int64 `json:"claim_epoch,omitempty"`
 	// Current job status
 	Status job.Status `json:"status,omitempty"`
 	// Optional progress fraction in [0.0, 1.0]
@@ -63,7 +65,7 @@ func (*Job) scanValues(columns []string) ([]any, error) {
 			values[i] = new([]byte)
 		case job.FieldProgress:
 			values[i] = new(sql.NullFloat64)
-		case job.FieldAttemptCount, job.FieldMaxRetries, job.FieldMaxDuration:
+		case job.FieldClaimEpoch, job.FieldAttemptCount, job.FieldMaxRetries, job.FieldMaxDuration:
 			values[i] = new(sql.NullInt64)
 		case job.FieldID, job.FieldCapability, job.FieldOwnerInstanceID, job.FieldStatus, job.FieldProgressMessage, job.FieldError, job.FieldSubmittedBy:
 			values[i] = new(sql.NullString)
@@ -102,6 +104,12 @@ func (j *Job) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				j.OwnerInstanceID = new(string)
 				*j.OwnerInstanceID = value.String
+			}
+		case job.FieldClaimEpoch:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field claim_epoch", values[i])
+			} else if value.Valid {
+				j.ClaimEpoch = value.Int64
 			}
 		case job.FieldStatus:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -242,6 +250,9 @@ func (j *Job) String() string {
 		builder.WriteString("owner_instance_id=")
 		builder.WriteString(*v)
 	}
+	builder.WriteString(", ")
+	builder.WriteString("claim_epoch=")
+	builder.WriteString(fmt.Sprintf("%v", j.ClaimEpoch))
 	builder.WriteString(", ")
 	builder.WriteString("status=")
 	builder.WriteString(fmt.Sprintf("%v", j.Status))

@@ -71,6 +71,15 @@ struct Frame {
     /// only the frame whose generation matches — a different scope that
     /// registered later under the same `job_id` is never disturbed.
     generation: u64,
+    /// Claim generation (epoch) this execution attempt runs under, or
+    /// `None` for a push-mode inbound job / legacy path. Used by
+    /// [`cancel_superseded`] / [`get_state_for_epoch`] to target the
+    /// EXACT superseded frame — never the top-of-stack. Critical for the
+    /// same-instance re-claim shape: the zombie H1 (epoch 1) and the fresh
+    /// healthy H2 (epoch 2) both live under one `job_id`; a stale-epoch
+    /// supersession must fire ONLY H1's token, leaving H2 running (issue
+    /// #1252 review).
+    claim_epoch: Option<i64>,
     cancel: CancellationToken,
     ended: CancellationToken,
 }
@@ -102,9 +111,22 @@ fn registry() -> &'static Mutex<HashMap<String, Vec<Frame>>> {
 /// registry for each registration; it fires only when this
 /// registration's [`unregister_active_job`] runs.
 pub fn register_active_job(job_id: &str, token: CancellationToken) -> u64 {
+    register_active_job_with_epoch(job_id, token, None)
+}
+
+/// Like [`register_active_job`] but records the execution's `claim_epoch`
+/// (issue #1252) so [`cancel_superseded`] / [`get_state_for_epoch`] can
+/// target this exact frame rather than the top-of-stack. Pass `None` for a
+/// push-mode inbound job / legacy path (identical to `register_active_job`).
+pub fn register_active_job_with_epoch(
+    job_id: &str,
+    token: CancellationToken,
+    claim_epoch: Option<i64>,
+) -> u64 {
     let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
     let frame = Frame {
         generation,
+        claim_epoch,
         cancel: token,
         ended: CancellationToken::new(),
     };
@@ -138,6 +160,64 @@ pub fn cancel_active_job(job_id: &str) -> bool {
         }
         None => false,
     }
+}
+
+/// Fire the cancel token of the frame(s) registered for `job_id` whose
+/// `claim_epoch` matches `epoch` — the SUPERSEDED execution, targeted by
+/// epoch rather than stack position (issue #1252 review).
+///
+/// Unlike [`cancel_active_job`] (which fires the top-of-stack = the current
+/// LIVE attempt, the right target for a user-initiated cancel), this fires
+/// exactly the fenced frame. In the same-instance re-claim shape the zombie
+/// H1 (epoch 1) sits UNDERNEATH the fresh healthy H2 (epoch 2); a
+/// `claim_superseded` from H1's stale delta / read must abort H1 only —
+/// firing H2 (top) would kill the healthy attempt while the zombie keeps
+/// running. Epochs are strictly monotonic per job, so `epoch` identifies a
+/// unique attempt (its double-registered frames share one token — firing
+/// both is idempotent).
+///
+/// Returns `true` if at least one matching frame was found and fired.
+/// Frames with `claim_epoch == None` (legacy) never match a real epoch, so
+/// they are never collaterally cancelled here.
+pub fn cancel_superseded(job_id: &str, epoch: i64) -> bool {
+    let tokens: Vec<CancellationToken> = {
+        let map = registry().lock().expect("cancel_registry mutex poisoned");
+        map.get(job_id)
+            .map(|stack| {
+                stack
+                    .iter()
+                    .filter(|f| f.claim_epoch == Some(epoch))
+                    .map(|f| f.cancel.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let mut fired = false;
+    for t in tokens {
+        t.cancel();
+        fired = true;
+    }
+    fired
+}
+
+/// Snapshot `(cancel, ended)` of the topmost frame for `job_id` whose
+/// `claim_epoch` matches `epoch`, without firing either. Lets an executor
+/// (a [`crate::jobs::JobController`] carrying `epoch`) watch ITS OWN frame's
+/// cancel token — not the top-of-stack, which after a re-claim is a
+/// different attempt (issue #1252 review). Returns `None` when no frame with
+/// that epoch is registered.
+pub fn get_state_for_epoch(
+    job_id: &str,
+    epoch: i64,
+) -> Option<(CancellationToken, CancellationToken)> {
+    let map = registry().lock().expect("cancel_registry mutex poisoned");
+    map.get(job_id).and_then(|stack| {
+        stack
+            .iter()
+            .rev()
+            .find(|f| f.claim_epoch == Some(epoch))
+            .map(|f| (f.cancel.clone(), f.ended.clone()))
+    })
 }
 
 /// Remove the registration identified by (`job_id`, `generation`). Safe
@@ -238,6 +318,67 @@ mod tests {
         let id = unique_id("missing");
         // Never registered.
         assert!(!cancel_active_job(&id));
+    }
+
+    /// Issue #1252 review, item 1: the same-instance re-claim shape. Two live
+    /// frames under one job_id — zombie H1 (epoch 1) UNDER healthy H2 (epoch
+    /// 2, top). A stale-epoch supersession must fire ONLY the matching frame
+    /// (H1), never the top-of-stack (H2).
+    #[test]
+    fn cancel_superseded_fires_only_matching_epoch_frame() {
+        let id = unique_id("reclaim-epoch");
+        let h1 = CancellationToken::new();
+        let h2 = CancellationToken::new();
+        let g1 = register_active_job_with_epoch(&id, h1.clone(), Some(1));
+        let g2 = register_active_job_with_epoch(&id, h2.clone(), Some(2));
+
+        assert!(cancel_superseded(&id, 1), "should fire the epoch-1 frame");
+        assert!(h1.is_cancelled(), "superseded zombie H1 must be cancelled");
+        assert!(
+            !h2.is_cancelled(),
+            "healthy re-claim H2 (top-of-stack) must be untouched"
+        );
+
+        unregister_active_job(&id, g1);
+        unregister_active_job(&id, g2);
+    }
+
+    #[test]
+    fn cancel_superseded_no_match_returns_false_and_spares_legacy_frames() {
+        // No frame with the requested epoch → nothing fired.
+        let id = unique_id("epoch-nomatch");
+        let tok = CancellationToken::new();
+        let g = register_active_job_with_epoch(&id, tok.clone(), Some(5));
+        assert!(!cancel_superseded(&id, 99));
+        assert!(!tok.is_cancelled());
+        unregister_active_job(&id, g);
+
+        // Legacy (None) frames never match a real epoch — never collaterally
+        // cancelled by a supersession.
+        let id2 = unique_id("legacy-frame");
+        let tok2 = CancellationToken::new();
+        let g2 = register_active_job(&id2, tok2.clone());
+        assert!(!cancel_superseded(&id2, 1));
+        assert!(!tok2.is_cancelled());
+        unregister_active_job(&id2, g2);
+    }
+
+    #[test]
+    fn get_state_for_epoch_targets_matching_frame_only() {
+        let id = unique_id("get-epoch");
+        let t1 = CancellationToken::new();
+        let t2 = CancellationToken::new();
+        let g1 = register_active_job_with_epoch(&id, t1.clone(), Some(1));
+        let g2 = register_active_job_with_epoch(&id, t2.clone(), Some(2));
+
+        let (c1, _e1) = get_state_for_epoch(&id, 1).expect("epoch-1 frame visible");
+        c1.cancel();
+        assert!(t1.is_cancelled());
+        assert!(!t2.is_cancelled(), "epoch-2 frame must be unaffected");
+        assert!(get_state_for_epoch(&id, 99).is_none(), "no epoch-99 frame");
+
+        unregister_active_job(&id, g1);
+        unregister_active_job(&id, g2);
     }
 
     #[test]

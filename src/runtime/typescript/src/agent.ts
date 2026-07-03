@@ -785,7 +785,8 @@ export class MeshAgent {
           result = await runWithTraceContext(traceContext, async () => {
             return await runWithPropagatedHeaders(propagatedHeaders, async () => {
               if (isTaskTool) {
-                const [jobId, deadlineSecs] = readJobHeaders(propagatedHeaders);
+                const [jobId, deadlineSecs, claimEpoch] =
+                  readJobHeaders(propagatedHeaders);
                 let controller = null;
                 if (jobId && this.config.registryUrl && this.agentId) {
                   try {
@@ -793,6 +794,7 @@ export class MeshAgent {
                       jobId,
                       this.agentId,
                       this.config.registryUrl,
+                      claimEpoch,
                     );
                   } catch (err) {
                     // Don't silently fall back to a regular tool call —
@@ -839,6 +841,7 @@ export class MeshAgent {
                       (execute as (...a: unknown[]) => unknown)(...callArgs),
                     ),
                   retryOn,
+                  claimEpoch,
                 );
               }
               if (a2aClient !== null) {

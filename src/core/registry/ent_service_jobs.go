@@ -55,6 +55,129 @@ func leaseWindowFor(j *ent.Job) time.Duration {
 	return time.Duration(secs) * time.Second
 }
 
+// cappedPollLease computes the lease_expires_at an executor poll should write
+// for job j. The base extension is now+leaseWindowFor(j) — identical to the
+// per-delta extension in ApplyJobDeltas — but poll-liveness (unlike an
+// explicit progress delta) is passive, so it is capped at the job's declared
+// duration ceilings so an actively-polling handler cannot outlive the point
+// where the sweep would legitimately reap it (#1244 semantics unchanged):
+//
+//   - total_deadline (when set) is a hard wall-clock cap across retries —
+//     ExpireDeadlinedJobs reaps past it regardless.
+//   - otherwise, when the operator enabled the default stale ceiling
+//     (MCP_MESH_JOB_STALE_TIMEOUT > 0), cap at submitted_at +
+//     max(staleTimeout, max_duration) — the exact boundary ExpireStaleJobs
+//     enforces (it only scans jobs with a NULL total_deadline).
+//
+// With no total_deadline and the stale sweep disabled (the default), there is
+// no default reap ceiling, so the poll extends freely (like a delta) — matching
+// today's "unlimited unless you opt in" semantics.
+//
+// The caller only writes the result when it strictly extends the current lease
+// (never shortens): if a cap already sits at/behind the current lease the poll
+// simply earns no further liveness and the sweep is allowed to catch up.
+func cappedPollLease(j *ent.Job, now time.Time, staleTimeout time.Duration) time.Time {
+	lease := now.Add(leaseWindowFor(j))
+	if j.TotalDeadline != nil {
+		if lease.After(*j.TotalDeadline) {
+			lease = *j.TotalDeadline
+		}
+		return lease
+	}
+	if staleTimeout > 0 {
+		effective := staleTimeout
+		if j.MaxDuration != nil && *j.MaxDuration > 0 {
+			if md := time.Duration(*j.MaxDuration) * time.Second; md > effective {
+				effective = md
+			}
+		}
+		if ceiling := j.SubmittedAt.Add(effective); lease.After(ceiling) {
+			lease = ceiling
+		}
+	}
+	return lease
+}
+
+// ExecutorReadOutcome classifies an identity-bearing GET /jobs/{id}/events
+// read (both instance_id + claim_epoch supplied). Anonymous reads (either
+// param absent) never reach this path — the handler serves them unchanged.
+type ExecutorReadOutcome int
+
+const (
+	// ExecutorReadExtended: identity matches the current owner + claim epoch
+	// and the job is live — the lease was extended (poll-liveness credit).
+	ExecutorReadExtended ExecutorReadOutcome = iota
+	// ExecutorReadTerminal: job is in a terminal state. No fencing, no lease
+	// write — a handler may legitimately poll right after completion.
+	ExecutorReadTerminal
+	// ExecutorReadSuperseded: job is live but the (owner, epoch) pair is stale
+	// — a newer claim fenced this reader. Handler maps to 409 claim_superseded.
+	ExecutorReadSuperseded
+)
+
+// AuthorizeExecutorRead fences and grants poll-liveness for an executor read
+// of a job's event log. Called only when the caller supplied BOTH instance_id
+// and claim_epoch. Returns ErrJobNotFound when the job is unknown (handler:
+// 404). On ExecutorReadExtended the job's lease is extended in a guarded
+// UPDATE (same discipline as ApplyJobDeltas), capped by cappedPollLease so
+// poll-liveness cannot push a job past its declared duration.
+func (s *EntService) AuthorizeExecutorRead(ctx context.Context, jobID, instanceID string, epoch int64) (ExecutorReadOutcome, error) {
+	if jobID == "" {
+		return ExecutorReadSuperseded, fmt.Errorf("AuthorizeExecutorRead: job_id is required")
+	}
+	if instanceID == "" {
+		return ExecutorReadSuperseded, fmt.Errorf("AuthorizeExecutorRead: instance_id is required")
+	}
+
+	j, err := s.entDB.Job.Query().Where(job.IDEQ(jobID)).Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return ExecutorReadSuperseded, ErrJobNotFound
+		}
+		return ExecutorReadSuperseded, fmt.Errorf("lookup job %s: %w", jobID, err)
+	}
+
+	// Terminal jobs never fence: a handler may poll for the final result/cancel
+	// event right after it completed the job. Serve events, no lease write.
+	if isTerminalStatus(j.Status) {
+		return ExecutorReadTerminal, nil
+	}
+
+	// Fence: owner AND epoch must both match the live row.
+	if j.OwnerInstanceID == nil || *j.OwnerInstanceID != instanceID || j.ClaimEpoch != epoch {
+		return ExecutorReadSuperseded, nil
+	}
+
+	now := time.Now().UTC()
+	// Silently disable the default stale ceiling on unset/invalid config — the
+	// sweep loader surfaces the warning; here we just fall back to no cap.
+	staleTimeout, _ := parseJobStaleTimeoutEnv()
+	newLease := cappedPollLease(j, now, staleTimeout)
+	// Only write when it strictly extends the current lease — never shorten a
+	// lease (a cap sitting behind the current lease just earns no credit).
+	if j.LeaseExpiresAt == nil || newLease.After(*j.LeaseExpiresAt) {
+		// Guarded UPDATE: re-assert owner + epoch + live status so a reclaim
+		// racing between the read above and this write fails the predicate
+		// (Affected=0) rather than extending a lease this reader lost. A lost
+		// race is benign — the reader still gets its events; it simply didn't
+		// earn liveness this round.
+		_, uerr := s.entDB.Job.Update().
+			Where(
+				job.IDEQ(jobID),
+				job.OwnerInstanceIDEQ(instanceID),
+				job.ClaimEpochEQ(epoch),
+				job.StatusNotIn(job.StatusCompleted, job.StatusFailed, job.StatusCancelled),
+			).
+			SetLeaseExpiresAt(newLease).
+			SetLastHeartbeatAt(now).
+			Save(ctx)
+		if uerr != nil {
+			return ExecutorReadSuperseded, fmt.Errorf("extend lease for job %s: %w", jobID, uerr)
+		}
+	}
+	return ExecutorReadExtended, nil
+}
+
 // CreateJob persists a new job row. Caller is responsible for generating
 // the ID (UUID) and applying defaults; this method does the mechanical
 // translation from CreateJobInput to the Ent builder.
@@ -245,6 +368,7 @@ func decodeJobsCursor(cursor string) (time.Time, string, error) {
 // on the OpenAPI package directly (handler is responsible for the mapping).
 type JobDeltaInput struct {
 	ID              string
+	ClaimEpoch      *int64  // optional; when set, (owner, epoch) must both match or the delta is rejected claim_superseded
 	Status          *string // optional; validated against job.Status enum
 	Progress        *float64
 	ProgressMessage *string
@@ -266,6 +390,15 @@ const (
 	JobDeltaRejectionNotOwner        = "not_owner"
 	JobDeltaRejectionAlreadyTerminal = "already_terminal"
 	JobDeltaRejectionInvalidStatus   = "invalid_status"
+	// JobDeltaRejectionClaimSuperseded is returned for any epoch-BEARING delta
+	// whose (owner_instance_id, claim_epoch) no longer matches the live row: a
+	// different owner, a reclaimed owner=NULL row, or the same owner at a newer
+	// epoch. Echoing an epoch proves the sender once held a claim it has since
+	// lost, so the reject is the abort signal (the Rust core cancels the job on
+	// claim_superseded). not_owner is reserved for epoch-LESS deltas (legacy
+	// SDKs) whose owner does not match — those get owner-only validation with
+	// no fencing.
+	JobDeltaRejectionClaimSuperseded = "claim_superseded"
 )
 
 // ApplyJobDeltas processes a batch of per-job deltas from a single producer
@@ -280,8 +413,8 @@ const (
 // + heartbeat (lease extension)" comment. A handler that keeps posting
 // deltas is therefore never reclaimed by the expired-lease sweep, no
 // matter how long it runs. Terminal deltas skip the extension (the sweep
-// ignores terminal rows). Rejected deltas (not_owner / already_terminal /
-// invalid_status / not_found) never touch the lease.
+// ignores terminal rows). Rejected deltas (not_owner / claim_superseded /
+// already_terminal / invalid_status / not_found) never touch the lease.
 //
 // NOTE: the SDKs do NOT auto-heartbeat while a handler runs — the
 // runtime's batching tick only flushes deltas the handler actually posted
@@ -310,9 +443,25 @@ func (s *EntService) ApplyJobDeltas(ctx context.Context, instanceID string, delt
 			return accepted, rejections, fmt.Errorf("query job %s: %w", d.ID, err)
 		}
 
-		if j.OwnerInstanceID == nil || *j.OwnerInstanceID != instanceID {
-			rejections = append(rejections, JobDeltaRejection{ID: d.ID, Reason: JobDeltaRejectionNotOwner})
-			continue
+		ownerMatches := j.OwnerInstanceID != nil && *j.OwnerInstanceID == instanceID
+		if d.ClaimEpoch != nil {
+			// Epoch-bearing delta: the sender proves (by echoing an epoch) that
+			// it once held a claim. Any mismatch now — a different owner, a
+			// reclaimed owner=NULL row, or the same owner at a newer epoch —
+			// means a reclaim + fresh claim has superseded the execution that
+			// produced this delta. Fence it as claim_superseded (the abort
+			// signal the Rust core keys on) rather than a bare not_owner, which
+			// would leave a cross-instance zombie unsignalled.
+			if !ownerMatches || *d.ClaimEpoch != j.ClaimEpoch {
+				rejections = append(rejections, JobDeltaRejection{ID: d.ID, Reason: JobDeltaRejectionClaimSuperseded})
+				continue
+			}
+		} else {
+			// Epoch-less delta (legacy SDK): owner-only validation, no fencing.
+			if !ownerMatches {
+				rejections = append(rejections, JobDeltaRejection{ID: d.ID, Reason: JobDeltaRejectionNotOwner})
+				continue
+			}
 		}
 		if isTerminalStatus(j.Status) {
 			rejections = append(rejections, JobDeltaRejection{ID: d.ID, Reason: JobDeltaRejectionAlreadyTerminal})
@@ -337,12 +486,21 @@ func (s *EntService) ApplyJobDeltas(ctx context.Context, instanceID string, delt
 		// predicate fails with Affected=0 and the delta is rejected —
 		// crucially, without extending a lease this instance no longer
 		// holds.
+		guard := []predicate.Job{
+			job.IDEQ(d.ID),
+			job.OwnerInstanceIDEQ(instanceID),
+			job.StatusNotIn(job.StatusCompleted, job.StatusFailed, job.StatusCancelled),
+		}
+		// Re-assert the epoch in the WHERE clause too when the delta carries
+		// one, so a reclaim that lands between the read above and this write
+		// (bumping claim_epoch) fails the predicate → Affected=0 → classified
+		// as claim_superseded below, without extending a lease this execution
+		// no longer holds.
+		if d.ClaimEpoch != nil {
+			guard = append(guard, job.ClaimEpochEQ(*d.ClaimEpoch))
+		}
 		upd := s.entDB.Job.Update().
-			Where(
-				job.IDEQ(d.ID),
-				job.OwnerInstanceIDEQ(instanceID),
-				job.StatusNotIn(job.StatusCompleted, job.StatusFailed, job.StatusCancelled),
-			).
+			Where(guard...).
 			SetLastHeartbeatAt(now)
 		if newStatus == nil || !isTerminalStatus(*newStatus) {
 			// The accepted delta doubles as a lease extension (see the
@@ -376,15 +534,23 @@ func (s *EntService) ApplyJobDeltas(ctx context.Context, instanceID string, delt
 		if affected == 0 {
 			// Lost a race between the read and the guarded write. Re-read
 			// once to classify: still ours but now terminal → terminal
-			// rejection; row deleted in between → not_found; anything
-			// else → not_owner.
+			// rejection; row deleted in between → not_found; an epoch-bearing
+			// delta whose (owner, epoch) no longer matches → claim_superseded;
+			// otherwise → not_owner.
 			reason := JobDeltaRejectionNotOwner
 			cur, rerr := s.entDB.Job.Query().Where(job.IDEQ(d.ID)).Only(ctx)
 			switch {
 			case rerr == nil:
-				if cur.OwnerInstanceID != nil && *cur.OwnerInstanceID == instanceID &&
-					isTerminalStatus(cur.Status) {
+				sameOwner := cur.OwnerInstanceID != nil && *cur.OwnerInstanceID == instanceID
+				switch {
+				case sameOwner && isTerminalStatus(cur.Status):
 					reason = JobDeltaRejectionAlreadyTerminal
+				case d.ClaimEpoch != nil && (!sameOwner || cur.ClaimEpoch != *d.ClaimEpoch):
+					// Epoch-bearing delta lost the row to a reclaim + fresh
+					// claim (owner changed/cleared, or epoch advanced) between
+					// the read and the guarded write. Same fencing as the
+					// pre-check above.
+					reason = JobDeltaRejectionClaimSuperseded
 				}
 			case ent.IsNotFound(rerr):
 				reason = JobDeltaRejectionNotFound
@@ -481,6 +647,13 @@ func (s *EntService) ClaimNextJob(ctx context.Context, capability, instanceID st
 			).
 			SetOwnerInstanceID(instanceID).
 			AddAttemptCount(1).
+			// Bump the claim generation in the SAME guarded UPDATE that
+			// assigns the owner. A re-claim after a lease reclaim — even by
+			// the same instance_id — therefore lands on a fresh epoch, so the
+			// previous owner's in-flight writes/reads (carrying the old epoch)
+			// are fenced as claim_superseded. Reclaim itself never touches
+			// claim_epoch; only this path does.
+			AddClaimEpoch(1).
 			SetLeaseExpiresAt(leaseExpires).
 			SetLastHeartbeatAt(now).
 			Save(ctx)
@@ -966,14 +1139,16 @@ func (s *EntService) ResetOrphanedJobs(ctx context.Context) (reset, exhausted in
 // (lease cleared), or it was re-claimed with a fresh lease, the guard
 // predicate fails, Affected=0, and we skip the row without counting it.
 //
-// What this phase does NOT provide: execution fencing. After a reclaim the
-// original handler may still be running. When the job is re-claimed — in a
-// single-replica deployment necessarily by the SAME owner_instance_id —
-// deltas from BOTH the original and the new execution pass the owner check
-// and are accepted interleaved. Registry state stays consistent (the first
-// terminal delta wins; later ones are rejected already_terminal) but the
-// handler itself runs twice concurrently, which matters for non-idempotent
-// work. Reclaim is a liveness mechanism, not a mutual-exclusion one.
+// Fencing across the reclaim boundary is provided by claim_epoch, NOT by this
+// phase directly: reclaim only clears owner/lease and leaves claim_epoch
+// untouched. The NEXT claim (ClaimNextJob) bumps the epoch, so after a
+// re-claim — even by the SAME owner_instance_id in a single-replica
+// deployment — the original execution's deltas (carrying the old epoch) are
+// rejected claim_superseded and its executor reads 409, while the new owner
+// runs on the fresh epoch. Registry state stays consistent (the first
+// terminal delta wins) AND the superseded handler is signalled to abort.
+// Reclaim itself must NOT bump the epoch (that would fence the reclaimer it
+// is about to hand the job to); minting the new generation is the claim's job.
 func (s *EntService) ReclaimExpiredLeaseJobs(ctx context.Context) (reset, exhausted int, err error) {
 	now := time.Now().UTC()
 

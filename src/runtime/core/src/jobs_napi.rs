@@ -155,12 +155,21 @@ impl JsJobController {
     /// configured cadence (default 2s); the tick is torn down with a final
     /// flush when the controller is dropped.
     #[napi(constructor)]
-    pub fn new(job_id: String, instance_id: String, registry_url: String) -> Result<Self> {
+    pub fn new(
+        job_id: String,
+        instance_id: String,
+        registry_url: String,
+        claim_epoch: Option<i64>,
+    ) -> Result<Self> {
         let backend = backend_from_url(&registry_url)?;
         let queue = new_coalescing_queue();
-        let inner = JobController::new(
+        // `claim_epoch=None` (push-mode inbound job / old registry) ⇒ legacy
+        // owner-only behavior; on the claim path the SDK passes the epoch
+        // from the `/jobs/claim` response so this execution is fenced (#1252).
+        let inner = JobController::new_with_epoch(
             job_id,
             instance_id.clone(),
+            claim_epoch,
             backend.clone(),
             queue.clone(),
         );
@@ -191,6 +200,13 @@ impl JsJobController {
     #[napi(getter)]
     pub fn job_id(&self) -> String {
         self.inner.job_id().to_string()
+    }
+
+    /// The claim generation this controller executes under, or ``null`` for
+    /// a push-mode inbound job / an old registry (issue #1252).
+    #[napi(getter)]
+    pub fn claim_epoch(&self) -> Option<i64> {
+        self.inner.claim_epoch()
     }
 
     /// Enqueue a progress update. Coalesces with any prior pending progress
@@ -523,6 +539,9 @@ pub struct JsJobContextSnapshot {
     pub job_id: String,
     /// `None` if no deadline is set on the active context.
     pub deadline_secs_remaining: Option<u32>,
+    /// Claim generation this attempt executes under, or `None` for a
+    /// push-mode inbound job / an old registry (issue #1252).
+    pub claim_epoch: Option<i64>,
 }
 
 /// Snapshot of the active job context on the current Tokio task, or `null`
@@ -539,6 +558,7 @@ pub fn current_job_napi() -> Option<JsJobContextSnapshot> {
         JsJobContextSnapshot {
             job_id: ctx.job_id,
             deadline_secs_remaining: remaining,
+            claim_epoch: ctx.claim_epoch,
         }
     })
 }
@@ -696,6 +716,7 @@ pub async fn with_job_async_napi(
     job_id: String,
     deadline_secs: Option<f64>,
     body: Promise<serde_json::Value>,
+    claim_epoch: Option<i64>,
 ) -> Result<serde_json::Value> {
     // Reject negative / NaN / Inf deadlines explicitly: silently aliasing
     // them to "no deadline" (the previous behaviour) papers over upstream
@@ -720,6 +741,8 @@ pub async fn with_job_async_napi(
         }
         _ => JobContext::new(job_id),
     };
+    // Carry the claim generation so `currentJob()` exposes it (issue #1252).
+    let ctx = ctx.with_claim_epoch(claim_epoch);
     run_as_job(ctx, async move { body.await }).await
 }
 

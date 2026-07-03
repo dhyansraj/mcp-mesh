@@ -18,6 +18,8 @@ const (
 	FieldCapability = "capability"
 	// FieldOwnerInstanceID holds the string denoting the owner_instance_id field in the database.
 	FieldOwnerInstanceID = "owner_instance_id"
+	// FieldClaimEpoch holds the string denoting the claim_epoch field in the database.
+	FieldClaimEpoch = "claim_epoch"
 	// FieldStatus holds the string denoting the status field in the database.
 	FieldStatus = "status"
 	// FieldProgress holds the string denoting the progress field in the database.
@@ -55,6 +57,7 @@ var Columns = []string{
 	FieldID,
 	FieldCapability,
 	FieldOwnerInstanceID,
+	FieldClaimEpoch,
 	FieldStatus,
 	FieldProgress,
 	FieldProgressMessage,
@@ -84,6 +87,10 @@ func ValidColumn(column string) bool {
 var (
 	// CapabilityValidator is a validator for the "capability" field. It is called by the builders before save.
 	CapabilityValidator func(string) error
+	// DefaultClaimEpoch holds the default value on creation for the "claim_epoch" field.
+	DefaultClaimEpoch int64
+	// ClaimEpochValidator is a validator for the "claim_epoch" field. It is called by the builders before save.
+	ClaimEpochValidator func(int64) error
 	// DefaultAttemptCount holds the default value on creation for the "attempt_count" field.
 	DefaultAttemptCount int
 	// AttemptCountValidator is a validator for the "attempt_count" field. It is called by the builders before save.
@@ -145,6 +152,11 @@ func ByCapability(opts ...sql.OrderTermOption) OrderOption {
 // ByOwnerInstanceID orders the results by the owner_instance_id field.
 func ByOwnerInstanceID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldOwnerInstanceID, opts...).ToFunc()
+}
+
+// ByClaimEpoch orders the results by the claim_epoch field.
+func ByClaimEpoch(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldClaimEpoch, opts...).ToFunc()
 }
 
 // ByStatus orders the results by the status field.

@@ -131,6 +131,35 @@ class ClaimDispatcherTest {
         d.stop(0);
     }
 
+    // ---- Issue #1252: claim-epoch threading ---------------------------------
+
+    @Test
+    void extractClaimEpoch_coercesNonNegativeAndGuardsRest() {
+        // Registry-minted generation (Jackson deserializes as Integer/Long).
+        assertEquals(5L, ClaimDispatcher.extractClaimEpoch(5));
+        assertEquals(5L, ClaimDispatcher.extractClaimEpoch(5L));
+        // A legitimate 0 the registry minted is a real epoch.
+        assertEquals(0L, ClaimDispatcher.extractClaimEpoch(0));
+        // Absent / negative / non-numeric ⇒ null ⇒ legacy owner-only fencing;
+        // never fabricate a 0 the registry didn't mint.
+        assertNull(ClaimDispatcher.extractClaimEpoch(null));
+        assertNull(ClaimDispatcher.extractClaimEpoch(-1));
+        assertNull(ClaimDispatcher.extractClaimEpoch("5"));
+    }
+
+    @Test
+    void buildRunAsJobSnapshot_carriesClaimEpoch() {
+        // With an epoch, the mesh_run_as_job snapshot must carry claim_epoch so
+        // the Rust JobContext exposes it via mesh_current_job (→ Snapshot).
+        String withEpoch = ClaimDispatcher.buildRunAsJobSnapshot("job-1", 30L, 7L);
+        assertTrue(withEpoch.contains("\"claim_epoch\":7"),
+            "snapshot must carry the claim epoch; got: " + withEpoch);
+        // Legacy: null epoch serializes as null (not fabricated 0).
+        String noEpoch = ClaimDispatcher.buildRunAsJobSnapshot("job-1", 30L, null);
+        assertTrue(noEpoch.contains("\"claim_epoch\":null"),
+            "legacy snapshot must carry null claim epoch; got: " + noEpoch);
+    }
+
     @Test
     void constructor_validatesRequiredArgs() {
         // capability

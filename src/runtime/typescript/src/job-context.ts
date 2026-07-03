@@ -49,6 +49,15 @@ export interface JobContextSnapshot {
    * Rust core via `currentJob()` from `@mcpmesh/core` instead.
    */
   deadlineSecsRemaining: number | null;
+  /**
+   * Claim generation this attempt executes under (from the registry's
+   * `POST /jobs/claim` response), or `null` for a push-mode inbound job
+   * / an old registry (issue #1252). Additive, read-only — handlers can
+   * stamp it on side effects so a superseded re-execution's writes are
+   * distinguishable downstream. Supersession itself surfaces through the
+   * existing cancellation path, not by polling this value.
+   */
+  claimEpoch: number | null;
 }
 
 /**

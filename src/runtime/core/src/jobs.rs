@@ -193,6 +193,54 @@ pub fn spawn_batching_tick(
     }
 }
 
+/// Translate `claim_superseded` batch rejections into a cancel of the
+/// EXACT superseded execution's frame — keyed by the epoch the rejected
+/// delta was sent under, never the top-of-stack.
+///
+/// A newer claim (a reclaim + fresh claim, possibly by this same instance)
+/// fenced the owner that produced these deltas. `epoch_by_id` maps each
+/// sent delta's `job_id` to the `claim_epoch` it carried; the rejected
+/// frame is the one registered under that epoch. Firing the top-of-stack
+/// instead would abort a healthy same-instance re-claim (H2) while the
+/// zombie (H1) kept running (issue #1252 review). A no-op when the job
+/// isn't registered under that epoch (already terminal / never wrapped in
+/// `run_as_job`). Surfaces to the handler through the SAME cancel path as an
+/// explicit user cancel.
+fn fire_superseded_cancels(
+    rejected: &[crate::task_backend::RejectedDelta],
+    epoch_by_id: &HashMap<String, Option<i64>>,
+) {
+    for r in rejected {
+        if r.reason != crate::task_backend::CLAIM_SUPERSEDED_REASON {
+            continue;
+        }
+        match epoch_by_id.get(&r.id).copied().flatten() {
+            Some(epoch) => {
+                warn!(
+                    "Job {} superseded by a newer claim (delta rejected \
+                     claim_superseded, epoch={}); firing this execution's \
+                     cancel token to abort it",
+                    r.id, epoch
+                );
+                cancel_registry::cancel_superseded(&r.id, epoch);
+            }
+            None => {
+                // A superseded rejection with no epoch on the sent delta
+                // should not happen (the registry only supersedes epoch-
+                // bearing deltas), but if it does we deliberately do NOT
+                // fall back to a top-of-stack cancel — that could kill a
+                // healthy re-claim. Log and leave the frame alone.
+                warn!(
+                    "Job {} rejected claim_superseded but the sent delta \
+                     carried no epoch; not firing a cancel (avoids killing a \
+                     healthy re-claim)",
+                    r.id
+                );
+            }
+        }
+    }
+}
+
 async fn flush_once(
     queue: &Arc<Mutex<CoalescingQueue>>,
     backend: &dyn TaskBackend,
@@ -209,6 +257,13 @@ async fn flush_once(
         return;
     }
     let count = drained.len();
+    // Capture each delta's job_id → claim_epoch BEFORE the deltas move into
+    // submit_batch, so a claim_superseded rejection fires the exact frame
+    // that produced the delta (by epoch), never the top-of-stack.
+    let epoch_by_id: HashMap<String, Option<i64>> = drained
+        .iter()
+        .map(|d| (d.id.clone(), d.claim_epoch))
+        .collect();
     match backend.submit_batch(instance_id, drained).await {
         Ok(resp) => {
             debug!(
@@ -217,6 +272,9 @@ async fn flush_once(
                 resp.accepted,
                 resp.rejected.len()
             );
+            // A superseded owner's progress deltas are rejected here —
+            // translate to a cancel so the zombie execution stops.
+            fire_superseded_cancels(&resp.rejected, &epoch_by_id);
         }
         Err(e) => {
             warn!("Failed to flush job batch ({}): {}", count, e);
@@ -246,6 +304,16 @@ async fn flush_once(
 pub struct JobController {
     job_id: String,
     instance_id: String,
+    /// Claim generation this controller executes under, as minted by the
+    /// registry on the `POST /jobs/claim` that handed this replica the job
+    /// (see [`crate::task_backend::ClaimedJob::claim_epoch`]). `None` for a
+    /// push-mode inbound job (never claimed) or an old registry that predates
+    /// epochs — in that case the controller sends NO identity on reads and
+    /// NO epoch on deltas, i.e. byte-identical legacy owner-only behavior.
+    /// `Some(e)` fences this execution: deltas carry `e`, executor reads
+    /// carry `(instance_id, e)`, and a `claim_superseded` from either fires
+    /// the job's cancel token so the superseded handler aborts.
+    claim_epoch: Option<i64>,
     backend: Arc<dyn TaskBackend>,
     queue: Arc<Mutex<CoalescingQueue>>,
     /// Set once `complete` / `fail` / `release_lease` has dispatched a
@@ -273,17 +341,36 @@ pub struct JobController {
 }
 
 impl JobController {
-    /// Construct a new controller. Normally created by the tool wrapper /
-    /// claim worker; agent code receives one via DDDI injection.
+    /// Construct a new controller with NO claim epoch (push-mode inbound
+    /// job, or version-skew against an old registry). Deltas carry no epoch
+    /// and reads are anonymous — legacy owner-only behavior. Normally
+    /// created by the tool wrapper; agent code receives one via DDDI
+    /// injection. Use [`Self::new_with_epoch`] on the claim path.
     pub fn new(
         job_id: impl Into<String>,
         instance_id: impl Into<String>,
         backend: Arc<dyn TaskBackend>,
         queue: Arc<Mutex<CoalescingQueue>>,
     ) -> Self {
+        Self::new_with_epoch(job_id, instance_id, None, backend, queue)
+    }
+
+    /// Construct a controller carrying the claim generation minted by the
+    /// registry on `POST /jobs/claim`. Pass `Some(epoch)` from
+    /// [`crate::task_backend::ClaimedJob::claim_epoch`] on the claim-worker
+    /// path so this execution is fenced; `None` degrades to legacy
+    /// owner-only behavior (never fabricate `0`).
+    pub fn new_with_epoch(
+        job_id: impl Into<String>,
+        instance_id: impl Into<String>,
+        claim_epoch: Option<i64>,
+        backend: Arc<dyn TaskBackend>,
+        queue: Arc<Mutex<CoalescingQueue>>,
+    ) -> Self {
         Self {
             job_id: job_id.into(),
             instance_id: instance_id.into(),
+            claim_epoch,
             backend,
             queue,
             terminal: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -297,10 +384,19 @@ impl JobController {
         &self.job_id
     }
 
+    /// The claim generation this controller executes under, if any. `None`
+    /// for a push-mode inbound job or version-skew against an old registry.
+    pub fn claim_epoch(&self) -> Option<i64> {
+        self.claim_epoch
+    }
+
     /// Enqueue a progress update. Coalesces with any prior pending
     /// progress for this job — only the latest survives the next flush.
     pub async fn update_progress(&self, progress: f32, message: Option<String>) {
-        let delta = JobDelta::progress(self.job_id.clone(), progress, message);
+        let mut delta = JobDelta::progress(self.job_id.clone(), progress, message);
+        // Stamp the claim epoch so the registry can fence a superseded owner
+        // (no-op when `None` — the field is omitted from the wire).
+        delta.claim_epoch = self.claim_epoch;
         let mut q = self.queue.lock().await;
         // Check the terminal sentinel UNDER the queue lock: flush_terminal
         // sets it (and evicts pending) while holding the same lock, so a
@@ -346,7 +442,8 @@ impl JobController {
     /// resume-to-`working` primitive in v1 — a `resume_working()` is a future
     /// follow-up.
     pub async fn request_input(&self, prompt: Option<String>) -> Result<(), JobError> {
-        let delta = JobDelta::input_required(self.job_id.clone(), prompt);
+        let mut delta = JobDelta::input_required(self.job_id.clone(), prompt);
+        delta.claim_epoch = self.claim_epoch;
         // Evict any pending coalesced progress delta for this job UNDER the
         // queue lock before the immediate flush — same fence `flush_terminal`
         // uses — so a stale progress delta queued just before this call can't
@@ -375,9 +472,15 @@ impl JobController {
             }
             q.pending.remove(&self.job_id);
         }
-        self.backend
+        let resp = self
+            .backend
             .submit_batch(&self.instance_id, vec![delta])
             .await?;
+        // Single delta carrying this controller's epoch — fire only this
+        // execution's frame on a superseded rejection.
+        let epoch_by_id =
+            HashMap::from([(self.job_id.clone(), self.claim_epoch)]);
+        fire_superseded_cancels(&resp.rejected, &epoch_by_id);
         Ok(())
     }
 
@@ -397,6 +500,10 @@ impl JobController {
     }
 
     async fn flush_terminal(&self, mut delta: JobDelta) -> Result<(), JobError> {
+        // Stamp the claim epoch onto the terminal delta too (no-op when
+        // `None`). A terminal write from a superseded owner is rejected
+        // claim_superseded rather than stomping the new owner's row.
+        delta.claim_epoch = self.claim_epoch;
         // Set the per-controller terminal sentinel and evict the pending
         // entry BEFORE dropping the lock — this slams the door on any
         // racing `update_progress` that lands while the backend submit is
@@ -427,9 +534,22 @@ impl JobController {
             self.terminal.store(true, Ordering::SeqCst);
             q.pending.remove(&self.job_id);
         }
-        self.backend
+        let resp = self
+            .backend
             .submit_batch(&self.instance_id, vec![delta])
             .await?;
+        // Contract (issue #1252 review, item 3): when the terminal delta is
+        // rejected `claim_superseded` this returns `Ok(())` and the discarded
+        // terminal is intentional. The registry row is owned by the newer
+        // claim (H2); THIS (superseded) execution must NOT re-assert a
+        // terminal — the registry already rejected it and, crucially,
+        // `fire_superseded_cancels` fires THIS execution's own frame (by
+        // epoch, never top-of-stack), so cancellation — not the return value
+        // — is the surfacing mechanism. Swallowing the rejection here is safe
+        // precisely because the cancel targets the right frame.
+        let epoch_by_id =
+            HashMap::from([(self.job_id.clone(), self.claim_epoch)]);
+        fire_superseded_cancels(&resp.rejected, &epoch_by_id);
         Ok(())
     }
 
@@ -459,9 +579,25 @@ impl JobController {
     /// loop) poll this between blocking sleep intervals so a mid-flight
     /// cancel can break out instead of running to natural completion —
     /// languages whose blocking primitives can't be interrupted by a
-    /// Tokio token firing have no other observation point.
+    /// Tokio token firing have no other observation point. On the Java
+    /// path this is the ONLY supersession-observation surface, so it MUST
+    /// read this execution's OWN frame.
+    ///
+    /// Frame targeting (issue #1252 review): when this controller carries a
+    /// claim epoch it observes ITS OWN frame (keyed by epoch), NOT the
+    /// top-of-stack. After a same-instance re-claim the top frame is the
+    /// fresh healthy attempt H2 (token un-fired); a superseded zombie H1
+    /// polling `is_cancelled()` against the top would forever read `false`
+    /// and keep running non-idempotent work. Reading H1's own epoch frame
+    /// makes a `cancel_superseded(job_id, H1_epoch)` visible to H1 and
+    /// invisible to H2. A legacy no-epoch controller has no dedicated frame,
+    /// so it reads the top-of-stack as before (single-attempt semantics).
     pub async fn is_cancelled(&self) -> bool {
-        match cancel_registry::get_state(&self.job_id) {
+        let state = match self.claim_epoch {
+            Some(epoch) => cancel_registry::get_state_for_epoch(&self.job_id, epoch),
+            None => cancel_registry::get_state(&self.job_id),
+        };
+        match state {
             Some((cancel, _ended)) => cancel.is_cancelled(),
             None => false,
         }
@@ -593,13 +729,62 @@ impl JobController {
                 None => REGISTRY_LONG_POLL_CAP,
             };
 
+            // Cancellation check each iteration (issue #1252 / #882): a user
+            // cancel (`POST /jobs/{id}/cancel`) OR a supersession fires this
+            // job's token in the cancel registry. A handler parked in a
+            // blocking `recv_event` gate must break out promptly — the loop
+            // otherwise round-trips a fresh 60s long-poll oblivious to the
+            // cancel. Snapshot the token so we can BOTH short-circuit an
+            // already-fired cancel here AND race it against the long-poll
+            // below (so a mid-poll cancel returns without waiting out the
+            // registry's 60s window). Surfaces as `JobError::Cancelled` —
+            // the same shape an explicit user cancel takes.
+            //
+            // Watch THIS execution's OWN frame, keyed by claim epoch — NOT
+            // the top-of-stack. After a same-instance re-claim the top frame
+            // is the fresh healthy attempt H2; the superseded H1 (this one)
+            // must observe its own token so a batch-path supersession firing
+            // H1's frame wakes H1's parked poll without depending on H2
+            // (issue #1252 review). A legacy controller (no epoch) has no
+            // dedicated frame, so it watches the top-of-stack as before.
+            let cancel_token = match self.claim_epoch {
+                Some(epoch) => cancel_registry::get_state_for_epoch(&self.job_id, epoch),
+                None => cancel_registry::get_state(&self.job_id),
+            }
+            .map(|(cancel, _ended)| cancel);
+            if let Some(tok) = &cancel_token {
+                if tok.is_cancelled() {
+                    return Err(JobError::Cancelled);
+                }
+            }
+
             let after = self.last_seen_seq.load(Ordering::SeqCst);
             let types_ref = types.as_deref();
-            match self
-                .backend
-                .list_job_events(&self.job_id, after, types_ref, wait, FETCH_LIMIT)
-                .await
-            {
+            // Executor identity: the OWNER's controller supplies
+            // `(instance_id, claim_epoch)` so the registry fences this read
+            // and extends the lease (poll-liveness). Only sent when this
+            // controller carries a real epoch — a push-mode / legacy
+            // controller reads anonymously (`None`), byte-identical to today.
+            let identity = self
+                .claim_epoch
+                .map(|epoch| (self.instance_id.as_str(), epoch));
+            let list_fut =
+                self.backend
+                    .list_job_events(&self.job_id, after, types_ref, wait, FETCH_LIMIT, identity);
+            // Race the long-poll against the cancel token so a cancel fired
+            // mid-poll returns immediately instead of after the registry's
+            // 60s cap. Poll cadence / backoff are otherwise unchanged.
+            let list_result = match &cancel_token {
+                Some(tok) => {
+                    tokio::select! {
+                        biased;
+                        _ = tok.cancelled() => return Err(JobError::Cancelled),
+                        r = list_fut => r,
+                    }
+                }
+                None => list_fut.await,
+            };
+            match list_result {
                 Ok(resp) => {
                     transient_failure_started = None;
                     // Reset exponential backoff on every successful list,
@@ -624,6 +809,26 @@ impl JobController {
                     }
                     // No event yet — loop. The deadline check at the top
                     // of the next iteration returns Ok(None) if expired.
+                }
+                Err(BackendError::ClaimSuperseded(_)) => {
+                    // The registry fenced this executor read: a newer claim
+                    // (a reclaim + fresh claim, possibly by this same
+                    // instance) superseded this execution. Fire THIS
+                    // execution's own frame — keyed by our claim epoch, never
+                    // the top-of-stack — so a healthy re-claim (H2) is not
+                    // collaterally cancelled (issue #1252 review). Then
+                    // surface `Cancelled` — indistinguishable from a user
+                    // cancel at the handler surface (no reason field).
+                    warn!(
+                        "JobController::recv_event superseded by a newer claim \
+                         (job_id={}, epoch={:?}); firing this execution's cancel \
+                         token and aborting",
+                        self.job_id, self.claim_epoch
+                    );
+                    if let Some(epoch) = self.claim_epoch {
+                        cancel_registry::cancel_superseded(&self.job_id, epoch);
+                    }
+                    return Err(JobError::Cancelled);
                 }
                 Err(e) if e.is_transient() => {
                     let started = *transient_failure_started.get_or_insert_with(Instant::now);
@@ -825,6 +1030,9 @@ impl JobProxy {
                 types.as_deref(),
                 wait.unwrap_or_default(),
                 FETCH_LIMIT,
+                // Observer read: JobProxy never claims — no executor identity,
+                // no lease side-effects (A2A / UI / meshctl all rely on this).
+                None,
             )
             .await?;
         Ok((resp.events, resp.next_after))
@@ -1036,7 +1244,13 @@ pub async fn run_as_job<F, T>(ctx: JobContext, body: F) -> T
 where
     F: Future<Output = T>,
 {
-    let generation = cancel_registry::register_active_job(&ctx.job_id, ctx.cancel_token.clone());
+    // Record the claim epoch on the frame so a supersession fires THIS
+    // execution's token by epoch, never the top-of-stack (issue #1252).
+    let generation = cancel_registry::register_active_job_with_epoch(
+        &ctx.job_id,
+        ctx.cancel_token.clone(),
+        ctx.claim_epoch,
+    );
     let _guard = CancelRegistryGuard {
         job_id: ctx.job_id.clone(),
         generation,
@@ -1146,6 +1360,13 @@ mod tests {
         events_post_returns_conflict: AtomicUsize,
         /// If set, every list_job_events returns NotFound.
         events_list_returns_not_found: AtomicUsize,
+        /// Current claim generation per job_id, as the registry would hold
+        /// it. Absent ⇒ treated as epoch 0. An executor read / delta whose
+        /// epoch mismatches this (owner check aside) is `claim_superseded`.
+        epochs: StdMutex<HashMap<String, i64>>,
+        /// Every `identity` arg seen by `list_job_events`, in call order —
+        /// lets tests assert executor (Some) vs observer (None) reads.
+        list_identities: StdMutex<Vec<Option<(String, i64)>>>,
         next_id: AtomicUsize,
         /// Auto-progress to terminal on the Nth `get_job` call. 0 = never.
         terminal_after: AtomicUsize,
@@ -1173,6 +1394,8 @@ mod tests {
                 event_posts: StdMutex::new(Vec::new()),
                 events_post_returns_conflict: AtomicUsize::new(0),
                 events_list_returns_not_found: AtomicUsize::new(0),
+                epochs: StdMutex::new(HashMap::new()),
+                list_identities: StdMutex::new(Vec::new()),
                 next_id: AtomicUsize::new(0),
                 terminal_after: AtomicUsize::new(0),
                 get_calls: AtomicUsize::new(0),
@@ -1194,6 +1417,29 @@ mod tests {
                 posted_by: None,
                 created_at: 1700000000 + seq,
             });
+        }
+        /// Set the registry-side current claim generation for a job so
+        /// tests can simulate a reclaim + fresh claim bumping the epoch out
+        /// from under a superseded owner.
+        fn set_current_epoch(&self, job_id: &str, epoch: i64) {
+            self.epochs
+                .lock()
+                .unwrap()
+                .insert(job_id.to_string(), epoch);
+        }
+        /// Current claim generation the registry holds for `job_id` (0 when
+        /// never set).
+        fn current_epoch(&self, job_id: &str) -> i64 {
+            self.epochs
+                .lock()
+                .unwrap()
+                .get(job_id)
+                .copied()
+                .unwrap_or(0)
+        }
+        /// Snapshot of every `identity` arg `list_job_events` has seen.
+        fn list_identities(&self) -> Vec<Option<(String, i64)>> {
+            self.list_identities.lock().unwrap().clone()
         }
         fn set_events_post_conflict(&self, on: bool) {
             self.events_post_returns_conflict
@@ -1288,12 +1534,34 @@ mod tests {
             instance_id: &str,
             deltas: Vec<JobDelta>,
         ) -> Result<JobBatchResponse, BackendError> {
-            let count = deltas.len() as u32;
-            // Apply deltas to in-memory state.
+            // Epoch fencing (mirrors the registry's ApplyJobDeltas): a delta
+            // carrying a claim_epoch that mismatches the job's current
+            // generation (and the job is non-terminal) is rejected
+            // claim_superseded rather than applied. Deltas without an epoch
+            // fall back to owner-only validation (always accepted here).
+            let mut rejected: Vec<crate::task_backend::RejectedDelta> = Vec::new();
             {
                 let mut jobs = self.jobs.lock().unwrap();
                 for d in &deltas {
                     if let Some(j) = jobs.get_mut(&d.id) {
+                        if let Some(epoch) = d.claim_epoch {
+                            let cur = self
+                                .epochs
+                                .lock()
+                                .unwrap()
+                                .get(&d.id)
+                                .copied()
+                                .unwrap_or(0);
+                            if epoch != cur && !j.status.is_terminal() {
+                                rejected.push(crate::task_backend::RejectedDelta {
+                                    id: d.id.clone(),
+                                    reason:
+                                        crate::task_backend::CLAIM_SUPERSEDED_REASON
+                                            .to_string(),
+                                });
+                                continue;
+                            }
+                        }
                         if let Some(s) = d.status {
                             j.status = s;
                         }
@@ -1312,14 +1580,12 @@ mod tests {
                     }
                 }
             }
+            let accepted = (deltas.len() - rejected.len()) as u32;
             self.batches
                 .lock()
                 .unwrap()
                 .push((instance_id.to_string(), deltas));
-            Ok(JobBatchResponse {
-                accepted: count,
-                rejected: vec![],
-            })
+            Ok(JobBatchResponse { accepted, rejected })
         }
 
         async fn claim_next(
@@ -1419,9 +1685,33 @@ mod tests {
             types: Option<&[String]>,
             _wait: Duration,
             limit: usize,
+            identity: Option<(&str, i64)>,
         ) -> Result<JobEventListResponse, BackendError> {
+            // Record the identity so tests can assert executor-vs-observer.
+            self.list_identities.lock().unwrap().push(
+                identity.map(|(inst, epoch)| (inst.to_string(), epoch)),
+            );
             if self.events_list_returns_not_found.load(Ordering::SeqCst) == 1 {
                 return Err(BackendError::NotFound(job_id.to_string()));
+            }
+            // Executor read: fence against the job's current owner + epoch,
+            // mirroring the registry's AuthorizeExecutorRead. Terminal jobs
+            // never fence (safe post-completion polling); a live job whose
+            // (owner, epoch) no longer matches → 409 claim_superseded.
+            if let Some((inst, epoch)) = identity {
+                if let Some(j) = self.jobs.lock().unwrap().get(job_id) {
+                    if !j.status.is_terminal() {
+                        let owner_ok =
+                            j.owner_instance_id.as_deref() == Some(inst);
+                        let epoch_ok = self.current_epoch(job_id) == epoch;
+                        if !owner_ok || !epoch_ok {
+                            return Err(BackendError::ClaimSuperseded(
+                                crate::task_backend::CLAIM_SUPERSEDED_REASON
+                                    .to_string(),
+                            ));
+                        }
+                    }
+                }
             }
             let all = self.events.lock().unwrap();
             let list = match all.get(job_id) {
@@ -2448,6 +2738,355 @@ mod tests {
             queue,
         );
         (backend, ctrl)
+    }
+
+    /// Like [`make_controller`] but the controller carries `claim_epoch`
+    /// and the mock's registry-side current epoch is seeded to `cur_epoch`
+    /// so tests can drive the match / supersede branches.
+    async fn make_controller_with_epoch(
+        job_id: &str,
+        claim_epoch: Option<i64>,
+        cur_epoch: i64,
+    ) -> (Arc<MockBackend>, JobController) {
+        let (backend, _legacy) = make_controller(job_id).await;
+        backend.set_current_epoch(job_id, cur_epoch);
+        let ctrl = JobController::new_with_epoch(
+            job_id.to_string(),
+            "inst-1".to_string(),
+            claim_epoch,
+            backend.clone() as Arc<dyn TaskBackend>,
+            new_coalescing_queue(),
+        );
+        (backend, ctrl)
+    }
+
+    // ---- claim-epoch / supersession tests -----------------------------------
+
+    #[test]
+    fn claim_epoch_accessor_reflects_construction() {
+        let backend = MockBackend::new();
+        let with_epoch = JobController::new_with_epoch(
+            "j-e",
+            "inst-1",
+            Some(7),
+            backend.clone() as Arc<dyn TaskBackend>,
+            new_coalescing_queue(),
+        );
+        assert_eq!(with_epoch.claim_epoch(), Some(7));
+        let legacy = JobController::new(
+            "j-e2",
+            "inst-1",
+            backend as Arc<dyn TaskBackend>,
+            new_coalescing_queue(),
+        );
+        assert_eq!(legacy.claim_epoch(), None);
+    }
+
+    #[tokio::test]
+    async fn deltas_carry_claim_epoch_when_present() {
+        // A controller carrying an epoch stamps it onto the deltas it
+        // flushes so the registry can fence a superseded owner. The terminal
+        // delta (flushed immediately by complete) is the deterministic probe;
+        // progress deltas go through the same stamping in update_progress.
+        let (backend, ctrl) = make_controller_with_epoch("j-delta-epoch", Some(3), 3).await;
+        ctrl.complete(serde_json::json!({"ok": true})).await.unwrap();
+        let (_, deltas) = backend.last_batch().unwrap();
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(
+            deltas[0].claim_epoch,
+            Some(3),
+            "terminal delta must carry the controller's claim epoch"
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_controller_omits_epoch_on_deltas() {
+        // A controller with no epoch (push-mode / old registry) sends
+        // deltas with claim_epoch=None — byte-identical legacy behavior.
+        let (backend, ctrl) = make_controller("j-delta-legacy").await;
+        ctrl.complete(serde_json::json!({"ok": true})).await.unwrap();
+        let (_, deltas) = backend.last_batch().unwrap();
+        assert_eq!(deltas[0].claim_epoch, None);
+    }
+
+    #[tokio::test]
+    async fn recv_event_sends_executor_identity_when_epoch_present() {
+        // The owner's controller supplies (instance_id, claim_epoch) on the
+        // event read so the registry fences + lease-extends.
+        let (backend, ctrl) = make_controller_with_epoch("j-recv-exec", Some(4), 4).await;
+        backend.push_event("j-recv-exec", "tick", serde_json::json!({}));
+        let ev = ctrl
+            .recv_event(None, Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .expect("event");
+        assert_eq!(ev.seq, 1);
+        let ids = backend.list_identities();
+        assert!(
+            ids.iter().all(|i| *i == Some(("inst-1".to_string(), 4))),
+            "executor reads must carry (inst-1, 4); got {:?}",
+            ids
+        );
+    }
+
+    #[tokio::test]
+    async fn recv_event_legacy_controller_reads_anonymously() {
+        // No epoch → anonymous observer read (no identity params).
+        let (backend, ctrl) = make_controller("j-recv-anon").await;
+        backend.push_event("j-recv-anon", "tick", serde_json::json!({}));
+        ctrl.recv_event(None, Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .expect("event");
+        let ids = backend.list_identities();
+        assert!(
+            ids.iter().all(|i| i.is_none()),
+            "legacy controller must read anonymously; got {:?}",
+            ids
+        );
+    }
+
+    #[tokio::test]
+    async fn proxy_list_events_is_anonymous_observer() {
+        // JobProxy is the observer path — never sends executor identity.
+        let backend = MockBackend::new();
+        backend.push_event("j-proxy-anon", "tick", serde_json::json!({}));
+        let proxy = JobProxy::new("j-proxy-anon", backend.clone() as Arc<dyn TaskBackend>);
+        proxy.list_events(0, None, None).await.unwrap();
+        let ids = backend.list_identities();
+        assert_eq!(ids, vec![None]);
+    }
+
+    #[tokio::test]
+    async fn supersession_fires_only_superseded_frame_not_healthy_reclaim() {
+        // Issue #1252 review, item 1 — the critical same-instance re-claim
+        // shape (every single-replica deployment). Two live frames under one
+        // job_id: the zombie H1 (epoch 1) UNDER the fresh healthy H2 (epoch
+        // 2, top-of-stack). H1's stale terminal delta is rejected
+        // claim_superseded; the cancel MUST fire ONLY H1's frame (by epoch),
+        // never the top-of-stack — else H2 dies spuriously while the zombie
+        // keeps running.
+        let (_backend, h1_ctrl) =
+            make_controller_with_epoch("j-reclaim", Some(1), 2).await;
+        let h1_token = CancellationToken::new();
+        let h2_token = CancellationToken::new();
+        let g1 = cancel_registry::register_active_job_with_epoch(
+            "j-reclaim",
+            h1_token.clone(),
+            Some(1),
+        );
+        let g2 = cancel_registry::register_active_job_with_epoch(
+            "j-reclaim",
+            h2_token.clone(),
+            Some(2),
+        );
+
+        // H1 (epoch 1) posts its terminal delta → mock's current epoch is 2
+        // → rejected claim_superseded → fire H1's frame only.
+        h1_ctrl
+            .complete(serde_json::json!({"ok": true}))
+            .await
+            .unwrap();
+
+        assert!(
+            h1_token.is_cancelled(),
+            "the superseded zombie H1 (epoch 1) must be cancelled"
+        );
+        assert!(
+            !h2_token.is_cancelled(),
+            "the healthy re-claim H2 (epoch 2, top-of-stack) must be UNTOUCHED"
+        );
+
+        cancel_registry::unregister_active_job("j-reclaim", g1);
+        cancel_registry::unregister_active_job("j-reclaim", g2);
+    }
+
+    #[tokio::test]
+    async fn is_cancelled_reads_own_epoch_frame_not_top_of_stack() {
+        // Issue #1252 review (Java path): `controller.is_cancelled()` is the
+        // ONLY supersession-observation surface for a CPU-bound handler that
+        // can't be interrupted by a Tokio token. It MUST read this
+        // execution's OWN frame. Same-instance re-claim: H1 (epoch 1) UNDER
+        // H2 (epoch 2, top). When H1's frame is fired, H1's controller must
+        // see is_cancelled()==true while H2's controller stays false.
+        let backend = MockBackend::new();
+        backend.jobs.lock().unwrap().insert(
+            "j-iscancel".to_string(),
+            Job {
+                id: "j-iscancel".to_string(),
+                capability: "cap".into(),
+                owner_instance_id: Some("inst-1".into()),
+                status: JobStatus::Working,
+                progress: None,
+                progress_message: None,
+                result: None,
+                error: None,
+                submitted_payload: serde_json::json!({}),
+                attempt_count: 0,
+                max_retries: 1,
+                max_duration: None,
+                total_deadline: None,
+                lease_expires_at: None,
+                last_heartbeat_at: None,
+                submitted_at: 0,
+                submitted_by: "client-1".into(),
+            },
+        );
+        let h1_ctrl = JobController::new_with_epoch(
+            "j-iscancel",
+            "inst-1",
+            Some(1),
+            backend.clone() as Arc<dyn TaskBackend>,
+            new_coalescing_queue(),
+        );
+        let h2_ctrl = JobController::new_with_epoch(
+            "j-iscancel",
+            "inst-1",
+            Some(2),
+            backend.clone() as Arc<dyn TaskBackend>,
+            new_coalescing_queue(),
+        );
+
+        // Register both execution frames (H1 under H2). The frame tokens are
+        // what is_cancelled() observes.
+        let h1_token = CancellationToken::new();
+        let h2_token = CancellationToken::new();
+        let g1 = cancel_registry::register_active_job_with_epoch(
+            "j-iscancel",
+            h1_token.clone(),
+            Some(1),
+        );
+        let g2 = cancel_registry::register_active_job_with_epoch(
+            "j-iscancel",
+            h2_token.clone(),
+            Some(2),
+        );
+
+        // Nothing fired yet.
+        assert!(!h1_ctrl.is_cancelled().await);
+        assert!(!h2_ctrl.is_cancelled().await);
+
+        // Supersede H1 (epoch 1) — fires only H1's frame.
+        assert!(cancel_registry::cancel_superseded("j-iscancel", 1));
+
+        assert!(
+            h1_ctrl.is_cancelled().await,
+            "superseded H1 must observe its own frame fired"
+        );
+        assert!(
+            !h2_ctrl.is_cancelled().await,
+            "healthy H2 (top-of-stack) must NOT read cancelled"
+        );
+
+        cancel_registry::unregister_active_job("j-iscancel", g1);
+        cancel_registry::unregister_active_job("j-iscancel", g2);
+    }
+
+    #[tokio::test]
+    async fn recv_event_supersession_fires_cancel_and_returns_cancelled() {
+        // Controller carries epoch 1 but the registry bumped the current
+        // generation to 2 (a reclaim + fresh claim). The executor read is
+        // fenced → 409 claim_superseded → recv_event fires the job's cancel
+        // token and returns Cancelled (indistinguishable from user cancel).
+        let (backend, ctrl) = make_controller_with_epoch("j-super", Some(1), 2).await;
+        backend.push_event("j-super", "tick", serde_json::json!({}));
+        // Register the job so the fired cancel is observable (as run_as_job
+        // would in production). Frame carries this execution's epoch (1) so
+        // the epoch-keyed supersession fires it.
+        let token = CancellationToken::new();
+        let generation =
+            cancel_registry::register_active_job_with_epoch("j-super", token.clone(), Some(1));
+
+        let started = Instant::now();
+        let err = ctrl
+            .recv_event(None, Some(Duration::from_secs(5)))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, JobError::Cancelled),
+            "supersession must surface as Cancelled, got {:?}",
+            err
+        );
+        assert!(token.is_cancelled(), "supersession must fire the cancel token");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "must return promptly, took {:?}",
+            started.elapsed()
+        );
+        cancel_registry::unregister_active_job("j-super", generation);
+    }
+
+    #[tokio::test]
+    async fn batch_superseded_rejection_fires_cancel() {
+        // A terminal (or progress) delta rejected claim_superseded on
+        // /jobs/batch drives the SAME cancel path as an executor-read 409.
+        let (backend, ctrl) = make_controller_with_epoch("j-batch-super", Some(1), 2).await;
+        let token = CancellationToken::new();
+        let generation = cancel_registry::register_active_job_with_epoch(
+            "j-batch-super",
+            token.clone(),
+            Some(1),
+        );
+
+        // complete() flushes a terminal delta immediately; the mock rejects
+        // it (epoch 1 != current 2, job still non-terminal) as
+        // claim_superseded. flush_terminal still returns Ok — the cancel is
+        // the surfacing mechanism.
+        ctrl.complete(serde_json::json!({"ok": true})).await.unwrap();
+        assert!(
+            token.is_cancelled(),
+            "a claim_superseded batch rejection must fire the cancel token"
+        );
+        // The delta was rejected, not applied.
+        let (_, deltas) = backend.last_batch().unwrap();
+        assert_eq!(deltas[0].claim_epoch, Some(1));
+        cancel_registry::unregister_active_job("j-batch-super", generation);
+    }
+
+    // Multi-thread flavor: the mock's `list_job_events` returns instantly,
+    // so `recv_event` becomes a CPU hot-loop (a real registry long-poll is a
+    // pending future). On a single-threaded runtime that starves the timer
+    // driver and the canceller task never fires. A real deployment never hot-
+    // loops; the multi-thread runtime lets the concurrent canceller run so
+    // this exercises the per-iteration cancel check + prompt return.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn recv_event_long_poll_interrupts_on_user_cancel() {
+        // Regression for the blocked-gate case: a handler parked in
+        // recv_event with no events must break out promptly when the job's
+        // cancel token fires (user cancel), returning Cancelled rather than
+        // running to the full timeout. Uses a legacy (no-epoch) controller
+        // so this is pure user-cancel, no supersession.
+        let (_backend, ctrl) = make_controller("j-longpoll-cancel").await;
+        let token = CancellationToken::new();
+        let generation =
+            cancel_registry::register_active_job("j-longpoll-cancel", token.clone());
+
+        let ctrl_clone = ctrl.clone();
+        let recv = tokio::spawn(async move {
+            ctrl_clone
+                .recv_event(None, Some(Duration::from_secs(10)))
+                .await
+        });
+        // Fire the cancel shortly after the recv parks.
+        sleep(Duration::from_millis(80)).await;
+        assert!(cancel_registry::cancel_active_job("j-longpoll-cancel"));
+
+        let started = Instant::now();
+        let result = tokio::time::timeout(Duration::from_secs(3), recv)
+            .await
+            .expect("recv_event must return after cancel")
+            .unwrap();
+        assert!(
+            matches!(result, Err(JobError::Cancelled)),
+            "user cancel must surface as Cancelled, got {:?}",
+            result
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "cancel must interrupt the poll promptly, took {:?}",
+            started.elapsed()
+        );
+        cancel_registry::unregister_active_job("j-longpoll-cancel", generation);
     }
 
     #[tokio::test]

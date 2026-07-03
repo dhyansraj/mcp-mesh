@@ -250,9 +250,14 @@ async fn run_loop(
                         "Claim worker: dispatching job {} (attempt={})",
                         claimed.id, claimed.attempt_count
                     );
-                    let controller = JobController::new(
+                    // Carry the claim generation the registry minted for this
+                    // claim so the controller fences its deltas + executor
+                    // reads (issue #1252). `None` (old registry) degrades to
+                    // legacy owner-only behavior.
+                    let controller = JobController::new_with_epoch(
                         claimed.id.clone(),
                         cfg.instance_id.clone(),
+                        claimed.claim_epoch,
                         backend.clone(),
                         queue.clone(),
                     );
@@ -366,6 +371,7 @@ mod tests {
             id: format!("job-{}", i),
             submitted_payload: serde_json::json!({"i": i}),
             attempt_count: 1,
+            claim_epoch: Some(1),
             lease_expires_at: None,
             max_duration: None,
         }
@@ -426,6 +432,7 @@ mod tests {
             _types: Option<&[String]>,
             _wait: Duration,
             _limit: usize,
+            _identity: Option<(&str, i64)>,
         ) -> Result<crate::task_backend::JobEventListResponse, BackendError> {
             // Claim-worker tests don't exercise the event channel.
             Ok(crate::task_backend::JobEventListResponse {

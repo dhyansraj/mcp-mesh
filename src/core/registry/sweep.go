@@ -120,29 +120,45 @@ func LoadSweepConfigFromEnv(log *logger.Logger) SweepConfig {
 
 	// MCP_MESH_JOB_STALE_TIMEOUT: a DEFAULT total-runtime ceiling for jobs
 	// that didn't set their own total_deadline (measured from submitted_at).
-	// Parsed exactly like MCP_MESH_RETENTION except the default is 0
-	// (DISABLED) — the feature is opt-in, so unset means the stale-job phase
-	// scans zero rows.
-	//   - unset / empty: 0 (disabled)
-	//   - positive duration (e.g. "2h", "30m"): use that value
-	//   - "0" / "0s": disabled (same as unset)
-	//   - negative: warn and stay disabled (likely a typo)
-	//   - invalid: warn and stay disabled
-	if v := os.Getenv("MCP_MESH_JOB_STALE_TIMEOUT"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			if d < 0 {
-				if log != nil {
-					log.Warning("Invalid MCP_MESH_JOB_STALE_TIMEOUT %q: negative durations are not allowed (use 0 / unset to disable); leaving stale-job sweep disabled", v)
-				}
-			} else {
-				cfg.JobStaleTimeout = d
-			}
-		} else if log != nil {
-			log.Warning("Invalid MCP_MESH_JOB_STALE_TIMEOUT %q, leaving stale-job sweep disabled: %v", v, err)
+	// Parsed by the shared parseJobStaleTimeoutEnv so the sweep's reap ceiling
+	// and the poll-liveness lease cap (AuthorizeExecutorRead) cannot drift.
+	// The feature is opt-in (default 0 = disabled); invalid/negative config
+	// warns here and stays disabled.
+	if d, err := parseJobStaleTimeoutEnv(); err != nil {
+		if log != nil {
+			log.Warning("%v; leaving stale-job sweep disabled", err)
 		}
+	} else {
+		cfg.JobStaleTimeout = d
 	}
 
 	return cfg
+}
+
+// parseJobStaleTimeoutEnv reads and validates MCP_MESH_JOB_STALE_TIMEOUT, the
+// DEFAULT total-runtime ceiling applied to jobs that set no total_deadline
+// (measured from submitted_at). It is the single source of truth shared by
+// LoadSweepConfigFromEnv (which logs the returned error) and the poll-liveness
+// lease cap in AuthorizeExecutorRead (which silently disables) so the two
+// derivations of the #1244 ceiling cannot drift. Semantics:
+//   - unset / empty ⇒ (0, nil)   (disabled — the common opt-out)
+//   - positive duration ⇒ (d, nil)
+//   - "0" / "0s" ⇒ (0, nil)      (explicitly disabled)
+//   - negative ⇒ (0, err)        (likely a typo)
+//   - unparseable ⇒ (0, err)
+func parseJobStaleTimeoutEnv() (time.Duration, error) {
+	v := os.Getenv("MCP_MESH_JOB_STALE_TIMEOUT")
+	if v == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, fmt.Errorf("Invalid MCP_MESH_JOB_STALE_TIMEOUT %q: %v", v, err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("Invalid MCP_MESH_JOB_STALE_TIMEOUT %q: negative durations are not allowed (use 0 / unset to disable)", v)
+	}
+	return d, nil
 }
 
 // SweepJob purges stale agents, old registry events, and orphan schema

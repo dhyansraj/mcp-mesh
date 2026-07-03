@@ -39,18 +39,24 @@ import { CURRENT_JOB, type JobContextSnapshot } from "./job-context.js";
 
 const _HDR_JOB_ID = "x-mesh-job-id";
 const _HDR_TIMEOUT = "x-mesh-timeout";
+// Claim generation minted by the registry on POST /jobs/claim (issue #1252).
+// Seeded by the claim dispatcher; absent on the push-mode inbound path.
+const _HDR_CLAIM_EPOCH = "x-mesh-claim-epoch";
 
 /**
- * Read `X-Mesh-Job-Id` / `X-Mesh-Timeout` from a header dict (case
- * normalised to lowercase). Returns `[null, null]` when absent or
- * malformed.
+ * Read `X-Mesh-Job-Id` / `X-Mesh-Timeout` / `X-Mesh-Claim-Epoch` from a
+ * header dict (case normalised to lowercase). Returns
+ * `[null, null, null]` when the job id is absent. `claimEpoch` is present
+ * only on the claim path; a push-mode inbound job leaves it `null` (legacy
+ * owner-only fencing) — a non-negative integer is required (never fabricate
+ * a `0` the registry didn't mint).
  */
 export function readJobHeaders(
   headers: Record<string, string> | null | undefined,
-): [string | null, number | null] {
-  if (!headers) return [null, null];
+): [string | null, number | null, number | null] {
+  if (!headers) return [null, null, null];
   const jobId = headers[_HDR_JOB_ID] ?? null;
-  if (!jobId) return [null, null];
+  if (!jobId) return [null, null, null];
   const timeoutRaw = headers[_HDR_TIMEOUT];
   let deadlineSecs: number | null = null;
   if (timeoutRaw) {
@@ -59,7 +65,15 @@ export function readJobHeaders(
       deadlineSecs = parsed;
     }
   }
-  return [jobId, deadlineSecs];
+  const epochRaw = headers[_HDR_CLAIM_EPOCH];
+  let claimEpoch: number | null = null;
+  if (epochRaw !== undefined && epochRaw !== "") {
+    const parsed = Number.parseInt(epochRaw, 10);
+    if (Number.isInteger(parsed) && parsed >= 0) {
+      claimEpoch = parsed;
+    }
+  }
+  return [jobId, deadlineSecs, claimEpoch];
 }
 
 /**
@@ -133,6 +147,7 @@ export async function runWithJobContext<T>(
   controller: JobController | null,
   invoke: () => Promise<T>,
   retryOn?: ReadonlyArray<new (...args: unknown[]) => Error>,
+  claimEpoch: number | null = null,
 ): Promise<T> {
   if (!jobId || !controller) {
     // Not a job — run directly.
@@ -142,6 +157,7 @@ export async function runWithJobContext<T>(
   const snap: JobContextSnapshot = {
     jobId,
     deadlineSecsRemaining: deadlineSecs,
+    claimEpoch,
   };
 
   // Auto-complete on successful return iff the user didn't already
@@ -273,7 +289,9 @@ export async function runWithJobContext<T>(
   // pulled from `captured` after the await resolves.
   return CURRENT_JOB.run(snap, async () => {
     const body = runAndAutoComplete();
-    await withJobAsync(jobId, deadlineSecs, body);
+    // Bind claim_epoch onto the Rust JobContext so currentJob() exposes it
+    // (issue #1252). The napi core ships with this SDK in lockstep.
+    await withJobAsync(jobId, deadlineSecs, body, claimEpoch ?? undefined);
     if (!didCapture) {
       if (suppressed) {
         // Issue #894: the user threw a retryOn-matched exception and the
@@ -307,8 +325,17 @@ export function makeJobController(
   jobId: string,
   instanceId: string,
   registryUrl: string,
+  claimEpoch?: number | null,
 ): JobController {
-  return new JobController(jobId, instanceId, registryUrl);
+  // `claimEpoch` undefined/null (push-mode inbound job / old registry) ⇒
+  // legacy owner-only fencing; on the claim path the dispatcher passes the
+  // epoch from the /jobs/claim response so this execution is fenced (#1252).
+  return new JobController(
+    jobId,
+    instanceId,
+    registryUrl,
+    claimEpoch ?? undefined,
+  );
 }
 
 /**

@@ -163,13 +163,23 @@ impl PyJobController {
     /// configured cadence (default 2s); the tick is torn down with a final
     /// flush when the controller is dropped.
     #[new]
-    #[pyo3(signature = (job_id, instance_id, registry_url))]
-    fn new(job_id: String, instance_id: String, registry_url: &str) -> PyResult<Self> {
+    #[pyo3(signature = (job_id, instance_id, registry_url, claim_epoch=None))]
+    fn new(
+        job_id: String,
+        instance_id: String,
+        registry_url: &str,
+        claim_epoch: Option<i64>,
+    ) -> PyResult<Self> {
         let backend = backend_from_url(registry_url)?;
         let queue = new_coalescing_queue();
-        let inner = JobController::new(
+        // `claim_epoch=None` (push-mode inbound job, or an old registry that
+        // predates epochs) ⇒ legacy owner-only behavior. On the claim path
+        // the SDK passes the epoch from the `/jobs/claim` response so this
+        // execution is fenced (issue #1252).
+        let inner = JobController::new_with_epoch(
             job_id,
             instance_id.clone(),
+            claim_epoch,
             backend.clone(),
             queue.clone(),
         );
@@ -196,6 +206,14 @@ impl PyJobController {
     #[getter]
     fn job_id(&self) -> String {
         self.inner.job_id().to_string()
+    }
+
+    /// The claim generation this controller executes under, or ``None`` for
+    /// a push-mode inbound job / an old registry. Additive read accessor
+    /// (issue #1252) so handlers can stamp side effects for dedupe.
+    #[getter]
+    fn claim_epoch(&self) -> Option<i64> {
+        self.inner.claim_epoch()
     }
 
     /// Enqueue a progress update. Coalesces with any prior pending progress
@@ -618,12 +636,13 @@ pub fn await_job_cancel_py<'py>(
 ///
 /// Returns a Python coroutine; callers `await` it on asyncio.
 #[pyfunction(name = "with_job_async")]
-#[pyo3(signature = (job_id, deadline_secs, awaitable))]
+#[pyo3(signature = (job_id, deadline_secs, awaitable, claim_epoch=None))]
 pub fn with_job_async_py<'py>(
     py: Python<'py>,
     job_id: String,
     deadline_secs: Option<f64>,
     awaitable: Bound<'py, PyAny>,
+    claim_epoch: Option<i64>,
 ) -> PyResult<Bound<'py, PyAny>> {
     // Build the JobContext on the Rust side (the deadline is set relative
     // to "now" on the Tokio runtime, which matches the semantics of the
@@ -649,6 +668,9 @@ pub fn with_job_async_py<'py>(
         }
         _ => JobContext::new(job_id.clone()),
     };
+    // Carry the claim generation so `current_job()` can expose it (issue
+    // #1252). Additive — `None` leaves the surface unchanged.
+    let ctx = ctx.with_claim_epoch(claim_epoch);
 
     // Race fix: register the cancel token in the process-wide registry
     // BEFORE `into_future` schedules the Python coroutine on asyncio. The
@@ -662,7 +684,11 @@ pub fn with_job_async_py<'py>(
     // that as a real cancel and abort the user task immediately. By
     // registering here — synchronously, before any asyncio scheduling
     // happens — the watcher always observes a live entry.
-    let generation = cancel_registry::register_active_job(&job_id, ctx.cancel_token.clone());
+    let generation = cancel_registry::register_active_job_with_epoch(
+        &job_id,
+        ctx.cancel_token.clone(),
+        ctx.claim_epoch,
+    );
     // Panic-safe RAII: cleanup runs whether the body completes normally,
     // returns Err, or panics. Mirrors `CancelRegistryGuard` in
     // `jobs.rs::run_as_job`. Carries the registration generation so only
@@ -732,7 +758,8 @@ pub fn with_job_async_py<'py>(
 /// `_mcp_mesh.engine.job_context.JobContextSnapshot`:
 ///
 /// ```python
-/// {"job_id": str, "deadline_secs_remaining": Optional[int]}
+/// {"job_id": str, "deadline_secs_remaining": Optional[int],
+///  "claim_epoch": Optional[int]}
 /// ```
 ///
 /// Source of truth is the Rust [`crate::job_context`] (set via
@@ -746,6 +773,7 @@ pub fn current_job_py(py: Python<'_>) -> PyResult<Option<Py<PyDict>>> {
             let remaining = ctx.remaining_seconds();
             dict.set_item("job_id", ctx.job_id)?;
             dict.set_item("deadline_secs_remaining", remaining)?;
+            dict.set_item("claim_epoch", ctx.claim_epoch)?;
             Ok(Some(dict.unbind()))
         }
     }

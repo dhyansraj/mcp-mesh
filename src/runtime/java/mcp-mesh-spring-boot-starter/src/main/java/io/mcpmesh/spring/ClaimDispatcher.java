@@ -434,10 +434,15 @@ public final class ClaimDispatcher implements AutoCloseable {
         if (maxDur instanceof Number n && n.longValue() > 0) {
             deadlineSecs = n.longValue();
         }
+        // Claim generation minted by the registry on this claim (issue #1252).
+        // Fences the controller's deltas + executor reads so a supersession
+        // aborts this attempt. Absent on an old registry ⇒ null ⇒ legacy
+        // owner-only fencing; never fabricate a 0 the registry didn't mint.
+        Long claimEpoch = extractClaimEpoch(claimed.get("claim_epoch"));
 
         JobController controller;
         try {
-            controller = JobController.open(jobId, instanceId, registryUrl);
+            controller = JobController.open(jobId, instanceId, registryUrl, claimEpoch);
         } catch (Exception e) {
             log.warn("[mesh-claim] failed to construct controller for job={}: {}", jobId, e.getMessage());
             // Best-effort: tell the registry we failed so the row doesn't
@@ -454,9 +459,9 @@ public final class ClaimDispatcher implements AutoCloseable {
             // so nested mesh_job_controller_* block_on calls are legal.
             // See MeshToolWrapper.dispatchAsJob class javadoc for the
             // full rationale (resolved via #889).
-            JobContext.Snapshot snap = new JobContext.Snapshot(jobId, deadlineSecs);
+            JobContext.Snapshot snap = new JobContext.Snapshot(jobId, deadlineSecs, claimEpoch);
             try {
-                runAsJobWithRegistryBinding(jobId, deadlineSecs, () -> {
+                runAsJobWithRegistryBinding(jobId, deadlineSecs, claimEpoch, () -> {
                     JobContext.withJob(snap, () -> {
                         runHandler(payload, controller);
                         return null;
@@ -647,9 +652,10 @@ public final class ClaimDispatcher implements AutoCloseable {
      * inside the user-supplied callable.
      */
     private Object runAsJobWithRegistryBinding(
-            String jobId, Long deadlineSecs, java.util.concurrent.Callable<Object> body)
+            String jobId, Long deadlineSecs, Long claimEpoch,
+            java.util.concurrent.Callable<Object> body)
             throws Exception {
-        String snapshotJson = buildRunAsJobSnapshot(jobId, deadlineSecs);
+        String snapshotJson = buildRunAsJobSnapshot(jobId, deadlineSecs, claimEpoch);
         Object[] resultBox = new Object[1];
         Throwable[] thrownBox = new Throwable[1];
         MeshCore core = MeshCore.load();
@@ -675,16 +681,34 @@ public final class ClaimDispatcher implements AutoCloseable {
         return resultBox[0];
     }
 
-    private static String buildRunAsJobSnapshot(String jobId, Long deadlineSecs) {
+    static String buildRunAsJobSnapshot(String jobId, Long deadlineSecs, Long claimEpoch) {
         try {
             java.util.Map<String, Object> snap = new java.util.LinkedHashMap<>();
             snap.put("job_id", jobId);
             snap.put("deadline_secs", deadlineSecs);
+            // Additive (issue #1252): carry the claim generation so the Rust
+            // JobContext exposes it via mesh_current_job. null ⇒ legacy.
+            snap.put("claim_epoch", claimEpoch);
             return MAPPER.writeValueAsString(snap);
         } catch (Exception e) {
             throw new IllegalStateException(
                 "failed to serialize mesh_run_as_job snapshot for job=" + jobId, e);
         }
+    }
+
+    /**
+     * Coerce a claim-response {@code claim_epoch} value (Jackson deserializes
+     * it as an Integer/Long) into a {@link Long} generation, or {@code null}
+     * when absent / malformed / negative (issue #1252). Only a registry-minted
+     * non-negative generation is a real epoch — a genuine {@code 0} is valid;
+     * never fabricate one the registry didn't mint.
+     */
+    static Long extractClaimEpoch(Object raw) {
+        if (raw instanceof Number n) {
+            long v = n.longValue();
+            return v >= 0 ? v : null;
+        }
+        return null;
     }
 
     private static String readLastError(MeshCore core) {

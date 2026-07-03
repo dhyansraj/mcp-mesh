@@ -249,6 +249,13 @@ class MeshJob(Protocol):
           keeps running; ``complete`` / ``fail`` exit ``input_required``.
         - ``await job.complete(result)`` — terminal success.
         - ``await job.fail(error)`` — terminal failure.
+        - ``job.claim_epoch`` *(since v2.8)* — the claim generation this
+          attempt executes under (``int``), or ``None`` for a push-mode
+          inbound job / an old registry. Read-only; useful to stamp on side
+          effects so a superseded re-execution's writes are distinguishable
+          downstream. Supersession itself surfaces through the existing
+          cancellation path (``CancelledError`` in the handler) — no polling
+          of this value is required.
         - ``await job.recv_event(types=None, timeout_secs=None)`` *(since v2.2)* —
           wait for the next event posted into this job's event channel.
           Returns the event dict ``{job_id, seq, type, payload, trace_context,
