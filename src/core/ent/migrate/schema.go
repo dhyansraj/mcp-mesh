@@ -184,6 +184,7 @@ var (
 		{Name: "job_id", Type: field.TypeString},
 		{Name: "capability", Type: field.TypeString},
 		{Name: "owner_instance_id", Type: field.TypeString, Nullable: true},
+		{Name: "claim_epoch", Type: field.TypeInt64, Default: 0},
 		{Name: "status", Type: field.TypeEnum, Enums: []string{"working", "input_required", "completed", "failed", "cancelled"}, Default: "working"},
 		{Name: "progress", Type: field.TypeFloat64, Nullable: true},
 		{Name: "progress_message", Type: field.TypeString, Nullable: true},
@@ -208,12 +209,12 @@ var (
 			{
 				Name:    "job_capability_status",
 				Unique:  false,
-				Columns: []*schema.Column{JobsColumns[1], JobsColumns[3]},
+				Columns: []*schema.Column{JobsColumns[1], JobsColumns[4]},
 			},
 			{
 				Name:    "job_lease_expires_at",
 				Unique:  false,
-				Columns: []*schema.Column{JobsColumns[13]},
+				Columns: []*schema.Column{JobsColumns[14]},
 			},
 			{
 				Name:    "job_owner_instance_id",
@@ -223,12 +224,12 @@ var (
 			{
 				Name:    "job_status",
 				Unique:  false,
-				Columns: []*schema.Column{JobsColumns[3]},
+				Columns: []*schema.Column{JobsColumns[4]},
 			},
 			{
 				Name:    "job_submitted_at_job_id",
 				Unique:  false,
-				Columns: []*schema.Column{JobsColumns[15], JobsColumns[0]},
+				Columns: []*schema.Column{JobsColumns[16], JobsColumns[0]},
 			},
 		},
 	}

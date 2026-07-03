@@ -351,6 +351,7 @@ func (h *EntBusinessLogicHandlers) SubmitJobBatch(c *gin.Context) {
 		}
 		in := JobDeltaInput{
 			ID:              d.Id,
+			ClaimEpoch:      d.ClaimEpoch,
 			ProgressMessage: d.ProgressMessage,
 			Error:           d.Error,
 		}
@@ -397,13 +398,14 @@ func (h *EntBusinessLogicHandlers) SubmitJobBatch(c *gin.Context) {
 // concurrent claimers via guarded UPDATE inside the service layer; "no
 // work available" is a 200 with claimed=[] (not an error).
 //
-// Honesty note on re-claims after a lease reclaim: claiming a job whose
-// previous lease expired does NOT fence out the previous execution. If the
-// same instance re-claims (the only possibility in a single-replica
-// deployment), deltas from the original still-running handler pass the
-// owner check and are accepted alongside the new execution's. State stays
-// consistent — the first terminal delta wins — but the handler may run
-// twice concurrently. See ReclaimExpiredLeaseJobs.
+// Fencing: every successful claim bumps the job's claim_epoch (see
+// ClaimNextJob), returned here as ClaimedJob.claim_epoch. The owner echoes it
+// on /jobs/batch deltas and on executor reads of GET /jobs/{id}/events; a
+// reclaim + fresh claim (even by the SAME instance in a single-replica
+// deployment) mints a new epoch, so the previous execution's writes and reads
+// are fenced as claim_superseded. State stays consistent (the first terminal
+// delta wins) AND the superseded handler is signalled to abort. See
+// ReclaimExpiredLeaseJobs and AuthorizeExecutorRead.
 func (h *EntBusinessLogicHandlers) ClaimJobs(c *gin.Context) {
 	var req generated.ClaimJobsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -442,6 +444,7 @@ func (h *EntBusinessLogicHandlers) ClaimJobs(c *gin.Context) {
 		entry := generated.ClaimedJob{
 			Id:               claimed.ID,
 			AttemptCount:     claimed.AttemptCount,
+			ClaimEpoch:       claimed.ClaimEpoch,
 			SubmittedPayload: claimed.SubmittedPayload,
 			MaxDuration:      claimed.MaxDuration,
 		}
@@ -1019,6 +1022,12 @@ func (h *EntBusinessLogicHandlers) PostJobEvent(c *gin.Context, jobId string) {
 // next_after in the response is the seq of the last returned event (or the
 // same `after` the caller sent if nothing arrived). Callers feed it back
 // in to skip past already-seen events.
+//
+// Executor vs. observer read: when the caller supplies BOTH instance_id and
+// claim_epoch the read is fenced against the job's current owner + claim
+// generation — a stale pair returns 409 claim_superseded, a matching pair on
+// a live job extends the lease (poll-liveness credit). Either param absent is
+// an anonymous observer read, served unchanged with no lease side-effects.
 func (h *EntBusinessLogicHandlers) ListJobEvents(c *gin.Context, jobId string, params generated.ListJobEventsParams) {
 	if jobId == "" {
 		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
@@ -1026,6 +1035,58 @@ func (h *EntBusinessLogicHandlers) ListJobEvents(c *gin.Context, jobId string, p
 			Timestamp: time.Now().UTC(),
 		})
 		return
+	}
+
+	// Executor vs. observer read. Both instance_id AND claim_epoch identify
+	// the caller as the job's current owner: the read is fenced (409
+	// claim_superseded if stale) and, when valid, extends the lease
+	// (poll-liveness). Either param absent ⇒ anonymous observer read, served
+	// byte-identically to before with no lease side-effects (A2A / UI /
+	// meshctl / recv_event-without-identity all rely on this).
+	hasInstance := params.InstanceId != nil && *params.InstanceId != ""
+	hasEpoch := params.ClaimEpoch != nil
+	if hasInstance != hasEpoch {
+		// Half-supplied identity: the two params are paired by contract, so a
+		// lone one is almost certainly an SDK bug. Fail loudly rather than
+		// silently degrading to an observer read (which would drop fencing and
+		// poll-liveness credit without any signal).
+		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
+			Error:     "instance_id and claim_epoch must be supplied together (both for an executor read, or neither for an observer read)",
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+	executorRead := hasInstance && hasEpoch
+	if executorRead {
+		outcome, err := h.entService.AuthorizeExecutorRead(
+			c.Request.Context(), jobId, *params.InstanceId, *params.ClaimEpoch,
+		)
+		if err != nil {
+			if errors.Is(err, ErrJobNotFound) {
+				c.JSON(http.StatusNotFound, generated.ErrorResponse{
+					Error:     fmt.Sprintf("job not found: %s", jobId),
+					Timestamp: time.Now().UTC(),
+				})
+				return
+			}
+			c.JSON(http.StatusServiceUnavailable, generated.ErrorResponse{
+				Error:     fmt.Sprintf("Failed to authorize executor read: %v", err),
+				Timestamp: time.Now().UTC(),
+			})
+			return
+		}
+		if outcome == ExecutorReadSuperseded {
+			c.JSON(http.StatusConflict, generated.ErrorResponse{
+				Error:     JobDeltaRejectionClaimSuperseded,
+				Timestamp: time.Now().UTC(),
+			})
+			return
+		}
+		// ExecutorReadExtended / ExecutorReadTerminal fall through to serve
+		// events exactly as an observer read would (terminal jobs got no lease
+		// write; live matches got their lease extended above). AuthorizeExecutorRead
+		// already proved the job exists, so the event read below skips the
+		// redundant existence lookup (see executorRead branch).
 	}
 
 	after := int64(0)
@@ -1063,14 +1124,32 @@ func (h *EntBusinessLogicHandlers) ListJobEvents(c *gin.Context, jobId string, p
 		}
 	}
 
-	events, err := h.entService.ListJobEvents(
-		c.Request.Context(),
-		jobId,
-		after,
-		types,
-		time.Duration(waitSeconds)*time.Second,
-		limit,
+	// Executor reads already confirmed existence in AuthorizeExecutorRead, so
+	// they use the existence-check-free core; observer reads use the public
+	// wrapper (which does the Exist lookup that surfaces 404).
+	var (
+		events []*ent.JobEvent
+		err    error
 	)
+	if executorRead {
+		events, err = h.entService.listJobEventsCore(
+			c.Request.Context(),
+			jobId,
+			after,
+			types,
+			time.Duration(waitSeconds)*time.Second,
+			limit,
+		)
+	} else {
+		events, err = h.entService.ListJobEvents(
+			c.Request.Context(),
+			jobId,
+			after,
+			types,
+			time.Duration(waitSeconds)*time.Second,
+			limit,
+		)
+	}
 	if err != nil {
 		if errors.Is(err, ErrJobNotFound) {
 			c.JSON(http.StatusNotFound, generated.ErrorResponse{

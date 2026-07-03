@@ -1,5 +1,6 @@
 package io.mcpmesh.spring;
 
+import io.mcpmesh.JobContext;
 import io.mcpmesh.JobController;
 import io.mcpmesh.MeshJob;
 import io.mcpmesh.MeshJobSubmitter;
@@ -169,6 +170,33 @@ class MeshToolWrapperJobTest {
         // resolved instance id / registry url yet).
         assertDoesNotThrow(() -> w.setJobBindingContext(null, null));
         assertDoesNotThrow(() -> w.setJobBindingContext("id", "http://x"));
+    }
+
+    // ---- Issue #1252: claim-epoch threading ---------------------------------
+
+    @Test
+    void parseClaimEpochHeader_parsesValidRejectsNegativeAndMalformed() {
+        // Registry-minted generation (a legitimate 0 is a real epoch).
+        assertEquals(5L, MeshToolWrapper.parseClaimEpochHeader("5"));
+        assertEquals(0L, MeshToolWrapper.parseClaimEpochHeader("0"));
+        assertEquals(9L, MeshToolWrapper.parseClaimEpochHeader("  9  "));
+        // Absent / empty / negative / malformed ⇒ null ⇒ legacy owner-only
+        // fencing; never fabricate a 0 the registry didn't mint.
+        assertNull(MeshToolWrapper.parseClaimEpochHeader(null));
+        assertNull(MeshToolWrapper.parseClaimEpochHeader(""));
+        assertNull(MeshToolWrapper.parseClaimEpochHeader("-1"));
+        assertNull(MeshToolWrapper.parseClaimEpochHeader("abc"));
+    }
+
+    @Test
+    void snapshot_populatesClaimEpoch_legacyConstructorYieldsNull() {
+        // The dispatch wrapper binds a Snapshot carrying the epoch so
+        // JobContext.current().claimEpoch surfaces it to handlers (#1252).
+        JobContext.Snapshot withEpoch = new JobContext.Snapshot("job-1", 30L, 7L);
+        assertEquals(7L, withEpoch.claimEpoch);
+        // Legacy push-mode inbound / old registry ⇒ null.
+        JobContext.Snapshot legacy = new JobContext.Snapshot("job-1", 30L);
+        assertNull(legacy.claimEpoch, "legacy 2-arg Snapshot must leave claimEpoch null");
     }
 
     @Test

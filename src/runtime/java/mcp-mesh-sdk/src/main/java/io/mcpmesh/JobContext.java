@@ -52,16 +52,32 @@ public final class JobContext {
         public final String jobId;
         /** Seconds remaining on the deadline, or null if no deadline is set. */
         public final Long deadlineSecsRemaining;
+        /**
+         * Claim generation this attempt executes under (from the registry's
+         * {@code POST /jobs/claim} response), or null for a push-mode inbound
+         * job / an old registry (issue #1252). Additive, read-only — handlers
+         * can stamp it on side effects so a superseded re-execution's writes
+         * are distinguishable downstream. Supersession itself surfaces through
+         * the existing cancellation path, not by polling this value.
+         */
+        public final Long claimEpoch;
 
+        /** Back-compat constructor (no claim epoch — legacy owner-only). */
         public Snapshot(String jobId, Long deadlineSecsRemaining) {
+            this(jobId, deadlineSecsRemaining, null);
+        }
+
+        public Snapshot(String jobId, Long deadlineSecsRemaining, Long claimEpoch) {
             this.jobId = jobId;
             this.deadlineSecsRemaining = deadlineSecsRemaining;
+            this.claimEpoch = claimEpoch;
         }
 
         @Override
         public String toString() {
             return "JobContext.Snapshot{jobId=" + jobId
-                + ", deadlineSecsRemaining=" + deadlineSecsRemaining + "}";
+                + ", deadlineSecsRemaining=" + deadlineSecsRemaining
+                + ", claimEpoch=" + claimEpoch + "}";
         }
     }
 
@@ -159,7 +175,13 @@ public final class JobContext {
             } else {
                 remaining = null;
             }
-            return new Snapshot(jobId, remaining);
+            Long claimEpoch;
+            if (node.has("claim_epoch") && !node.get("claim_epoch").isNull()) {
+                claimEpoch = node.get("claim_epoch").asLong();
+            } else {
+                claimEpoch = null;
+            }
+            return new Snapshot(jobId, remaining, claimEpoch);
         } catch (Exception e) {
             log.warn("Failed to parse current job snapshot: {}", e.getMessage());
             return null;

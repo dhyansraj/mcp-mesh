@@ -726,7 +726,18 @@ public class MeshToolWrapper implements McpToolHandler {
         // gate silently skipped the wrap when the wiring was partial,
         // leaving downstream calls headerless. (PR #891 review.)
         if (task && jobIdHeader != null && !jobIdHeader.isEmpty()) {
-            return dispatchAsJob(cleanArgs, jobIdHeader, deadlineSecs);
+            // Claim generation minted by the registry on POST /jobs/claim
+            // (issue #1252). Java's own claim path (ClaimDispatcher) invokes
+            // handlers directly and fences via JobController.open(..., epoch) —
+            // it never writes this header. So x-mesh-claim-epoch is currently
+            // populated only by cross-runtime propagation, i.e. a Python/TS
+            // claim dispatcher (which re-enters its wrapper and seeds the
+            // header) forwarding into a Java tool. Absent ⇒ null ⇒ legacy
+            // owner-only fencing; never fabricate a 0. Parse kept regardless
+            // (harmless, future-proof).
+            Long claimEpoch = parseClaimEpochHeader(
+                propagated != null ? propagated.get("x-mesh-claim-epoch") : null);
+            return dispatchAsJob(cleanArgs, jobIdHeader, deadlineSecs, claimEpoch);
         }
 
         // Build full argument array (MCP params + deps + LLM agents + a2a client)
@@ -1023,7 +1034,8 @@ public class MeshToolWrapper implements McpToolHandler {
      *   <li>TypeScript {@code runWithJobContext} in inbound-job-dispatch.ts</li>
      * </ul>
      */
-    private Object dispatchAsJob(Map<String, Object> cleanArgs, String jobId, Long deadlineSecs) throws Exception {
+    private Object dispatchAsJob(Map<String, Object> cleanArgs, String jobId, Long deadlineSecs,
+                                Long claimEpoch) throws Exception {
         // Build full args (MCP params + deps + LLM agents + a2a client);
         // the MeshJob slot is filled below with the controller or null.
         Object[] fullArgs = buildFullArgs(cleanArgs);
@@ -1048,13 +1060,14 @@ public class MeshToolWrapper implements McpToolHandler {
             if (meshJobParamIndex != null) {
                 fullArgs[meshJobParamIndex] = null;
             }
-            JobContext.Snapshot snap = new JobContext.Snapshot(jobId, deadlineSecs);
-            return runAsJobWithRegistryBinding(jobId, deadlineSecs,
+            JobContext.Snapshot snap = new JobContext.Snapshot(jobId, deadlineSecs, claimEpoch);
+            return runAsJobWithRegistryBinding(jobId, deadlineSecs, claimEpoch,
                 () -> JobContext.withJob(snap, () -> invokeNoController(fullArgs, deadlineSecs)));
         }
 
-        // Construct the producer controller. Free in finally.
-        JobController controller = JobController.open(jobId, instanceId.get(), registryUrl.get());
+        // Construct the producer controller. Free in finally. Fenced to the
+        // claim generation when present (issue #1252). Free in finally.
+        JobController controller = JobController.open(jobId, instanceId.get(), registryUrl.get(), claimEpoch);
         try {
             // Inject the controller at the MeshJob slot
             fullArgs[meshJobParamIndex] = controller;
@@ -1063,9 +1076,9 @@ public class MeshToolWrapper implements McpToolHandler {
             // and the Java-side ThreadLocal job context (via JobContext.withJob)
             // for the duration of the user method. See class javadoc on
             // dispatchAsJob for the rationale (resolved via #889).
-            JobContext.Snapshot snap = new JobContext.Snapshot(jobId, deadlineSecs);
+            JobContext.Snapshot snap = new JobContext.Snapshot(jobId, deadlineSecs, claimEpoch);
             try {
-                return runAsJobWithRegistryBinding(jobId, deadlineSecs,
+                return runAsJobWithRegistryBinding(jobId, deadlineSecs, claimEpoch,
                     () -> JobContext.withJob(snap, () -> invokeAndAutoComplete(fullArgs, controller, deadlineSecs)));
             } catch (Throwable t) {
                 // Defensive: runAsJobWithRegistryBinding can throw BEFORE
@@ -1107,9 +1120,10 @@ public class MeshToolWrapper implements McpToolHandler {
      * inside the user-supplied callable.
      */
     private Object runAsJobWithRegistryBinding(
-            String jobId, Long deadlineSecs, java.util.concurrent.Callable<Object> body)
+            String jobId, Long deadlineSecs, Long claimEpoch,
+            java.util.concurrent.Callable<Object> body)
             throws Exception {
-        String snapshotJson = buildRunAsJobSnapshot(jobId, deadlineSecs);
+        String snapshotJson = buildRunAsJobSnapshot(jobId, deadlineSecs, claimEpoch);
         Object[] resultBox = new Object[1];
         Throwable[] thrownBox = new Throwable[1];
         MeshCore core = MeshCore.load();
@@ -1142,15 +1156,37 @@ public class MeshToolWrapper implements McpToolHandler {
      * Build the {@code mesh_run_as_job} snapshot payload:
      * {@code {"job_id": "...", "deadline_secs": <number>|null}}.
      */
-    private String buildRunAsJobSnapshot(String jobId, Long deadlineSecs) {
+    private String buildRunAsJobSnapshot(String jobId, Long deadlineSecs, Long claimEpoch) {
         try {
             Map<String, Object> snap = new LinkedHashMap<>();
             snap.put("job_id", jobId);
             snap.put("deadline_secs", deadlineSecs);
+            // Additive (issue #1252): carry the claim generation so the Rust
+            // JobContext exposes it via mesh_current_job. null ⇒ legacy.
+            snap.put("claim_epoch", claimEpoch);
             return objectMapper.writeValueAsString(snap);
         } catch (Exception e) {
             throw new IllegalStateException(
                 "failed to serialize mesh_run_as_job snapshot for job=" + jobId, e);
+        }
+    }
+
+    /**
+     * Parse the propagated {@code x-mesh-claim-epoch} header (issue #1252)
+     * into a {@link Long} claim generation, or {@code null} when absent /
+     * malformed / negative. Only a registry-minted non-negative generation is
+     * a real epoch — a genuine {@code 0} is valid; never fabricate one the
+     * registry didn't mint (a bad value degrades to legacy owner-only fencing).
+     */
+    static Long parseClaimEpochHeader(String raw) {
+        if (raw == null || raw.isEmpty()) {
+            return null;
+        }
+        try {
+            long parsed = Long.parseLong(raw.trim());
+            return parsed >= 0 ? parsed : null;
+        } catch (NumberFormatException nfe) {
+            return null;
         }
     }
 

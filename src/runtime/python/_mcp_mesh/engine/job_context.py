@@ -50,10 +50,16 @@ class JobContextSnapshot:
         deadline_secs_remaining: Seconds left until the per-attempt
             deadline expires, or ``None`` if no deadline is set
             (unlimited per design-doc default).
+        claim_epoch: Claim generation this attempt executes under (from
+            the registry's ``POST /jobs/claim`` response), or ``None`` for
+            a push-mode inbound job / an old registry (issue #1252).
+            Additive, read-only — handlers can stamp it on side effects so
+            a superseded re-execution's writes are distinguishable downstream.
     """
 
     job_id: str
     deadline_secs_remaining: Optional[float] = None
+    claim_epoch: Optional[int] = None
 
 
 CURRENT_JOB: contextvars.ContextVar[Optional[JobContextSnapshot]] = (

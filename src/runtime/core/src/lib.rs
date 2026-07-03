@@ -78,7 +78,8 @@ pub use task_backend::{
     JobDelta, JobStatus, RegistryHttpBackend, RejectedDelta, TaskBackend,
 };
 pub use cancel_registry::{
-    active_job_count, cancel_active_job, register_active_job, unregister_active_job,
+    active_job_count, cancel_active_job, cancel_superseded, get_state_for_epoch,
+    register_active_job, register_active_job_with_epoch, unregister_active_job,
 };
 pub use claim_worker::{
     spawn_claim_worker, ClaimDispatcher, ClaimWorkerConfig, ClaimWorkerHandle, DispatchOutcome,

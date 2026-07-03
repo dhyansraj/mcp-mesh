@@ -38,6 +38,12 @@ pub struct JobContext {
     /// Cancellation token. Fired by inbound cancel forwarders or by parent
     /// scope; outbound requests within this scope should `select!` on it.
     pub cancel_token: CancellationToken,
+    /// Claim generation this attempt executes under (from the registry's
+    /// `POST /jobs/claim` response), or `None` for a push-mode inbound job
+    /// / an old registry. Additive, read-only surface (issue #1252): handlers
+    /// can stamp `claim_epoch` on side effects for downstream dedupe. Never
+    /// used for fencing decisions here — that lives on [`crate::jobs::JobController`].
+    pub claim_epoch: Option<i64>,
 }
 
 impl JobContext {
@@ -47,6 +53,7 @@ impl JobContext {
             job_id: job_id.into(),
             deadline: None,
             cancel_token: CancellationToken::new(),
+            claim_epoch: None,
         }
     }
 
@@ -56,7 +63,15 @@ impl JobContext {
             job_id: job_id.into(),
             deadline: Some(Instant::now() + timeout),
             cancel_token: CancellationToken::new(),
+            claim_epoch: None,
         }
+    }
+
+    /// Builder: attach the claim generation minted by the registry. Chains
+    /// off [`Self::new`] / [`Self::with_timeout`].
+    pub fn with_claim_epoch(mut self, claim_epoch: Option<i64>) -> Self {
+        self.claim_epoch = claim_epoch;
+        self
     }
 
     /// Seconds remaining until deadline, or `None` if no deadline is set.
@@ -83,6 +98,9 @@ impl JobContext {
             job_id: child_job_id.into(),
             deadline,
             cancel_token: self.cancel_token.child_token(),
+            // A child job is a distinct claim (or none yet) — it does not
+            // inherit the parent's claim generation.
+            claim_epoch: None,
         }
     }
 }

@@ -62,6 +62,27 @@ func (ju *JobUpdate) ClearOwnerInstanceID() *JobUpdate {
 	return ju
 }
 
+// SetClaimEpoch sets the "claim_epoch" field.
+func (ju *JobUpdate) SetClaimEpoch(i int64) *JobUpdate {
+	ju.mutation.ResetClaimEpoch()
+	ju.mutation.SetClaimEpoch(i)
+	return ju
+}
+
+// SetNillableClaimEpoch sets the "claim_epoch" field if the given value is not nil.
+func (ju *JobUpdate) SetNillableClaimEpoch(i *int64) *JobUpdate {
+	if i != nil {
+		ju.SetClaimEpoch(*i)
+	}
+	return ju
+}
+
+// AddClaimEpoch adds i to the "claim_epoch" field.
+func (ju *JobUpdate) AddClaimEpoch(i int64) *JobUpdate {
+	ju.mutation.AddClaimEpoch(i)
+	return ju
+}
+
 // SetStatus sets the "status" field.
 func (ju *JobUpdate) SetStatus(j job.Status) *JobUpdate {
 	ju.mutation.SetStatus(j)
@@ -355,6 +376,11 @@ func (ju *JobUpdate) check() error {
 			return &ValidationError{Name: "capability", err: fmt.Errorf(`ent: validator failed for field "Job.capability": %w`, err)}
 		}
 	}
+	if v, ok := ju.mutation.ClaimEpoch(); ok {
+		if err := job.ClaimEpochValidator(v); err != nil {
+			return &ValidationError{Name: "claim_epoch", err: fmt.Errorf(`ent: validator failed for field "Job.claim_epoch": %w`, err)}
+		}
+	}
 	if v, ok := ju.mutation.Status(); ok {
 		if err := job.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "Job.status": %w`, err)}
@@ -398,6 +424,12 @@ func (ju *JobUpdate) sqlSave(ctx context.Context) (n int, err error) {
 	}
 	if ju.mutation.OwnerInstanceIDCleared() {
 		_spec.ClearField(job.FieldOwnerInstanceID, field.TypeString)
+	}
+	if value, ok := ju.mutation.ClaimEpoch(); ok {
+		_spec.SetField(job.FieldClaimEpoch, field.TypeInt64, value)
+	}
+	if value, ok := ju.mutation.AddedClaimEpoch(); ok {
+		_spec.AddField(job.FieldClaimEpoch, field.TypeInt64, value)
 	}
 	if value, ok := ju.mutation.Status(); ok {
 		_spec.SetField(job.FieldStatus, field.TypeEnum, value)
@@ -531,6 +563,27 @@ func (juo *JobUpdateOne) SetNillableOwnerInstanceID(s *string) *JobUpdateOne {
 // ClearOwnerInstanceID clears the value of the "owner_instance_id" field.
 func (juo *JobUpdateOne) ClearOwnerInstanceID() *JobUpdateOne {
 	juo.mutation.ClearOwnerInstanceID()
+	return juo
+}
+
+// SetClaimEpoch sets the "claim_epoch" field.
+func (juo *JobUpdateOne) SetClaimEpoch(i int64) *JobUpdateOne {
+	juo.mutation.ResetClaimEpoch()
+	juo.mutation.SetClaimEpoch(i)
+	return juo
+}
+
+// SetNillableClaimEpoch sets the "claim_epoch" field if the given value is not nil.
+func (juo *JobUpdateOne) SetNillableClaimEpoch(i *int64) *JobUpdateOne {
+	if i != nil {
+		juo.SetClaimEpoch(*i)
+	}
+	return juo
+}
+
+// AddClaimEpoch adds i to the "claim_epoch" field.
+func (juo *JobUpdateOne) AddClaimEpoch(i int64) *JobUpdateOne {
+	juo.mutation.AddClaimEpoch(i)
 	return juo
 }
 
@@ -840,6 +893,11 @@ func (juo *JobUpdateOne) check() error {
 			return &ValidationError{Name: "capability", err: fmt.Errorf(`ent: validator failed for field "Job.capability": %w`, err)}
 		}
 	}
+	if v, ok := juo.mutation.ClaimEpoch(); ok {
+		if err := job.ClaimEpochValidator(v); err != nil {
+			return &ValidationError{Name: "claim_epoch", err: fmt.Errorf(`ent: validator failed for field "Job.claim_epoch": %w`, err)}
+		}
+	}
 	if v, ok := juo.mutation.Status(); ok {
 		if err := job.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "Job.status": %w`, err)}
@@ -900,6 +958,12 @@ func (juo *JobUpdateOne) sqlSave(ctx context.Context) (_node *Job, err error) {
 	}
 	if juo.mutation.OwnerInstanceIDCleared() {
 		_spec.ClearField(job.FieldOwnerInstanceID, field.TypeString)
+	}
+	if value, ok := juo.mutation.ClaimEpoch(); ok {
+		_spec.SetField(job.FieldClaimEpoch, field.TypeInt64, value)
+	}
+	if value, ok := juo.mutation.AddedClaimEpoch(); ok {
+		_spec.AddField(job.FieldClaimEpoch, field.TypeInt64, value)
 	}
 	if value, ok := juo.mutation.Status(); ok {
 		_spec.SetField(job.FieldStatus, field.TypeEnum, value)

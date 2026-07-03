@@ -397,9 +397,23 @@ export class ClaimDispatcher {
     const deadlineSecs =
       typeof maxDur === "number" && maxDur > 0 ? maxDur : null;
 
+    // Claim generation minted by the registry on this claim (issue #1252).
+    // Absent on an old registry ⇒ null ⇒ legacy owner-only fencing; never
+    // fabricate a `0`.
+    const rawEpoch = claimed.claim_epoch;
+    const claimEpoch =
+      typeof rawEpoch === "number" && Number.isInteger(rawEpoch) && rawEpoch >= 0
+        ? rawEpoch
+        : null;
+
     let controller: JobController;
     try {
-      controller = makeJobController(jobId, this.instanceId, this.registryUrl);
+      controller = makeJobController(
+        jobId,
+        this.instanceId,
+        this.registryUrl,
+        claimEpoch,
+      );
     } catch (err) {
       console.warn(
         `[mesh-claim] failed to construct JobController for job=${jobId}:`,
@@ -438,6 +452,9 @@ export class ClaimDispatcher {
     if (deadlineSecs !== null && deadlineSecs > 0) {
       headers["x-mesh-timeout"] = String(deadlineSecs);
     }
+    if (claimEpoch !== null) {
+      headers["x-mesh-claim-epoch"] = String(claimEpoch);
+    }
 
     try {
       await runWithPropagatedHeaders(headers, () =>
@@ -447,6 +464,7 @@ export class ClaimDispatcher {
           controller,
           () => this.handler(payload, controller),
           this.retryOn,
+          claimEpoch,
         ),
       );
     } catch (err) {

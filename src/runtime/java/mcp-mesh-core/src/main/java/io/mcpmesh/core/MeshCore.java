@@ -483,6 +483,29 @@ public interface MeshCore {
     int mesh_job_controller_new(String jobId, String instanceId, String registryUrl, PointerByReference outHandle);
 
     /**
+     * Construct a JobController carrying the claim generation the registry
+     * minted on {@code POST /jobs/claim} (issue #1252), so this execution is
+     * fenced: deltas carry the epoch and executor reads carry
+     * {@code (instance_id, epoch)}. A {@code claimEpoch < 0} is treated as
+     * "no epoch" (the C ABI has no null int) ⇒ identical to
+     * {@link #mesh_job_controller_new}.
+     *
+     * <p>Additive: a separate entry point rather than a new parameter on
+     * {@code mesh_job_controller_new}, so existing callers keep their current
+     * 4-arg signature.
+     *
+     * @param jobId       Job UUID this controller is bound to
+     * @param instanceId  Instance ID submitting deltas to the registry
+     * @param registryUrl Registry base URL
+     * @param claimEpoch  Claim generation from the {@code /jobs/claim} response
+     *                    ({@code < 0} ⇒ no epoch / legacy owner-only fencing)
+     * @param outHandle   Out-param: receives the opaque handle on success
+     * @return 0 on success, -1 on error (see mesh_last_error)
+     */
+    int mesh_job_controller_new_with_epoch(String jobId, String instanceId, String registryUrl,
+                                           long claimEpoch, PointerByReference outHandle);
+
+    /**
      * Enqueue a progress update. Coalesces with any prior pending progress
      * for this job — only the latest survives the next batch flush.
      *

@@ -40,6 +40,20 @@ func (jc *JobCreate) SetNillableOwnerInstanceID(s *string) *JobCreate {
 	return jc
 }
 
+// SetClaimEpoch sets the "claim_epoch" field.
+func (jc *JobCreate) SetClaimEpoch(i int64) *JobCreate {
+	jc.mutation.SetClaimEpoch(i)
+	return jc
+}
+
+// SetNillableClaimEpoch sets the "claim_epoch" field if the given value is not nil.
+func (jc *JobCreate) SetNillableClaimEpoch(i *int64) *JobCreate {
+	if i != nil {
+		jc.SetClaimEpoch(*i)
+	}
+	return jc
+}
+
 // SetStatus sets the "status" field.
 func (jc *JobCreate) SetStatus(j job.Status) *JobCreate {
 	jc.mutation.SetStatus(j)
@@ -261,6 +275,10 @@ func (jc *JobCreate) ExecX(ctx context.Context) {
 
 // defaults sets the default values of the builder before save.
 func (jc *JobCreate) defaults() {
+	if _, ok := jc.mutation.ClaimEpoch(); !ok {
+		v := job.DefaultClaimEpoch
+		jc.mutation.SetClaimEpoch(v)
+	}
 	if _, ok := jc.mutation.Status(); !ok {
 		v := job.DefaultStatus
 		jc.mutation.SetStatus(v)
@@ -287,6 +305,14 @@ func (jc *JobCreate) check() error {
 	if v, ok := jc.mutation.Capability(); ok {
 		if err := job.CapabilityValidator(v); err != nil {
 			return &ValidationError{Name: "capability", err: fmt.Errorf(`ent: validator failed for field "Job.capability": %w`, err)}
+		}
+	}
+	if _, ok := jc.mutation.ClaimEpoch(); !ok {
+		return &ValidationError{Name: "claim_epoch", err: errors.New(`ent: missing required field "Job.claim_epoch"`)}
+	}
+	if v, ok := jc.mutation.ClaimEpoch(); ok {
+		if err := job.ClaimEpochValidator(v); err != nil {
+			return &ValidationError{Name: "claim_epoch", err: fmt.Errorf(`ent: validator failed for field "Job.claim_epoch": %w`, err)}
 		}
 	}
 	if _, ok := jc.mutation.Status(); !ok {
@@ -368,6 +394,10 @@ func (jc *JobCreate) createSpec() (*Job, *sqlgraph.CreateSpec) {
 	if value, ok := jc.mutation.OwnerInstanceID(); ok {
 		_spec.SetField(job.FieldOwnerInstanceID, field.TypeString, value)
 		_node.OwnerInstanceID = &value
+	}
+	if value, ok := jc.mutation.ClaimEpoch(); ok {
+		_spec.SetField(job.FieldClaimEpoch, field.TypeInt64, value)
+		_node.ClaimEpoch = value
 	}
 	if value, ok := jc.mutation.Status(); ok {
 		_spec.SetField(job.FieldStatus, field.TypeEnum, value)

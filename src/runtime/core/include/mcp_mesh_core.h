@@ -759,6 +759,24 @@ int32_t mesh_job_controller_new(const char *job_id,
                                 const char *registry_url,
                                 struct JobControllerHandle **out_handle);
 
+// Construct a [`JobController`] carrying the claim generation the registry
+// minted on `POST /jobs/claim` (issue #1252), so this execution is fenced:
+// deltas carry the epoch and executor reads carry `(instance_id, epoch)`.
+// A `claim_epoch < 0` is treated as "no epoch" (the C ABI has no `null`
+// int) ⇒ identical to [`mesh_job_controller_new`].
+//
+// Additive: a separate entry point rather than a new parameter on
+// `mesh_job_controller_new`, so existing C/Java callers keep their current
+// 4-arg signature.
+//
+// # Safety
+// Same contract as [`mesh_job_controller_new`].
+int32_t mesh_job_controller_new_with_epoch(const char *job_id,
+                                           const char *instance_id,
+                                           const char *registry_url,
+                                           int64_t claim_epoch,
+                                           struct JobControllerHandle **out_handle);
+
 // Enqueue a progress update. Coalesces with any prior pending progress
 // for this job — only the latest survives the next batch flush.
 //

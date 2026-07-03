@@ -248,6 +248,46 @@ pub unsafe extern "C" fn mesh_job_controller_new(
     registry_url: *const c_char,
     out_handle: *mut *mut JobControllerHandle,
 ) -> i32 {
+    // Legacy owner-only path (no claim epoch). See
+    // `mesh_job_controller_new_with_epoch` for the fenced claim path.
+    mesh_job_controller_new_impl(job_id, instance_id, registry_url, None, out_handle)
+}
+
+/// Construct a [`JobController`] carrying the claim generation the registry
+/// minted on `POST /jobs/claim` (issue #1252), so this execution is fenced:
+/// deltas carry the epoch and executor reads carry `(instance_id, epoch)`.
+/// A `claim_epoch < 0` is treated as "no epoch" (the C ABI has no `null`
+/// int) ⇒ identical to [`mesh_job_controller_new`].
+///
+/// Additive: a separate entry point rather than a new parameter on
+/// `mesh_job_controller_new`, so existing C/Java callers keep their current
+/// 4-arg signature.
+///
+/// # Safety
+/// Same contract as [`mesh_job_controller_new`].
+#[no_mangle]
+pub unsafe extern "C" fn mesh_job_controller_new_with_epoch(
+    job_id: *const c_char,
+    instance_id: *const c_char,
+    registry_url: *const c_char,
+    claim_epoch: i64,
+    out_handle: *mut *mut JobControllerHandle,
+) -> i32 {
+    let epoch = if claim_epoch < 0 { None } else { Some(claim_epoch) };
+    mesh_job_controller_new_impl(job_id, instance_id, registry_url, epoch, out_handle)
+}
+
+/// Shared body for the two `mesh_job_controller_new*` entry points.
+///
+/// # Safety
+/// See [`mesh_job_controller_new`].
+unsafe fn mesh_job_controller_new_impl(
+    job_id: *const c_char,
+    instance_id: *const c_char,
+    registry_url: *const c_char,
+    claim_epoch: Option<i64>,
+    out_handle: *mut *mut JobControllerHandle,
+) -> i32 {
     take_last_error();
     if out_handle.is_null() {
         set_last_error("out_handle is null");
@@ -271,9 +311,10 @@ pub unsafe extern "C" fn mesh_job_controller_new(
     };
 
     let queue = new_coalescing_queue();
-    let inner = JobController::new(
+    let inner = JobController::new_with_epoch(
         job_id,
         instance_id.clone(),
+        claim_epoch,
         backend.clone(),
         queue.clone(),
     );
@@ -1170,6 +1211,9 @@ pub unsafe extern "C" fn mesh_current_job(out_snapshot_json: *mut *mut c_char) -
             let value = serde_json::json!({
                 "job_id": ctx.job_id,
                 "deadline_secs_remaining": ctx.remaining_seconds(),
+                // Additive (issue #1252): claim generation for this attempt,
+                // or null for a push-mode inbound job / an old registry.
+                "claim_epoch": ctx.claim_epoch,
             });
             write_out_string(out_snapshot_json, value.to_string())
         }
@@ -1385,6 +1429,9 @@ pub unsafe extern "C" fn mesh_run_as_job(
         job_id: String,
         #[serde(default)]
         deadline_secs: Option<f64>,
+        // Additive (issue #1252): absent ⇒ None ⇒ legacy behavior.
+        #[serde(default)]
+        claim_epoch: Option<i64>,
     }
     let wire: SnapshotWire = match serde_json::from_str(snap_str) {
         Ok(w) => w,
@@ -1427,6 +1474,8 @@ pub unsafe extern "C" fn mesh_run_as_job(
         },
         _ => JobContext::new(wire.job_id),
     };
+    // Carry the claim generation so `mesh_current_job` exposes it (#1252).
+    let ctx = ctx.with_claim_epoch(wire.claim_epoch);
 
     // Wrap the user pointer so we can move it into the async block without
     // raw-pointer Send/Sync issues. The C contract is: `user_data` is

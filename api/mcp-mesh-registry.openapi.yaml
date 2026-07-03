@@ -665,6 +665,16 @@ paths:
         the wait expired or `after` is already at the tip. `next_after`
         is the seq the caller should use on the next round-trip (the
         last returned seq, or the same `after` if nothing arrived).
+
+        Executor vs. observer reads: supply BOTH `instance_id` and
+        `claim_epoch` (from the claim response) to identify as the job's
+        current owner. A matching pair is an **executor read** — proof the
+        handler is alive — and extends the job's lease (capped by
+        `max_duration` / `total_deadline`), so an actively-polling handler
+        parked in a legitimate wait is never reclaimed. A present-but-stale
+        pair is rejected `409 claim_superseded` (a newer claim fenced this
+        owner). Omitting both is an **observer read** (A2A, UI, `meshctl`):
+        events are returned exactly as before, with no lease side-effects.
       operationId: listJobEvents
       parameters:
         - name: job_id
@@ -673,6 +683,27 @@ paths:
           schema:
             type: string
           description: Server-assigned job identifier (UUID)
+        - name: instance_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: |
+            Optional owner identity for an executor read. Must be paired with
+            `claim_epoch`. When both are supplied and match the job's current
+            owner + claim generation, the read extends the lease; a stale pair
+            is rejected 409 `claim_superseded`. Absent ⇒ anonymous observer
+            read (no lease side-effects).
+        - name: claim_epoch
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+          description: |
+            Optional claim generation for an executor read, paired with
+            `instance_id`. See `instance_id`.
         - name: after
           in: query
           required: false
@@ -716,8 +747,26 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/JobEventListResponse"
+        "400":
+          description: |
+            Half-supplied executor identity — exactly one of `instance_id` /
+            `claim_epoch` was provided. The two are paired: supply both for an
+            executor read, or neither for an observer read.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: |
+            Executor read whose `(instance_id, claim_epoch)` no longer matches
+            the job's current owner + claim generation — a newer claim fenced
+            this owner. Body carries `error: claim_superseded`.
           content:
             application/json:
               schema:
@@ -3028,6 +3077,19 @@ components:
           type: string
           example: "8f2b4e6a-1c3d-4e5f-9a0b-1c2d3e4f5a6b"
           description: Job identifier this delta targets.
+        claim_epoch:
+          type: integer
+          format: int64
+          nullable: true
+          minimum: 0
+          example: 3
+          description: |
+            Claim generation this delta was produced under (from the claim
+            response). When present, the registry rejects the delta as
+            `claim_superseded` unless it matches the job's current
+            `claim_epoch` AND `owner_instance_id` — fencing a superseded owner
+            even on a same-instance re-claim. Omit (old SDKs) to fall back to
+            owner-only validation (`not_owner` on owner mismatch).
         status:
           allOf:
             - $ref: "#/components/schemas/JobStatus"
@@ -3095,7 +3157,18 @@ components:
                 description: Job identifier of the rejected delta.
               reason:
                 type: string
-                description: Reason the delta was rejected (e.g. `not_owner`, `terminal`, `not_found`).
+                description: |
+                  Reason the delta was rejected. One of `not_owner`,
+                  `claim_superseded`, `already_terminal`, `invalid_status`,
+                  `not_found`.
+
+                  Fencing: an epoch-BEARING delta (one carrying `claim_epoch`)
+                  whose `(owner_instance_id, claim_epoch)` no longer matches the
+                  live row — a different owner, a reclaimed `owner=null` row, or
+                  the same owner at a newer epoch — is rejected
+                  `claim_superseded` (the sender once held a claim it has since
+                  lost). `not_owner` is reserved for epoch-LESS deltas (legacy
+                  SDKs) whose owner does not match.
           description: Per-job rejection records.
 
     ClaimJobsRequest:
@@ -3116,7 +3189,7 @@ components:
 
     ClaimedJob:
       type: object
-      required: [id, submitted_payload, attempt_count]
+      required: [id, submitted_payload, attempt_count, claim_epoch]
       description: A single job successfully claimed in this round-trip.
       properties:
         id:
@@ -3130,6 +3203,16 @@ components:
           type: integer
           minimum: 1
           description: Updated attempt count after this claim.
+        claim_epoch:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |
+            Monotonic claim generation for this job, incremented on every
+            successful claim (including a same-instance re-claim after a
+            reclaim). The owner MUST echo it on `/jobs/batch` deltas and on
+            executor reads of `GET /jobs/{job_id}/events`; the registry fences
+            a stale `(owner, claim_epoch)` pair as `claim_superseded`.
         lease_expires_at:
           type: integer
           nullable: true

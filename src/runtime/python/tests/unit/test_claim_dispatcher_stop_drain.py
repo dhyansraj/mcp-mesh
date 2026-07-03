@@ -74,7 +74,7 @@ class TestStopDrainsInflightDispatch:
         fail_reports: list[tuple[str, str]] = []
 
         class _FakeController:
-            def __init__(self, job_id, instance_id, registry_url):
+            def __init__(self, job_id, instance_id, registry_url, claim_epoch=None):
                 self.job_id = job_id
 
             async def fail(self, error):

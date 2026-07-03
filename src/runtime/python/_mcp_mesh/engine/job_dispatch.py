@@ -55,30 +55,36 @@ except ImportError:
 # ``http_wrapper.py::MCPSessionRoutingMiddleware.dispatch``).
 _HDR_JOB_ID = "x-mesh-job-id"
 _HDR_TIMEOUT = "x-mesh-timeout"
+# Claim generation minted by the registry on POST /jobs/claim (issue #1252).
+# Seeded by the claim dispatcher; absent on the push-mode inbound path.
+_HDR_CLAIM_EPOCH = "x-mesh-claim-epoch"
 
 
-def _read_job_headers() -> tuple[Optional[str], Optional[float]]:
-    """Pull ``X-Mesh-Job-Id`` / ``X-Mesh-Timeout`` from the propagated-
-    headers contextvar populated by the MCP session middleware.
+def _read_job_headers() -> tuple[Optional[str], Optional[float], Optional[int]]:
+    """Pull ``X-Mesh-Job-Id`` / ``X-Mesh-Timeout`` / ``X-Mesh-Claim-Epoch``
+    from the propagated-headers contextvar populated by the MCP session
+    middleware (or seeded by the claim dispatcher).
 
-    Returns ``(job_id, deadline_secs_remaining)`` — either may be ``None``.
+    Returns ``(job_id, deadline_secs_remaining, claim_epoch)`` — any may be
+    ``None``. ``claim_epoch`` is present only on the claim path; a push-mode
+    inbound job leaves it ``None`` (legacy owner-only fencing).
 
     Defensive: never raises. If the trace-context module is somehow not
-    importable (test harness with stubs), returns ``(None, None)``.
+    importable (test harness with stubs), returns ``(None, None, None)``.
     """
     try:
         from ..tracing.context import TraceContext
     except Exception:
-        return None, None
+        return None, None, None
 
     headers = TraceContext.get_propagated_headers() or {}
     if not headers:
-        return None, None
+        return None, None, None
 
     # Header dict is lowercased by the middleware before storing.
     job_id = headers.get(_HDR_JOB_ID)
     if not job_id:
-        return None, None
+        return None, None, None
 
     timeout_raw = headers.get(_HDR_TIMEOUT)
     deadline_secs: Optional[float] = None
@@ -94,7 +100,24 @@ def _read_job_headers() -> tuple[Optional[str], Optional[float]]:
                 timeout_raw,
             )
             deadline_secs = None
-    return job_id, deadline_secs
+
+    claim_epoch_raw = headers.get(_HDR_CLAIM_EPOCH)
+    claim_epoch: Optional[int] = None
+    if claim_epoch_raw is not None and claim_epoch_raw != "":
+        try:
+            parsed = int(claim_epoch_raw)
+            # Only a registry-minted (non-negative) generation is a real
+            # epoch — never fabricate one; a bad value degrades to legacy.
+            if parsed >= 0:
+                claim_epoch = parsed
+        except (TypeError, ValueError):
+            logger.debug(
+                "job_dispatch: ignoring malformed %s header value %r",
+                _HDR_CLAIM_EPOCH,
+                claim_epoch_raw,
+            )
+            claim_epoch = None
+    return job_id, deadline_secs, claim_epoch
 
 
 def _resolve_runtime_identity() -> tuple[Optional[str], Optional[str]]:
@@ -248,7 +271,7 @@ async def maybe_dispatch_as_job(
     if not is_task_tool(func):
         return await invoke(final_kwargs)
 
-    job_id, deadline_secs = _read_job_headers()
+    job_id, deadline_secs, claim_epoch = _read_job_headers()
     mesh_job_param = get_mesh_job_param_name(func)
 
     # Ensure the MeshJob param defaults to ``None`` — this is what the
@@ -295,7 +318,9 @@ async def maybe_dispatch_as_job(
         return await invoke(final_kwargs)
 
     try:
-        controller = PyJobController(job_id, instance_id, registry_url)
+        # Pass the claim generation (when present) so the controller fences
+        # its deltas + executor reads; None ⇒ legacy owner-only (issue #1252).
+        controller = PyJobController(job_id, instance_id, registry_url, claim_epoch)
     except Exception as e:
         logger.warning(
             "job_dispatch: failed to construct JobController for job=%s "
@@ -536,7 +561,9 @@ async def maybe_dispatch_as_job(
     # Bind the Python contextvar so user code (and the outbound proxy
     # inside this Python process) can observe the active job.
     snap = JobContextSnapshot(
-        job_id=job_id, deadline_secs_remaining=deadline_secs
+        job_id=job_id,
+        deadline_secs_remaining=deadline_secs,
+        claim_epoch=claim_epoch,
     )
     token = CURRENT_JOB.set(snap)
     try:
@@ -549,8 +576,13 @@ async def maybe_dispatch_as_job(
             with_job_async = None  # type: ignore[assignment]
 
         if with_job_async is not None:
+            # Bind claim_epoch onto the Rust JobContext so current_job()
+            # exposes it (issue #1252). The core ships with this SDK in
+            # lockstep, so the 4-arg signature is always available — a broad
+            # TypeError fallback here would risk catching a user-code
+            # TypeError and re-running the handler.
             return await with_job_async(
-                job_id, deadline_secs, _run_and_autocomplete()
+                job_id, deadline_secs, _run_and_autocomplete(), claim_epoch
             )
         else:
             # Defensive fallback: if the FFI helper isn't available

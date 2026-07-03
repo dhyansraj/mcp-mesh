@@ -70,6 +70,14 @@ pub struct CreateJobResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobDelta {
     pub id: String,
+    /// Claim generation this delta was produced under (from the claim
+    /// response). Stamped by [`crate::jobs::JobController`] onto every
+    /// delta it flushes when the controller carries an epoch. `None`
+    /// (old SDKs, or a push-mode inbound job that was never claimed) is
+    /// omitted from the wire and the registry falls back to owner-only
+    /// validation — we never fabricate a bare `0` the registry didn't mint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim_epoch: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<JobStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -87,6 +95,7 @@ impl JobDelta {
     pub fn progress(id: impl Into<String>, progress: f32, message: Option<String>) -> Self {
         Self {
             id: id.into(),
+            claim_epoch: None,
             status: None,
             progress: Some(progress),
             progress_message: message,
@@ -105,6 +114,7 @@ impl JobDelta {
     pub fn input_required(id: impl Into<String>, message: Option<String>) -> Self {
         Self {
             id: id.into(),
+            claim_epoch: None,
             status: Some(JobStatus::InputRequired),
             progress: None,
             progress_message: message,
@@ -117,6 +127,7 @@ impl JobDelta {
     pub fn completed(id: impl Into<String>, result: serde_json::Value) -> Self {
         Self {
             id: id.into(),
+            claim_epoch: None,
             status: Some(JobStatus::Completed),
             progress: Some(1.0),
             progress_message: None,
@@ -129,6 +140,7 @@ impl JobDelta {
     pub fn failed(id: impl Into<String>, error: impl Into<String>) -> Self {
         Self {
             id: id.into(),
+            claim_epoch: None,
             status: Some(JobStatus::Failed),
             progress: None,
             progress_message: None,
@@ -165,6 +177,13 @@ pub struct RejectedDelta {
     pub reason: String,
 }
 
+/// Registry rejection reason (matches `JobDeltaRejectionClaimSuperseded` in
+/// `src/core/registry/ent_service_jobs.go` and the `409` body `error` on the
+/// executor-read path) signalling the delta's / reader's `(owner, epoch)`
+/// pair was fenced by a newer claim. The controller maps this to the job's
+/// cancel token so the superseded handler aborts.
+pub const CLAIM_SUPERSEDED_REASON: &str = "claim_superseded";
+
 /// Request body for `POST /jobs/claim`.
 #[derive(Debug, Clone, Serialize)]
 pub struct ClaimJobsRequest {
@@ -178,6 +197,18 @@ pub struct ClaimedJob {
     pub id: String,
     pub submitted_payload: serde_json::Value,
     pub attempt_count: u32,
+    /// Monotonic claim generation minted by the registry on THIS claim
+    /// (bumped +1 on every successful claim / re-claim). The owner echoes
+    /// it on `/jobs/batch` deltas and on executor reads of
+    /// `GET /jobs/{id}/events`; the registry fences a stale `(owner,
+    /// claim_epoch)` pair as `claim_superseded`.
+    ///
+    /// `#[serde(default)]` ⇒ an OLD registry that predates epochs omits the
+    /// field and this deserializes to `None`; the controller then runs
+    /// byte-identical legacy behavior (no identity on reads, no epoch on
+    /// deltas). We never fabricate a `0` the registry didn't mint.
+    #[serde(default)]
+    pub claim_epoch: Option<i64>,
     #[serde(default)]
     pub lease_expires_at: Option<i64>,
     #[serde(default)]
@@ -329,6 +360,15 @@ pub enum BackendError {
     #[error("conflict: {0}")]
     Conflict(String),
 
+    /// Executor read fenced: the caller's `(instance_id, claim_epoch)` no
+    /// longer matches the job's current owner + claim generation — a newer
+    /// claim superseded this owner. Surfaced ONLY on the executor read path
+    /// of `GET /jobs/{id}/events` (HTTP 409, body `error: claim_superseded`).
+    /// Distinct from [`BackendError::Conflict`] so the controller can map it
+    /// to a cancel rather than a generic conflict. NOT transient.
+    #[error("claim superseded: {0}")]
+    ClaimSuperseded(String),
+
     /// Registry returned 503 (or backend infrastructure unavailable).
     #[error("backend unavailable: {0}")]
     BackendUnavailable(String),
@@ -433,12 +473,22 @@ pub trait TaskBackend: Send + Sync {
         reason: Option<String>,
     ) -> Result<ReleaseJobResponse, BackendError>;
 
-    /// Anyone-side: long-poll for events on a job
-    /// (`GET /jobs/{id}/events`). Returns events with `seq > after`. If
-    /// `types` is `Some`, only events whose `event_type` matches one of
-    /// the given strings are returned (the registry filters server-side
-    /// via the `types` query param). `wait` caps at 60s registry-side —
-    /// callers requesting longer waits should loop. `limit` caps at 500.
+    /// Long-poll for events on a job (`GET /jobs/{id}/events`). Returns
+    /// events with `seq > after`. If `types` is `Some`, only events whose
+    /// `event_type` matches one of the given strings are returned (the
+    /// registry filters server-side via the `types` query param). `wait`
+    /// caps at 60s registry-side — callers requesting longer waits should
+    /// loop. `limit` caps at 500.
+    ///
+    /// `identity`: executor vs. observer read.
+    /// * `Some((instance_id, claim_epoch))` — an **executor read**: BOTH
+    ///   params are sent so the registry fences the read against the job's
+    ///   current owner + claim generation (a stale pair returns
+    ///   [`BackendError::ClaimSuperseded`]) AND extends the lease
+    ///   (poll-liveness). Only the owning [`crate::jobs::JobController`]
+    ///   supplies this, and only when it carries a real claim epoch.
+    /// * `None` — an **observer read** (`JobProxy`, A2A, UI, `meshctl`):
+    ///   no identity params, no lease side-effects, served unchanged.
     async fn list_job_events(
         &self,
         job_id: &str,
@@ -446,6 +496,7 @@ pub trait TaskBackend: Send + Sync {
         types: Option<&[String]>,
         wait: Duration,
         limit: usize,
+        identity: Option<(&str, i64)>,
     ) -> Result<JobEventListResponse, BackendError>;
 
     /// Anyone-side: post an event into a running job's event log
@@ -637,6 +688,7 @@ impl TaskBackend for RegistryHttpBackend {
         types: Option<&[String]>,
         wait: Duration,
         limit: usize,
+        identity: Option<(&str, i64)>,
     ) -> Result<JobEventListResponse, BackendError> {
         let url = format!("{}/jobs/{}/events", self.base_url, job_id);
         // Registry caps `wait` at 60s — clamp client-side so we don't
@@ -652,15 +704,53 @@ impl TaskBackend for RegistryHttpBackend {
                 req = req.query(&[("types", ts.join(","))]);
             }
         }
+        // Executor read: send BOTH instance_id and claim_epoch so the
+        // registry fences + lease-extends. Absent ⇒ anonymous observer read
+        // (byte-identical to legacy). Both-or-neither is enforced by taking
+        // a single `(instance_id, epoch)` tuple.
+        if let Some((instance_id, claim_epoch)) = identity {
+            req = req.query(&[
+                ("instance_id", instance_id.to_string()),
+                ("claim_epoch", claim_epoch.to_string()),
+            ]);
+        }
         // Per-request timeout > registry's long-poll window so the HTTP
         // call doesn't time out before the registry replies. Pad by 10s
         // beyond the requested wait to absorb network jitter.
         let req = req.timeout(Duration::from_secs(wait_secs + 10));
         debug!(
-            "GET {} (after={}, wait={}s, limit={}, types={:?})",
-            url, after, wait_secs, limit, types
+            "GET {} (after={}, wait={}s, limit={}, types={:?}, executor={})",
+            url, after, wait_secs, limit, types, identity.is_some()
         );
         let resp = req.send().await?;
+        // Executor read fenced by a newer claim: the registry returns HTTP
+        // 409 with body `{"error":"claim_superseded", ...}`. Classify it as
+        // the dedicated cancel-firing variant ONLY when BOTH:
+        //   (a) this was an executor read (identity supplied), AND
+        //   (b) the body actually carries the registry's claim_superseded
+        //       marker.
+        // A bare 409 from an ingress / proxy — or ANY 409 on an anonymous
+        // observer read — must NOT cancel a healthy handler. It falls through
+        // to `classify_error` (a generic Conflict), where a genuine
+        // fence-cancel never happens (issue #1252 review, item 2).
+        if identity.is_some() && resp.status().as_u16() == 409 {
+            let body = resp.text().await.unwrap_or_default();
+            let is_superseded = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| {
+                    v.get("error")
+                        .and_then(|e| e.as_str())
+                        .map(|s| s == CLAIM_SUPERSEDED_REASON)
+                })
+                .unwrap_or(false);
+            if is_superseded {
+                return Err(BackendError::ClaimSuperseded(body));
+            }
+            // Not the registry's fence marker — a generic conflict from some
+            // intermediary. Mirror classify_error's 409 branch (Conflict);
+            // never a cancel-firing ClaimSuperseded.
+            return Err(BackendError::Conflict(body));
+        }
         if !resp.status().is_success() {
             return Err(Self::classify_error(resp).await);
         }
@@ -828,6 +918,110 @@ mod tests {
         assert!(!s.contains("result"));
         assert!(!s.contains("error"));
         assert!(!s.contains("progress_message"));
+        // Epoch omitted when None (legacy owner-only path).
+        assert!(!s.contains("claim_epoch"));
+    }
+
+    #[test]
+    fn job_delta_serializes_claim_epoch_when_set() {
+        let mut d = JobDelta::progress("job-1", 0.25, None);
+        d.claim_epoch = Some(3);
+        let v = serde_json::to_value(&d).unwrap();
+        assert_eq!(v["claim_epoch"], serde_json::json!(3));
+        // A bare 0 IS a legitimate epoch when the registry minted it — must
+        // still serialize (only None is omitted).
+        d.claim_epoch = Some(0);
+        let s = serde_json::to_string(&d).unwrap();
+        assert!(s.contains("\"claim_epoch\":0"));
+    }
+
+    #[test]
+    fn claimed_job_deserializes_with_and_without_epoch() {
+        // New registry: claim_epoch present.
+        let with = r#"{"id":"j","submitted_payload":{},"attempt_count":1,"claim_epoch":5}"#;
+        let cj: ClaimedJob = serde_json::from_str(with).unwrap();
+        assert_eq!(cj.claim_epoch, Some(5));
+        // Old registry (version skew): field absent ⇒ None ⇒ legacy path.
+        let without = r#"{"id":"j","submitted_payload":{},"attempt_count":1}"#;
+        let cj: ClaimedJob = serde_json::from_str(without).unwrap();
+        assert_eq!(cj.claim_epoch, None);
+    }
+
+    #[test]
+    fn claim_superseded_is_not_transient() {
+        assert!(!BackendError::ClaimSuperseded("x".into()).is_transient());
+    }
+
+    // ---- HTTP-level 409 classification (issue #1252 review, item 2) ---------
+    //
+    // Only an EXECUTOR read (identity supplied) whose 409 body carries the
+    // registry's `claim_superseded` marker becomes the cancel-firing
+    // ClaimSuperseded. A bare/ingress 409, or ANY 409 on an anonymous
+    // observer read, must be a generic Conflict — never cancel a healthy
+    // handler.
+
+    #[tokio::test]
+    async fn executor_read_409_with_marker_is_claim_superseded() {
+        let mut server = mockito::Server::new_async().await;
+        let m = server
+            .mock("GET", mockito::Matcher::Any)
+            .with_status(409)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"error":"claim_superseded","timestamp":"2026-01-01T00:00:00Z"}"#)
+            .create_async()
+            .await;
+        let backend = RegistryHttpBackend::new(&server.url()).unwrap();
+        let err = backend
+            .list_job_events("j1", 0, None, Duration::from_secs(0), 100, Some(("inst-1", 1)))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, BackendError::ClaimSuperseded(_)),
+            "executor 409 with the marker must be ClaimSuperseded; got {err:?}"
+        );
+        m.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn executor_read_409_without_marker_is_conflict_not_superseded() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", mockito::Matcher::Any)
+            .with_status(409)
+            .with_body("upstream conflict from an ingress/proxy")
+            .create_async()
+            .await;
+        let backend = RegistryHttpBackend::new(&server.url()).unwrap();
+        let err = backend
+            .list_job_events("j1", 0, None, Duration::from_secs(0), 100, Some(("inst-1", 1)))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, BackendError::Conflict(_)),
+            "a non-marker 409 must NOT fence-cancel a healthy handler; got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn observer_read_409_is_never_claim_superseded() {
+        let mut server = mockito::Server::new_async().await;
+        // Even a body carrying the marker must not fence an OBSERVER read
+        // (identity=None) — observers never participate in claim fencing.
+        server
+            .mock("GET", mockito::Matcher::Any)
+            .with_status(409)
+            .with_body(r#"{"error":"claim_superseded"}"#)
+            .create_async()
+            .await;
+        let backend = RegistryHttpBackend::new(&server.url()).unwrap();
+        let err = backend
+            .list_job_events("j1", 0, None, Duration::from_secs(0), 100, None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, BackendError::Conflict(_)),
+            "observer 409 must be Conflict, never ClaimSuperseded; got {err:?}"
+        );
     }
 
     #[test]

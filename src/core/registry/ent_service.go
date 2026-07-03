@@ -239,6 +239,14 @@ type EntService struct {
 	logger      *logger.Logger
 	hookManager *AgentStatusChangeHookManager
 	matcher     *Matcher
+
+	// jobStaleTimeout caches MCP_MESH_JOB_STALE_TIMEOUT parsed once at
+	// construction (the sweep reads the same env once at startup), so the
+	// poll-liveness lease cap in AuthorizeExecutorRead does not re-parse the
+	// env on every executor recv_event poll. 0 = disabled. Invalid/negative
+	// config is warned by LoadSweepConfigFromEnv at startup; here it degrades
+	// silently to disabled.
+	jobStaleTimeout time.Duration
 }
 
 // NewEntService creates a new Ent-based registry service instance
@@ -258,14 +266,20 @@ func NewEntService(entDB *database.EntDatabase, config *RegistryConfig, logger *
 	// Create Matcher for dependency resolution
 	matcher := NewMatcher(logger)
 
+	// Parse the default stale-job ceiling once (see field doc). The sweep
+	// loader logs any invalid/negative value at startup; here we take the
+	// value and silently treat errors as disabled.
+	staleTimeout, _ := parseJobStaleTimeoutEnv()
+
 	// Create EntService instance
 	service := &EntService{
-		entDB:       entDB,
-		config:      config,
-		validator:   NewAgentRegistrationValidator(),
-		logger:      logger,
-		hookManager: hookManager,
-		matcher:     matcher,
+		entDB:           entDB,
+		config:          config,
+		validator:       NewAgentRegistrationValidator(),
+		logger:          logger,
+		hookManager:     hookManager,
+		matcher:         matcher,
+		jobStaleTimeout: staleTimeout,
 	}
 
 	// Register status change hooks with the database client

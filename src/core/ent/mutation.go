@@ -4692,6 +4692,8 @@ type JobMutation struct {
 	id                *string
 	capability        *string
 	owner_instance_id *string
+	claim_epoch       *int64
+	addclaim_epoch    *int64
 	status            *job.Status
 	progress          *float64
 	addprogress       *float64
@@ -4903,6 +4905,62 @@ func (m *JobMutation) OwnerInstanceIDCleared() bool {
 func (m *JobMutation) ResetOwnerInstanceID() {
 	m.owner_instance_id = nil
 	delete(m.clearedFields, job.FieldOwnerInstanceID)
+}
+
+// SetClaimEpoch sets the "claim_epoch" field.
+func (m *JobMutation) SetClaimEpoch(i int64) {
+	m.claim_epoch = &i
+	m.addclaim_epoch = nil
+}
+
+// ClaimEpoch returns the value of the "claim_epoch" field in the mutation.
+func (m *JobMutation) ClaimEpoch() (r int64, exists bool) {
+	v := m.claim_epoch
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldClaimEpoch returns the old "claim_epoch" field's value of the Job entity.
+// If the Job object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobMutation) OldClaimEpoch(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldClaimEpoch is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldClaimEpoch requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldClaimEpoch: %w", err)
+	}
+	return oldValue.ClaimEpoch, nil
+}
+
+// AddClaimEpoch adds i to the "claim_epoch" field.
+func (m *JobMutation) AddClaimEpoch(i int64) {
+	if m.addclaim_epoch != nil {
+		*m.addclaim_epoch += i
+	} else {
+		m.addclaim_epoch = &i
+	}
+}
+
+// AddedClaimEpoch returns the value that was added to the "claim_epoch" field in this mutation.
+func (m *JobMutation) AddedClaimEpoch() (r int64, exists bool) {
+	v := m.addclaim_epoch
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetClaimEpoch resets all changes to the "claim_epoch" field.
+func (m *JobMutation) ResetClaimEpoch() {
+	m.claim_epoch = nil
+	m.addclaim_epoch = nil
 }
 
 // SetStatus sets the "status" field.
@@ -5655,12 +5713,15 @@ func (m *JobMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *JobMutation) Fields() []string {
-	fields := make([]string, 0, 16)
+	fields := make([]string, 0, 17)
 	if m.capability != nil {
 		fields = append(fields, job.FieldCapability)
 	}
 	if m.owner_instance_id != nil {
 		fields = append(fields, job.FieldOwnerInstanceID)
+	}
+	if m.claim_epoch != nil {
+		fields = append(fields, job.FieldClaimEpoch)
 	}
 	if m.status != nil {
 		fields = append(fields, job.FieldStatus)
@@ -5716,6 +5777,8 @@ func (m *JobMutation) Field(name string) (ent.Value, bool) {
 		return m.Capability()
 	case job.FieldOwnerInstanceID:
 		return m.OwnerInstanceID()
+	case job.FieldClaimEpoch:
+		return m.ClaimEpoch()
 	case job.FieldStatus:
 		return m.Status()
 	case job.FieldProgress:
@@ -5757,6 +5820,8 @@ func (m *JobMutation) OldField(ctx context.Context, name string) (ent.Value, err
 		return m.OldCapability(ctx)
 	case job.FieldOwnerInstanceID:
 		return m.OldOwnerInstanceID(ctx)
+	case job.FieldClaimEpoch:
+		return m.OldClaimEpoch(ctx)
 	case job.FieldStatus:
 		return m.OldStatus(ctx)
 	case job.FieldProgress:
@@ -5807,6 +5872,13 @@ func (m *JobMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetOwnerInstanceID(v)
+		return nil
+	case job.FieldClaimEpoch:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetClaimEpoch(v)
 		return nil
 	case job.FieldStatus:
 		v, ok := value.(job.Status)
@@ -5914,6 +5986,9 @@ func (m *JobMutation) SetField(name string, value ent.Value) error {
 // this mutation.
 func (m *JobMutation) AddedFields() []string {
 	var fields []string
+	if m.addclaim_epoch != nil {
+		fields = append(fields, job.FieldClaimEpoch)
+	}
 	if m.addprogress != nil {
 		fields = append(fields, job.FieldProgress)
 	}
@@ -5934,6 +6009,8 @@ func (m *JobMutation) AddedFields() []string {
 // was not set, or was not defined in the schema.
 func (m *JobMutation) AddedField(name string) (ent.Value, bool) {
 	switch name {
+	case job.FieldClaimEpoch:
+		return m.AddedClaimEpoch()
 	case job.FieldProgress:
 		return m.AddedProgress()
 	case job.FieldAttemptCount:
@@ -5951,6 +6028,13 @@ func (m *JobMutation) AddedField(name string) (ent.Value, bool) {
 // type.
 func (m *JobMutation) AddField(name string, value ent.Value) error {
 	switch name {
+	case job.FieldClaimEpoch:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddClaimEpoch(v)
+		return nil
 	case job.FieldProgress:
 		v, ok := value.(float64)
 		if !ok {
@@ -6080,6 +6164,9 @@ func (m *JobMutation) ResetField(name string) error {
 		return nil
 	case job.FieldOwnerInstanceID:
 		m.ResetOwnerInstanceID()
+		return nil
+	case job.FieldClaimEpoch:
+		m.ResetClaimEpoch()
 		return nil
 	case job.FieldStatus:
 		m.ResetStatus()
