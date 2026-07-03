@@ -309,6 +309,9 @@ public class MeshToolRegistry {
                     depSpec.setTags("[]");
                 }
                 depSpec.setVersion(dep.version());
+                // Issue #1249: carry the required flag through to the spec JSON
+                // (omitted when false via NON_DEFAULT on AgentSpec.DependencySpec).
+                depSpec.setRequired(dep.required());
                 applySchemaMatching(depSpec, dep, clusterStrict);
                 spec.getDependencies().add(depSpec);
             }
@@ -426,6 +429,7 @@ public class MeshToolRegistry {
                     spec.setTags("[]");
                 }
                 spec.setVersion(dep.version());
+                spec.setRequired(dep.required());
                 applySchemaMatching(spec, dep, clusterStrict);
                 deps.add(spec);
             }
@@ -447,7 +451,8 @@ public class MeshToolRegistry {
                     Arrays.asList(sel.tags()),
                     sel.version(),
                     expectedType,
-                    sel.schemaMode()
+                    sel.schemaMode(),
+                    sel.required()
                 ));
             }
         }
@@ -597,10 +602,16 @@ public class MeshToolRegistry {
         List<String> tags,
         String version,
         Class<?> expectedType,
-        SchemaMode schemaMode
+        SchemaMode schemaMode,
+        boolean required
     ) {
         public DependencyInfo(String capability, List<String> tags, String version) {
-            this(capability, tags, version, null, SchemaMode.NONE);
+            this(capability, tags, version, null, SchemaMode.NONE, false);
+        }
+
+        public DependencyInfo(String capability, List<String> tags, String version,
+                              Class<?> expectedType, SchemaMode schemaMode) {
+            this(capability, tags, version, expectedType, schemaMode, false);
         }
     }
 }

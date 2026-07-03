@@ -1,0 +1,265 @@
+# tc01_chain_propagation_python — transitive required-dependency availability
+# propagates up a chain and out to the route perimeter (issue #1249, Python).
+#
+# Topology: A --optional--> B --REQUIRED--> C, plus gateway-z whose /z route
+# has a REQUIRED dep on b-cap.
+#
+# Design guarantees under test:
+#   1. Kill C -> b-cap flips available==false with unavailable_reason naming
+#      the broken required edge (c-cap) — WHILE agent-b itself stays
+#      registered and status=healthy. Availability is derived per-CAPABILITY
+#      state; the agent's own health is untouched.
+#   2. a-cap stays available==true — the A->B edge is OPTIONAL, and optional
+#      edges never propagate unavailability (soft-fail default preserved).
+#   3. /z answers 503 {"error":"dependency_unavailable","capability":"b-cap"}
+#      BEFORE user code runs: the gateway's required perimeter sees b-cap
+#      exactly as it would see a dead provider, two hops from the actual
+#      failure. The handler calls the proxy unguarded, so a clean 503 (not a
+#      500) proves the framework wrapper fired.
+#   4. Restart C -> the whole chain heals organically: /z returns 200 again
+#      with no restarts of B, A or the gateway.
+#
+# Timing: availability transitions ride the registry's default health
+# debounce (~3 missed heartbeats, ~15-25s) plus one consumer heartbeat to
+# propagate proxy state — every transition is POLLED with a deadline, never
+# a fixed sleep. Registration waits are liveness-only (issue #1193); the
+# settle window covers dependency resolution.
+
+name: "Required deps: chain propagation A->B->C with route perimeter (Python)"
+description: "Kill C: b-cap unavailable (reason names c-cap) while agent-b stays healthy, a-cap stays available (optional edge), /z answers 503 dependency_unavailable; restart C: /z recovers 200"
+tags:
+  - integration
+  - python
+  - registry
+  - required-deps
+  - availability
+  - issue-1249
+  - slow
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/agent-a /workspace/
+      cp -rL /uc-artifacts/agent-b /workspace/
+      cp -rL /uc-artifacts/agent-c /workspace/
+      cp -rL /uc-artifacts/gateway-z /workspace/
+
+  - name: "Install agent-a deps"
+    handler: pip-install
+    path: /workspace/agent-a
+
+  - name: "Install agent-b deps"
+    handler: pip-install
+    path: /workspace/agent-b
+
+  - name: "Install agent-c deps"
+    handler: pip-install
+    path: /workspace/agent-c
+
+  - name: "Install gateway-z deps"
+    handler: pip-install
+    path: /workspace/gateway-z
+
+  - name: "Start agent-c (port 9101)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start agent-c/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  - name: "Start agent-b (port 9102)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start agent-b/main.py --env MCP_MESH_HTTP_PORT=9102 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  - name: "Start agent-a (port 9103)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start agent-a/main.py --env MCP_MESH_HTTP_PORT=9103 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  - name: "Start gateway-z (port 9104)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start gateway-z/main.py --env MCP_MESH_HTTP_PORT=9104 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  # Liveness only (issue #1193): the three tool agents must APPEAR in
+  # meshctl list. The gateway is API-type; its readiness is proven by the /z
+  # baseline poll below. No dep-resolution wait — the settle window covers it.
+  - routine: global.wait_for_agents_registered
+    params:
+      agents: "agent-a agent-b agent-c"
+
+  # Baseline: the FULL chain works end-to-end (gateway -> b-cap -> c-cap).
+  # This is also the gateway's liveness + settle gate.
+  - name: "Wait for /z baseline 200"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        CODE=$(curl -s -o /tmp/z_baseline.json -w "%{http_code}" http://localhost:9104/z 2>/dev/null || echo 000)
+        if [ "$CODE" = "200" ]; then
+          echo "Z_BASELINE_200=1 after ~$((i*2))s"
+          cat /tmp/z_baseline.json
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: /z never answered 200 within 120s (last code=$CODE)"
+      cat /tmp/z_baseline.json 2>/dev/null || true
+      meshctl logs gateway-z 2>/dev/null | tail -30 || true
+      exit 1
+    capture: z_baseline
+    timeout: 140
+
+  - name: "Capture baseline /agents snapshot"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:8000/agents
+    capture: agents_baseline
+
+  - name: "Kill agent-c"
+    handler: shell
+    workdir: /workspace
+    command: meshctl stop agent-c
+    capture: kill_c
+
+  # The registry re-derives b-cap's availability once C's death lands
+  # (graceful unregister is immediate; a hard death takes the ~15-25s health
+  # debounce). Poll with a deadline that covers both paths.
+  - name: "Wait for b-cap to flip unavailable"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AVAIL=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name == "agent-b") | .capabilities[] | select(.name == "b-cap") | .available' 2>/dev/null || echo "")
+        if [ "$AVAIL" = "false" ]; then
+          echo "BCAP_UNAVAILABLE=1 after ~$((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: b-cap never flipped to available=false within 120s (last=$AVAIL)"
+      curl -s http://localhost:8000/agents | jq '.agents[] | select(.name == "agent-b")' 2>/dev/null || true
+      exit 1
+    capture: wait_bcap_down
+    timeout: 140
+
+  # Perimeter: the gateway learns via its own heartbeat's resolution diff,
+  # then its required route wrapper 503s before user code.
+  - name: "Wait for /z to answer 503"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9104/z 2>/dev/null || echo 000)
+        if [ "$CODE" = "503" ]; then
+          echo "Z_503=1 after ~$((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: /z never answered 503 within 120s (last code=$CODE)"
+      curl -s http://localhost:9104/z 2>/dev/null || true
+      meshctl logs gateway-z 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_z_503
+    timeout: 140
+
+  # Pure-JSON captures for jq assertions (state is stable while C is down).
+  - name: "Capture /z outage body"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:9104/z
+    capture: z_outage_body
+
+  - name: "Capture /z outage status code"
+    handler: shell
+    workdir: /workspace
+    command: curl -s -o /dev/null -w "%{http_code}" http://localhost:9104/z
+    capture: z_outage_code
+
+  # Snapshot taken WHILE /z is 503 — this is the snapshot that proves
+  # agent-b is still registered/healthy during the perimeter outage.
+  - name: "Capture /agents snapshot during outage"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:8000/agents
+    capture: agents_during_outage
+
+  - name: "Restart agent-c"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start agent-c/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  # Recovery: C re-registers, b-cap re-derives available, the gateway's next
+  # heartbeat restores the proxy — nothing else is restarted.
+  - name: "Wait for /z recovery 200"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 75); do
+        CODE=$(curl -s -o /tmp/z_recovery.json -w "%{http_code}" http://localhost:9104/z 2>/dev/null || echo 000)
+        if [ "$CODE" = "200" ]; then
+          echo "Z_RECOVERED=1 after ~$((i*2))s"
+          cat /tmp/z_recovery.json
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: /z never recovered to 200 within 150s (last code=$CODE)"
+      cat /tmp/z_recovery.json 2>/dev/null || true
+      curl -s http://localhost:8000/agents | jq '.agents[] | select(.name == "agent-b")' 2>/dev/null || true
+      meshctl logs gateway-z 2>/dev/null | tail -30 || true
+      exit 1
+    capture: z_recovery
+    timeout: 170
+
+assertions:
+  # IDIOM: equality lives INSIDE the jq filter so the interpolation yields a
+  # bare true/false (tsuite Go-formats extracted values, and the interpolation
+  # body cannot contain '}' — hence no object construction in filters).
+
+  # Scenario gates surfaced by the poll steps
+  - expr: "${captured.z_baseline} contains 'Z_BASELINE_200=1'"
+    message: "the full A->B->C chain plus gateway must work before the kill"
+  - expr: "${captured.wait_bcap_down} contains 'BCAP_UNAVAILABLE=1'"
+    message: "killing C must flip b-cap to available=false within the health-debounce deadline"
+  - expr: "${captured.wait_z_503} contains 'Z_503=1'"
+    message: "/z must transition to 503 once b-cap is unavailable"
+  - expr: "${captured.z_recovery} contains 'Z_RECOVERED=1'"
+    message: "restarting C must heal the chain: /z back to 200 with no other restarts"
+
+  # Baseline: with C up, b-cap is available and carries no reason
+  - expr: "${jq:captured.agents_baseline:(.agents[] | select(.name == \"agent-b\") | .capabilities[] | select(.name == \"b-cap\") | .available == true and .unavailable_reason == null)} == 'true'"
+    message: "baseline: b-cap must be available with no unavailable_reason while C is up"
+
+  # Guarantee 1: b-cap unavailable, reason names the broken c-cap edge...
+  - expr: "${jq:captured.agents_during_outage:(.agents[] | select(.name == \"agent-b\") | .capabilities[] | select(.name == \"b-cap\") | .available == false)} == 'true'"
+    message: "b-cap must be available=false while its required c-cap edge is broken"
+  - expr: "${jq:captured.agents_during_outage:(.agents[] | select(.name == \"agent-b\") | .capabilities[] | select(.name == \"b-cap\") | .unavailable_reason // \"\" | contains(\"c-cap\"))} == 'true'"
+    message: "b-cap's unavailable_reason must name the broken required edge (c-cap)"
+
+  # ...WHILE agent-b itself is still registered and healthy (derived
+  # capability state, not agent health)
+  - expr: "${jq:captured.agents_during_outage:([.agents[] | select(.name == \"agent-b\")] | length == 1)} == 'true'"
+    message: "agent-b must still be REGISTERED while its capability is unavailable"
+  - expr: "${jq:captured.agents_during_outage:(.agents[] | select(.name == \"agent-b\") | .status == \"healthy\")} == 'true'"
+    message: "agent-b must still be HEALTHY — unavailability is capability-level derived state"
+
+  # Guarantee 2: the optional A->B edge does NOT propagate unavailability
+  - expr: "${jq:captured.agents_during_outage:(.agents[] | select(.name == \"agent-a\") | .capabilities[] | select(.name == \"a-cap\") | .available == true)} == 'true'"
+    message: "a-cap must STAY available — optional edges never propagate unavailability"
+
+  # Guarantee 3: the perimeter 503 carries the structured contract body
+  - expr: "${captured.z_outage_code} == '503'"
+    message: "/z must answer HTTP 503 while b-cap is unavailable"
+  - expr: "${jq:captured.z_outage_body:(.error == \"dependency_unavailable\" and .capability == \"b-cap\")} == 'true'"
+    message: "the 503 body must be the structured contract: error=dependency_unavailable, capability=b-cap (a 500/handler crash would mean user code ran with a dead proxy)"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

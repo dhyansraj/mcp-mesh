@@ -34,6 +34,12 @@ pub struct JsDependencySpec {
     pub expected_schema_hash: Option<String>,
     /// Issue #547: schema match mode ("subset" or "strict")
     pub match_mode: Option<String>,
+    /// Issue #1249: opt-in strictness for this dependency edge. When true, the
+    /// registry factors this edge into transitive capability availability and
+    /// routes declaring it return 503 when the proxy is unavailable at call
+    /// time. Optional/absent → false, keeping existing heartbeats byte-identical
+    /// (the field is omitted from the wire when false).
+    pub required: Option<bool>,
 }
 
 impl From<JsDependencySpec> for RustDependencySpec {
@@ -45,9 +51,9 @@ impl From<JsDependencySpec> for RustDependencySpec {
             js.expected_schema_canonical,
             js.expected_schema_hash,
             js.match_mode,
-            // Issue #1249: TS SDK does not surface `required` yet — default
-            // false keeps existing TypeScript heartbeats byte-identical.
-            false,
+            // Issue #1249: absent → false so zero-required meshes stay
+            // byte-identical on the wire (DependencySpec omits false).
+            js.required.unwrap_or(false),
         )
     }
 }
@@ -1124,6 +1130,35 @@ mod tests {
         let rust_spec: RustAgentSpec = js_spec.into();
         assert_eq!(rust_spec.agent_type, AgentType::Api);
         assert_eq!(rust_spec.http_port, 0);
+    }
+
+    #[test]
+    fn test_js_dependency_required_passthrough() {
+        // Issue #1249: required=Some(true) reaches the Rust DependencySpec.
+        let js_required = JsDependencySpec {
+            capability: "weather-api".to_string(),
+            tags: "[]".to_string(),
+            version: None,
+            expected_schema_canonical: None,
+            expected_schema_hash: None,
+            match_mode: None,
+            required: Some(true),
+        };
+        let rust_dep: RustDependencySpec = js_required.into();
+        assert!(rust_dep.required);
+
+        // Absent (None) → false, keeping existing TS heartbeats byte-identical.
+        let js_absent = JsDependencySpec {
+            capability: "weather-api".to_string(),
+            tags: "[]".to_string(),
+            version: None,
+            expected_schema_canonical: None,
+            expected_schema_hash: None,
+            match_mode: None,
+            required: None,
+        };
+        let rust_dep_absent: RustDependencySpec = js_absent.into();
+        assert!(!rust_dep_absent.required);
     }
 
     #[test]

@@ -13,11 +13,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -126,39 +124,58 @@ public class MeshRouteRegistry {
      * @return list of unique AgentSpec.DependencySpec for route dependencies
      */
     public List<AgentSpec.DependencySpec> getUniqueDependencySpecs() {
-        Set<String> seenCapabilities = new HashSet<>();
-        List<AgentSpec.DependencySpec> specs = new ArrayList<>();
+        // Keyed by capability, insertion-ordered. Issue #1249: required WINS on
+        // merge — see the conflict branch below.
+        Map<String, AgentSpec.DependencySpec> byCapability = new LinkedHashMap<>();
         var jsonMapper = JsonMapper.builder().build();
         // Issue #547 Phase 4: cluster-wide strict knob promotes WARN→BLOCK.
         boolean clusterStrict = MeshSchemaSupport.clusterStrictEnabled();
 
         for (RouteMetadata route : routesByPath.values()) {
             for (DependencySpec dep : route.getDependencies()) {
-                if (seenCapabilities.add(dep.getCapability())) {
-                    AgentSpec.DependencySpec agentDep = new AgentSpec.DependencySpec();
-                    agentDep.setCapability(dep.getCapability());
-                    if (dep.hasTags()) {
-                        // Issue #1158: tags is contractually a JSON-array string
-                        // (the Rust core JSON-parses it; a comma-joined string
-                        // silently degrades to "no tag constraint").
-                        try {
-                            agentDep.setTags(jsonMapper.writeValueAsString(dep.getTags()));
-                        } catch (Exception e) {
-                            log.warn("Failed to serialize tags for dependency '{}' — registering with no tag constraint: {}",
-                                dep.getCapability(), e.getMessage());
-                            agentDep.setTags("[]");
-                        }
+                AgentSpec.DependencySpec existing = byCapability.get(dep.getCapability());
+                if (existing != null) {
+                    // Issue #1249: dedupe on capability is otherwise first-wins,
+                    // but iteration order over the route map is nondeterministic
+                    // (ConcurrentHashMap). A required=true declaration must never
+                    // be silently dropped just because a non-required declaration
+                    // of the same capability happened to be visited first —
+                    // required WINS on merge.
+                    if (dep.isRequired() && !existing.isRequired()) {
+                        log.warn("Capability '{}' is declared by multiple @MeshRoute dependencies "
+                                + "with conflicting required flags — upgrading the deduped dependency "
+                                + "to required=true (required wins on merge)",
+                            dep.getCapability());
+                        existing.setRequired(true);
                     }
-                    if (dep.hasVersion()) {
-                        agentDep.setVersion(dep.getVersion());
-                    }
-                    applySchemaMatching(agentDep, dep, clusterStrict);
-                    specs.add(agentDep);
+                    continue;
                 }
+                AgentSpec.DependencySpec agentDep = new AgentSpec.DependencySpec();
+                agentDep.setCapability(dep.getCapability());
+                if (dep.hasTags()) {
+                    // Issue #1158: tags is contractually a JSON-array string
+                    // (the Rust core JSON-parses it; a comma-joined string
+                    // silently degrades to "no tag constraint").
+                    try {
+                        agentDep.setTags(jsonMapper.writeValueAsString(dep.getTags()));
+                    } catch (Exception e) {
+                        log.warn("Failed to serialize tags for dependency '{}' — registering with no tag constraint: {}",
+                            dep.getCapability(), e.getMessage());
+                        agentDep.setTags("[]");
+                    }
+                }
+                if (dep.hasVersion()) {
+                    agentDep.setVersion(dep.getVersion());
+                }
+                // Issue #1249: carry required through to the spec JSON
+                // (omitted when false via NON_DEFAULT on the AgentSpec dep).
+                agentDep.setRequired(dep.isRequired());
+                applySchemaMatching(agentDep, dep, clusterStrict);
+                byCapability.put(dep.getCapability(), agentDep);
             }
         }
 
-        return specs;
+        return new ArrayList<>(byCapability.values());
     }
 
     /**
@@ -365,20 +382,27 @@ public class MeshRouteRegistry {
         private final String parameterName;
         private final Class<?> expectedType;
         private final SchemaMode schemaMode;
+        private final boolean required;
         private Type returnType;  // Set by BeanPostProcessor after construction
 
         public DependencySpec(String capability, String[] tags, String version, String parameterName) {
-            this(capability, tags, version, parameterName, null, SchemaMode.NONE);
+            this(capability, tags, version, parameterName, null, SchemaMode.NONE, false);
         }
 
         public DependencySpec(String capability, String[] tags, String version, String parameterName,
                               Class<?> expectedType, SchemaMode schemaMode) {
+            this(capability, tags, version, parameterName, expectedType, schemaMode, false);
+        }
+
+        public DependencySpec(String capability, String[] tags, String version, String parameterName,
+                              Class<?> expectedType, SchemaMode schemaMode, boolean required) {
             this.capability = capability;
             this.tags = tags != null ? tags : new String[0];
             this.version = version;
             this.parameterName = parameterName;
             this.expectedType = expectedType;
             this.schemaMode = schemaMode != null ? schemaMode : SchemaMode.NONE;
+            this.required = required;
         }
 
         /**
@@ -400,7 +424,8 @@ public class MeshRouteRegistry {
                 annotation.version(),
                 paramName,
                 expectedType,
-                annotation.schemaMode()
+                annotation.schemaMode(),
+                annotation.required()
             );
         }
 
@@ -447,6 +472,17 @@ public class MeshRouteRegistry {
          */
         public SchemaMode getSchemaMode() {
             return schemaMode;
+        }
+
+        /**
+         * Whether this route dependency is required (issue #1249). When true,
+         * the route perimeter returns 503 before user code if the dependency's
+         * proxy is unavailable at call time.
+         *
+         * @return true if the source {@link MeshDependency#required()} was set
+         */
+        public boolean isRequired() {
+            return required;
         }
 
         public Type getReturnType() { return returnType; }

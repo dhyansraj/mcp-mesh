@@ -47,7 +47,7 @@ agent.addTool({
   parameters: z.object({
     name: z.string(),
   }),
-  execute: async ({ name }, { date_service }) => {
+  execute: async ({ name }, date_service: McpMeshTool | null = null) => {
     if (date_service) {
       const today = await date_service({});
       return `Hello ${name}! Today is ${today}`;
@@ -57,7 +57,7 @@ agent.addTool({
 });
 ```
 
-**Important**: Dependencies are injected as the second parameter to `execute`, keyed by capability name. They may be `null` if unavailable.
+**Important**: Dependencies are injected **positionally** as parameters after the first `args` parameter, in declaration order (`dependencies[0]`, `dependencies[1]`, ...). They may be `null` if unavailable.
 
 ### Dependencies with Filters
 
@@ -72,7 +72,11 @@ agent.addTool({
     { capability: "formatter", tags: ["-deprecated"] },
   ],
   parameters: z.object({}),
-  execute: async ({}, { data_service, formatter }) => {
+  execute: async (
+    {},
+    data_service: McpMeshTool | null = null, // dependencies[0]
+    formatter: McpMeshTool | null = null,    // dependencies[1]
+  ) => {
     if (!data_service || !formatter) {
       return "Required services unavailable";
     }
@@ -106,7 +110,7 @@ agent.addTool({
     },
   ],
   parameters: z.object({}),
-  execute: async ({}, { lookup_employee }) => { /* ... */ },
+  execute: async ({}, lookup_employee: McpMeshTool | null = null) => { /* ... */ },
 });
 ```
 
@@ -128,7 +132,7 @@ agent.addTool({
     a: z.number(),
     b: z.number(),
   }),
-  execute: async ({ a, b }, { math }) => {
+  execute: async ({ a, b }, math: McpMeshTool | null = null) => {
     if (!math) return "Math service unavailable";
     const result = await math({ a, b });
     return result;
@@ -152,7 +156,8 @@ and want to prefer one but fallback to another if unavailable.
 Callable proxy for tool invocations:
 
 ```typescript
-execute: async ({}, { helper }) => {
+// dependencies: ["helper"] → helper is dependencies[0]
+execute: async ({}, helper: McpMeshTool | null = null) => {
   if (helper) {
     // Direct call (calls default tool)
     const result = await helper({ arg1: "value" });
@@ -192,7 +197,7 @@ agent.addTool({
   capability: "my_capability",
   dependencies: ["helper"],
   parameters: z.object({}),
-  execute: async ({}, { helper }) => {
+  execute: async ({}, helper: McpMeshTool | null = null) => {
     if (helper === null) {
       return "Service temporarily unavailable";
     }
@@ -209,7 +214,7 @@ agent.addTool({
   capability: "time_service",
   dependencies: ["date_service"],
   parameters: z.object({}),
-  execute: async ({}, { date_service }) => {
+  execute: async ({}, date_service: McpMeshTool | null = null) => {
     if (date_service) {
       return await date_service({});
     }
@@ -218,25 +223,90 @@ agent.addTool({
 });
 ```
 
+## Required Dependencies
+
+By default a dependency is optional: an unresolved dependency injects `null`, and the agent still starts, registers, and serves (soft-fail). Mark an edge `required` to opt that single edge into strictness:
+
+```typescript
+agent.addTool({
+  name: "generate_report",
+  capability: "report",
+  dependencies: [
+    { capability: "data_service", required: true },
+    { capability: "formatter" }, // optional (default)
+  ],
+  parameters: z.object({}),
+  // Tool deps inject POSITIONALLY as McpMeshTool params after args
+  // (dependencies[0], dependencies[1], ...).
+  execute: async (
+    {},
+    data_service: McpMeshTool | null = null, // dependencies[0] — required
+    formatter: McpMeshTool | null = null,    // dependencies[1] — optional
+  ) => { /* ... */ },
+});
+```
+
+`required` defaults to `false` and combines with the other selector fields (`tags`, `version`, `expectedSchema`). It is carried on the wire only when `true`.
+
+### Availability Semantics
+
+The registry computes a capability-availability predicate:
+
+> a capability is **available** ⇔ its owning agent is healthy **AND** every one of its `required` dependencies resolves to an available provider (full tag / version / schema matching)
+
+The predicate is **transitive**: in a required chain `A → B → C`, if `C` goes down then `B` becomes unavailable and `A` becomes unavailable in turn. Optional edges never propagate — strictness flows only along edges you mark `required`, so the soft-fail default is preserved everywhere else.
+
+An unavailable capability is excluded from resolution exactly like an unhealthy provider — it drops out at the resolver's `health` stage. Consumers holding a proxy to it see the proxy flip to `null` through the same background dependency-update channel that already delivers topology changes — no code changes, no SDK upgrade required.
+
+### Route Perimeter (503)
+
+Mesh-internal calls go through proxies; external HTTP callers to a `mesh.route()` handler do not. When a route declares a required dependency that is unavailable at call time, the framework's own middleware returns **503** — before your handler runs, after the settle window — with the body:
+
+```json
+{ "error": "dependency_unavailable", "capability": "data_service" }
+```
+
+503 rather than 404 so monitoring alarms on 5xx, load-balancer health checks eject the instance, and clients see a retryable "unavailable" instead of a permanent "missing".
+
+### Cycle Rule
+
+A cycle among `required` edges can never converge (both ends stay unavailable forever), so the registry rejects the registration/heartbeat that would close one, loudly naming the loop:
+
+```
+required dependency cycle: analyst → enricher → analyst
+```
+
+The rejected agent logs the registration failure and keeps retrying on each heartbeat until the loop is broken. Cycles routed through an **optional** edge remain legal — that is the bootstrapping path.
+
+### Observing Availability
+
+The agents/capabilities API carries two derived fields per capability:
+
+- `available` — the predicate above (boolean)
+- `unavailable_reason` — set when `available` is false; names the first broken edge with its constraint detail, e.g. `required dep 'weather-api' unresolved (no provider matches tags=[+prod])`, `required dep 'data_service' unavailable (provider agent-7 unhealthy)`, or `agent unhealthy` when the owning agent is itself down.
+
+The capability stays visible in the registry, UI, and `meshctl` (availability is distinct from presence), so the reason chain is a diagnostic upgrade, not a disappearance.
+
 ## Proxy Configuration
 
-Configure proxy behavior via `dependencyConfig`:
+Configure proxy behavior via `dependencyKwargs` — an array indexed by dependency position (aligned with `dependencies`):
 
 ```typescript
 agent.addTool({
   name: "my_tool",
   capability: "my_capability",
   dependencies: ["slow_service"],
-  dependencyConfig: {
-    slow_service: {
-      timeout: 60000, // Request timeout (milliseconds)
-      retryCount: 3, // Retry attempts
-      streaming: true, // Enable streaming
+  dependencyKwargs: [
+    {
+      // Config for dependencies[0] (slow_service)
+      timeout: 60, // Request timeout in seconds (default 30)
+      maxAttempts: 3, // Total attempts incl. the first try (default 1)
+      streaming: true, // Enable streaming (uses streamTimeout)
       sessionRequired: true, // Require session affinity
     },
-  },
+  ],
   parameters: z.object({ data: z.string() }),
-  execute: async ({ data }, { slow_service }) => {
+  execute: async ({ data }, slow_service: McpMeshTool | null = null) => {
     if (slow_service) {
       return await slow_service({ data });
     }
@@ -276,10 +346,14 @@ No code changes needed - happens transparently.
 Dependencies are typed based on the capability name:
 
 ```typescript
-// Dependencies are McpMeshTool | null
-execute: async (params, deps: Record<string, McpMeshTool | null>) => {
-  const { date_service, weather_service } = deps;
-
+// dependencies: ["date_service", "weather_service"]
+// Each dependency is McpMeshTool | null, injected positionally in
+// declaration order after the first args parameter.
+execute: async (
+  params,
+  date_service: McpMeshTool | null = null,    // dependencies[0]
+  weather_service: McpMeshTool | null = null, // dependencies[1]
+) => {
   if (date_service) {
     // TypeScript knows this is McpMeshTool
     const result = await date_service({});
@@ -313,7 +387,9 @@ agent.addTool({
   }),
   execute: async (
     { quarter, year },
-    { data_service, formatter, audit_log },
+    data_service: McpMeshTool | null = null, // dependencies[0]
+    formatter: McpMeshTool | null = null,    // dependencies[1]
+    audit_log: McpMeshTool | null = null,    // dependencies[2] (string form)
   ) => {
     // Graceful degradation for each dependency
     if (!data_service) {

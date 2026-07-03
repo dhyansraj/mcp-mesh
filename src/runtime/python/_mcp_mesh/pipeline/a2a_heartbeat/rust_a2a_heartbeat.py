@@ -469,9 +469,15 @@ async def rust_a2a_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
                 pass
 
             try:
-                try:
-                    event = await asyncio.wait_for(handle.next_event(), timeout=1.0)
-                except TimeoutError:
+                # Pull the next event. The 1s liveness timeout lives INSIDE the
+                # Rust future (issue #1256): a `None` return is a timeout tick
+                # that lets us re-check the shutdown signal. We must NOT wrap
+                # this in asyncio.wait_for — an external cancellation could drop
+                # a dequeued event in the recv→deliver window, permanently
+                # stalling a dependency edge.
+                event = await handle.next_event()
+                if event is None:
+                    # Liveness tick, no event; loop back to check shutdown.
                     continue
 
                 if event.event_type == "shutdown":

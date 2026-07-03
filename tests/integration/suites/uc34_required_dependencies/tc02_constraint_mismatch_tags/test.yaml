@@ -1,0 +1,163 @@
+# tc02_constraint_mismatch_tags — required-edge availability applies FULL
+# constraint matching, not just capability-name existence (issue #1249).
+#
+# Topology: agent-b2's b2-cap REQUIRES c-cap WITH tags=["needs-this-tag"].
+# agent-c provides c-cap UNTAGGED and perfectly healthy.
+#
+# Design guarantees under test:
+#   1. A healthy provider that fails the edge's tag constraint does NOT
+#      satisfy a required edge: b2-cap is available==false even though a
+#      c-cap provider is up. The unavailable_reason must name the missing
+#      tag ("no provider matches tags=[needs-this-tag]") — NOT blame the
+#      healthy provider's health (the describeUnresolvedRequiredEdge
+#      live-validation fix: constraint-failing providers are irrelevant to
+#      why the edge is broken).
+#   2. Availability is re-derived live: starting agent-c2 (c-cap tagged
+#      needs-this-tag) flips b2-cap to available==true with no restart of
+#      agent-b2.
+#
+# Timing: verdicts are computed at /agents read time from registered state,
+# so both transitions land as soon as registration does — still polled with
+# deadlines, never fixed sleeps.
+
+name: "Required deps: tag-constrained edge ignores a healthy non-matching provider (Python)"
+description: "b2-cap requires c-cap+needs-this-tag; untagged healthy C leaves b2-cap unavailable with the tag named in the reason; starting tagged C2 flips it available"
+tags:
+  - integration
+  - python
+  - registry
+  - required-deps
+  - availability
+  - tags
+  - issue-1249
+timeout: 420
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/agent-b2 /workspace/
+      cp -rL /uc-artifacts/agent-c /workspace/
+      cp -rL /uc-artifacts/agent-c2 /workspace/
+
+  - name: "Install agent-b2 deps"
+    handler: pip-install
+    path: /workspace/agent-b2
+
+  - name: "Install agent-c deps"
+    handler: pip-install
+    path: /workspace/agent-c
+
+  - name: "Install agent-c2 deps"
+    handler: pip-install
+    path: /workspace/agent-c2
+
+  - name: "Start untagged agent-c (port 9101)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start agent-c/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  - name: "Start agent-b2 (port 9107)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start agent-b2/main.py --env MCP_MESH_HTTP_PORT=9107 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  # Liveness only (issue #1193). "agent-c" is a substring of "agent-c2" too,
+  # but c2 is not started yet — this wait can only be satisfied by agent-c.
+  - routine: global.wait_for_agents_registered
+    params:
+      agents: "agent-b2 agent-c"
+
+  # The mismatch verdict: b2-cap must surface as unavailable as soon as it is
+  # listed. Polling until 'false' (rather than until listed) means a bugged
+  # 'true' verdict fails HERE with a loud named error, not in a later step.
+  - name: "Wait for b2-cap mismatch verdict (available=false)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 45); do
+        AVAIL=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name == "agent-b2") | .capabilities[] | select(.name == "b2-cap") | .available' 2>/dev/null || echo "")
+        if [ "$AVAIL" = "false" ]; then
+          echo "B2CAP_UNAVAILABLE=1 after ~$((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: b2-cap never surfaced as available=false within 90s (last=$AVAIL) — a healthy UNTAGGED provider must not satisfy a tag-constrained required edge"
+      curl -s http://localhost:8000/agents | jq '.agents[] | select(.name == "agent-b2")' 2>/dev/null || true
+      exit 1
+    capture: wait_b2_mismatch
+    timeout: 110
+
+  - name: "Capture /agents snapshot with only the untagged provider"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:8000/agents
+    capture: agents_mismatch
+
+  - name: "Start tagged agent-c2 (port 9108)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start agent-c2/main.py --env MCP_MESH_HTTP_PORT=9108 -d
+
+  - routine: global.wait_for_agents_registered
+    params:
+      agents: "agent-c2"
+
+  - name: "Wait for b2-cap to flip available (tagged provider matched)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AVAIL=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name == "agent-b2") | .capabilities[] | select(.name == "b2-cap") | .available' 2>/dev/null || echo "")
+        if [ "$AVAIL" = "true" ]; then
+          echo "B2CAP_AVAILABLE=1 after ~$((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: b2-cap never flipped to available=true within 120s of the tagged provider registering (last=$AVAIL)"
+      curl -s http://localhost:8000/agents | jq '.agents[] | select(.name == "agent-b2")' 2>/dev/null || true
+      exit 1
+    capture: wait_b2_available
+    timeout: 140
+
+  - name: "Capture /agents snapshot with the tagged provider"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:8000/agents
+    capture: agents_tagged
+
+assertions:
+  # IDIOM: equality INSIDE the jq filter, '== true' outside; no '}' in
+  # interpolation bodies.
+
+  - expr: "${captured.wait_b2_mismatch} contains 'B2CAP_UNAVAILABLE=1'"
+    message: "b2-cap must surface available=false while only the untagged provider exists"
+  - expr: "${captured.wait_b2_available} contains 'B2CAP_AVAILABLE=1'"
+    message: "b2-cap must flip available=true once the tagged provider registers"
+
+  # Guarantee 1: constraint mismatch, with the TAG named in the reason
+  - expr: "${jq:captured.agents_mismatch:(.agents[] | select(.name == \"agent-b2\") | .capabilities[] | select(.name == \"b2-cap\") | .available == false)} == 'true'"
+    message: "a healthy non-matching provider must NOT satisfy a tag-constrained required edge"
+  - expr: "${jq:captured.agents_mismatch:(.agents[] | select(.name == \"agent-b2\") | .capabilities[] | select(.name == \"b2-cap\") | .unavailable_reason // \"\" | contains(\"needs-this-tag\"))} == 'true'"
+    message: "the unavailable_reason must name the unmatched tag constraint (needs-this-tag), not provider health"
+
+  # The untagged provider itself is healthy and its own c-cap is available —
+  # proving the mismatch verdict above is constraint-driven, not health-driven
+  - expr: "${jq:captured.agents_mismatch:(.agents[] | select(.name == \"agent-c\") | .status == \"healthy\")} == 'true'"
+    message: "the untagged c-cap provider must be healthy — otherwise this test degenerates into tc01"
+  - expr: "${jq:captured.agents_mismatch:(.agents[] | select(.name == \"agent-c\") | .capabilities[] | select(.name == \"c-cap\") | .available == true)} == 'true'"
+    message: "the untagged provider's own c-cap must be available (it has no required deps)"
+
+  # Guarantee 2: the tagged provider flips the verdict, reason cleared
+  - expr: "${jq:captured.agents_tagged:(.agents[] | select(.name == \"agent-b2\") | .capabilities[] | select(.name == \"b2-cap\") | .available == true and .unavailable_reason == null)} == 'true'"
+    message: "b2-cap must be available with no unavailable_reason once a tag-matching provider exists"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

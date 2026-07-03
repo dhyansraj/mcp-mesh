@@ -71,6 +71,9 @@ function buildToolSpecs(routes: RouteMetadata[]): JsToolSpec[] {
           capability: dep.capability,
           tags: JSON.stringify(dep.tags ?? []),
           version: dep.version,
+          // Issue #1249: carry the required flag so the registry factors this
+          // route edge into transitive availability. Only when true.
+          required: dep.required ? true : undefined,
         })
       ),
       inputSchema: undefined,

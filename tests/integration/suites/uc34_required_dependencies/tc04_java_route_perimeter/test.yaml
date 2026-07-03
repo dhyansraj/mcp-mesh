@@ -1,0 +1,201 @@
+# tc04_java_route_perimeter — Java parity for the issue #1249 required-route
+# perimeter: @MeshDependency(required = true) on a @MeshRoute.
+#
+# Topology: Python base-provider (base-cap) + Java java-route-consumer whose
+# /check route declares the required edge and calls the proxy UNGUARDED.
+#
+# Design guarantees under test (mirrors the Python contract exactly):
+#   1. Provider up: /check answers 200 through the injected proxy.
+#   2. Provider down: MeshRouteHandlerInterceptor answers HTTP 503 with the
+#      structured body {"error":"dependency_unavailable","capability":"base-cap"}
+#      BEFORE user code runs — external HTTP callers never traverse a mesh
+#      proxy, so the perimeter is the enforcement point. A 500 here would
+#      mean user code ran with a dead proxy (perimeter did NOT fire).
+#   3. Provider restarted: /check heals to 200 with no consumer restart.
+#
+# Timing: the unavailable transition rides the default health debounce
+# (~3 missed heartbeats, ~15-25s) plus one consumer heartbeat — polled with
+# deadlines. Registration waits are liveness-only with the global routine's
+# 240s deadline (cold-JVM mvn spring-boot:run starts routinely exceed 90s).
+
+name: "Required deps: Java @MeshDependency(required=true) route perimeter answers 503/recovers"
+description: "Java /check route with a required base-cap edge: 200 with the Python provider up, 503 dependency_unavailable (before user code) when it dies, 200 again after restart"
+tags:
+  - integration
+  - java
+  - python
+  - registry
+  - required-deps
+  - availability
+  - issue-1249
+  - slow
+timeout: 900
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/base-provider /workspace/
+      cp -rL /uc-artifacts/java-route-consumer /workspace/
+
+  - name: "Install provider deps"
+    handler: pip-install
+    path: /workspace/base-provider
+
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-route-consumer
+    timeout: 600
+
+  - name: "Start base-provider (port 9101)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start base-provider/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  - name: "Start java-route-consumer (port 9201)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start /workspace/java-route-consumer --env MCP_MESH_HTTP_PORT=9201 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  # Liveness only (issue #1193): 240s deadline covers the cold JVM start.
+  - routine: global.wait_for_agents_registered
+    params:
+      agents: "base-provider java-route-consumer"
+
+  # Baseline 200 through the injected proxy. Long deadline: Spring context
+  # refresh + first heartbeat resolution on a cold JVM.
+  - name: "Wait for /check baseline 200"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 90); do
+        CODE=$(curl -s -o /tmp/check_baseline.json -w "%{http_code}" http://localhost:9201/check 2>/dev/null || echo 000)
+        if [ "$CODE" = "200" ]; then
+          echo "CHECK_BASELINE_200=1 after ~$((i*2))s"
+          cat /tmp/check_baseline.json
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: /check never answered 200 within 180s (last code=$CODE)"
+      cat /tmp/check_baseline.json 2>/dev/null || true
+      meshctl logs java-route-consumer 2>/dev/null | tail -40 || true
+      exit 1
+    capture: check_baseline
+    timeout: 200
+
+  # Pure-JSON capture for the jq payload assertion: the wait step above mixes
+  # its progress marker with the body in one capture, which jq can't parse.
+  - name: "Capture /check baseline body"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:9201/check
+    capture: check_baseline_body
+
+  - name: "Kill base-provider"
+    handler: shell
+    workdir: /workspace
+    command: meshctl stop base-provider
+    capture: kill_provider
+
+  - name: "Wait for /check to answer 503"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9201/check 2>/dev/null || echo 000)
+        if [ "$CODE" = "503" ]; then
+          echo "CHECK_503=1 after ~$((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: /check never answered 503 within 120s (last code=$CODE)"
+      curl -s http://localhost:9201/check 2>/dev/null || true
+      meshctl logs java-route-consumer 2>/dev/null | tail -40 || true
+      exit 1
+    capture: wait_check_503
+    timeout: 140
+
+  # Pure-JSON captures for jq assertions (state stable while provider is down).
+  - name: "Capture /check outage body"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:9201/check
+    capture: check_outage_body
+
+  - name: "Capture /check outage status code"
+    handler: shell
+    workdir: /workspace
+    command: curl -s -o /dev/null -w "%{http_code}" http://localhost:9201/check
+    capture: check_outage_code
+
+  - name: "Restart base-provider"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start base-provider/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  - name: "Wait for /check recovery 200"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 75); do
+        CODE=$(curl -s -o /tmp/check_recovery.json -w "%{http_code}" http://localhost:9201/check 2>/dev/null || echo 000)
+        if [ "$CODE" = "200" ]; then
+          echo "CHECK_RECOVERED=1 after ~$((i*2))s"
+          cat /tmp/check_recovery.json
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: /check never recovered to 200 within 150s (last code=$CODE)"
+      cat /tmp/check_recovery.json 2>/dev/null || true
+      meshctl logs java-route-consumer 2>/dev/null | tail -40 || true
+      exit 1
+    capture: check_recovery
+    timeout: 170
+
+  # Pure-JSON capture for the jq payload assertion (same reason as baseline).
+  - name: "Capture /check recovery body"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:9201/check
+    capture: check_recovery_body
+
+assertions:
+  # IDIOM: equality INSIDE the jq filter, '== true' outside; no '}' in
+  # interpolation bodies.
+
+  - expr: "${captured.check_baseline} contains 'CHECK_BASELINE_200=1'"
+    message: "/check must answer 200 through the injected proxy while the provider is up"
+  - expr: "${jq:captured.check_baseline_body:(.base.msg == \"hello-from-base\")} == 'true'"
+    message: "the baseline 200 must carry the provider payload — proving the proxy path, not a static handler"
+
+  # Guarantee 2: the perimeter 503 with the structured contract body
+  - expr: "${captured.wait_check_503} contains 'CHECK_503=1'"
+    message: "/check must transition to 503 once the required base-cap provider dies"
+  - expr: "${captured.check_outage_code} == '503'"
+    message: "/check must answer HTTP 503 during the outage"
+  - expr: "${jq:captured.check_outage_body:(.error == \"dependency_unavailable\" and .capability == \"base-cap\")} == 'true'"
+    message: "the 503 body must be the structured contract (error=dependency_unavailable, capability=base-cap) — a 500 or other body means user code ran with a dead proxy"
+
+  # Guarantee 3: organic recovery, no consumer restart
+  - expr: "${captured.check_recovery} contains 'CHECK_RECOVERED=1'"
+    message: "/check must heal to 200 after the provider restarts, with no consumer restart"
+  - expr: "${jq:captured.check_recovery_body:(.base.msg == \"hello-from-base\")} == 'true'"
+    message: "the recovered 200 must again carry the provider payload"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*route" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

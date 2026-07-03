@@ -233,6 +233,22 @@ class MeshDependsOnIntegrationTest {
         @Bean public TypedCapDeclarer typedCapDeclarer() { return new TypedCapDeclarer(); }
     }
 
+    // Issue #1249: a @MeshDependsOn edge marked required=true must carry the
+    // flag into the synthetic __mesh_depends_on_deps tool spec; a sibling
+    // default edge stays required=false (omitted on the wire).
+    @Component
+    @MeshDependsOn({
+        @MeshDependency(capability = "req_dep_cap", required = true),
+        @MeshDependency(capability = "opt_dep_cap")
+    })
+    static class RequiredCapDeclarer {}
+
+    @Configuration
+    @MeshAgent(name = "required-cap-agent")
+    static class RequiredCapAgentConfig {
+        @Bean public RequiredCapDeclarer requiredCapDeclarer() { return new RequiredCapDeclarer(); }
+    }
+
     // Heartbeat-driven availability
     @Component
     @MeshDependsOn(@MeshDependency(capability = "avail_cap"))
@@ -660,6 +676,38 @@ class MeshDependsOnIntegrationTest {
                 assertThat(dep.getVersion())
                     .as("version constraint must propagate verbatim")
                     .isEqualTo(">=1.0");
+            });
+    }
+
+    @Test
+    @DisplayName("#1249: required flag propagates to DependencySpec for @MeshDependsOn")
+    void requiredFlagPropagatesForMeshDependsOn() {
+        baseRunner
+            .withUserConfiguration(RequiredCapAgentConfig.class)
+            .run(context -> {
+                assertThat(context).hasNotFailed();
+                AgentSpec spec = context.getBean(MeshRuntime.class).getAgentSpec();
+                AgentSpec.DependencySpec req = spec.getTools().stream()
+                    .filter(t -> "__mesh_depends_on_deps".equals(t.getCapability()))
+                    .flatMap(t -> t.getDependencies().stream())
+                    .filter(d -> "req_dep_cap".equals(d.getCapability()))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError(
+                        "req_dep_cap dependency missing from __mesh_depends_on_deps tool"));
+                AgentSpec.DependencySpec opt = spec.getTools().stream()
+                    .filter(t -> "__mesh_depends_on_deps".equals(t.getCapability()))
+                    .flatMap(t -> t.getDependencies().stream())
+                    .filter(d -> "opt_dep_cap".equals(d.getCapability()))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError(
+                        "opt_dep_cap dependency missing from __mesh_depends_on_deps tool"));
+
+                assertThat(req.isRequired())
+                    .as("required=true @MeshDependsOn edge must carry required into the spec")
+                    .isTrue();
+                assertThat(opt.isRequired())
+                    .as("default @MeshDependsOn edge must stay required=false")
+                    .isFalse();
             });
     }
 

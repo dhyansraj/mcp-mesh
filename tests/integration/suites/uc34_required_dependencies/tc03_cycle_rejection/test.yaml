@@ -1,0 +1,130 @@
+# tc03_cycle_rejection — a registration that would close a required-edge
+# cycle is REJECTED loudly at the registry (issue #1249, Python).
+#
+# Topology: agent-x declares x-cap --REQUIRED--> y-cap; agent-y declares
+# y-cap --REQUIRED--> x-cap. Started SEQUENTIALLY so the rejected party is
+# deterministic: x registers first (its edge is merely unresolved — legal),
+# then y's registration closes the loop and is the one rejected.
+#
+# Design guarantees under test:
+#   1. Cycle rejection is registration-time and semantic: the registry
+#      answers HTTP 200 + status:"error" with a message naming the loop;
+#      the Rust core surfaces it as a loud per-attempt log ("Registry
+#      rejected agent ...: required dependency cycle: ...") and keeps
+#      retrying with bounded backoff (soft-fail: fix the config, agent heals
+#      without restart). A required cycle can never converge, so a loud
+#      deterministic rejection beats a silent permanent deadlock.
+#   2. The rejected agent NEVER appears in /agents while the loop stands.
+#   3. The half-cycle that DID register is legal but simply unavailable:
+#      agent-x stays registered with x-cap available==false, reason naming
+#      the unresolved y-cap edge. (Optional edges remain the sanctioned
+#      bootstrapping path for mutually-dependent agents.)
+
+name: "Required deps: cycle-closing registration is rejected, half-cycle stays unavailable (Python)"
+description: "x requires y-cap then y requires x-cap: y is rejected ('required dependency cycle' in its logs, absent from /agents); x stays registered with x-cap available=false naming y-cap"
+tags:
+  - integration
+  - python
+  - registry
+  - required-deps
+  - availability
+  - cycle
+  - issue-1249
+timeout: 420
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/agent-x /workspace/
+      cp -rL /uc-artifacts/agent-y /workspace/
+
+  - name: "Install agent-x deps"
+    handler: pip-install
+    path: /workspace/agent-x
+
+  - name: "Install agent-y deps"
+    handler: pip-install
+    path: /workspace/agent-y
+
+  # Sequential start makes the rejection deterministic: x's lone required
+  # edge (x-cap -> y-cap) cannot close a cycle against an empty graph.
+  - name: "Start agent-x (port 9105)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start agent-x/main.py --env MCP_MESH_HTTP_PORT=9105 -d
+
+  - routine: global.wait_for_agents_registered
+    params:
+      agents: "agent-x"
+
+  - name: "Start cycle-closing agent-y (port 9106)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start agent-y/main.py --env MCP_MESH_HTTP_PORT=9106 -d
+
+  # The Rust core logs the semantic rejection on every heartbeat attempt.
+  # meshctl logs resolves the DECLARED agent name; fall back to the raw log
+  # dir in case the process tracker keys differently for a never-registered
+  # agent.
+  - name: "Wait for the cycle rejection in agent-y's logs"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 45); do
+        if (meshctl logs agent-y 2>/dev/null; cat ~/.mcp-mesh/logs/agent-y*.log 2>/dev/null) | grep -q "required dependency cycle"; then
+          echo "CYCLE_REJECTED=1 after ~$((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: 'required dependency cycle' never appeared in agent-y's logs within 90s"
+      meshctl logs agent-y 2>/dev/null | tail -50 || true
+      ls ~/.mcp-mesh/logs/ 2>/dev/null || true
+      exit 1
+    capture: wait_cycle_rejected
+    timeout: 110
+
+  - name: "Capture agent-y rejection log lines"
+    handler: shell
+    workdir: /workspace
+    command: |
+      (meshctl logs agent-y 2>/dev/null || true; cat ~/.mcp-mesh/logs/agent-y*.log 2>/dev/null || true) | grep "required dependency cycle" | head -5
+    capture: y_rejection_log
+
+  - name: "Capture /agents snapshot"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:8000/agents
+    capture: agents_snapshot
+
+assertions:
+  # IDIOM: equality INSIDE the jq filter, '== true' outside; no '}' in
+  # interpolation bodies.
+
+  - expr: "${captured.wait_cycle_rejected} contains 'CYCLE_REJECTED=1'"
+    message: "agent-y's registration must be rejected with the cycle named in its logs"
+
+  # Guarantee 1: the rejection is loud and names the failure class
+  - expr: "${captured.y_rejection_log} contains 'required dependency cycle'"
+    message: "the rejected agent's log must carry the registry's 'required dependency cycle' message (loud soft-fail, not a silent drop)"
+
+  # Guarantee 2: the cycle-closer never registers
+  - expr: "${jq:captured.agents_snapshot:([.agents[] | select(.name == \"agent-y\")] | length == 0)} == 'true'"
+    message: "agent-y must be ABSENT from /agents — a cycle-closing registration is never written"
+
+  # Guarantee 3: the legal half-cycle is registered but unavailable
+  - expr: "${jq:captured.agents_snapshot:([.agents[] | select(.name == \"agent-x\")] | length == 1)} == 'true'"
+    message: "agent-x must stay registered — an unresolved required edge is legal, only the cycle is not"
+  - expr: "${jq:captured.agents_snapshot:(.agents[] | select(.name == \"agent-x\") | .capabilities[] | select(.name == \"x-cap\") | .available == false)} == 'true'"
+    message: "x-cap must be available=false while its required y-cap edge is unresolved"
+  - expr: "${jq:captured.agents_snapshot:(.agents[] | select(.name == \"agent-x\") | .capabilities[] | select(.name == \"x-cap\") | .unavailable_reason // \"\" | contains(\"y-cap\"))} == 'true'"
+    message: "x-cap's unavailable_reason must name the unresolved y-cap edge"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

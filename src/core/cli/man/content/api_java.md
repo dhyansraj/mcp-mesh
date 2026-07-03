@@ -176,6 +176,22 @@ public ResponseEntity<?> greetWithFallback(
 
 Without this flag, a missing dependency returns `503 Service Unavailable` automatically.
 
+## Required Dependencies
+
+`failOnMissingDependency` is a coarse per-route switch. To mark a single edge strict, set `required = true` on its `@MeshDependency`. When that dependency is unavailable at request time, the framework's interceptor returns **503** with body `{"error":"dependency_unavailable","capability":"<cap>"}` before your handler runs (after the settle window):
+
+```java
+@GetMapping("/greet")
+@MeshRoute(dependencies = @MeshDependency(capability = "greeting", required = true))
+public ResponseEntity<?> greet(@RequestParam(defaultValue = "World") String name,
+                               McpMeshTool<Map<String, Object>> greeting) {
+    // framework guarantees greeting is live
+    return ResponseEntity.ok(greeting.call(Map.of("name", name)));
+}
+```
+
+The required check takes precedence over `failOnMissingDependency`: a required-dep 503 fires regardless of that flag, and only non-required missing deps fall through to the coarse backstop. See `meshctl man dependency-injection --java` for the full availability model, transitive propagation, and cycle rules.
+
 ## How It Works
 
 1. Spring Boot starts and detects `@MeshRoute` annotations (no `@MeshAgent` needed)

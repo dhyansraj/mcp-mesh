@@ -210,6 +210,15 @@ export type DependencySpec =
        * {@link expectedSchema}. Defaults to "subset" when expectedSchema is set.
        */
       matchMode?: "subset" | "strict";
+      /** Issue #1249: opt-in strictness for this dependency edge. When `true`,
+       * the registry factors this edge into transitive capability availability
+       * (own agent healthy AND every required dep available) and — for
+       * `mesh.route` deps — the framework returns HTTP 503
+       * (`{ error: "dependency_unavailable", capability }`) before user code
+       * when the proxy is unavailable at call time. Default `false` (soft-fail:
+       * an unresolved dep injects a null proxy that the handler null-checks).
+       */
+      required?: boolean;
     };
 
 /**
@@ -226,6 +235,8 @@ export interface NormalizedDependency {
   expectedSchemaRaw?: object;
   /** Issue #547: schema match mode ("subset" or "strict"). */
   matchMode?: "subset" | "strict";
+  /** Issue #1249: opt-in strictness for this dependency edge (default false). */
+  required?: boolean;
 }
 
 /**

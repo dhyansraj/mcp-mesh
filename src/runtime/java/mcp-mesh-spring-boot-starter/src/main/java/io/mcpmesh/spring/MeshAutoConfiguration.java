@@ -1059,6 +1059,14 @@ public class MeshAutoConfiguration {
                 if (dep.version() != null && !dep.version().isEmpty()) {
                     agentDep.setVersion(dep.version());
                 }
+                // Issue #1249: carry the @MeshDependency required flag through
+                // to the spec JSON (omitted when false via NON_DEFAULT on the
+                // AgentSpec dep). @MeshDependsOn edges participate in the same
+                // transitive availability predicate as @MeshRoute / @MeshTool
+                // dependencies. The value() array is a user-authored ordered
+                // list, so no required-wins merge is needed here (unlike the
+                // route/A2A registries' nondeterministic map iteration).
+                agentDep.setRequired(dep.required());
                 // Issue #547: honour expectedType / schemaMode the same way
                 // @MeshRoute does. Default-sentinel (Void.class) means "not
                 // set" — same convention as MeshRouteRegistry.DependencySpec

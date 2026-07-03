@@ -107,6 +107,9 @@ export interface RouteMetadata {
     expectedSchemaRaw?: object;
     /** Issue #547: schema match mode. */
     matchMode?: "subset" | "strict";
+    /** Issue #1249: opt-in required edge (default false). A required route dep
+     * whose proxy is unavailable at call time trips the perimeter 503. */
+    required?: boolean;
   }>;
   /** Per-dependency kwargs */
   dependencyKwargs?: DependencyKwargs[];
@@ -388,6 +391,16 @@ export function route(
   // Store normalized deps for the handler
   const normalizedDeps = dependencies.map(normalizeDependency);
 
+  // Issue #1249: does this route declare any required dep? Precomputed once so
+  // the perimeter check below is a no-op for the common (all-optional) route.
+  // Every declared dep always has a slot in the `deps` object keyed by
+  // capability, so — unlike Python's positional injection — there is no
+  // "required perimeter INACTIVE (no injectable slot)" case to warn about.
+  // TS `mesh.route` has no declared streaming/SSE variant either, and the 503
+  // is emitted before the handler runs (nothing written to `res` yet), so
+  // there is no stream to break and no creation-time bypass warning to emit.
+  const hasRequiredDep = normalizedDeps.some((dep) => dep.required === true);
+
   // Return Express middleware
   const middleware: RequestHandler = async (
     req: Request,
@@ -432,6 +445,40 @@ export function route(
       for (const dep of normalizedDeps) {
         if (deps[dep.capability] === undefined) {
           deps[dep.capability] = null;
+        }
+      }
+
+      // Issue #1249 perimeter: a route dep declared `required: true` whose
+      // proxy is unavailable AT CALL TIME (after the settle wait above) makes
+      // the capability unavailable — return 503 before user code, naming the
+      // capability, so monitoring alarms on 5xx and clients see a retryable
+      // "unavailable" rather than a hand-written null check.
+      //
+      // Evaluate required-ness PER UNIQUE CAPABILITY against the same
+      // capability-keyed `deps` object the handler receives — NOT per index.
+      // Injection is capability-keyed (a capability declared twice collapses to
+      // one `deps[cap]` slot, last resolution winning), so an index-based check
+      // could 503 on a dead sibling slot while `deps[cap]` is actually live.
+      // Deduping with "required wins" (a capability required in any slot is
+      // required) keeps the perimeter and the handler seeing identical state.
+      if (hasRequiredDep) {
+        const checkedCaps = new Set<string>();
+        for (const dep of normalizedDeps) {
+          if (dep.required !== true) continue;
+          if (checkedCaps.has(dep.capability)) continue;
+          checkedCaps.add(dep.capability);
+          // `== null` catches both the resolved-null and never-set cases.
+          if (deps[dep.capability] == null) {
+            console.warn(
+              `🚫 Route '${req.method} ${req.path}': required dependency ` +
+                `'${dep.capability}' unavailable — returning 503`
+            );
+            res.status(503).json({
+              error: "dependency_unavailable",
+              capability: dep.capability,
+            });
+            return;
+          }
         }
       }
 

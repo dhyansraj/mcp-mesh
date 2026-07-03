@@ -310,6 +310,7 @@ class MeshLlmAgentProxyStreamTest {
             @Override public String capability() { return "llm"; }
             @Override public String[] tags() { return new String[]{"+claude", "ai.mcpmesh.stream"}; }
             @Override public String version() { return ""; }
+            @Override public boolean required() { return false; }
             @Override public Class<?> expectedType() { return Void.class; }
             @Override public io.mcpmesh.SchemaMode schemaMode() { return io.mcpmesh.SchemaMode.NONE; }
         };

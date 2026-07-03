@@ -75,6 +75,27 @@ public @interface MeshDependency {
     String name() default "";
 
     /**
+     * Whether this route dependency is <b>required</b> (issue #1249).
+     *
+     * <p>Opt-in strictness, default {@code false} (soft-fail). When
+     * {@code true}, the framework's own route wrapper returns HTTP
+     * <b>503</b> with body
+     * {@code {"error":"dependency_unavailable","capability":"<cap>"}} — before
+     * user code runs — whenever this dependency's proxy is unavailable at
+     * call time (after the settling window). This is the perimeter backstop:
+     * external HTTP callers don't go through mesh proxies, so the required
+     * predicate is evaluated at the route boundary from the proxy state the
+     * agent already holds locally.
+     *
+     * <p>Only carried on the wire when {@code true}; {@code false} is omitted
+     * from the registration payload.
+     *
+     * @return true to mark this dependency required (perimeter 503 when
+     *         unavailable)
+     */
+    boolean required() default false;
+
+    /**
      * Optional expected response type for schema-aware capability matching (issue #547).
      *
      * <p>When set together with {@link #schemaMode()}, the resolver filters out

@@ -1203,6 +1203,10 @@ export function normalizeDependency(dep: DependencySpec): NormalizedDependency {
     capability: dep.capability,
     tags: dep.tags ?? [],
     version: dep.version,
+    // Issue #1249: carry the opt-in required flag through to the heartbeat
+    // pipeline and (for routes) the perimeter check. Only set when true so
+    // the default soft-fail path stays untouched.
+    ...(dep.required ? { required: true } : {}),
   };
 
   if (dep.expectedSchema !== undefined) {

@@ -110,6 +110,9 @@ function buildToolSpecs(routes: RouteMetadata[]): JsToolSpec[] {
             expectedSchemaCanonical: expectedCanonical,
             expectedSchemaHash: expectedHash,
             matchMode: dep.matchMode,
+            // Issue #1249: carry the required flag so the registry factors
+            // this route edge into transitive availability. Only when true.
+            required: dep.required ? true : undefined,
           };
         }
       ),

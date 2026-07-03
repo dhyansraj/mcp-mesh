@@ -135,6 +135,45 @@ async def get_time(date_service: mesh.McpMeshTool = None):
     return datetime.now().isoformat()  # Fallback
 ```
 
+## Required Dependencies
+
+Graceful degradation is the default — an unresolved dependency injects `None` and your agent keeps serving. When a capability is useless without a particular dependency, mark that edge `required` instead of null-checking it everywhere:
+
+```python
+@app.tool()
+@mesh.tool(
+    capability="report",
+    dependencies=[
+        {"capability": "data_service", "required": True},
+        {"capability": "formatter"},  # optional (default)
+    ],
+)
+async def generate_report(
+    data_svc: mesh.McpMeshTool = None,
+    formatter: mesh.McpMeshTool = None,
+) -> str:
+    data = await data_svc(query="sales")  # data_svc is guaranteed live
+    if formatter:
+        return await formatter(data=data)
+    return str(data)
+```
+
+`required` defaults to `False` and combines with the other selector fields (`tags`, `version`, `expected_type`).
+
+**What it changes.** The registry now computes a capability as **available** only when its owning agent is healthy *and* every one of its `required` dependencies resolves to an available provider. This is transitive — in a chain `A → B → C`, if `C` goes down then `B` becomes unavailable and `A` becomes unavailable in turn. An unavailable capability drops out of resolution exactly like an unhealthy provider, so any consumer's proxy for it flips to `None` automatically, with no code change. Optional edges never propagate, so soft-fail stays the default everywhere you don't opt in.
+
+**HTTP routes get an automatic 503.** External callers to a `@mesh.route` don't go through proxies, so when a route declares a required dependency that is unavailable at request time, the framework returns `503` before your handler runs (after the settle window):
+
+```json
+{ "error": "dependency_unavailable", "capability": "data_service" }
+```
+
+Streaming routes can't carry a pre-body 503, so they bypass the perimeter and keep soft-fail semantics — check `None` there.
+
+**Cycles are rejected.** A cycle of required edges could never converge (both ends stay unavailable forever), so the registry rejects the registration that closes one and logs, on the rejected agent, `Agent registration failed: required dependency cycle: analyst → enricher → analyst`. Cycles that route through an optional edge remain legal — that's the bootstrapping path.
+
+**Inspecting availability.** Each capability in the agents/capabilities API carries `available` (boolean) and, when false, `unavailable_reason` naming the first broken edge — e.g. `required dep 'data_service' unavailable (provider agent-7 unhealthy)` or `required dep 'weather-api' unresolved (no provider matches tags=[+prod])`. The capability stays visible in the registry, UI, and `meshctl`; availability is distinct from presence.
+
 ## Proxy Configuration
 
 Configure proxy behavior via `dependency_kwargs`:

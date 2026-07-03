@@ -329,6 +329,63 @@ public TimeResponse getTime(McpMeshTool<String> dateService) {
 }
 ```
 
+## Required Dependencies
+
+By default a dependency is optional: an unresolved dependency injects a `null`/unavailable proxy, and the agent still starts, registers, and serves (soft-fail). Mark an edge `required` to opt that single edge into strictness — `@Selector(required = true)` on a `@MeshTool`, `@MeshDependency(required = true)` on a `@MeshRoute` or `@MeshDependsOn`:
+
+```java
+@MeshTool(capability = "report",
+          dependencies = @Selector(capability = "data_service", required = true))
+public Report generateReport(McpMeshTool<Data> dataService) { ... }
+
+@MeshRoute(dependencies = {
+    @MeshDependency(capability = "data_service", required = true)
+})
+@PostMapping("/report")
+public ResponseEntity<Report> report(McpMeshTool<Data> dataService) { ... }
+```
+
+`required` defaults to `false` and combines with the other selector fields (`tags`, `version`, `expectedType`). It is carried on the wire only when `true`.
+
+### Availability Semantics
+
+The registry computes a capability-availability predicate:
+
+> a capability is **available** ⇔ its owning agent is healthy **AND** every one of its `required` dependencies resolves to an available provider (full tag / version / schema matching)
+
+The predicate is **transitive**: in a required chain `A → B → C`, if `C` goes down then `B` becomes unavailable and `A` becomes unavailable in turn. Optional edges never propagate — strictness flows only along edges you mark `required`, so the soft-fail default is preserved everywhere else.
+
+An unavailable capability is excluded from resolution exactly like an unhealthy provider — it drops out at the resolver's `health` stage. Consumers holding a proxy to it see it flip to unavailable through the same background dependency-update channel that already delivers topology changes — no code changes, no SDK upgrade required.
+
+### Route Perimeter (503)
+
+Mesh-internal calls go through proxies; external HTTP callers to a `@MeshRoute` do not. When a route declares a required dependency that is unavailable at call time, the framework's own interceptor returns **503** — before your handler runs, after the settle window — with the body:
+
+```json
+{ "error": "dependency_unavailable", "capability": "data_service" }
+```
+
+503 rather than 404 so monitoring alarms on 5xx, load-balancer health checks eject the instance, and clients see a retryable "unavailable" instead of a permanent "missing". The required check takes precedence over the coarser `failOnMissingDependency` backstop: a required-dep 503 fires regardless of that flag, and only non-required missing deps fall through to `failOnMissingDependency`.
+
+### Cycle Rule
+
+A cycle among `required` edges can never converge (both ends stay unavailable forever), so the registry rejects the registration/heartbeat that would close one, loudly naming the loop:
+
+```
+required dependency cycle: analyst → enricher → analyst
+```
+
+The rejected agent logs the registration failure and keeps retrying on each heartbeat until the loop is broken. Cycles routed through an **optional** edge remain legal — that is the bootstrapping path.
+
+### Observing Availability
+
+The agents/capabilities API carries two derived fields per capability:
+
+- `available` — the predicate above (boolean)
+- `unavailable_reason` — set when `available` is false; names the first broken edge with its constraint detail, e.g. `required dep 'weather-api' unresolved (no provider matches tags=[+prod])`, `required dep 'data_service' unavailable (provider agent-7 unhealthy)`, or `agent unhealthy` when the owning agent is itself down.
+
+The capability stays visible in the registry, UI, and `meshctl` (availability is distinct from presence), so the reason chain is a diagnostic upgrade, not a disappearance.
+
 ## Auto-Rewiring
 
 When topology changes (agents join/leave), the mesh:
