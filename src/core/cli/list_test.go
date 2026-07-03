@@ -480,3 +480,149 @@ func TestFormatSupersededAnnotation(t *testing.T) {
 	assert.Empty(t, formatSupersededAnnotation(-1))
 	assert.Contains(t, formatSupersededAnnotation(2), "(+2 superseded)")
 }
+
+// --- Capability availability rendering (issue #1249) ------------------------
+//
+// The registry marks a capability unavailable (available:false + a reason)
+// when its owning agent is healthy but a required dependency's chain is broken.
+// meshctl must surface that on healthy agents without needing jq on the API.
+
+func boolPtr(b bool) *bool { return &b }
+
+// TestCountUnavailableCapabilities covers the nil/true/false tri-state of the
+// per-capability Available pointer. nil (older registries that don't report
+// availability) must be treated as available and never counted.
+func TestCountUnavailableCapabilities(t *testing.T) {
+	agent := EnhancedAgent{
+		Tools: []ToolInfo{
+			{Name: "greet", Available: boolPtr(true)},
+			{Name: "forecast", Available: boolPtr(false), UnavailableReason: "required dep 'weather-api' unresolved"},
+			{Name: "legacy", Available: nil}, // registry didn't report -> available
+			{Name: "enrich", Available: boolPtr(false)},
+		},
+	}
+	assert.Equal(t, 2, countUnavailableCapabilities(agent),
+		"only capabilities with Available==false count; nil is treated as available")
+
+	assert.Equal(t, 0, countUnavailableCapabilities(EnhancedAgent{
+		Tools: []ToolInfo{{Name: "a", Available: boolPtr(true)}, {Name: "b"}},
+	}), "an agent with no unavailable capabilities counts zero")
+}
+
+// TestFormatUnavailableAnnotation guards the compact per-row marker: empty when
+// nothing is unavailable, singular/plural wording otherwise, and always red so
+// it reads as an alarm even on a healthy (green) row.
+func TestFormatUnavailableAnnotation(t *testing.T) {
+	// All available -> no annotation.
+	assert.Empty(t, formatUnavailableAnnotation(EnhancedAgent{
+		Status: "healthy",
+		Tools:  []ToolInfo{{Name: "a", Available: boolPtr(true)}},
+	}))
+	// nil Available -> treated as available -> no annotation.
+	assert.Empty(t, formatUnavailableAnnotation(EnhancedAgent{
+		Status: "healthy",
+		Tools:  []ToolInfo{{Name: "a"}},
+	}))
+
+	one := formatUnavailableAnnotation(EnhancedAgent{
+		Status: "healthy",
+		Tools:  []ToolInfo{{Name: "a", Available: boolPtr(false)}},
+	})
+	assert.Contains(t, one, "(1 capability unavailable)")
+	assert.Contains(t, one, colorRed, "the marker must render red")
+
+	two := formatUnavailableAnnotation(EnhancedAgent{
+		Status: "healthy",
+		Tools: []ToolInfo{
+			{Name: "a", Available: boolPtr(false)},
+			{Name: "b", Available: boolPtr(false)},
+		},
+	})
+	assert.Contains(t, two, "(2 capabilities unavailable)")
+}
+
+// TestFormatUnavailableAnnotation_SuppressedForUnhealthyAgent guards the
+// double-signal fix: the registry marks EVERY capability of an unhealthy agent
+// available:false (reason "agent unhealthy"), which is redundant with the row's
+// own red status. The annotation must therefore be suppressed on a non-live
+// agent even though its capabilities are technically unavailable.
+func TestFormatUnavailableAnnotation_SuppressedForUnhealthyAgent(t *testing.T) {
+	for _, status := range []string{"unhealthy", "", "unknown"} {
+		agent := EnhancedAgent{
+			Status: status,
+			Tools: []ToolInfo{
+				{Name: "a", Available: boolPtr(false), UnavailableReason: "agent unhealthy"},
+				{Name: "b", Available: boolPtr(false), UnavailableReason: "agent unhealthy"},
+			},
+		}
+		assert.Empty(t, formatUnavailableAnnotation(agent),
+			"unavailable annotation must be suppressed for non-live status %q", status)
+	}
+}
+
+// TestFormatToolUnavailableMarker covers the bulk `--tools` table suffix: shown
+// (red) only for an unavailable capability on a LIVE agent; suppressed for
+// available caps, nil availability, and every capability of an unhealthy agent.
+func TestFormatToolUnavailableMarker(t *testing.T) {
+	// Unavailable on a live agent -> red marker.
+	m := formatToolUnavailableMarker(ToolListItem{AgentHealthy: true, Available: boolPtr(false)})
+	assert.Contains(t, m, "unavailable")
+	assert.Contains(t, m, colorRed)
+
+	// Available on a live agent -> no marker.
+	assert.Empty(t, formatToolUnavailableMarker(ToolListItem{AgentHealthy: true, Available: boolPtr(true)}))
+	// nil availability -> no marker.
+	assert.Empty(t, formatToolUnavailableMarker(ToolListItem{AgentHealthy: true}))
+	// Unavailable but agent unhealthy -> suppressed (redundant "agent unhealthy").
+	assert.Empty(t, formatToolUnavailableMarker(ToolListItem{AgentHealthy: false, Available: boolPtr(false)}))
+}
+
+// TestProcessAgentData_ParsesAvailability verifies the registry's
+// available/unavailable_reason fields survive the map round-trip in
+// processAgentData and land on the right ToolInfo. This is the wiring the
+// rendering above depends on.
+func TestProcessAgentData_ParsesAvailability(t *testing.T) {
+	data := map[string]interface{}{
+		"id":     "analyst-abc123",
+		"name":   "analyst",
+		"status": "healthy",
+		"capabilities": []interface{}{
+			map[string]interface{}{
+				"name":          "summarize",
+				"function_name": "summarize",
+				"version":       "1.0.0",
+				"available":     true,
+			},
+			map[string]interface{}{
+				"name":               "forecast",
+				"function_name":      "forecast",
+				"version":            "1.0.0",
+				"available":          false,
+				"unavailable_reason": "required dep 'weather-api' unresolved (via analyst → enricher)",
+			},
+		},
+	}
+
+	agent := processAgentData(data)
+	require.Len(t, agent.Tools, 2)
+
+	byName := map[string]ToolInfo{}
+	for _, tool := range agent.Tools {
+		byName[tool.Name] = tool
+	}
+
+	summarize := byName["summarize"]
+	require.NotNil(t, summarize.Available)
+	assert.True(t, *summarize.Available)
+	assert.Empty(t, summarize.UnavailableReason)
+
+	forecast := byName["forecast"]
+	require.NotNil(t, forecast.Available)
+	assert.False(t, *forecast.Available)
+	assert.Equal(t,
+		"required dep 'weather-api' unresolved (via analyst → enricher)",
+		forecast.UnavailableReason)
+
+	// And the derived aggregate the row marker uses.
+	assert.Equal(t, 1, countUnavailableCapabilities(agent))
+}

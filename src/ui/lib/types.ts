@@ -48,6 +48,13 @@ export interface Capability {
   // True when this tool was declared task=True — a long-running MeshJob
   // producer. Surfaced by the registry from the stored capability kwargs.
   task?: boolean;
+  // Derived availability (issue #1249): false when the owning agent is healthy
+  // but a required dependency's chain is broken. Undefined on older registries
+  // that don't compute the predicate — treated as available (unknown).
+  available?: boolean;
+  // One-level explanation of why the capability is unavailable, naming the
+  // first broken required-dependency edge. Empty/undefined when available.
+  unavailable_reason?: string;
 }
 
 export interface DependencyResolution {

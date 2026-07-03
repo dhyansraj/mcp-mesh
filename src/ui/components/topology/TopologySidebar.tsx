@@ -111,6 +111,14 @@ function AgentDetailBlock({ agent }: { agent: Agent }) {
                 <p className="text-[10px] text-muted-foreground mb-1">
                   {cap.name} v{cap.version}
                 </p>
+                {cap.available === false && (
+                  <p
+                    className="text-[10px] text-red-400 mb-1"
+                    title={cap.unavailable_reason || "A required dependency chain is broken"}
+                  >
+                    unavailable{cap.unavailable_reason ? `: ${cap.unavailable_reason}` : ""}
+                  </p>
+                )}
                 {cap.description && (
                   <p className="text-[10px] text-muted-foreground/80 mb-1">{cap.description}</p>
                 )}
