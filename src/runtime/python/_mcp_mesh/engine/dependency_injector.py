@@ -952,6 +952,56 @@ def _prepare_injection_kwargs(
     return final_kwargs, injected_count
 
 
+def _first_unavailable_required(
+    func_id: str,
+    route_required_caps: list[Optional[str]],
+    injected_deps_array: list,
+    get_dependency_fn: Callable[[str], Any | None],
+    kwargs: Optional[dict] = None,
+    settle_params: Optional[list] = None,
+) -> Optional[str]:
+    """Return the capability of the first unavailable required route dep.
+
+    Issue #1249 perimeter check. For each dependency slot flagged required
+    (``route_required_caps[i]`` is the capability name, else ``None``),
+    resolve the proxy the same way the injection path does — the wrapper's
+    cached ``injected_deps_array[i]`` first, then the injector's composite-key
+    fallback. A ``None`` proxy means the (transitively) required capability is
+    unavailable AT CALL TIME; return its name so the caller can emit a 503.
+    Returns ``None`` when every required dep has a live proxy.
+
+    Honors the documented mock contract (mirrors
+    ``_prepare_injection_kwargs`` line ~878 and the settle skip): a slot the
+    CALLER supplied a non-None value for via ``kwargs`` — keyed by the
+    parameter NAME in ``settle_params[dep_index]`` — counts as available and
+    is skipped, so a route invoked with an explicit fake for a required dep
+    runs the handler even while the mesh proxy is unresolved.
+
+    Runs AFTER the settle grace (the caller waits first), so a still-settling
+    dep is given its full window before being judged unavailable.
+    """
+    for dep_index, cap in enumerate(route_required_caps):
+        if cap is None:
+            continue
+        # Caller-supplied fake for this slot (mock contract) → available.
+        if kwargs and settle_params and dep_index < len(settle_params):
+            param_name = settle_params[dep_index]
+            if (
+                param_name is not None
+                and param_name in kwargs
+                and kwargs.get(param_name) is not None
+            ):
+                continue
+        resolved = None
+        if dep_index < len(injected_deps_array):
+            resolved = injected_deps_array[dep_index]
+        if resolved is None:
+            resolved = get_dependency_fn(f"{func_id}:dep_{dep_index}")
+        if resolved is None:
+            return cap
+    return None
+
+
 def _log_wrapper_result(func: Callable, result: Any, log: logging.Logger) -> None:
     """Log the result of a dependency-injected function call."""
     tp = get_trace_prefix()
@@ -1230,7 +1280,10 @@ class DependencyInjector:
         return self._llm_injector.create_injection_wrapper(func, function_id)
 
     def create_injection_wrapper(
-        self, func: Callable, dependencies: list[str]
+        self,
+        func: Callable,
+        dependencies: list[str],
+        route_required_caps: Optional[list[Optional[str]]] = None,
     ) -> Callable:
         """
         Create in-place dependency injection by modifying the original function.
@@ -1241,8 +1294,21 @@ class DependencyInjector:
         3. Can be updated when topology changes
         4. Handles missing dependencies gracefully
         5. Logs warnings for configuration issues
+
+        ``route_required_caps`` (issue #1249) is set ONLY by @mesh.route: an
+        index-aligned list where each entry is the capability name if that
+        dependency slot is ``required=True`` (perimeter 503), else ``None``.
+        When any slot is required, the non-streaming DI wrapper returns HTTP
+        503 (naming the capability) before invoking user code if that dep's
+        proxy is unavailable at call time. @mesh.tool never passes this —
+        mesh-internal calls are chain-gated, not perimeter-gated.
         """
         func_id = f"{func.__module__}.{func.__qualname__}"
+
+        # Normalize to a plain list so the closures below can test truthiness
+        # cheaply; None (the @mesh.tool case) short-circuits the whole check.
+        _route_required_caps: list[Optional[str]] = list(route_required_caps or [])
+        _has_route_required = any(c is not None for c in _route_required_caps)
 
         # Use new smart injection strategy
         mesh_positions = analyze_injection_strategy(func, dependencies)
@@ -1331,6 +1397,24 @@ class DependencyInjector:
             logger.debug(
                 f"🔧 No injection positions for {func.__name__}, creating minimal wrapper for tracking"
             )
+
+            # Issue #1249: a @mesh.route declared required deps but the handler
+            # has no injectable (McpMeshTool) slot to receive a proxy — the
+            # perimeter check has nothing to evaluate and is SILENTLY inactive.
+            # This is almost always a mis-annotation (the dep param isn't typed
+            # McpMeshTool). Fail loud so the route isn't left thinking it's
+            # protected. Enforcement stays off (positional injection contract is
+            # unchanged) — the signal is the fix.
+            if _has_route_required:
+                _req_caps = [c for c in _route_required_caps if c is not None]
+                logger.warning(
+                    f"⚠️ Route '{func.__name__}': required perimeter INACTIVE — "
+                    f"declared required {_req_caps} but the handler has no "
+                    f"injectable McpMeshTool parameter to receive them, so the "
+                    f"503 perimeter cannot evaluate and is skipped. Fix: annotate "
+                    f"the intended parameter(s) as McpMeshTool "
+                    f"(e.g. 'dep: McpMeshTool = None')."
+                )
 
             if is_stream:
                 minimal_wrapper = _make_stream_wrapper(
@@ -1454,6 +1538,34 @@ class DependencyInjector:
                     wrapper_logger,
                 )
 
+                # Issue #1249 perimeter: @mesh.route with required deps returns
+                # 503 (naming the capability) before user code when a required
+                # proxy is unavailable at call time. Runs AFTER the settle wait
+                # above, so a still-settling dep gets its full window first.
+                if _has_route_required:
+                    _unavailable = _first_unavailable_required(
+                        func_id,
+                        _route_required_caps,
+                        dependency_wrapper._mesh_injected_deps,
+                        self.get_dependency,
+                        kwargs,
+                        settle_params,
+                    )
+                    if _unavailable is not None:
+                        from fastapi.responses import JSONResponse
+
+                        wrapper_logger.warning(
+                            f"🚫 Route '{func.__name__}': required dependency "
+                            f"'{_unavailable}' unavailable — returning 503"
+                        )
+                        return JSONResponse(
+                            status_code=503,
+                            content={
+                                "error": "dependency_unavailable",
+                                "capability": _unavailable,
+                            },
+                        )
+
                 from ..tracing.execution_tracer import ExecutionTracer
                 from .job_dispatch import maybe_dispatch_as_job
 
@@ -1510,6 +1622,31 @@ class DependencyInjector:
                     self.get_dependency,
                     wrapper_logger,
                 )
+
+                # Issue #1249 perimeter (sync route handler variant).
+                if _has_route_required:
+                    _unavailable = _first_unavailable_required(
+                        func_id,
+                        _route_required_caps,
+                        dependency_wrapper._mesh_injected_deps,
+                        self.get_dependency,
+                        kwargs,
+                        settle_params,
+                    )
+                    if _unavailable is not None:
+                        from fastapi.responses import JSONResponse
+
+                        wrapper_logger.warning(
+                            f"🚫 Route '{func.__name__}': required dependency "
+                            f"'{_unavailable}' unavailable — returning 503"
+                        )
+                        return JSONResponse(
+                            status_code=503,
+                            content={
+                                "error": "dependency_unavailable",
+                                "capability": _unavailable,
+                            },
+                        )
 
                 from ..tracing.execution_tracer import ExecutionTracer
 

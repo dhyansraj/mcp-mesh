@@ -250,6 +250,11 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
                 expected_schema_canonical=expected_canonical,
                 expected_schema_hash=expected_hash,
                 match_mode=match_mode,
+                # Issue #1249: opt-in strictness flag (default False). The
+                # registry factors required edges into transitive capability
+                # availability. Absent/false is omitted from the wire payload
+                # by the core's skip_serializing_if.
+                required=bool(dep_info.get("required", False)),
             )
             deps.append(dep_spec)
 

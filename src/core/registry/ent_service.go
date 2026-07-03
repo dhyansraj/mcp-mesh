@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -114,6 +115,12 @@ type DependencySpec struct {
 	Version         string     `json:"version,omitempty"`
 	Namespace       string     `json:"namespace,omitempty"`
 
+	// Required marks this as a required dependency (issue #1249). When true, the
+	// declaring capability is unavailable unless this dependency resolves to an
+	// available provider (transitively). Defaults false — optional deps never
+	// affect availability.
+	Required bool `json:"required,omitempty"`
+
 	// Schema-aware filtering inputs (issue #547); see Dependency.MatchMode.
 	ExpectedSchemaHash      string                 `json:"expected_schema_hash,omitempty"`
 	ExpectedSchemaCanonical map[string]interface{} `json:"expected_schema_canonical,omitempty"`
@@ -147,6 +154,11 @@ func parseDependencySpec(m map[string]interface{}) DependencySpec {
 
 	if namespace, ok := m["namespace"].(string); ok {
 		spec.Namespace = namespace
+	}
+
+	// Required flag (issue #1249). Defaults false when absent or wrong type.
+	if required, ok := m["required"].(bool); ok {
+		spec.Required = required
 	}
 
 	// Handle tags - can be []interface{} or []string, with nested arrays for OR alternatives
@@ -247,6 +259,17 @@ type EntService struct {
 	// config is warned by LoadSweepConfigFromEnv at startup; here it degrades
 	// silently to disabled.
 	jobStaleTimeout time.Duration
+
+	// cycleWriteMu serializes the required-edge cycle check with the capability
+	// write that follows it (issue #1249). The check reads the current graph and
+	// the write adds this agent's edges; without serialization two concurrent
+	// registrations/heartbeats each closing half of a cycle could both pass their
+	// (pre-write) checks and jointly persist a required cycle. The registry is a
+	// single process, so a coarse in-process mutex around the check+persist window
+	// is the cheapest correct fix — it fully serializes only the capability-write
+	// path, which is not a hot loop (steady-state heartbeats without tools, HEAD
+	// polls, and reads never take it).
+	cycleWriteMu sync.Mutex
 }
 
 // NewEntService creates a new Ent-based registry service instance
@@ -654,6 +677,18 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 	// Extract agent metadata
 	meta := extractAgentMetadata(req.AgentID, req.Metadata)
 
+	// Reject registrations that would close a required-dependency cycle
+	// (issue #1249). Done before any persistence so a rejected registration
+	// leaves no partial state. Optional-edge cycles are legal and never trip
+	// this check. The lock is held across the capability-write transaction below
+	// so a concurrent registration can't slip a cycle-closing edge in between our
+	// check and our write (see cycleWriteMu).
+	s.cycleWriteMu.Lock()
+	if err := s.checkRequiredCycles(ctx, req.AgentID, req.Metadata); err != nil {
+		s.cycleWriteMu.Unlock()
+		return nil, err
+	}
+
 	// A2A surfaces (issue #903). Pulled here so the agent create/update path
 	// can persist them on the agent's a2a_surfaces JSON field. Empty / nil
 	// when the request isn't a2a-typed or didn't carry a surfaces array —
@@ -806,6 +841,7 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 
 		return nil
 	})
+	s.cycleWriteMu.Unlock()
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to register agent: %w", err)
@@ -1393,6 +1429,25 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 	if req.Metadata != nil {
 		_, hasTools := req.Metadata["tools"]
 		if hasTools {
+			// Guard the heartbeat capability-sync against introducing NEW required
+			// edges that close a cycle (issue #1249). A running agent hits this
+			// path on every full heartbeat; the dangerous case is a non-graceful
+			// redeploy (crash + retained row) whose new code declares a
+			// cycle-closing required edge — without this check it would land
+			// silently and become the permanent-unavailable deadlock the
+			// registration-time check exists to prevent. Same rejection shape as
+			// registration: HTTP-200 + status:"error" (the SDK/rust path then
+			// surfaces it). The lock is held across the write transaction below so
+			// the check+persist window is serialized (see cycleWriteMu).
+			s.cycleWriteMu.Lock()
+			if cerr := s.checkRequiredCycles(ctx, req.AgentID, req.Metadata); cerr != nil {
+				s.cycleWriteMu.Unlock()
+				return &HeartbeatResponse{
+					Status:    "error",
+					Timestamp: now.Format(time.RFC3339),
+					Message:   cerr.Error(),
+				}, nil
+			}
 			// Update agent metadata and capabilities within transaction
 			err := s.entDB.Transaction(ctx, func(tx *ent.Tx) error {
 				// Extract agent metadata for updates
@@ -1468,6 +1523,7 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 
 				return nil
 			})
+			s.cycleWriteMu.Unlock()
 
 			if err != nil {
 				return &HeartbeatResponse{
@@ -1635,7 +1691,10 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 		agents = filteredAgents
 	}
 
-	// Convert to response format
+	// Convert to response format. One availability evaluation (shared verdict
+	// memo, issue #1249) spans the whole response so a capability referenced by
+	// many agents' required chains is evaluated once, not per capability.
+	availEvalShared := newAvailEval()
 	var agentInfos []generated.AgentInfo
 	for _, a := range agents {
 		// Build endpoint
@@ -1712,6 +1771,25 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 			// real @mesh.tool(task=True) producers.
 			if t, ok := cap.Kwargs["task"].(bool); ok && t {
 				capInfo.Task = &t
+			}
+
+			// Derived availability + reason (issue #1249). A capability is
+			// unavailable when its own agent is unhealthy OR any required
+			// dependency is unresolved/unavailable (transitively). The reason
+			// names the first broken required edge; walk the chain by querying
+			// the named dep.
+			available := true
+			var reason string
+			if a.Status != agent.StatusHealthy {
+				available = false
+				reason = "agent unhealthy"
+			} else if r := s.capabilityUnavailableReason(ctx, a.ID, cap, availEvalShared); r != "" {
+				available = false
+				reason = r
+			}
+			capInfo.Available = &available
+			if reason != "" {
+				capInfo.UnavailableReason = &reason
 			}
 
 			capabilities = append(capabilities, capInfo)

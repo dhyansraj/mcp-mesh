@@ -28,6 +28,14 @@ pub struct DependencySpec {
 
     /// Schema match mode: "subset" (default semantics) or "strict". None = no schema check.
     pub match_mode: Option<String>,
+
+    /// Issue #1249: opt-in strictness for this dependency edge. When true, the
+    /// registry factors this edge into transitive capability availability
+    /// (own agent healthy AND every required dep available). Default false
+    /// (soft-fail: unresolved deps inject null proxies). Omitted from the
+    /// serialized payload when false to match the optional-field wire style.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
 }
 
 #[cfg(feature = "python")]
@@ -40,7 +48,8 @@ impl DependencySpec {
         version=None,
         expected_schema_canonical=None,
         expected_schema_hash=None,
-        match_mode=None
+        match_mode=None,
+        required=false
     ))]
     pub fn py_new(
         capability: String,
@@ -49,6 +58,7 @@ impl DependencySpec {
         expected_schema_canonical: Option<String>,
         expected_schema_hash: Option<String>,
         match_mode: Option<String>,
+        required: bool,
     ) -> Self {
         Self::new(
             capability,
@@ -57,6 +67,7 @@ impl DependencySpec {
             expected_schema_canonical,
             expected_schema_hash,
             match_mode,
+            required,
         )
     }
 
@@ -74,6 +85,7 @@ impl DependencySpec {
         expected_schema_canonical: Option<String>,
         expected_schema_hash: Option<String>,
         match_mode: Option<String>,
+        required: bool,
     ) -> Self {
         Self {
             capability,
@@ -82,6 +94,7 @@ impl DependencySpec {
             expected_schema_canonical,
             expected_schema_hash,
             match_mode,
+            required,
         }
     }
 }
@@ -895,8 +908,8 @@ mod tests {
                 "".to_string(),
                 None,
                 Some(vec![
-                    DependencySpec::new("date-service".to_string(), None, None, None, None, None),
-                    DependencySpec::new("weather-service".to_string(), None, None, None, None, None),
+                    DependencySpec::new("date-service".to_string(), None, None, None, None, None, false),
+                    DependencySpec::new("weather-service".to_string(), None, None, None, None, None, false),
                 ]),
                 None,
                 None,
@@ -915,7 +928,7 @@ mod tests {
                 "1.0.0".to_string(),
                 "".to_string(),
                 None,
-                Some(vec![DependencySpec::new("date-service".to_string(), None, None, None, None, None)]),
+                Some(vec![DependencySpec::new("date-service".to_string(), None, None, None, None, None, false)]),
                 None,
                 None,
                 None,
@@ -931,5 +944,49 @@ mod tests {
 
         let deps = spec.all_dependencies();
         assert_eq!(deps, vec!["date-service", "weather-service"]);
+    }
+
+    #[test]
+    fn test_dependency_required_serialization() {
+        // Issue #1249: required=true must appear in the wire payload.
+        let required_dep = DependencySpec::new(
+            "weather-api".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        );
+        let json = serde_json::to_value(&required_dep).unwrap();
+        assert_eq!(json["required"], serde_json::json!(true));
+
+        // Default false is omitted entirely (skip_serializing_if) so existing
+        // consumers/payloads stay byte-identical.
+        let optional_dep = DependencySpec::new(
+            "weather-api".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        );
+        let json = serde_json::to_value(&optional_dep).unwrap();
+        assert!(
+            json.get("required").is_none(),
+            "required=false must be omitted from the serialized payload, got {json}"
+        );
+
+        // Round-trip: an old payload without `required` deserializes to false
+        // (serde default), and a payload carrying it round-trips true.
+        let from_absent: DependencySpec =
+            serde_json::from_str(r#"{"capability":"x","tags":"[]"}"#).unwrap();
+        assert!(!from_absent.required);
+        let from_true: DependencySpec = serde_json::from_str(
+            r#"{"capability":"x","tags":"[]","required":true}"#,
+        )
+        .unwrap();
+        assert!(from_true.required);
     }
 }

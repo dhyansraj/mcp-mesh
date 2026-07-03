@@ -22,6 +22,11 @@ const (
 	ReasonDeregistering EvictionReason = "Deregistering"
 	// ReasonUnreachable — provider's endpoint can't be reached for invocation.
 	ReasonUnreachable EvictionReason = "Unreachable"
+	// ReasonUnavailable — provider's agent is healthy but the capability is
+	// unavailable because one of its required dependencies (issue #1249) is
+	// itself unresolved/unavailable. Treated identically to ReasonUnhealthy by
+	// the health stage so consumers exclude it via the existing channel.
+	ReasonUnavailable EvictionReason = "Unavailable"
 )
 
 // Audit-trail stage names. Stages run in this order:

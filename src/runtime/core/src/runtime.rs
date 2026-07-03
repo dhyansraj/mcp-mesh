@@ -406,6 +406,12 @@ impl AgentRuntime {
                 if old_dep.capability != new_dep.capability
                     || old_dep.tags != new_dep.tags
                     || old_dep.version != new_dep.version
+                    // Issue #1249: a tools update that flips only `required`
+                    // must not be dropped as "unchanged" — it changes the
+                    // availability edge the registry computes. (match_mode /
+                    // schema fields are intentionally left out here, matching
+                    // the pre-existing narrow comparison.)
+                    || old_dep.required != new_dep.required
                 {
                     return true;
                 }
@@ -861,6 +867,180 @@ mod tests {
         let config = RuntimeConfig::default();
         assert_eq!(config.event_buffer_size, 100);
         assert_eq!(config.heartbeat.interval, Duration::from_secs(5));
+    }
+
+    /// Issue #1249: a tools update that flips ONLY the dependency `required`
+    /// flag must be seen as different (otherwise the smart-diff drops it and
+    /// the availability edge never propagates).
+    #[tokio::test]
+    async fn tools_differ_when_only_required_flag_changes() {
+        use crate::spec::{AgentSpec, DependencySpec, ToolSpec};
+
+        fn spec_with_required(required: bool) -> AgentSpec {
+            AgentSpec::new(
+                "diff-agent".to_string(),
+                "http://127.0.0.1:1".to_string(),
+                "1.0.0".to_string(),
+                "".to_string(),
+                8080,
+                "localhost".to_string(),
+                "default".to_string(),
+                None,
+                None,
+                Some(vec![ToolSpec::new(
+                    "analyst".to_string(),
+                    "analysis".to_string(),
+                    "1.0.0".to_string(),
+                    "".to_string(),
+                    None,
+                    Some(vec![DependencySpec::new(
+                        "weather-api".to_string(),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        required,
+                    )]),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )]),
+                None,
+                5,
+                None,
+            )
+        }
+
+        let (event_tx, _event_rx) = mpsc::channel(10);
+        let (_shutdown_tx, shutdown_rx) = mpsc::channel(1);
+        let (_command_tx, command_rx) = mpsc::channel(10);
+        let shared_state = Arc::new(RwLock::new(HandleState::default()));
+
+        let runtime = AgentRuntime::new(
+            spec_with_required(true),
+            RuntimeConfig::default(),
+            event_tx,
+            shared_state,
+            shutdown_rx,
+            command_rx,
+        )
+        .await
+        .expect("runtime construction should succeed");
+
+        // Same spec (required=true) → unchanged.
+        assert!(!runtime.tools_are_different(&spec_with_required(true).tools));
+        // Only `required` flipped → different.
+        assert!(runtime.tools_are_different(&spec_with_required(false).tools));
+    }
+
+    /// Issue #1249: a registry rejection (HTTP 200 + {"status":"error",...},
+    /// e.g. a required dependency cycle) must reach the caller as a
+    /// registration_failed event carrying the reason — and must NOT emit
+    /// agent_registered. The run loop keeps retrying (soft-fail), so the reason
+    /// surfaces loudly on every attempt.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn semantic_rejection_emits_registration_failed() {
+        use crate::events::EventType;
+        use crate::spec::AgentSpec;
+
+        let mut server = mockito::Server::new_async().await;
+        // Every heartbeat is semantically rejected with HTTP 200 + error body.
+        let _reject = server
+            .mock("POST", "/heartbeat")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{"status":"error","message":"required dependency cycle: analyst -> enricher -> analyst","agent_id":"cyc-agent"}"#,
+            )
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        let _unregister = server
+            .mock("DELETE", "/agents/cyc-agent")
+            .with_status(204)
+            .create_async()
+            .await;
+
+        let spec = AgentSpec::new(
+            "cyc-agent".to_string(),
+            server.url(),
+            "1.0.0".to_string(),
+            "".to_string(),
+            8080,
+            "localhost".to_string(),
+            "default".to_string(),
+            None,
+            None,
+            None,
+            None,
+            1,
+            None,
+        );
+        let config = RuntimeConfig {
+            heartbeat: HeartbeatConfig {
+                interval: Duration::from_secs(1),
+                max_retries: 5,
+                base_backoff: Duration::from_secs(2),
+                max_backoff: Duration::from_secs(2),
+                missed_threshold: 1,
+            },
+            event_buffer_size: 100,
+        };
+
+        let (event_tx, mut event_rx) = mpsc::channel(100);
+        let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
+        let (_command_tx, command_rx) = mpsc::channel(10);
+        let shared_state = Arc::new(RwLock::new(HandleState::default()));
+
+        let runtime = AgentRuntime::new(
+            spec,
+            config,
+            event_tx,
+            shared_state,
+            shutdown_rx,
+            command_rx,
+        )
+        .await
+        .expect("runtime construction should succeed");
+
+        let join = tokio::spawn(runtime.run());
+
+        // Let the first heartbeat be rejected, then stop.
+        sleep(Duration::from_millis(300)).await;
+        shutdown_tx.send(()).await.expect("shutdown signal");
+        tokio::time::timeout(Duration::from_secs(5), join)
+            .await
+            .expect("runtime did not exit after shutdown")
+            .expect("runtime task panicked");
+
+        let mut saw_registration_failed = false;
+        while let Ok(event) = event_rx.try_recv() {
+            assert_ne!(
+                event.event_type,
+                EventType::AgentRegistered,
+                "a rejected agent must never emit agent_registered"
+            );
+            if event.event_type == EventType::RegistrationFailed {
+                saw_registration_failed = true;
+                let msg = event.error.clone().unwrap_or_default();
+                assert!(
+                    msg.contains("required dependency cycle"),
+                    "registration_failed must carry the registry reason, got: {msg}"
+                );
+            }
+        }
+        assert!(
+            saw_registration_failed,
+            "semantic rejection must emit a registration_failed event"
+        );
     }
 
     /// Issue #1166 MED-1 regression: a shutdown that arrives during the
