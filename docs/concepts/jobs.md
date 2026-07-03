@@ -545,6 +545,21 @@ For the full design rationale and lifecycle diagrams, see
 [`MESHJOB_DESIGN.org`](https://github.com/dhyansraj/mcp-mesh/blob/main/MESHJOB_DESIGN.org)
 and [`MESHJOB_DDDI_CONTRACT.md`](https://github.com/dhyansraj/mcp-mesh/blob/main/MESHJOB_DDDI_CONTRACT.md).
 
+### Claim gating on unavailable capabilities
+
+Claiming is also gated on capability availability. A claim worker will not
+pull a job for a `task=true` capability whose `required` dependencies are
+currently unavailable under the [availability predicate](../python/dependency-injection.md#required-dependencies) —
+claiming it would only run the handler far enough to fail on the missing
+dependency and burn a retry on a purely topological outage. Instead the
+registry leaves the job queued and untouched (no owner, no `attempt_count`
+increment, no `claim_epoch` bump, no lease) and the worker moves on to the
+next candidate. The gate is evaluated lazily — only once a candidate job
+actually exists — so an idle queue pays nothing. Claiming resumes
+automatically within one claim-poll cycle (≤5s backoff ceiling) of the
+required chain recovering, so no retry budget is spent while the capability
+is down.
+
 ## What it does NOT do (v2 limitations)
 
 - **No idempotency keys.** Retries restart the handler from scratch;

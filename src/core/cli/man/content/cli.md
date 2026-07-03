@@ -115,6 +115,7 @@ for script compatibility.
 meshctl list                       # Healthy agents (down agents counted in the footer)
 meshctl list --all                 # Every instance, incl. unhealthy (purged after MCP_MESH_RETENTION)
 meshctl list --wide                # Endpoints + tool counts
+meshctl list --verbose             # Per-tool detail incl. unavailable-capability reasons
 meshctl list --filter hello        # Substring match on agent ID
 meshctl list --since 1h            # Active in the last hour
 
@@ -129,6 +130,15 @@ meshctl list --schemas             # Most recent 100 canonical schemas
 meshctl list --schemas --limit 20  # Last 20
 meshctl list --schemas --json      # Raw envelope from GET /schemas
 ```
+
+**Capability availability.** When an agent is healthy but one of its
+capabilities has a broken `required` dependency chain, its row is flagged in
+red with `(N capabilities unavailable)`. `--verbose` expands each affected
+tool with its reason (`[unavailable: required dep '…' unresolved]`); the
+`--tools` table marks the row with a trailing red `unavailable`; and
+`--tools=<name>` prints an `Availability:` line naming the broken edge. The
+markers appear only on healthy agents — an unhealthy agent's capabilities are
+all unavailable by definition, so the row status already says so.
 
 ### `meshctl call`
 
