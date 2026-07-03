@@ -1,6 +1,59 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.7.0...HEAD)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.8.0...HEAD)
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.7.0...v2.8.0)
+
+## v2.8.0 (2026-07-03)
+
+An availability-aware dependency graph via `required=true`, MeshJob execution integrity under multi-replica consumers, and exact data fidelity for empty returns and LLM replies.
+
+v2.7 made the LLM-provider layer correct and gave MeshJob a proactive reaper; v2.8 turns the mesh's dependency graph from resolution-aware into *availability*-aware. A dependency edge can now declare `required=true`, and the registry computes capability availability **transitively** — an agent's capability is available only when the agent is healthy and every required edge resolves under full tag/version/schema matching — propagating the result through the existing dependency-update channel so consumer proxies and route perimeters gate on it with no SDK changes. Alongside it, MeshJob gains execution integrity for multi-replica consumers (claim-epoch fencing, poll-liveness, per-filter event cursors), and two data-fidelity contracts are made exact across every runtime: empty tool returns now round-trip byte-for-byte, and the `@mesh.llm` reply envelope always carries its answer as a string.
+
+### 🔗 `required=true` — availability-aware dependencies (#1255, #1257, #1258)
+
+A dependency edge may now opt into `required=true`. The registry computes each capability's availability **transitively** — the owning agent is healthy AND every required edge resolves under the existing resolver's full tag/version/schema matching — and propagates it through the dependency-update channel that already drives resolution, so consumers gate mesh-internal calls with **zero SDK changes**. Availability is memoized (O(nodes)), fail-closed, and the check-persist window is serialized; reason strings name the first broken edge with its constraint detail.
+
+- **Route perimeter, all three runtimes** — a route declaring a required dependency auto-returns `503 {"error":"dependency_unavailable","capability":...}` before user code runs. Python gates in the route wrapper; Java via `MeshRouteHandlerInterceptor` (taking precedence over `failOnMissingDependency`); TypeScript via a capability-keyed perimeter judging exactly the state the handler receives.
+- **Declaration syntax** — Python `required: true` on the dependency edge; Java `@Selector(required = true)` for tools and `@MeshDependency(required = true)` for routes / `@MeshDependsOn` / A2A; TypeScript `{ capability, required: true }`. Defaults `false` everywhere — existing specs serialize byte-identically and optional edges never propagate.
+- **Cycle rejection** — required-edge cycles are rejected loudly at registration **and** on heartbeat metadata refresh, closing a path that bypassed the check.
+- **Job claim-gating** (#1258) — `ClaimNextJob` skips a job whose target capability is unavailable under the required-deps predicate: the job stays queued with `attempt_count` / epoch / lease untouched, so a topology outage no longer burns `max_retries`. Evaluated lazily only when a candidate job exists (idle polls are byte-identical to before), fail-open with a warning on query errors, and self-healing within the claim worker's ≤5s poll ceiling.
+- **Availability observability** (#1258) — `meshctl list` annotates a healthy agent that owns an unavailable capability (`(N capabilities unavailable)`), with per-tool reasons in `--verbose`, the `--tools` table, the single-tool detail view, and additive JSON fields; the mesh UI adds an availability badge with a reason tooltip on agent rows, cards, and topology nodes, plus per-capability state in the detail and topology sidebars. Registries without the fields are treated as fully available — no spurious markers.
+- **Reliable dependency-update delivery** (#1256, via #1257) — dependency-update events could be silently lost at the Rust→Python bridge (a cancel-unsafe wait around an already-dequeued receive) and were never retried because the diff gate advanced on enqueue. The pull timeout now lives inside a cancel-safe future, and a throttled 10s reconcile re-emits any edge whose event didn't apply. This bug predates `required=true` and likely explains a class of historical registration-timing flakes.
+
+Soft-fail posture is unchanged: `required` defaults false, optional edges never propagate, and a mesh with zero required edges pays effectively nothing on the hot path.
+
+### 🔒 MeshJob execution integrity under multi-replica consumers (#1253, #1254)
+
+MeshJob execution is made correct when the same job may be claimed and reclaimed across multiple consumer replicas or after a mid-execution reclaim.
+
+- **Claim-epoch fencing** (#1253) — every successful claim/re-claim mints a monotonic `claim_epoch` in the same guarded update that assigns the owner. `/jobs/batch` deltas carry it; any epoch-bearing delta whose `(owner, epoch)` doesn't match the live row — cross-instance, reclaimed `owner=NULL`, or same-instance re-claim — rejects as `claim_superseded`. Epoch-less deltas keep legacy `not_owner` semantics.
+- **Frame-exact supersession** (#1253) — the core translates `claim_superseded` into firing *that execution's own* cancel frame, keyed by epoch rather than top-of-stack, so a superseded zombie aborts while a healthy same-process re-claim keeps running.
+- **Poll-liveness** (#1253) — an epoch-valid executor `recvEvent` poll extends the lease (capped by `total_deadline` and the `max_duration`-derived stale ceiling, preserving #1244 semantics). A handler legitimately blocked in an event gate is no longer reclaimed as wedged, so artificial `progress()` keepalives are unnecessary. The long-poll races the cancellation token, so user cancels and supersession interrupt a blocked gate promptly.
+- **Per-filter event cursors** (#1254) — `recvEvent` tracks an independent cursor per canonical type-filter (exactly-once within a stream, documented at-least-once across streams), so interleaved gates with different filters can no longer permanently skip each other's events; per-filter locks replace the global receive lock, so a long-poll on one type doesn't block another.
+- **Surfaces** — `claimEpoch` is exposed read-only on `JobContext` in Python, TypeScript, and Java, threaded claim→controller through the shared Rust core. A new `uc33_meshjob_replicas` integration suite proves poll-liveness (a quietly-gating handler polling through 2× its lease window keeps a single claim) and fencing (a wedged handler is re-claimed with the stale owner fenced, exactly one surviving owner). Jobs man pages (base + TS/Java), `environment.md`, and `docs/concepts/jobs.md` now document lease derivation, what renews a lease, epoch fencing, per-filter cursor semantics, and the reap-ceiling-vs-lease-window distinction.
+
+### 🔁 Empty tool returns round-trip exactly (#1251)
+
+An empty collection return (`[]` / `{}` / `""` / `null` / non-empty values) now round-trips byte-for-byte across every Python-provider × {Python, TypeScript, Java}-consumer pairing. The root cause was Python-side: FastMCP serialized an empty list/tuple to an MCP content array byte-identical to `None`, so consumers received `null` / `""` / exceptions instead of `[]`. Mesh now patches tool components at a registration chokepoint (covering dynamic/post-startup registrations, drift-hardened with pass-through and warn-once fallbacks) so empty collections emit a real `"[]"` text block while `None` is untouched. Consumers recover from `structuredContent` when content is empty, else resolve to `null` — never a misparsed envelope. A new `uc32_empty_return_values` suite pins the exact received values.
+
+- **Java: untyped tool calls parse generically** — `McpMeshTool<Object>` and undeclared targets parse JSON results via one shared `deserializeDynamic` (objects → `Map`, arrays → `List`, scalars boxed, empty → `""`); typed targets keep strict deserialization and still fail loudly on shape mismatch.
+- **Java: proxy cache keys on declared return type** — each declared type gets its own cached proxy (`null` and `Object` share the dynamic key), fixing a race where two consumers with different type params could resolve run-to-run differently under load.
+- **Java spring-ai: the tool executor serializes non-string results as JSON** instead of `toString()`, which had mangled arrays/objects fed back to the LLM.
+
+### 🧾 LLM reply envelope always carries the answer as a string (#1248)
+
+The `@mesh.llm` `{role, content}` reply envelope now always carries the answer as a JSON string. On the Python structured-output path the answer is recovered from `message.parsed` / `provider_specific_fields` when the text-block join is empty (upstream client libraries move structured output between text blocks, tool-call arguments, and parsed fields across versions), and a warning naming model, mode, and a truncated raw message fires when nothing is recoverable instead of silently emitting empty content. The OpenAI native adapter recovers a `parsed`-only response only when the message has no tool calls, so content is never fabricated on an ordinary tool-call turn and replayed assistant history is byte-for-byte unchanged. As defense in depth, consumers across all three runtimes serialize dict/Map-shaped content and recover a bare envelope-less map as the answer (excluding maps carrying a truthy `error`, `tool_calls`, or `_mesh_usage`, which stay on the diagnostic path), with empty-content parse failures now including a truncated snippet of the raw provider payload.
+
+### ⚠️ Breaking / behavior changes
+
+- **Java: untyped tool calls parse JSON results generically** (#1251). `McpMeshTool<Object>` and undeclared targets now parse objects → `Map`, arrays → `List`, and JSON scalars → boxed values; non-JSON text is returned as-is and an empty result round-trips to `""`. Previously only JSON objects were parsed and arrays/scalars came back as raw JSON strings. Typed targets (`List` / `Map` / POJO) are unaffected.
+- **TypeScript: `callMcpTool` / `extractContent` now return `unknown`** (#1251), was `string | MultiContentResult`, and an empty tool-result content array resolves to `null` instead of `""`. Consumers that assumed a string return must narrow the type.
+- **Interactive MeshJobs: `recvEvent` polling now renews the lease** (#1253). A handler blocked in an event gate keeps its claim as long as it keeps polling, so artificial `progress()` keepalives added only to hold a lease can be removed. Declaring `max_duration` remains recommended for lease sizing.
+
+### ⚠️ Upgrade notes
+
+- **Mixed-version meshes degrade gracefully.** The `required` flag is ignored by registries that predate #1255 (capabilities read as available, exactly as before), and old SDKs are unaffected by a new registry — `claimEpoch` / availability fields are additive, and epoch-less deltas keep legacy ownership semantics. No coordinated upgrade is required; adopt `required=true` once both ends are on v2.8.0.
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.6.0...v2.7.0)
 

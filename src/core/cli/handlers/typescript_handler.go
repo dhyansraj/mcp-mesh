@@ -269,7 +269,7 @@ const typescriptPackageTemplate = `{
     "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
-    "@mcpmesh/sdk": "^2.7.0",
+    "@mcpmesh/sdk": "^2.8.0",
     "fastmcp": "^3.26.0",
     "zod": "^3.23.0"
   },
