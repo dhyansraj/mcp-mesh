@@ -16,7 +16,7 @@ tags:
   - typescript
   - phase2
   - python
-timeout: 300
+timeout: 600
 
 pre_run:
   - routine: global.setup_for_java_agent
@@ -93,9 +93,27 @@ test:
       echo "Consumer agent starting..."
     capture: start_consumer
 
-  - name: "Wait for consumer and resolution"
-    handler: wait
-    seconds: 25
+  # Liveness only: poll until the Java consumer REGISTERS instead of a fixed
+  # sleep — cold-JVM starts (mvn compile + Spring Boot startup) routinely
+  # outran the old 25s wait. Generous 240s deadline; dependency resolution
+  # stays covered by the runtime's settle window (no dep-resolution wait).
+  - name: "Wait for consumer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for analyst-java to register..."
+      for i in $(seq 1 120); do
+        if meshctl list 2>/dev/null | grep -q "analyst-java"; then
+          echo "analyst-java registered after ~$((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: analyst-java did not register within 240s"
+      meshctl logs analyst-java 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_consumer_registration
+    timeout: 260
 
   # 6. Verify all agents registered
   - name: "Verify agents registered"

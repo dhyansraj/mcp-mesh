@@ -531,6 +531,12 @@ export MCP_MESH_SWEEP_INTERVAL=5m
 # set their own total_deadline are fully exempt. Default: off (unset /
 # "0") — jobs without an explicit total_deadline run unbounded, subject
 # only to lease recovery.
+#
+# NOT the lease window. This is a total-runtime REAP CEILING (measured
+# from submission); it does not size or extend the per-attempt lease. The
+# lease window is derived per-job from max_duration (300s default) and is
+# renewed by progress deltas / recvEvent polls — tuning this variable does
+# NOT change how quickly a quiet handler's lease expires.
 export MCP_MESH_JOB_STALE_TIMEOUT=2h
 
 # CORS

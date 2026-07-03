@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -296,10 +296,12 @@ async fn flush_once(
 ///
 /// Also exposes [`Self::recv_event`] for handlers running inside a
 /// `task=True` job to drain events posted via [`JobProxy::send_event`].
-/// The per-controller `last_seen_seq` cursor is shared across `Clone`s of
-/// the same instance (via `Arc<AtomicI64>`), so passing the controller
-/// into helper tasks doesn't reset the cursor. A NEW controller created
-/// for the same `job_id` starts from seq=0 — replay is per-instance.
+/// Event delivery uses PER-FILTER cursors (issue #1252 Phase 3): each
+/// distinct type filter is an independent stream with its own cursor,
+/// shared across `Clone`s of the same instance, so consuming a type-A
+/// match at seq N no longer skips a type-B event at seq < N. A NEW
+/// controller for the same `job_id` starts every cursor at seq=0 — replay
+/// is per-instance, per filter.
 #[derive(Clone)]
 pub struct JobController {
     job_id: String,
@@ -324,20 +326,31 @@ pub struct JobController {
     /// queue-resident so the shared claim-worker queue doesn't accumulate
     /// one entry per completed job forever (issue #1166 LOW).
     terminal: Arc<std::sync::atomic::AtomicBool>,
-    /// Last event seq returned by `recv_event` on this controller (or any
-    /// of its `Clone`s). `0` means no events consumed yet — the next
-    /// `recv_event` will return the first event in the job's event log.
-    last_seen_seq: Arc<AtomicI64>,
-    /// Serialises the entire `recv_event` load→list→store window across
-    /// `Clone`s of this controller. Without this, two concurrent callers
-    /// on clones can both load the same `last_seen_seq`, both call
-    /// `list_job_events`, and both return the SAME head event — the
-    /// AtomicI64 prevents memory tearing but not the read-fetch-write
-    /// race across the `.await`. The `Arc` keeps clones cheap while
-    /// pinning every clone to the same lock instance; lock contention
-    /// is naturally bounded to the small number of helper tasks a
-    /// single handler typically spawns.
-    recv_event_lock: Arc<Mutex<()>>,
+    /// Per-filter event cursors (issue #1252 Phase 3). Keyed by canonical
+    /// filter identity ([`Self::filter_key`]): the sorted+deduped type list,
+    /// with `None`/empty (the unfiltered stream) collapsing to one distinct
+    /// key. Each `recv_event` reads/advances ONLY its own filter's cursor,
+    /// so consuming a type-A match at seq N no longer permanently skips a
+    /// type-B event at seq < N (the shared-cursor defect).
+    ///
+    /// Stream semantics: delivery is exactly-once WITHIN a filter stream; an
+    /// event matching two DIFFERENT filter streams may be observed once per
+    /// stream (intentional at-least-once ACROSS streams — consistent with
+    /// the at-least-once job model). Shared across `Clone`s; a NEW controller
+    /// for the same `job_id` starts every cursor at 0 (replay-from-0 per
+    /// filter on re-claim). Advancement is monotonic per key (never retreats).
+    cursors: Arc<std::sync::Mutex<HashMap<String, i64>>>,
+    /// Per-filter serialization locks. `recv_event` holds ONLY its own
+    /// filter's async lock across the load→list→store window, so concurrent
+    /// calls on DIFFERENT filters make progress independently (a 60s type-A
+    /// long-poll must NOT block a type-B call — the whole point of per-filter
+    /// cursors), while two calls on the SAME filter serialize so they can't
+    /// both load the same cursor, both `list_job_events` with the same
+    /// `after`, and both return the SAME head event (the read-fetch-write
+    /// race across the `.await`). Shared across `Clone`s; the map grows one
+    /// small entry per distinct filter the handler uses (bounded), never per
+    /// event.
+    recv_locks: Arc<std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>>,
 }
 
 impl JobController {
@@ -374,8 +387,45 @@ impl JobController {
             backend,
             queue,
             terminal: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            last_seen_seq: Arc::new(AtomicI64::new(0)),
-            recv_event_lock: Arc::new(Mutex::new(())),
+            cursors: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            recv_locks: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Canonical identity of a `recv_event` type filter, used as the
+    /// per-filter cursor key (issue #1252 Phase 3). `None`, an empty list, and
+    /// a list of only empty/whitespace strings all mean "all events" and
+    /// collapse to ONE unfiltered key (the empty string): each entry is
+    /// trimmed and empty entries are dropped, mirroring the registry's own
+    /// `types` parsing (`strings.TrimSpace` + drop-empty in
+    /// `ent_handlers_jobs.go`) so `Some(vec!["".into()])` canonicalizes — and
+    /// filters — identically on both backends. The surviving entries are then
+    /// sorted + deduped and joined with a non-printable unit separator, so
+    /// `["B","A"]`, `["A","B"]`, and `["A","A","B"]` share one cursor while
+    /// `["AB"]` and `["A","B"]` do NOT collide.
+    ///
+    /// Unsupported edge inputs (documented, not defended — no known caller
+    /// passes them): a type name that itself contains the U+001F unit
+    /// separator collides with the joined form of a multi-type filter (e.g.
+    /// `["A\u{1f}B"]` shares a key with `["A","B"]`), and a type name
+    /// containing a comma (`["a,b"]`) is a single filter on the client but,
+    /// once serialized as the comma-joined `types` query param and re-split by
+    /// the registry, becomes the server-identical filter `["a","b"]` — so two
+    /// distinct client cursors map to one server-side filter. Callers pass
+    /// plain event-type identifiers, which never contain these bytes.
+    fn filter_key(types: &Option<Vec<String>>) -> String {
+        match types {
+            None => String::new(),
+            Some(ts) => {
+                let mut v: Vec<&str> = ts
+                    .iter()
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                v.sort_unstable();
+                v.dedup();
+                v.join("\u{1f}")
+            }
         }
     }
 
@@ -651,14 +701,19 @@ impl JobController {
     ///
     /// On first call (or for a freshly-constructed controller) starts from
     /// `seq=0` and returns the first matching event in the log. Subsequent
-    /// calls return events strictly newer than the last consumed — the
-    /// internal cursor is incremented on every successful return. The
-    /// cursor is per-`JobController`-instance (shared across `Clone`s of
-    /// the same instance via `Arc<AtomicI64>`); a NEW controller for the
-    /// same `job_id` starts replay from `seq=0`.
+    /// calls return events strictly newer than the last consumed FOR THE
+    /// SAME FILTER — each distinct `types` filter has its OWN cursor (issue
+    /// #1252 Phase 3), so interleaving `recv_event(A)` and `recv_event(B)`
+    /// never lets one filter's consumption skip the other's earlier events.
+    /// Cursors are per-`JobController`-instance (shared across `Clone`s); a
+    /// NEW controller for the same `job_id` replays every filter from
+    /// `seq=0`.
     ///
     /// `types`: if `Some`, only events whose `event_type` matches one of
     /// the provided strings are returned. If `None`, all event types match.
+    /// The filter identity is canonical (order- and duplicate-insensitive;
+    /// `None` and `Some([])` are the same unfiltered stream) — see
+    /// [`Self::filter_key`].
     ///
     /// `timeout` bounds the long-poll. `None` waits indefinitely (loops
     /// the registry's 60s cap until an event arrives). `Some(d)` returns
@@ -689,14 +744,24 @@ impl JobController {
         // Server-side limit (matches OpenAPI `limit` maximum).
         const FETCH_LIMIT: usize = 100;
 
-        // Serialise the load→list→store window across `Clone`s of this
-        // controller. Without this, two concurrent callers can both load
-        // the same `last_seen_seq` cursor, both issue `list_job_events`
-        // with the same `after`, and both return the SAME head event.
-        // The AtomicI64 prevents tearing but not the read-fetch-write
-        // race across the `.await`. Acquire BEFORE the deadline check
-        // so a fast clone-vs-clone race ordering is deterministic.
-        let _guard = self.recv_event_lock.lock().await;
+        // Per-filter cursor + serialization (issue #1252 Phase 3). This
+        // filter's identity keys BOTH its cursor and its serialization lock.
+        // Hold ONLY this filter's lock across the load→list→store window:
+        // two calls on the SAME filter serialize (so they can't both load the
+        // same cursor, both `list_job_events` with the same `after`, and both
+        // return the SAME head event across the `.await`), while calls on
+        // DIFFERENT filters run concurrently — a 60s type-A long-poll must not
+        // block a type-B call. Acquire BEFORE the deadline check so a fast
+        // same-filter clone-vs-clone race ordering is deterministic.
+        let key = Self::filter_key(&types);
+        let filter_lock = {
+            let mut locks = self.recv_locks.lock().expect("recv_locks poisoned");
+            locks
+                .entry(key.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone()
+        };
+        let _guard = filter_lock.lock().await;
 
         let deadline = timeout.map(|t| Instant::now() + t);
         // Tracks the start of the current contiguous transient-failure
@@ -758,7 +823,15 @@ impl JobController {
                 }
             }
 
-            let after = self.last_seen_seq.load(Ordering::SeqCst);
+            // Read THIS filter's cursor (default 0 for a never-consumed
+            // filter). The per-filter lock above serializes same-filter
+            // callers, so the load→list→store window is race-free.
+            let after = *self
+                .cursors
+                .lock()
+                .expect("cursors poisoned")
+                .get(&key)
+                .unwrap_or(&0);
             let types_ref = types.as_deref();
             // Executor identity: the OWNER's controller supplies
             // `(instance_id, claim_epoch)` so the registry fences this read
@@ -793,19 +866,40 @@ impl JobController {
                     backoff_ms = POLL_INITIAL_MS;
                     // First matching event wins. The registry already
                     // filters by `types` and orders ascending; we return
-                    // the head and advance the cursor to its seq so the
-                    // next call picks up strictly after it.
+                    // the head and advance THIS filter's cursor to its seq so
+                    // the next same-filter call picks up strictly after it.
+                    // Advance monotonically (never retreat).
                     if let Some(ev) = resp.events.into_iter().next() {
-                        self.last_seen_seq.store(ev.seq, Ordering::SeqCst);
+                        let mut cursors = self.cursors.lock().expect("cursors poisoned");
+                        let cur = cursors.entry(key.clone()).or_insert(0);
+                        if ev.seq > *cur {
+                            *cur = ev.seq;
+                        }
                         return Ok(Some(ev));
                     }
-                    // Empty page: keep next_after as the cursor (matches
-                    // the registry's contract — the watermark may have
-                    // advanced even though no matching event arrived).
-                    // We only ever advance, never retreat.
-                    let cur = self.last_seen_seq.load(Ordering::SeqCst);
-                    if resp.next_after > cur {
-                        self.last_seen_seq.store(resp.next_after, Ordering::SeqCst);
+                    // Empty (no-match) page. Under the registry's contract a
+                    // no-match page returns `next_after == after` — the
+                    // watermark does NOT leap past events this filter didn't
+                    // return. The `list_events_mock_matches_registry_contract`
+                    // test pins that the in-process mock reproduces this
+                    // contract AND that RegistryHttpBackend sends the right
+                    // request (`after` + `types`) and parses the reply the same
+                    // way; the registry's own adherence to the contract is
+                    // pinned Go-side (see
+                    // `src/core/registry/ent_handlers_job_events_test.go`). So
+                    // this branch is a DEFENSIVE no-op under that
+                    // contract: it advances this filter's cursor only if a
+                    // backend ever reported `next_after` strictly ahead of the
+                    // cursor, and it never retreats. It must NOT advance past
+                    // unreturned events for OTHER filters — the cursor is
+                    // per-filter, so an unfiltered `next_after` can never
+                    // clobber a type filter's position.
+                    if resp.next_after > after {
+                        let mut cursors = self.cursors.lock().expect("cursors poisoned");
+                        let cur = cursors.entry(key.clone()).or_insert(0);
+                        if resp.next_after > *cur {
+                            *cur = resp.next_after;
+                        }
                     }
                     // No event yet — loop. The deadline check at the top
                     // of the next iteration returns Ok(None) if expired.
@@ -1324,6 +1418,7 @@ mod tests {
 
     use crate::task_backend::{
         CancelJobResponse, ClaimedJob, JobBatchResponse, JobEventListResponse,
+        RegistryHttpBackend,
     };
 
     // ---- mock backend -------------------------------------------------------
@@ -1725,12 +1820,25 @@ mod tests {
                     });
                 }
             };
+            // Canonicalize the `types` filter exactly as the registry does
+            // (`ent_handlers_jobs.go`): trim each entry and drop empties. An
+            // absent filter, an empty list, or a list of only empty/whitespace
+            // strings all match everything — so `types=[""]` behaves as
+            // unfiltered on the mock just as it does on the real registry.
+            let active_types: Vec<&str> = types
+                .map(|ts| {
+                    ts.iter()
+                        .map(|t| t.trim())
+                        .filter(|t| !t.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
             let mut out: Vec<JobEvent> = list
                 .iter()
                 .filter(|e| e.seq > after)
-                .filter(|e| match types {
-                    Some(ts) if !ts.is_empty() => ts.iter().any(|t| t == &e.event_type),
-                    _ => true,
+                .filter(|e| {
+                    active_types.is_empty()
+                        || active_types.iter().any(|t| *t == e.event_type.as_str())
                 })
                 .take(limit)
                 .cloned()
@@ -3140,6 +3248,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recv_event_empty_type_string_is_unfiltered() {
+        // `types=[""]` must canonicalize to the unfiltered stream — the
+        // registry trims + drops empty type strings and serves unfiltered, so
+        // the client mirrors that: it shares the "" cursor key with `None` and
+        // delivers events of ANY type (not a no-match timeout).
+        let (backend, ctrl) = make_controller("j-recv-empty-type").await;
+        backend.push_event("j-recv-empty-type", "A", serde_json::json!({"n": 1}));
+        backend.push_event("j-recv-empty-type", "B", serde_json::json!({"n": 2}));
+
+        // filter_key parity: the empty-string filter collapses to the
+        // unfiltered key, so both share one cursor.
+        assert_eq!(
+            JobController::filter_key(&Some(vec!["".into()])),
+            JobController::filter_key(&None),
+            "types=[\"\"] must canonicalize to the unfiltered key"
+        );
+
+        // recv_event with types=[""] returns the FIRST event regardless of
+        // type (unfiltered), not a no-match timeout.
+        let first = ctrl
+            .recv_event(Some(vec!["".into()]), Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .expect("types=[\"\"] must behave as unfiltered and deliver seq=1");
+        assert_eq!(first.seq, 1);
+        assert_eq!(first.event_type, "A");
+
+        // The cursor advanced on the shared "" key, so a follow-up unfiltered
+        // (None) call resumes strictly AFTER it — proving they share a cursor.
+        let second = ctrl
+            .recv_event(None, Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .expect("shared unfiltered cursor must resume at seq=2");
+        assert_eq!(second.seq, 2);
+    }
+
+    #[tokio::test]
     async fn recv_event_increments_cursor_between_calls() {
         // Two successive calls return seq=1 then seq=2 — the cursor must
         // advance between calls so we don't replay the first event.
@@ -3448,6 +3594,359 @@ mod tests {
 
         // Drain A.
         let _ = a_handle.await.unwrap();
+    }
+
+    // ---- Phase 3: per-filter event cursors (issue #1252) --------------------
+
+    #[tokio::test]
+    async fn recv_event_per_filter_cursors_do_not_skip_earlier_events() {
+        // THE Phase-3 defect pin: with a single shared cursor, consuming a
+        // type-A match at seq 5 sets the cursor to 5, so a later
+        // recv_event(type=B) reads after=5 and PERMANENTLY skips the type-B
+        // event at seq 3. With per-filter cursors, the B stream has its own
+        // cursor (still 0) and delivers seq 3.
+        let (backend, ctrl) = make_controller("j-perfilter").await;
+        backend.push_event("j-perfilter", "C", serde_json::json!({})); // seq 1
+        backend.push_event("j-perfilter", "C", serde_json::json!({})); // seq 2
+        backend.push_event("j-perfilter", "B", serde_json::json!({})); // seq 3
+        backend.push_event("j-perfilter", "C", serde_json::json!({})); // seq 4
+        backend.push_event("j-perfilter", "A", serde_json::json!({})); // seq 5
+
+        // Consume type-A at seq 5 (advances ONLY the A-filter cursor).
+        let a = ctrl
+            .recv_event(Some(vec!["A".into()]), Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .expect("type-A event");
+        assert_eq!(a.seq, 5);
+        assert_eq!(a.event_type, "A");
+
+        // type-B must still be delivered at seq 3 — NOT skipped.
+        let b = ctrl
+            .recv_event(Some(vec!["B".into()]), Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .expect("type-B event must NOT be skipped by the A cursor");
+        assert_eq!(b.seq, 3, "per-filter cursor must deliver the earlier B");
+        assert_eq!(b.event_type, "B");
+    }
+
+    #[tokio::test]
+    async fn recv_event_unfiltered_and_filtered_are_independent_streams() {
+        // The unfiltered stream (None) and a type filter each keep their own
+        // cursor. An event matching both streams is observed once PER stream
+        // (documented at-least-once across streams).
+        let (backend, ctrl) = make_controller("j-streams").await;
+        backend.push_event("j-streams", "A", serde_json::json!({})); // seq 1
+        backend.push_event("j-streams", "B", serde_json::json!({})); // seq 2
+        backend.push_event("j-streams", "A", serde_json::json!({})); // seq 3
+
+        // Unfiltered head = seq 1.
+        let u1 = ctrl.recv_event(None, Some(Duration::from_secs(2))).await.unwrap().unwrap();
+        assert_eq!(u1.seq, 1);
+        // A-filter is independent: re-observes seq 1 (the first A).
+        let a1 = ctrl
+            .recv_event(Some(vec!["A".into()]), Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(a1.seq, 1, "A-stream cursor is independent of the unfiltered one");
+        // Unfiltered advances to seq 2.
+        let u2 = ctrl.recv_event(None, Some(Duration::from_secs(2))).await.unwrap().unwrap();
+        assert_eq!(u2.seq, 2);
+        // A-filter advances to seq 3 (next A after its own cursor=1).
+        let a2 = ctrl
+            .recv_event(Some(vec!["A".into()]), Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(a2.seq, 3);
+    }
+
+    #[tokio::test]
+    async fn recv_event_filter_key_is_canonical() {
+        // Same filter expressed with different order / duplicates hits the
+        // SAME cursor; and None == Some([]) (both unfiltered).
+        let (backend, ctrl) = make_controller("j-canon").await;
+        backend.push_event("j-canon", "A", serde_json::json!({})); // seq 1
+        backend.push_event("j-canon", "B", serde_json::json!({})); // seq 2
+        backend.push_event("j-canon", "A", serde_json::json!({})); // seq 3
+
+        // ["A","B"] then ["B","A"] must share one cursor: second call does NOT
+        // re-deliver seq 1 — it advances to seq 2.
+        let first = ctrl
+            .recv_event(Some(vec!["A".into(), "B".into()]), Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.seq, 1);
+        let second = ctrl
+            .recv_event(Some(vec!["B".into(), "A".into()]), Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.seq, 2, "reordered filter must share the cursor, not replay");
+        // Duplicates canonicalize identically → cursor now past seq 2 → next A.
+        let third = ctrl
+            .recv_event(
+                Some(vec!["A".into(), "A".into(), "B".into()]),
+                Some(Duration::from_secs(2)),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(third.seq, 3);
+
+        // None and Some([]) are the SAME unfiltered stream.
+        let (backend2, ctrl2) = make_controller("j-canon2").await;
+        backend2.push_event("j-canon2", "X", serde_json::json!({})); // seq 1
+        backend2.push_event("j-canon2", "Y", serde_json::json!({})); // seq 2
+        let n1 = ctrl2.recv_event(None, Some(Duration::from_secs(2))).await.unwrap().unwrap();
+        assert_eq!(n1.seq, 1);
+        let e2 = ctrl2
+            .recv_event(Some(vec![]), Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(e2.seq, 2, "Some([]) shares the unfiltered cursor with None");
+    }
+
+    #[tokio::test]
+    async fn recv_event_different_filters_do_not_block_each_other() {
+        // Per-filter locks (not one global lock): a long-polling recv on
+        // filter A (no A events) must NOT block a filter-B call that has an
+        // event ready. This is the intra-controller analogue of
+        // `recv_event_lock_is_per_controller`.
+        let (backend, ctrl) = make_controller("j-nofilterblock").await;
+        backend.push_event("j-nofilterblock", "B", serde_json::json!({})); // seq 1
+
+        let ctrl_a = ctrl.clone();
+        let a_handle = tokio::spawn(async move {
+            // No A events — this parks for its full 500ms budget.
+            ctrl_a
+                .recv_event(Some(vec!["A".into()]), Some(Duration::from_millis(500)))
+                .await
+        });
+
+        let start = std::time::Instant::now();
+        let b = ctrl
+            .recv_event(Some(vec!["B".into()]), Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .expect("B should be observed immediately");
+        let elapsed = start.elapsed();
+        assert_eq!(b.seq, 1);
+        assert!(
+            elapsed < Duration::from_millis(400),
+            "filter B must not serialise behind filter A's long-poll (elapsed={:?})",
+            elapsed,
+        );
+        let _ = a_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn recv_event_same_filter_monotonic_under_concurrency() {
+        // Two concurrent recv_event calls on clones with the SAME filter must
+        // observe DISTINCT seqs (same-filter lock serializes the
+        // load→list→store window) and the cursor advances monotonically.
+        let (backend, ctrl) = make_controller("j-concfilter").await;
+        backend.push_event("j-concfilter", "A", serde_json::json!({})); // seq 1
+        backend.push_event("j-concfilter", "A", serde_json::json!({})); // seq 2
+
+        let ctrl_a = ctrl.clone();
+        let ctrl_b = ctrl.clone();
+        let a = tokio::spawn(async move {
+            ctrl_a
+                .recv_event(Some(vec!["A".into()]), Some(Duration::from_secs(2)))
+                .await
+                .unwrap()
+                .unwrap()
+        });
+        let b = tokio::spawn(async move {
+            ctrl_b
+                .recv_event(Some(vec!["A".into()]), Some(Duration::from_secs(2)))
+                .await
+                .unwrap()
+                .unwrap()
+        });
+        let ev_a = a.await.unwrap();
+        let ev_b = b.await.unwrap();
+        let seen: std::collections::HashSet<i64> = [ev_a.seq, ev_b.seq].into_iter().collect();
+        assert_eq!(
+            seen,
+            [1, 2].into_iter().collect(),
+            "same-filter concurrent callers must collectively observe {{1,2}}, got {:?}",
+            seen
+        );
+    }
+
+    // ---- Mock-vs-registry contract test (refuted-D3 divergence guard) -------
+    //
+    // A shared scenario table for `list_job_events` executed against BOTH the
+    // in-process `MockBackend` AND a mockito-simulated `RegistryHttpBackend`,
+    // asserting identical `(returned seqs, next_after)`. Two distinct
+    // properties are pinned:
+    //
+    //   1. The `MockBackend` reproduces the registry's page contract — empty
+    //      filtered page returns `next_after == after` (no leap past
+    //      unreturned events), filtered delivery is ascending and
+    //      type-restricted — so the mock the rest of the unit tests run
+    //      against can't silently drift from the real registry's behaviour.
+    //
+    //   2. `RegistryHttpBackend` sends the CORRECT request for each scenario:
+    //      the mockito expectation matches the request path AND the `after`
+    //      and `types` query params (not `Matcher::Any`), so a regression that
+    //      sent the wrong `after` or dropped the `types` filter would miss the
+    //      mock and fail the test rather than pass on a canned body. It also
+    //      pins that the backend parses the reply into the same
+    //      `(seqs, next_after)` the mock produces.
+    //
+    // What this test does NOT do is pin the registry's OWN adherence to the
+    // page contract (the mock body here is hand-built to match it) — that is
+    // an HTTP-server behaviour, pinned Go-side in
+    // `src/core/registry/ent_handlers_job_events_test.go`. This test pins the
+    // Rust CLIENT's request/parse contract against a faithful mock.
+
+    /// (log events as (seq,type), after, types, expected returned seqs,
+    /// expected next_after).
+    fn list_events_contract_scenarios() -> Vec<(
+        Vec<(i64, &'static str)>,
+        i64,
+        Option<Vec<String>>,
+        Vec<i64>,
+        i64,
+    )> {
+        let log = vec![(1_i64, "A"), (2, "B"), (3, "A")];
+        vec![
+            // Unfiltered from 0: all three, next_after = last returned.
+            (log.clone(), 0, None, vec![1, 2, 3], 3),
+            // Type A from 0: 1 and 3 only, next_after = 3.
+            (log.clone(), 0, Some(vec!["A".into()]), vec![1, 3], 3),
+            // Type B after 1: just 2, next_after = 2.
+            (log.clone(), 1, Some(vec!["B".into()]), vec![2], 2),
+            // Type A after 3 (tip): EMPTY page — next_after == after (3).
+            (log.clone(), 3, Some(vec!["A".into()]), vec![], 3),
+            // No-match type from 0: EMPTY page — next_after == after (0).
+            (log.clone(), 0, Some(vec!["Z".into()]), vec![], 0),
+            // Empty-string type from 0: the registry trims + drops empty type
+            // strings and serves UNFILTERED, so this must match `None` above —
+            // all three, next_after = 3. Pins the `types=[""]` ⇒ unfiltered
+            // equivalence on BOTH backends.
+            (log.clone(), 0, Some(vec!["".into()]), vec![1, 2, 3], 3),
+        ]
+    }
+
+    async fn run_scenario_on_backend(
+        backend: &dyn TaskBackend,
+        after: i64,
+        types: &Option<Vec<String>>,
+    ) -> (Vec<i64>, i64) {
+        let resp = backend
+            .list_job_events(
+                "j",
+                after,
+                types.as_deref(),
+                Duration::from_secs(0),
+                100,
+                None,
+            )
+            .await
+            .unwrap();
+        (resp.events.iter().map(|e| e.seq).collect(), resp.next_after)
+    }
+
+    #[tokio::test]
+    async fn list_events_mock_matches_registry_contract() {
+        for (log, after, types, expected_seqs, expected_next_after) in
+            list_events_contract_scenarios()
+        {
+            // --- in-process MockBackend ---
+            let mock = MockBackend::new();
+            for (_seq, ty) in &log {
+                mock.push_event("j", ty, serde_json::json!({}));
+            }
+            let (mock_seqs, mock_next) =
+                run_scenario_on_backend(mock.as_ref(), after, &types).await;
+
+            // --- mockito-simulated registry: canned response encoding the
+            // documented contract (built from the log via the SAME
+            // filter/next_after rules the registry implements). ---
+            let mut server = mockito::Server::new_async().await;
+            let events_json: Vec<serde_json::Value> = expected_seqs
+                .iter()
+                .map(|&seq| {
+                    let ty = log.iter().find(|(s, _)| *s == seq).unwrap().1;
+                    serde_json::json!({
+                        "job_id": "j",
+                        "seq": seq,
+                        "type": ty,
+                        "payload": null,
+                        "trace_context": null,
+                        "posted_by": null,
+                        "created_at": 1_700_000_000_i64 + seq,
+                    })
+                })
+                .collect();
+            let body = serde_json::json!({
+                "events": events_json,
+                "next_after": expected_next_after,
+            })
+            .to_string();
+            // Match the exact request the client MUST send for this scenario:
+            // the events path plus the `after` watermark, and — for filtered
+            // scenarios — the comma-joined `types` param. If a regression sent
+            // the wrong `after` or dropped `types`, the request won't match
+            // this mock and mockito serves a 501, failing the `.unwrap()`
+            // below instead of silently passing on the canned body.
+            let mut query_matchers = vec![mockito::Matcher::UrlEncoded(
+                "after".into(),
+                after.to_string(),
+            )];
+            if let Some(ts) = &types {
+                let joined = ts
+                    .iter()
+                    .map(|t| t.trim())
+                    .filter(|t| !t.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                if !joined.is_empty() {
+                    query_matchers.push(mockito::Matcher::UrlEncoded(
+                        "types".into(),
+                        joined,
+                    ));
+                }
+            }
+            let _m = server
+                .mock("GET", "/jobs/j/events")
+                .match_query(mockito::Matcher::AllOf(query_matchers))
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(body)
+                .create_async()
+                .await;
+            let registry = RegistryHttpBackend::new(&server.url()).unwrap();
+            let (reg_seqs, reg_next) =
+                run_scenario_on_backend(&registry, after, &types).await;
+
+            // Both backends must agree with each other AND the contract.
+            assert_eq!(
+                mock_seqs, expected_seqs,
+                "mock diverged from contract (after={after}, types={types:?})"
+            );
+            assert_eq!(
+                mock_next, expected_next_after,
+                "mock next_after diverged (after={after}, types={types:?})"
+            );
+            assert_eq!(
+                reg_seqs, expected_seqs,
+                "registry response diverged (after={after}, types={types:?})"
+            );
+            assert_eq!(
+                reg_next, expected_next_after,
+                "registry next_after diverged (after={after}, types={types:?})"
+            );
+            assert_eq!((mock_seqs, mock_next), (reg_seqs, reg_next));
+        }
     }
 
     // ---- JobProxy::list_events ---------------------------------------------

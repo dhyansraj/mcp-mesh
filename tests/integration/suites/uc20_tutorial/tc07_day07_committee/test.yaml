@@ -18,7 +18,11 @@ tags:
   - meshctl
   - gateway
   - fastapi
-timeout: 600
+# Total budget must cover the two 260s registration-wait steps STACKED on
+# top of 13 agent starts + the 360s plan_trip LLM call — a slow-but-
+# successful registration must not exhaust the test budget after every
+# step succeeded.
+timeout: 1200
 
 pre_run:
   - routine: global.start_observability
@@ -70,7 +74,7 @@ test:
       EXPECTED="flight-agent hotel-agent weather-agent poi-agent user-prefs-agent claude-provider openai-provider planner-agent chat-history-agent budget-analyst adventure-advisor logistics-planner"
       EXPECTED_COUNT=12
       echo "Waiting for $EXPECTED_COUNT agents to register..."
-      for i in $(seq 1 30); do
+      for i in $(seq 1 120); do
         AGENTS=$(meshctl list 2>/dev/null || true)
         COUNT=0
         for agent in $EXPECTED; do
@@ -83,14 +87,14 @@ test:
           meshctl list
           exit 0
         fi
-        echo "  $COUNT/$EXPECTED_COUNT agents registered (attempt $i/30)..."
+        echo "  $COUNT/$EXPECTED_COUNT agents registered (attempt $i/120)..."
         sleep 2
       done
-      echo "ERROR: Only $COUNT/$EXPECTED_COUNT agents registered within 60s"
+      echo "ERROR: Only $COUNT/$EXPECTED_COUNT agents registered within 240s"
       meshctl list 2>/dev/null || true
       exit 1
     capture: wait_agents_output
-    timeout: 90
+    timeout: 260
 
   # Start the gateway
   - name: "Start gateway"
@@ -105,20 +109,20 @@ test:
     workdir: /workspace
     command: |
       echo "Waiting for API gateway to register..."
-      for i in $(seq 1 30); do
+      for i in $(seq 1 120); do
         if meshctl list 2>/dev/null | grep -qi "API"; then
           echo "API gateway registered after $((i * 2))s"
           meshctl list
           exit 0
         fi
-        echo "  API gateway not yet registered (attempt $i/30)..."
+        echo "  API gateway not yet registered (attempt $i/120)..."
         sleep 2
       done
-      echo "ERROR: API gateway not registered within 60s"
+      echo "ERROR: API gateway not registered within 240s"
       meshctl list 2>/dev/null || true
       exit 1
     capture: wait_gateway_output
-    timeout: 90
+    timeout: 260
 
   # Verify all 13 agents are registered
   - name: "Verify all agents are registered"

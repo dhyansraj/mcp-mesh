@@ -1,0 +1,327 @@
+# tc01_quiet_gate_single_owner — a quietly-waiting gate earns poll-liveness;
+# the job is NEVER re-claimed (issue #1252 Phases 1+2, PR #1253).
+#
+# Field shape (from the #1252 repro): an interactive job runs sequential
+# recv_event(type="go") gates with the executing capability at 2 replicas.
+# One gate legitimately blocks in silence LONGER than the lease window.
+# Pre-fix, recv_event was an anonymous read that never touched the lease:
+# the lease lapsed mid-gate, the sweep re-dispatched the job to the peer
+# replica, and both owners executed — duplicate transitions, phase slip.
+# Post-fix, every executor recv_event poll carries (instance_id, claim_epoch)
+# and extends the lease — an actively-polling handler is provably alive.
+#
+# Topology: gated-worker-a + gated-worker-b (both providing task=true
+# capability gated_phases; MCP_MESH_AGENT_NAME=gated-worker gives both a
+# shared "gated-worker-" instance-id PREFIX — the production replica shape
+# that matters here is two claim workers on ONE shared job queue. NOTE:
+# MCP_MESH_AGENT_NAME only seeds the instance id — the registered /agents
+# .name stays each fixture's decorator literal, gated-worker-a/-b) +
+# gate-driver (submit-only). The worker polls its gates in <=4s rounds, so
+# poll-liveness credit lands several times per lease window (max_duration=15).
+#
+# Flow:
+#   1. Submit gated_phases (3 phases, max_duration=15 -> lease window 15s,
+#      max_retries=2 so a pre-fix lapse would RECLAIM, not fail).
+#   2. Feed "go" #1 normally; observe the phase_done(1) transition.
+#   3. GO SILENT for 30s — twice the lease window, and past the fast-sweep
+#      tick (10s). Only executor poll credit can keep the claim alive.
+#   4. Verify mid-silence: still working, attempt_count == 1, SAME owner.
+#   5. Feed "go" #2 and #3; job completes.
+#
+# Asserts (single claim, no duplicate execution):
+#   - attempt_count == 1 (claim_epoch is minted per claim; a re-claim would
+#     bump both — attempt_count is the row-level observable, and every
+#     handler-stamped transition carries the epoch itself)
+#   - owner_instance_id unchanged across the silent window
+#   - exactly 3 phase_done transitions: phases {1,2,3}, ALL epoch 1, ALL
+#     from ONE replica — no duplicates, no second owner
+#   - result payload stamped {status: done, epoch: 1}
+
+name: "MeshJob replicas: quiet recv_event gate outlasting the lease is NOT re-claimed"
+description: "2-replica gated_phases job survives a 30s silent gate (lease 15s) on poll-liveness alone — single claim, epoch 1, no duplicate transitions"
+tags:
+  - meshjob
+  - python
+  - issue-1252
+  - replicas
+  - lease
+  - slow
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/gated-worker-a /workspace/
+      cp -rL /uc-artifacts/gated-worker-b /workspace/
+      cp -rL /uc-artifacts/gate-driver /workspace/
+
+  - name: "Install worker A deps"
+    handler: pip-install
+    path: /workspace/gated-worker-a
+
+  - name: "Install worker B deps"
+    handler: pip-install
+    path: /workspace/gated-worker-b
+
+  - name: "Install driver deps"
+    handler: pip-install
+    path: /workspace/gate-driver
+
+  # Fast sweep so a lease lapse (the pre-fix failure mode) would surface as
+  # a reclaim within ~10s instead of ~5min. NO stale timeout — poll-liveness
+  # must be able to extend the lease freely.
+  - routine: start_registry_with_fast_sweep
+
+  # Both replicas register under the SAME agent name (production shape);
+  # meshctl manages them as distinct processes via their declared names.
+  - name: "Start worker replica A (port 9111)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start gated-worker-a/main.py --env MCP_MESH_HTTP_PORT=9111 --env MCP_MESH_AGENT_NAME=gated-worker -d
+
+  - name: "Start worker replica B (port 9112)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start gated-worker-b/main.py --env MCP_MESH_HTTP_PORT=9112 --env MCP_MESH_AGENT_NAME=gated-worker -d
+
+  - name: "Start driver (port 9110)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start gate-driver/main.py --env MCP_MESH_HTTP_PORT=9110 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  # Liveness only: BOTH gated-worker instances + the driver must be
+  # registered. Matching is PREFIX-based on /agents .name: the replicas
+  # register as gated-worker-a / gated-worker-b (MCP_MESH_AGENT_NAME only
+  # prefixes the instance id, it does not rename the agent). The trailing
+  # dash in "gated-worker-" keeps gate-driver from ever cross-matching.
+  # Dependency resolution is covered by the settle window — no
+  # dep-resolution wait.
+  - name: "Wait for both replicas and the driver to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for 2 gated-worker replicas + gate-driver..."
+      for i in $(seq 1 60); do
+        REPLICAS=$(curl -s http://localhost:8000/agents | jq '[.agents[] | select(.name | startswith("gated-worker-"))] | length' 2>/dev/null || echo 0)
+        DRIVER=$(curl -s http://localhost:8000/agents | jq '[.agents[] | select(.name | startswith("gate-driver"))] | length' 2>/dev/null || echo 0)
+        if [ "$REPLICAS" -ge 2 ] && [ "$DRIVER" -ge 1 ]; then
+          echo "REPLICAS_READY=$REPLICAS after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: replicas did not register within 60s (replicas=$REPLICAS driver=$DRIVER)"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_registration
+    timeout: 90
+
+  - name: "Submit gated_phases (3 phases, max_duration=15, max_retries=2)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call submit_gated '{"phases":3,"max_duration":15,"max_retries":2}'
+    capture: submit_resp
+    timeout: 30
+
+  - name: "Capture job_id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1 | xargs -I{} echo "JOB_ID={}"
+    capture: job_id_extract
+
+  # Deterministic claim gate: wait until a replica has CLAIMED the job and
+  # record WHICH one, so the silent-window check below can prove the owner
+  # never changed.
+  - name: "Wait for the claim and record the owner"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      echo "JOB_ID=${JOB_ID}"
+      for i in $(seq 1 30); do
+        OWNER=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.owner_instance_id // empty')
+        if [ -n "$OWNER" ]; then
+          echo "CLAIMED=1"
+          echo "OWNER=${OWNER}"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: job never claimed within 30s"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '.'
+      exit 1
+    capture: claim_wait
+    timeout: 45
+
+  - name: "Post go #1 and wait for the phase 1 transition"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      curl -s -X POST "http://localhost:8000/jobs/${JOB_ID}/events" \
+        -H 'Content-Type: application/json' \
+        -d '{"type":"go","payload":{"n":1}}' | jq -c '.'
+      for i in $(seq 1 20); do
+        SEEN=$(curl -s "http://localhost:8000/jobs/${JOB_ID}/events?after=0&limit=100" \
+          | jq '[.events[] | select(.type == "transition") | select(.payload.phase == 1)] | length')
+        if [ "$SEEN" -ge 1 ]; then
+          echo "PHASE1_SEEN=1 after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: phase 1 transition never appeared within 20s"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}/events?after=0&limit=100" | jq '.'
+      exit 1
+    capture: phase1_wait
+    timeout: 40
+
+  # THE QUIET GATE: 30 seconds of silence — twice the 15s lease window and
+  # well past the 10s sweep tick. The handler sits parked on recv_event
+  # rounds; only executor poll credit (Phase 2) keeps the claim alive. This
+  # is the scenario wait itself, NOT a registration/dep wait.
+  - name: "Go silent for a full gate window longer than the lease"
+    handler: wait
+    seconds: 30
+
+  # Mid-silence integrity: still the FIRST claim, SAME owner, still working.
+  - name: "Verify the job was not re-claimed during the silence"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      OWNER_BEFORE=$(echo '${captured.claim_wait}' | grep '^OWNER=' | cut -d= -f2)
+      ROW=$(curl -s "http://localhost:8000/jobs/${JOB_ID}")
+      echo "$ROW" | jq '{status, attempt_count, owner_instance_id}'
+      STATUS=$(echo "$ROW" | jq -r '.status')
+      ATTEMPTS=$(echo "$ROW" | jq -r '.attempt_count')
+      OWNER_NOW=$(echo "$ROW" | jq -r '.owner_instance_id // empty')
+      if [ "$STATUS" != "working" ]; then
+        echo "FAIL: expected status=working mid-silence, got ${STATUS}"
+        exit 1
+      fi
+      if [ "$ATTEMPTS" != "1" ]; then
+        echo "FAIL: expected attempt_count=1 mid-silence, got ${ATTEMPTS} — the quiet gate was re-claimed"
+        exit 1
+      fi
+      if [ "$OWNER_NOW" != "$OWNER_BEFORE" ]; then
+        echo "FAIL: owner changed mid-silence (${OWNER_BEFORE} -> ${OWNER_NOW})"
+        exit 1
+      fi
+      echo "OWNER_UNCHANGED=1"
+      echo "ATTEMPT_STILL_1=1"
+    capture: mid_silence_check
+    timeout: 30
+
+  - name: "Post go #2 and wait for the phase 2 transition"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      curl -s -X POST "http://localhost:8000/jobs/${JOB_ID}/events" \
+        -H 'Content-Type: application/json' \
+        -d '{"type":"go","payload":{"n":2}}' | jq -c '.'
+      for i in $(seq 1 20); do
+        SEEN=$(curl -s "http://localhost:8000/jobs/${JOB_ID}/events?after=0&limit=100" \
+          | jq '[.events[] | select(.type == "transition") | select(.payload.phase == 2)] | length')
+        if [ "$SEEN" -ge 1 ]; then
+          echo "PHASE2_SEEN=1 after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: phase 2 transition never appeared within 20s — the silent gate lost the claim or the event"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}/events?after=0&limit=100" | jq '.'
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status, attempt_count, owner_instance_id, error}'
+      exit 1
+    capture: phase2_wait
+    timeout: 40
+
+  - name: "Post go #3 and wait for completion"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      curl -s -X POST "http://localhost:8000/jobs/${JOB_ID}/events" \
+        -H 'Content-Type: application/json' \
+        -d '{"type":"go","payload":{"n":3}}' | jq -c '.'
+      for i in $(seq 1 30); do
+        ST=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.status')
+        if [ "$ST" = "completed" ]; then
+          echo "COMPLETED=1 after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: job did not complete within 30s of go #3"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '.'
+      exit 1
+    capture: completion_wait
+    timeout: 45
+
+  - name: "Capture final job row"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      curl -s "http://localhost:8000/jobs/${JOB_ID}"
+    capture: final_job
+
+  - name: "Capture final event log"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      curl -s "http://localhost:8000/jobs/${JOB_ID}/events?after=0&limit=100"
+    capture: final_events
+
+assertions:
+  # IDIOM: equality lives INSIDE the jq filter so the interpolation yields a
+  # bare true/false (tsuite Go-formats extracted values, and the
+  # interpolation body cannot contain '}').
+
+  # Scenario preconditions surfaced by the driver steps
+  - expr: "${captured.wait_registration} contains 'REPLICAS_READY=2'"
+    message: "both gated-worker-* replicas must register before the job is submitted"
+  - expr: "${captured.claim_wait} contains 'CLAIMED=1'"
+    message: "a replica must claim the job before the gates are fed"
+  - expr: "${captured.phase1_wait} contains 'PHASE1_SEEN=1'"
+    message: "phase 1 must transition before the silent window starts"
+  - expr: "${captured.mid_silence_check} contains 'OWNER_UNCHANGED=1'"
+    message: "the owner must not change across a silent gate longer than the lease"
+  - expr: "${captured.mid_silence_check} contains 'ATTEMPT_STILL_1=1'"
+    message: "the quiet gate must NOT be re-claimed — poll-liveness keeps the claim alive"
+  - expr: "${captured.completion_wait} contains 'COMPLETED=1'"
+    message: "the job must complete once all three gates are fed"
+
+  # Single claim end-to-end: one attempt, first epoch.
+  - expr: "${jq:captured.final_job:(.status == \"completed\") and (.attempt_count == 1)} == 'true'"
+    message: "job must complete on its FIRST and ONLY claim (attempt_count == 1)"
+  - expr: "${jq:captured.final_job:(.result.status == \"done\") and (.result.epoch == 1)} == 'true'"
+    message: "the completing handler must have executed under claim epoch 1"
+
+  # No duplicate transitions: exactly one per phase, all epoch 1, one replica.
+  - expr: "${jq:captured.final_events:([.events[] | select(.type == \"transition\")] | length) == 3} == 'true'"
+    message: "exactly 3 phase transitions — a re-claimed duplicate execution would post more"
+  - expr: "${jq:captured.final_events:([.events[] | select(.type == \"transition\") | .payload.phase] | sort) == [1,2,3]} == 'true'"
+    message: "phases 1,2,3 must each transition exactly once (sorted set-equality — ordering is not asserted)"
+  - expr: "${jq:captured.final_events:([.events[] | select(.type == \"transition\")] | all(.payload.epoch == 1))} == 'true'"
+    message: "every transition must be stamped with claim epoch 1 — no second claim ever executed"
+  - expr: "${jq:captured.final_events:([.events[] | select(.type == \"transition\") | .payload.replica] | unique | length) == 1} == 'true'"
+    message: "all transitions must come from ONE replica — dual ownership would interleave both"
+
+  # No undelivered events: all 3 posted 'go' events are in the log and the
+  # job consumed them all (it completed after exactly 3 gates).
+  - expr: "${jq:captured.final_events:([.events[] | select(.type == \"go\")] | length) == 3} == 'true'"
+    message: "all three posted go events must be in the job's event log"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace
