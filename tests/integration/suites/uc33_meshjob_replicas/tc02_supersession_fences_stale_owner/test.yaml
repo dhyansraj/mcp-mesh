@@ -1,0 +1,305 @@
+# tc02_supersession_fences_stale_owner — a genuinely wedged attempt is
+# reclaimed (epoch 2) and the stale owner's post-wake writes are fenced
+# (issue #1252 Phase 1, PR #1253).
+#
+# Scenario: sleepy_phases attempt 1 blocks in a PURE sleep (35s) — no
+# recv_event polls (no poll-liveness credit), no progress (no lease
+# renewal) — past its lease window (max_duration=6). The registry's
+# lease-reclaim sweep resets the row; a replica claims it again, minting
+# claim epoch 2 (reclaim itself does NOT bump the epoch — the next claim
+# does). The re-claimed attempt gates on a 'finish' event, holding the row
+# LIVE so the stale owner's post-wake write is fenced on a working row (not
+# trivially rejected as terminal).
+#
+# When attempt 1 wakes at ~35s the row belongs to epoch 2 (possibly on the
+# SAME instance — the same-instance re-claim gap is exactly what epochs
+# close). Its first write is a progress delta carrying the stale epoch:
+# the registry must reject it as claim_superseded, which fires attempt 1's
+# per-epoch cancel token and aborts the handler BEFORE its duplicate side
+# effects (a 'post_sleep' transition + a complete()) can land. The handler
+# gives the async cancel a 10s chunked grace window — if the fence or the
+# cancel translation is broken, 'post_sleep' lands in the event log and the
+# assertions fail.
+#
+# Asserts:
+#   - a second claim happened: 2 'claimed' transitions, epochs {1, 2},
+#     attempt_count == 2
+#   - the row is STILL WORKING (attempt 2 gated) after the stale owner woke
+#     and was fenced — its complete() did not land
+#   - NO 'post_sleep' transition ever appears (stale owner aborted mid-grace)
+#   - the stale owner's progress message never lands on the row
+#   - exactly ONE owner's transitions appear after the re-claim
+#     ('finish_seen' once, stamped epoch 2)
+#   - the job completes exactly once, from attempt 2 / epoch 2
+
+name: "MeshJob replicas: wedged owner is superseded (epoch 2); stale writes are fenced"
+description: "sleepy_phases attempt 1 wedges past the lease; reclaim mints epoch 2, stale owner's post-wake writes are rejected and its handler aborted — job completes exactly once"
+tags:
+  - meshjob
+  - python
+  - issue-1252
+  - replicas
+  - lease
+  - fencing
+  - slow
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/gated-worker-a /workspace/
+      cp -rL /uc-artifacts/gated-worker-b /workspace/
+      cp -rL /uc-artifacts/gate-driver /workspace/
+
+  - name: "Install worker A deps"
+    handler: pip-install
+    path: /workspace/gated-worker-a
+
+  - name: "Install worker B deps"
+    handler: pip-install
+    path: /workspace/gated-worker-b
+
+  - name: "Install driver deps"
+    handler: pip-install
+    path: /workspace/gate-driver
+
+  # Fast sweep so the lease-reclaim lands within ~10s of the lapse.
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start worker replica A (port 9111)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start gated-worker-a/main.py --env MCP_MESH_HTTP_PORT=9111 --env MCP_MESH_AGENT_NAME=gated-worker -d
+
+  - name: "Start worker replica B (port 9112)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start gated-worker-b/main.py --env MCP_MESH_HTTP_PORT=9112 --env MCP_MESH_AGENT_NAME=gated-worker -d
+
+  - name: "Start driver (port 9110)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start gate-driver/main.py --env MCP_MESH_HTTP_PORT=9110 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  # PREFIX-matched on /agents .name: the replicas register as
+  # gated-worker-a / gated-worker-b (MCP_MESH_AGENT_NAME only prefixes the
+  # instance id, it does not rename the agent). The trailing dash in
+  # "gated-worker-" keeps gate-driver from ever cross-matching.
+  - name: "Wait for both replicas and the driver to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for 2 gated-worker replicas + gate-driver..."
+      for i in $(seq 1 60); do
+        REPLICAS=$(curl -s http://localhost:8000/agents | jq '[.agents[] | select(.name | startswith("gated-worker-"))] | length' 2>/dev/null || echo 0)
+        DRIVER=$(curl -s http://localhost:8000/agents | jq '[.agents[] | select(.name | startswith("gate-driver"))] | length' 2>/dev/null || echo 0)
+        if [ "$REPLICAS" -ge 2 ] && [ "$DRIVER" -ge 1 ]; then
+          echo "REPLICAS_READY=$REPLICAS after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: replicas did not register within 60s (replicas=$REPLICAS driver=$DRIVER)"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_registration
+    timeout: 90
+
+  # sleep_secs=35 comfortably outlasts the worst-case reclaim+re-claim
+  # (~6s lease + 10s sweep tick + ~5s claim-poll backoff ≈ 21s), so the
+  # stale owner always wakes AFTER epoch 2 exists.
+  - name: "Submit sleepy_phases (sleep=35, max_duration=6, max_retries=1)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call submit_sleepy '{"sleep_secs":35,"max_duration":6,"max_retries":1}'
+    capture: submit_resp
+    timeout: 30
+
+  - name: "Capture job_id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1 | xargs -I{} echo "JOB_ID={}"
+    capture: job_id_extract
+
+  # First claim: attempt 1's 'claimed' transition, stamped epoch 1.
+  - name: "Wait for attempt 1 to claim (epoch 1)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      echo "JOB_ID=${JOB_ID}"
+      for i in $(seq 1 30); do
+        SEEN=$(curl -s "http://localhost:8000/jobs/${JOB_ID}/events?after=0&limit=100" \
+          | jq '[.events[] | select(.type == "transition") | select(.payload.marker == "claimed") | select(.payload.attempt == 1)] | length')
+        if [ "$SEEN" -ge 1 ]; then
+          echo "ATTEMPT1_CLAIMED=1 after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: attempt 1 never claimed within 30s"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '.'
+      exit 1
+    capture: attempt1_wait
+    timeout: 45
+
+  # The reclaim + second claim: lease lapses ~6s in, sweep (10s tick)
+  # resets the row, a replica claims it again minting epoch 2.
+  #
+  # FAIL-FAST at 30s: the stale owner wakes at ~t0+35. If attempt 2 has not
+  # claimed by then, the scenario SILENTLY CHANGES — the stale owner's
+  # post-wake write would land on an UNCLAIMED row instead of an
+  # epoch-mismatched live one, and a pass would no longer prove supersession
+  # fencing. Worst-case intended latency is ~21s (6s lease + 10s sweep tick
+  # + ~5s claim-poll backoff), so a 30s trip means the mechanism under test
+  # genuinely failed to engage — never wait past it.
+  - name: "Wait for the re-claim (attempt 2, epoch 2)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      for i in $(seq 1 30); do
+        SEEN=$(curl -s "http://localhost:8000/jobs/${JOB_ID}/events?after=0&limit=100" \
+          | jq '[.events[] | select(.type == "transition") | select(.payload.marker == "claimed") | select(.payload.attempt == 2)] | length')
+        if [ "$SEEN" -ge 1 ]; then
+          echo "ATTEMPT2_CLAIMED=1 after ~${i}s"
+          curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status, attempt_count, owner_instance_id}'
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: no re-claim within 30s — the stale owner (waking at ~35s) would hit an UNCLAIMED row, not an epoch-mismatched one, so this run can no longer prove supersession fencing"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '.'
+      curl -s "http://localhost:8000/jobs/${JOB_ID}/events?after=0&limit=100" | jq '.'
+      exit 1
+    capture: attempt2_wait
+    timeout: 45
+
+  # Let the stale owner wake (t0+35) and slam into the fence: its stale-
+  # epoch progress delta is rejected, the cancel token fires, and its grace
+  # window (10s) elapses. 30s from here covers the worst case with margin.
+  # Scenario wait — not a registration/dep wait.
+  - name: "Wait out the stale owner's wake-up and fencing window"
+    handler: wait
+    seconds: 30
+
+  # The row must STILL be working (attempt 2 is gated on 'finish'): the
+  # stale owner's complete() must NOT have landed, its progress message
+  # must not be on the row, and no 'post_sleep' transition may exist.
+  - name: "Verify the stale owner was fenced on a live row"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      ROW=$(curl -s "http://localhost:8000/jobs/${JOB_ID}")
+      echo "$ROW" | jq '{status, attempt_count, owner_instance_id, progress_message}'
+      STATUS=$(echo "$ROW" | jq -r '.status')
+      if [ "$STATUS" != "working" ]; then
+        echo "FAIL: expected status=working while attempt 2 is gated, got ${STATUS} — a stale write landed"
+        exit 1
+      fi
+      if echo "$ROW" | jq -r '.progress_message // ""' | grep -q "post-sleep write"; then
+        echo "FAIL: the stale owner's progress message landed on the row"
+        exit 1
+      fi
+      POST_SLEEP=$(curl -s "http://localhost:8000/jobs/${JOB_ID}/events?after=0&limit=100" \
+        | jq '[.events[] | select(.type == "transition") | select(.payload.marker == "post_sleep")] | length')
+      if [ "$POST_SLEEP" != "0" ]; then
+        echo "FAIL: the stale owner posted its post_sleep transition — it was not aborted"
+        exit 1
+      fi
+      echo "STALE_OWNER_FENCED=1"
+    capture: fence_check
+    timeout: 30
+
+  # Release attempt 2's gate; the job must complete exactly once, from
+  # the epoch-2 execution.
+  - name: "Post finish and wait for completion"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      curl -s -X POST "http://localhost:8000/jobs/${JOB_ID}/events" \
+        -H 'Content-Type: application/json' \
+        -d '{"type":"finish","payload":{}}' | jq -c '.'
+      for i in $(seq 1 30); do
+        ST=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.status')
+        if [ "$ST" = "completed" ]; then
+          echo "COMPLETED=1 after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: job did not complete within 30s of finish"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '.'
+      exit 1
+    capture: completion_wait
+    timeout: 45
+
+  - name: "Capture final job row"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      curl -s "http://localhost:8000/jobs/${JOB_ID}"
+    capture: final_job
+
+  - name: "Capture final event log"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      curl -s "http://localhost:8000/jobs/${JOB_ID}/events?after=0&limit=100"
+    capture: final_events
+
+assertions:
+  # IDIOM: equality lives INSIDE the jq filter so the interpolation yields a
+  # bare true/false (tsuite Go-formats extracted values, and the
+  # interpolation body cannot contain '}').
+
+  # Scenario markers from the driver steps
+  - expr: "${captured.wait_registration} contains 'REPLICAS_READY=2'"
+    message: "both gated-worker-* replicas must register before the job is submitted"
+  - expr: "${captured.attempt1_wait} contains 'ATTEMPT1_CLAIMED=1'"
+    message: "attempt 1 must claim first"
+  - expr: "${captured.attempt2_wait} contains 'ATTEMPT2_CLAIMED=1'"
+    message: "the wedged job must be re-claimed — a second claim (epoch 2) must happen"
+  - expr: "${captured.fence_check} contains 'STALE_OWNER_FENCED=1'"
+    message: "the stale owner's post-wake writes must be rejected while the row is live"
+  - expr: "${captured.completion_wait} contains 'COMPLETED=1'"
+    message: "the re-claimed attempt must complete the job after finish"
+
+  # Two claims, epochs minted 1 then 2.
+  - expr: "${jq:captured.final_events:([.events[] | select(.type == \"transition\") | select(.payload.marker == \"claimed\")] | length) == 2} == 'true'"
+    message: "exactly two claims must execute the handler (attempts 1 and 2)"
+  - expr: "${jq:captured.final_events:([.events[] | select(.type == \"transition\") | select(.payload.marker == \"claimed\") | .payload.epoch] | sort) == [1,2]} == 'true'"
+    message: "the claims must carry epochs 1 then 2 — the re-claim mints a fresh epoch"
+
+  # Stale owner fenced: its duplicate side effects never landed.
+  - expr: "${jq:captured.final_events:([.events[] | select(.type == \"transition\") | select(.payload.marker == \"post_sleep\")] | length) == 0} == 'true'"
+    message: "the superseded attempt must be aborted BEFORE its post-wake side effects — no post_sleep transition may exist"
+  - expr: "${captured.final_job} not contains 'post-sleep write from superseded attempt'"
+    message: "the stale owner's progress message must never land on the job row"
+
+  # Exactly one owner after the re-claim: finish_seen once, from epoch 2.
+  - expr: "${jq:captured.final_events:([.events[] | select(.type == \"transition\") | select(.payload.marker == \"finish_seen\")] | length) == 1} == 'true'"
+    message: "exactly ONE owner's transitions may appear after the re-claim"
+  - expr: "${jq:captured.final_events:([.events[] | select(.type == \"transition\") | select(.payload.marker == \"finish_seen\")] | all(.payload.epoch == 2))} == 'true'"
+    message: "the post-re-claim transitions must be stamped with claim epoch 2"
+
+  # Completed exactly once, by attempt 2 under epoch 2.
+  - expr: "${jq:captured.final_job:(.status == \"completed\") and (.attempt_count == 2)} == 'true'"
+    message: "the job must complete after exactly two claims"
+  - expr: "${jq:captured.final_job:(.result.attempt == 2) and (.result.epoch == 2)} == 'true'"
+    message: "the terminal result must come from attempt 2 / epoch 2 — not the superseded owner"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

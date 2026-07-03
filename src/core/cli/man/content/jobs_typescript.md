@@ -272,6 +272,16 @@ if (event === null) {
 }
 ```
 
+Each distinct `types` filter is an **independent event stream** with its
+own cursor, so interleaving `recvEvent(["A"])` and `recvEvent(["B"])`
+never lets one filter's consumption skip the other's earlier events.
+Delivery is **exactly-once within a filter stream** and **at-least-once
+across different filters** (an event matching two filters can surface once
+per stream). The cursor is per-handler and starts at the beginning of the
+log on every (re-)claim — a re-claimed handler replays from the start.
+Handlers doing **non-idempotent** work per event should checkpoint (e.g.
+persist their own event cursor) or design idempotent phases.
+
 **Outside the handler, with a `jobId` in scope — fire an event:**
 
 ```typescript
@@ -463,13 +473,22 @@ intervention:
   the matching capability picks it up. Jobs parked in `input_required`
   are covered too — a job waiting on a consumer answer whose owner then
   dies is reclaimed, not stranded.
-- **Lease recovery.** Every accepted progress/heartbeat delta extends
-  the owner's lease. A job whose lease expires with no further deltas —
-  a wedged or silently-crashed handler — is reset to claimable while
-  retries remain, or marked `failed` once the retry budget is spent.
-  This includes jobs parked in `input_required`: if the producer stops
-  extending the lease while waiting for an answer that never comes, the
-  job is reclaimed rather than held forever.
+- **Lease recovery.** The lease window is derived from `maxDuration`
+  (the 300s claim default when undeclared) — declare `maxDuration` ≈
+  the job's real per-attempt ceiling for long-running work. The lease
+  renews on **any accepted non-terminal delta AND any `recvEvent` poll
+  from the current claim**: a handler parked in a legitimate `recvEvent`
+  gate is provably alive, so no artificial `updateProgress` keepalives
+  are needed. Poll-liveness never pushes the lease past the job's
+  `totalDeadline` or stale ceiling, so an actively-polling handler
+  cannot outlive the point where the sweep would legitimately reap it. A
+  job whose lease expires with no renewal — a genuinely wedged handler,
+  neither progressing nor polling — is reset to claimable while retries
+  remain, or marked `failed` once the retry budget is spent. This
+  includes jobs parked in `input_required`: a handler that crashes while
+  awaiting an answer stops renewing and is reclaimed rather than held
+  forever (a live handler polling `recvEvent` for the answer keeps its
+  lease renewed).
 - **Total-deadline ceiling.** A job that set `totalDeadline` is failed
   with `deadline_exceeded` once that wall-clock deadline passes.
 - **Default stale ceiling (opt-in).** Set `MCP_MESH_JOB_STALE_TIMEOUT`
@@ -489,9 +508,44 @@ Reaping is observable in-handler via a synthetic `stale` event — see
 
 **Long-running (hours) jobs.** Set `maxDuration` to the job's real
 per-attempt runtime — this sizes the lease window AND floors the stale
-ceiling — and/or emit periodic progress to keep the lease renewed. Set
-`totalDeadline` if you want a hard total-runtime bound across all
-attempts, or to opt out of the registry-wide stale ceiling entirely.
+ceiling. A handler sitting in `recvEvent` gates renews the lease on
+every poll; one that computes silently for long stretches should emit
+periodic `updateProgress` to keep the lease renewed. Set `totalDeadline`
+if you want a hard total-runtime bound across all attempts, or to opt out
+of the registry-wide stale ceiling entirely.
+
+## Multi-replica execution and fencing
+
+Several replicas may declare the same `task: true` capability. Each job is
+claimed by **exactly one** replica per attempt — the claim is a guarded
+atomic update, so concurrent claimers race and only one wins. If a lease
+genuinely expires (a handler wedged, neither progressing nor polling), the
+sweep returns the job to the pool and a peer re-claims it.
+
+Every claim — including a re-claim of the same job, even by the same
+replica — carries a **monotonically increasing claim epoch**. The registry
+fences the superseded execution: its writes are rejected
+(`claim_superseded`) and it observes cancellation through the **same
+surface as a user cancel** — the handler's `AbortSignal` (`job?.signal`)
+aborts and a parked `recvEvent` rejects with the cancelled error. Honor
+cancellation promptly (return / stop side effects) instead of running to
+completion under a lost claim.
+
+For a side effect a fenced re-execution might repeat, stamp it with the
+claim epoch so downstream can dedupe. Read the epoch from the active job
+context:
+
+```typescript
+import { currentJob } from "@mcpmesh/sdk";
+
+// currentJob()?.claimEpoch is the generation this attempt runs under
+// (number, or null for a push-mode inbound job / an old registry).
+// Read-only and additive — supersession works without it (it rides the
+// cancellation path); the epoch exists only so downstream can distinguish
+// a fenced re-execution's duplicate write.
+const claimEpoch = currentJob()?.claimEpoch ?? null;
+await ledger.upsert({ key: orderId, claimEpoch, amount });
+```
 
 ## Out-of-band inspection
 

@@ -16,7 +16,7 @@ tags:
   - typescript
   - phase1
   - python
-timeout: 300
+timeout: 600
 pre_run:
   - routine: global.setup_for_java_agent
     params:
@@ -83,9 +83,14 @@ test:
       meshctl start analyst-java --env MCP_MESH_HTTP_PORT=9003 -d
       echo "Consumer agent starting..."
     capture: start_consumer
-  - name: "Wait for consumer and resolution"
-    handler: wait
-    seconds: 25
+  # Liveness only: poll until the Java consumer REGISTERS instead of a fixed
+  # sleep — cold-JVM starts (mvn compile + Spring Boot startup) routinely
+  # outran the old 25s wait. Dependency resolution stays covered by the
+  # runtime's settle window (no dep-resolution wait) — the shared routine is
+  # liveness-only by design (issue #1193).
+  - routine: global.wait_for_agents_registered
+    params:
+      agents: analyst-java
   # 6. Verify all agents registered
   - name: "Verify agents registered"
     handler: shell

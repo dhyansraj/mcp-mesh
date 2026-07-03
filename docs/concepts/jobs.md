@@ -485,9 +485,42 @@ such jobs run unbounded, subject only to lease recovery.
 
 For a job that runs for hours: set `max_duration` to its real
 per-attempt runtime (this sizes the lease AND floors the stale
-ceiling) and/or emit periodic progress to keep the lease renewed. Set
-`total_deadline` if you want a hard total-runtime bound across all
-attempts, or to opt out of the registry-wide stale ceiling entirely.
+ceiling). A handler sitting in `recv_event` gates renews the lease on
+every poll; one that computes silently for long stretches should emit
+periodic progress to keep the lease renewed. Set `total_deadline` if you
+want a hard total-runtime bound across all attempts, or to opt out of the
+registry-wide stale ceiling entirely.
+
+`MCP_MESH_JOB_STALE_TIMEOUT` is a **reap ceiling, not the lease window** —
+it caps total runtime from submission but does not size or extend the
+per-attempt lease. The lease window is derived per-job from `max_duration`
+(300s default) and is renewed by progress deltas and executor `recv_event`
+polls; tuning the stale timeout does not change how quickly a quiet
+handler's lease expires.
+
+### Multi-replica fencing and poll-liveness
+
+Several replicas can declare the same `task=true` capability. Each job is
+claimed by exactly one replica per attempt (the guarded atomic `UPDATE`
+above, so concurrent claimers race and one wins). The owner's lease is
+renewed by **any accepted non-terminal delta and any executor `recv_event`
+poll from the current claim** — a handler parked in a legitimate
+`recv_event` gate is provably alive, so no artificial `update_progress`
+keepalives are needed. Poll-liveness is capped so it never pushes the lease
+past `total_deadline` or the stale ceiling.
+
+If a lease genuinely expires (a handler wedged, neither progressing nor
+polling), the sweep returns the job to the pool and a peer re-claims it.
+Every claim — including a same-replica re-claim — carries a monotonically
+increasing **claim epoch**. The registry fences the superseded execution:
+its writes are rejected `claim_superseded` and its cancel token fires, so a
+parked `recv_event` breaks out with the cancelled error and the handler
+observes cancellation exactly as it would a user cancel. Handlers should
+honor cancellation promptly; the read-only `claimEpoch` accessor on the job
+context (`job.claim_epoch` in Python, `currentJob()?.claimEpoch` in
+TypeScript, `JobContext.current().claimEpoch` in Java) can be stamped onto
+external side effects so downstream can dedupe a fenced re-execution's
+duplicate write.
 
 The **agent runtime** is a thin client. On the producer side, it
 maintains a claim queue per `task=true` capability (`UPDATE jobs SET
@@ -564,7 +597,7 @@ sequenceDiagram
     Note over R: Append-only log<br/>(per-job seq)
     H->>R: GET /jobs/{id}/events?after=N  (long-poll)
     R-->>H: event dict (or empty after timeout)
-    Note over H: Cursor advances<br/>per-controller
+    Note over H: Cursor advances<br/>per-controller, per-filter
 ```
 
 ### Receiving events inside a handler
@@ -640,9 +673,15 @@ The producer-side recv loop. Filter by `types` to drop noise, set a
     ```
 <!-- markdownlint-enable MD046 -->
 
-The handler's `recv_event` cursor is per-`JobController` instance — a
-fresh controller for the same `job_id` replays from `seq=0`. The
-running handler always sees events in monotonic seq order.
+The handler's `recv_event` cursor is per-`JobController` instance **and
+per-`types` filter**: each distinct filter is an independent stream with
+its own cursor, so interleaving `recv_event(types=["A"])` and
+`recv_event(types=["B"])` never lets one filter's consumption skip the
+other's earlier events. Delivery is exactly-once within a filter stream
+and at-least-once across different filters. A fresh controller for the
+same `job_id` (e.g. a re-claim) replays every filter from `seq=0`; the
+running handler always sees events in monotonic seq order within a
+stream.
 
 ### Posting events from outside the handler
 
