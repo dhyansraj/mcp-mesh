@@ -149,10 +149,9 @@ func (s *EntService) AuthorizeExecutorRead(ctx context.Context, jobID, instanceI
 	}
 
 	now := time.Now().UTC()
-	// Silently disable the default stale ceiling on unset/invalid config — the
-	// sweep loader surfaces the warning; here we just fall back to no cap.
-	staleTimeout, _ := parseJobStaleTimeoutEnv()
-	newLease := cappedPollLease(j, now, staleTimeout)
+	// s.jobStaleTimeout is parsed once at construction (0 = disabled); the cap
+	// mirrors the stale sweep's #1244 ceiling without re-parsing the env here.
+	newLease := cappedPollLease(j, now, s.jobStaleTimeout)
 	// Only write when it strictly extends the current lease — never shorten a
 	// lease (a cap sitting behind the current lease just earns no credit).
 	if j.LeaseExpiresAt == nil || newLease.After(*j.LeaseExpiresAt) {
@@ -1423,18 +1422,37 @@ func (s *EntService) ListJobEvents(
 	if jobID == "" {
 		return nil, fmt.Errorf("ListJobEvents: job_id is required")
 	}
-	if limit <= 0 {
-		limit = 100
-	}
 
 	// Confirm the parent job exists so the handler can surface 404 even
-	// when the call is a long-poll with no events.
+	// when the call is a long-poll with no events. Executor reads skip this
+	// wrapper — AuthorizeExecutorRead already loaded (and thus proved the
+	// existence of) the row, so they call listJobEventsCore directly to avoid
+	// a redundant lookup on the hot recv_event poll path.
 	exists, err := s.entDB.Job.Query().Where(job.IDEQ(jobID)).Exist(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("lookup parent job %s: %w", jobID, err)
 	}
 	if !exists {
 		return nil, ErrJobNotFound
+	}
+
+	return s.listJobEventsCore(ctx, jobID, after, types, wait, limit)
+}
+
+// listJobEventsCore is the existence-check-free body of ListJobEvents. Callers
+// MUST have already confirmed the parent job exists (the public ListJobEvents
+// via Exist; the executor path via AuthorizeExecutorRead's row load). It never
+// returns ErrJobNotFound.
+func (s *EntService) listJobEventsCore(
+	ctx context.Context,
+	jobID string,
+	after int64,
+	types []string,
+	wait time.Duration,
+	limit int,
+) ([]*ent.JobEvent, error) {
+	if limit <= 0 {
+		limit = 100
 	}
 
 	queryEvents := func() ([]*ent.JobEvent, error) {

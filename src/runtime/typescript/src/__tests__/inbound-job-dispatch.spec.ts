@@ -81,6 +81,14 @@ describe("readJobHeaders", () => {
     expect(
       readJobHeaders({ "x-mesh-job-id": "j", "x-mesh-claim-epoch": "abc" }),
     ).toEqual(["j", null, null]);
+    // Strict integer parse: partial-numeric strings must NOT slip through as
+    // a truncated epoch (Number.parseInt would accept these as 5).
+    expect(
+      readJobHeaders({ "x-mesh-job-id": "j", "x-mesh-claim-epoch": "5.5" }),
+    ).toEqual(["j", null, null]);
+    expect(
+      readJobHeaders({ "x-mesh-job-id": "j", "x-mesh-claim-epoch": "5abc" }),
+    ).toEqual(["j", null, null]);
   });
 });
 

@@ -1056,7 +1056,8 @@ func (h *EntBusinessLogicHandlers) ListJobEvents(c *gin.Context, jobId string, p
 		})
 		return
 	}
-	if hasInstance && hasEpoch {
+	executorRead := hasInstance && hasEpoch
+	if executorRead {
 		outcome, err := h.entService.AuthorizeExecutorRead(
 			c.Request.Context(), jobId, *params.InstanceId, *params.ClaimEpoch,
 		)
@@ -1083,7 +1084,9 @@ func (h *EntBusinessLogicHandlers) ListJobEvents(c *gin.Context, jobId string, p
 		}
 		// ExecutorReadExtended / ExecutorReadTerminal fall through to serve
 		// events exactly as an observer read would (terminal jobs got no lease
-		// write; live matches got their lease extended above).
+		// write; live matches got their lease extended above). AuthorizeExecutorRead
+		// already proved the job exists, so the event read below skips the
+		// redundant existence lookup (see executorRead branch).
 	}
 
 	after := int64(0)
@@ -1121,14 +1124,32 @@ func (h *EntBusinessLogicHandlers) ListJobEvents(c *gin.Context, jobId string, p
 		}
 	}
 
-	events, err := h.entService.ListJobEvents(
-		c.Request.Context(),
-		jobId,
-		after,
-		types,
-		time.Duration(waitSeconds)*time.Second,
-		limit,
+	// Executor reads already confirmed existence in AuthorizeExecutorRead, so
+	// they use the existence-check-free core; observer reads use the public
+	// wrapper (which does the Exist lookup that surfaces 404).
+	var (
+		events []*ent.JobEvent
+		err    error
 	)
+	if executorRead {
+		events, err = h.entService.listJobEventsCore(
+			c.Request.Context(),
+			jobId,
+			after,
+			types,
+			time.Duration(waitSeconds)*time.Second,
+			limit,
+		)
+	} else {
+		events, err = h.entService.ListJobEvents(
+			c.Request.Context(),
+			jobId,
+			after,
+			types,
+			time.Duration(waitSeconds)*time.Second,
+			limit,
+		)
+	}
 	if err != nil {
 		if errors.Is(err, ErrJobNotFound) {
 			c.JSON(http.StatusNotFound, generated.ErrorResponse{

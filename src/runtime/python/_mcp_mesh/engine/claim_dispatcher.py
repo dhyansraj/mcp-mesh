@@ -90,6 +90,18 @@ _STOP_CANCEL_WAIT_SECS = 5.0
 _STOP_BUDGET_GRACE_SECS = 10.0
 
 
+def _valid_claim_epoch(raw: Any) -> Optional[int]:
+    """Return ``raw`` iff it is a registry-minted claim generation — a
+    non-negative ``int`` (issue #1252) — otherwise ``None``.
+
+    Shared by header seeding and terminal-fail normalization so the "never
+    fabricate a `0` the registry didn't mint" rule lives in one place. A bad
+    value (absent / wrong type / negative) degrades to the legacy owner-only
+    path.
+    """
+    return raw if isinstance(raw, int) and raw >= 0 else None
+
+
 class PythonClaimDispatcher:
     """Background task that claims pending jobs for a single capability
     and dispatches them to the local handler.
@@ -247,8 +259,8 @@ class PythonClaimDispatcher:
             # Seed the claim generation (issue #1252) so the dispatched
             # handler's JobController fences its deltas + executor reads and a
             # supersession aborts it. Absent on an old registry ⇒ legacy path.
-            claim_epoch = claimed.get("claim_epoch")
-            if isinstance(claim_epoch, int) and claim_epoch >= 0:
+            claim_epoch = _valid_claim_epoch(claimed.get("claim_epoch"))
+            if claim_epoch is not None:
                 merged["x-mesh-claim-epoch"] = str(claim_epoch)
             TraceContext.set_propagated_headers(merged)
         except Exception as e:
@@ -258,9 +270,7 @@ class PythonClaimDispatcher:
                 e,
             )
 
-        claim_epoch = claimed.get("claim_epoch")
-        if not (isinstance(claim_epoch, int) and claim_epoch >= 0):
-            claim_epoch = None
+        claim_epoch = _valid_claim_epoch(claimed.get("claim_epoch"))
 
         try:
             await self.handler(**payload)

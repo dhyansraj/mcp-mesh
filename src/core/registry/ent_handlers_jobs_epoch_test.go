@@ -437,6 +437,19 @@ func TestListJobEvents_HalfSuppliedIdentity_400(t *testing.T) {
 	}
 }
 
+func TestListJobEvents_ExecutorRead_404OnMissingJob(t *testing.T) {
+	srv, _, cleanup := newJobsEndpointTestEnvWithService(t)
+	defer cleanup()
+
+	// Executor read on an unknown job: AuthorizeExecutorRead is the sole
+	// existence gate on this path (the event read skips the redundant Exist),
+	// so 404 must still surface.
+	resp, err := http.Get(srv.URL + "/jobs/missing-id/events?instance_id=replica-a&claim_epoch=1")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
 // ---------- cappedPollLease unit coverage ----------
 
 func TestCappedPollLease(t *testing.T) {

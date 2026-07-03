@@ -67,8 +67,13 @@ export function readJobHeaders(
   }
   const epochRaw = headers[_HDR_CLAIM_EPOCH];
   let claimEpoch: number | null = null;
-  if (epochRaw !== undefined && epochRaw !== "") {
-    const parsed = Number.parseInt(epochRaw, 10);
+  // Strict: only a clean, wholly-numeric, non-negative integer string is a
+  // real epoch. `Number.parseInt` is too permissive (`"5.5"`/`"5abc"` → 5),
+  // so match the whole string against digits first — aligns with the
+  // claim-dispatcher's number-typed `Number.isInteger` check. Never fabricate
+  // a `0` the registry didn't mint (empty/malformed ⇒ null ⇒ legacy path).
+  if (epochRaw !== undefined && /^\d+$/.test(epochRaw)) {
+    const parsed = Number(epochRaw);
     if (Number.isInteger(parsed) && parsed >= 0) {
       claimEpoch = parsed;
     }
