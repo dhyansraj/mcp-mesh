@@ -514,6 +514,20 @@ periodic `updateProgress` to keep the lease renewed. Set `totalDeadline`
 if you want a hard total-runtime bound across all attempts, or to opt out
 of the registry-wide stale ceiling entirely.
 
+## Claim gating on unavailable capabilities
+
+A claim worker never pulls a job for a capability whose `required`
+dependencies are currently unavailable (see **Required Dependencies** in
+`meshctl man dependency-injection` for the availability predicate).
+Claiming it would only run the handler far enough to fail on the missing
+dependency and burn a retry on a purely topological outage. Instead the
+registry leaves the job queued and untouched — no owner, no attempt-count
+increment, no epoch bump, no lease — and the worker moves on. The gate is
+evaluated lazily, only once a candidate job actually exists, so an idle
+queue pays nothing. Claiming resumes automatically within one claim-poll
+cycle (≤5s backoff ceiling) of the required chain recovering, so no retry
+budget is spent while the capability is down.
+
 ## Multi-replica execution and fencing
 
 Several replicas may declare the same `task: true` capability. Each job is

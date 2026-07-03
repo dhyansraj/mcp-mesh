@@ -494,7 +494,7 @@ A handful of anti-patterns this decomposition exists to prevent:
   bound to worker-0. The supported shape at the default is the
   FastMCP-`lifespan` + module-global pattern (binds to the single-user
   loop, used by all tools on the same loop) — see
-  [Loop topology](#loop-topology-v221) above. If you also need N>1
+  [Loop topology](#loop-topology-v224) above. If you also need N>1
   workers for sync-blocking parallelism, switch to a per-loop dict
   cache (each worker lazily builds its own resource on first access).
 - **Putting orchestration state on the orchestrator process.** The
@@ -510,6 +510,6 @@ A handful of anti-patterns this decomposition exists to prevent:
   responses; pairs with MeshJob for live updates
 - [In-Process State (Escape Hatch)](in-process-state.md) — when even
   MeshJob can't fit your shape, with documented caveats
-- [Loop Topology](../python/dependency-injection.md#loop-topology-v221)
+- [Loop Topology](../python/dependency-injection.md#loop-topology-v224)
   — two-loop model, default `MCP_MESH_TOOL_WORKERS=1`, when to opt into N>1
 - `meshctl man dependency-injection` — DDDI and loop topology
