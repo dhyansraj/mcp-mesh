@@ -179,6 +179,31 @@ public class MeshRouteRegistry {
     }
 
     /**
+     * Cross-source required-wins (2.8.1): promote every route dependency
+     * matching {@code capability} to required=true. Called when another
+     * declaration source (e.g. a {@code @MeshDependsOn} bean) marks the same
+     * capability required — without this, the merged agent spec would
+     * advertise the edge as required while the request-time 503 perimeter
+     * ({@link MeshRouteHandlerInterceptor}, which reads the route's own
+     * {@link DependencySpec#isRequired()}) still soft-served a null dependency
+     * (split-brain).
+     *
+     * @return {@code true} when at least one route dependency was promoted.
+     */
+    public boolean promoteCapabilityToRequired(String capability) {
+        boolean promoted = false;
+        for (RouteMetadata route : routesByPath.values()) {
+            for (DependencySpec dep : route.getDependencies()) {
+                if (capability.equals(dep.getCapability()) && !dep.isRequired()) {
+                    dep.setRequired(true);
+                    promoted = true;
+                }
+            }
+        }
+        return promoted;
+    }
+
+    /**
      * Surface the {@code expectedType} declared on each {@code @MeshDependency}
      * across all registered routes. Returns the Class<?> reference for every
      * capability whose source annotation set {@code expectedType} to a
@@ -382,7 +407,11 @@ public class MeshRouteRegistry {
         private final String parameterName;
         private final Class<?> expectedType;
         private final SchemaMode schemaMode;
-        private final boolean required;
+        // Not final: cross-source required-wins (2.8.1) may promote a route
+        // dependency to required=true after construction when a @MeshDependsOn
+        // on the same capability declares required — see
+        // MeshRouteRegistry.promoteCapabilityToRequired.
+        private boolean required;
         private Type returnType;  // Set by BeanPostProcessor after construction
 
         public DependencySpec(String capability, String[] tags, String version, String parameterName) {
@@ -483,6 +512,19 @@ public class MeshRouteRegistry {
          */
         public boolean isRequired() {
             return required;
+        }
+
+        /**
+         * Promote this route dependency to required=true (cross-source
+         * required-wins, 2.8.1). Only ever flips false→true — a source that
+         * declares required wins over one that does not, and no source can
+         * downgrade an already-required edge. The request-time 503 perimeter
+         * ({@link MeshRouteHandlerInterceptor}) reads {@link #isRequired()}
+         * live, so this keeps the perimeter aligned with the merged agent-spec
+         * wire advertisement.
+         */
+        public void setRequired(boolean required) {
+            this.required = required;
         }
 
         public Type getReturnType() { return returnType; }

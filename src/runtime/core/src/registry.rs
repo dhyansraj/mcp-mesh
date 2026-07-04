@@ -31,6 +31,13 @@ pub enum RegistryError {
     #[error("Registry returned error: {status} - {message}")]
     RegistryError { status: u16, message: String },
 
+    /// A semantic rejection carried in a 200-OK body ({@code status:"error"}),
+    /// e.g. a required-dependency cycle. The HTTP transport succeeded, so the
+    /// status code is meaningless noise here — surface only the registry's
+    /// reason (issue #1260).
+    #[error("Registry rejected agent: {message}")]
+    SemanticRejection { message: String },
+
     #[error("Unexpected response: {0}")]
     UnexpectedResponse(String),
 
@@ -596,8 +603,7 @@ impl RegistryClient {
                     "Registry rejected agent '{}': {}",
                     request.agent_id, parsed.message
                 );
-                return Err(RegistryError::RegistryError {
-                    status: 200,
+                return Err(RegistryError::SemanticRejection {
                     message: parsed.message,
                 });
             }
@@ -1088,11 +1094,20 @@ mod tests {
         let result = client.send_heartbeat(&req).await;
 
         match result {
-            Err(RegistryError::RegistryError { status, message }) => {
-                assert_eq!(status, 200);
+            Err(RegistryError::SemanticRejection { message }) => {
                 assert!(
                     message.contains("required dependency cycle"),
                     "message must carry the registry reason, got: {message}"
+                );
+                // Issue #1260: the Display form must not print a status code —
+                // the HTTP transport succeeded (200 OK); only the reason matters.
+                let rendered = RegistryError::SemanticRejection {
+                    message: message.clone(),
+                }
+                .to_string();
+                assert!(
+                    !rendered.contains("200"),
+                    "semantic rejection must not surface an HTTP status, got: {rendered}"
                 );
             }
             other => panic!("expected semantic RegistryError, got {other:?}"),

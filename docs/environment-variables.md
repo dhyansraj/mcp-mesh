@@ -84,6 +84,27 @@ export MCP_MESH_SESSION_TTL=3600
 export MCP_MESH_TOOL_WORKERS=1
 ```
 
+### Tool Isolation (Python / TypeScript)
+
+```bash
+# Default: true. Runs each async tool body off the main event loop — Python
+# dispatches it to the mesh worker loop, TypeScript runs it on a worker
+# thread — so a blocking or long-running tool call cannot stall the main
+# loop that serves /health, /ready, the FastMCP/HTTP transport, and registry
+# heartbeats.
+#
+# Set to false to revert to legacy inline execution on the main loop.
+#
+# Scope and carve-outs:
+# - Python: only async tools are wrapped (sync tools already run off-loop via
+#   FastMCP); streaming tools are always inline (progress notifications must
+#   run on the main loop).
+# - TypeScript: requires `tsx` in your dependencies. A2A-consumer tools and
+#   MeshJob/task tools force-disable isolation (their injected handles cannot
+#   cross the worker_threads boundary) regardless of this setting.
+export MCP_MESH_TOOL_ISOLATION=true
+```
+
 ### Strict DI Diagnostics (Python)
 
 ```bash

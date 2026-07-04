@@ -79,7 +79,7 @@ func (h *JavaHandler) GenerateAgent(config ScaffoldConfig) error {
 // GenerateDockerfile returns Java Dockerfile content
 func (h *JavaHandler) GenerateDockerfile() string {
 	return `# Dockerfile for MCP Mesh Java agent
-FROM mcpmesh/java-runtime:2.7.0
+FROM mcpmesh/java-runtime:2.8.0
 
 WORKDIR /app
 
@@ -156,7 +156,7 @@ func (h *JavaHandler) ParseAgentFile(path string) (*AgentInfo, error) {
 
 // GetDockerImage returns the Java runtime Docker image
 func (h *JavaHandler) GetDockerImage() string {
-	return "mcpmesh/java-runtime:2.7.0"
+	return "mcpmesh/java-runtime:2.8.0"
 }
 
 // ValidatePrerequisites checks Java environment
