@@ -339,6 +339,14 @@ func (aw *AgentWatcher) shutdownCurrentForRestart() error {
 	// hanging the timeout and forcing us to (incorrectly) skip the restart.
 	pid := cmd.Process.Pid
 	if !lifecycle.KillGroupVerify(pid, aw.config.StopTimeout) {
+		// The group survived the kill. We cleared aw.currentCmd up front (to
+		// keep the exit reaper from racing our explicit kill); restore it so
+		// the watcher does NOT lose track of the still-live group. Otherwise a
+		// subsequent reload would see currentCmd==nil, treat the group as
+		// absent, and start a second process alongside the survivor.
+		aw.mu.Lock()
+		aw.currentCmd = cmd
+		aw.mu.Unlock()
 		return fmt.Errorf("process group %d still alive after SIGKILL", pid)
 	}
 	return nil

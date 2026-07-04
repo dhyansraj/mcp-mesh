@@ -172,22 +172,27 @@ func pollUntilGroupDead(pid int, timeout time.Duration) bool {
 }
 
 // groupConfirmedDead is the shared "is this process group effectively gone"
-// predicate used by pollUntilGroupDead. The group counts as dead when ANY of:
+// predicate used by pollUntilGroupDead. The group counts as dead when EITHER:
 //
 //  1. the group probe reports empty (kill(-pid, 0) -> ESRCH); or
-//  2. the originally tracked PID is itself a zombie (init-reaped orphan case
-//     that pollUntilDead already handled); or
-//  3. every REMAINING member of the group is a zombie — a SIGKILLed child in a
+//  2. every REMAINING member of the group is a zombie — a SIGKILLed child in a
 //     container whose PID 1 does not reap keeps kill(-pid, 0) reporting the
 //     group "alive" indefinitely even though the zombie holds no port or FDs.
 //     Without this, the group-drain waits would hang the full timeout and the
 //     watch-reload path would then skip the restart (issue surfaced by
 //     tc29_watch_mixed). Probe errors stay inconclusive — never treated as dead.
+//
+// It deliberately does NOT short-circuit on the TRACKED PID being a zombie:
+// for a multi-process group the tracked PID is the group *leader*, and a zombie
+// leader can still have LIVE children (e.g. a Maven parent that exited while
+// its child JVM ignores SIGTERM and holds the port). Treating a zombie leader
+// as "group dead" would mask those children and abort the SIGKILL escalation.
+// The leader-only-zombie case is covered by predicate (2) — groupAllZombieFn
+// finds the sole member is a zombie and reports the group drained. Single-PID
+// (non-group) zombie handling lives in pollUntilDead, which is correct there
+// because that path tracks exactly one process.
 func groupConfirmedDead(pid int) bool {
 	if !groupAliveFn(pid) {
-		return true
-	}
-	if z, err := isZombieFn(pid); err == nil && z {
 		return true
 	}
 	if az, err := groupAllZombieFn(pid); err == nil && az {

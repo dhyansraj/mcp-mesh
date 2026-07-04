@@ -1449,6 +1449,25 @@ class DependencyInjector:
                     f"(e.g. 'dep: McpMeshTool = None')."
                 )
 
+            # Issue #1273: the @mesh.tool analogue — a required dep declared but
+            # the tool took the minimal path (no injectable McpMeshTool slot), so
+            # the direct-dispatch refusal (_tool_required_refusal) has nothing to
+            # evaluate. With NO slot the handler can never observe a null required
+            # proxy (the #1273 null-observation bug is structurally impossible
+            # here), so — exactly like the route perimeter above — enforcement
+            # stays OFF and we WARN instead: the mis-annotation (the dep param
+            # isn't typed McpMeshTool) is the thing to fix, not a refuse-all guard.
+            if _has_tool_required:
+                _req_caps = [c for c in _tool_required_caps if c is not None]
+                logger.warning(
+                    f"⚠️ Tool '{func.__name__}': required-dependency guard "
+                    f"INACTIVE — declared required {_req_caps} but the handler has "
+                    f"no injectable McpMeshTool parameter to receive them, so the "
+                    f"dependency_unavailable refusal cannot evaluate and is "
+                    f"skipped. Fix: annotate the intended parameter(s) as "
+                    f"McpMeshTool (e.g. 'dep: McpMeshTool = None')."
+                )
+
             if is_stream:
                 minimal_wrapper = _make_stream_wrapper(
                     func,

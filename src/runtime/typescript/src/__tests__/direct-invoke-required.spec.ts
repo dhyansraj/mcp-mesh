@@ -20,19 +20,16 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { z } from "zod";
 import { UserError } from "fastmcp";
 
-// Controllable job-header + controller seams. `readJobHeaders` is mocked so a
-// test can present an inbound JOB dispatch without the real allowlist filter
-// (x-mesh-job-id is not in the default propagate set); `makeJobController`
-// captures the lease-release call. Other exports pass through unchanged.
-// Declared via vi.hoisted so the hoisted vi.mock factory below can reference
-// them (they'd be in the temporal dead zone otherwise).
+// Only `makeJobController` is mocked (it wraps a napi JobController handle that
+// hits the registry). The REAL `readJobHeaders` runs against the raw inbound
+// `_mesh_headers` the test passes through `execute(...)` — so the job-header
+// extraction path (item 1's fix: raw headers, not the allowlist-filtered map)
+// is exercised end-to-end. Declared via vi.hoisted so the hoisted vi.mock
+// factory below can reference them (TDZ otherwise).
 const h = vi.hoisted(() => {
   const releaseLeaseMock = vi.fn(async () => {});
   const makeJobControllerMock = vi.fn(() => ({ releaseLease: releaseLeaseMock }));
-  const state: {
-    jobHeaderResult: [string | null, number | null, number | null];
-  } = { jobHeaderResult: [null, null, null] };
-  return { releaseLeaseMock, makeJobControllerMock, state };
+  return { releaseLeaseMock, makeJobControllerMock };
 });
 
 vi.mock("../inbound-job-dispatch.js", async (importActual) => {
@@ -40,7 +37,6 @@ vi.mock("../inbound-job-dispatch.js", async (importActual) => {
     await importActual<typeof import("../inbound-job-dispatch.js")>();
   return {
     ...actual,
-    readJobHeaders: () => h.state.jobHeaderResult,
     makeJobController:
       h.makeJobControllerMock as unknown as typeof actual.makeJobController,
   };
@@ -64,7 +60,6 @@ let warnSpy: ReturnType<typeof vi.spyOn> | null = null;
 const savedEnv: Record<string, string | undefined> = {};
 
 beforeEach(() => {
-  h.state.jobHeaderResult = [null, null, null];
   h.releaseLeaseMock.mockClear();
   h.makeJobControllerMock.mockClear();
   autoStartSpy = vi
@@ -193,9 +188,6 @@ describe("direct-invoke required-dep guard (#1273)", () => {
 
 describe("job-header path releases the lease, never throws (#1273)", () => {
   it("releases the lease (not a throw) when an inbound JOB dispatch hits an unresolved required dep", async () => {
-    // Present an inbound job dispatch: task tool + X-Mesh-Job-Id.
-    h.state.jobHeaderResult = ["job-77", null, 3];
-
     // registryUrl defaults from env (MCP_MESH_REGISTRY_URL →
     // http://localhost:8000), so this.config.registryUrl is non-empty.
     const fastmcp = makeFastMCPStub();
@@ -216,8 +208,18 @@ describe("job-header path releases the lease, never throws (#1273)", () => {
     });
     const execute = captureExecute(fastmcp);
 
+    // Present an inbound JOB dispatch by passing the job headers through the
+    // REAL extraction path in _mesh_headers. x-mesh-job-id is NOT in the
+    // propagate allowlist, so this only works because the guard reads the RAW
+    // inbound headers (item 1's fix), not the allowlist-filtered map.
+    const result = await execute({
+      _mesh_headers: {
+        "x-mesh-job-id": "job-77",
+        "x-mesh-claim-epoch": "3",
+      },
+    });
+
     // Must NOT throw — the job-flavored path releases the lease instead.
-    const result = await execute({});
     expect(result).toBe("");
     expect(calls).toHaveLength(0); // handler MUST NOT run
     expect(h.makeJobControllerMock).toHaveBeenCalledTimes(1);

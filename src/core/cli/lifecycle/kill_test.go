@@ -439,6 +439,93 @@ func TestKillVerifyAndCleanup_GroupOnlyZombies_CleansUp(t *testing.T) {
 	}
 }
 
+// TestGroupConfirmedDead_ZombieLeaderLiveChild_NotDead is the PR #1275 review
+// guard: a zombie group LEADER must not by itself confirm the group dead while
+// a LIVE child remains. Pre-fix groupConfirmedDead short-circuited on the
+// tracked PID's zombie state, which would mask a live TERM-ignoring child and
+// abort the SIGKILL escalation.
+func TestGroupConfirmedDead_ZombieLeaderLiveChild_NotDead(t *testing.T) {
+	prevGroup, prevZombie, prevAllZ := groupAliveFn, isZombieFn, groupAllZombieFn
+	groupAliveFn = func(pid int) bool { return true }                    // child keeps group non-empty
+	isZombieFn = func(pid int) (bool, error) { return true, nil }        // LEADER is a zombie
+	groupAllZombieFn = func(pid int) (bool, error) { return false, nil } // ...but a live child exists
+	t.Cleanup(func() {
+		groupAliveFn = prevGroup
+		isZombieFn = prevZombie
+		groupAllZombieFn = prevAllZ
+	})
+
+	if groupConfirmedDead(12345) {
+		t.Error("groupConfirmedDead must be false: zombie leader + live child is NOT a dead group")
+	}
+	if pollUntilGroupDead(12345, 100*time.Millisecond) {
+		t.Error("pollUntilGroupDead must not confirm death while a live child remains — escalation must proceed")
+	}
+}
+
+// TestKillVerifyAndCleanup_ZombieLeaderLiveChild_Escalates is the real-process
+// version: the group leader (recorded PID) exits and becomes a zombie held by
+// this test process (a non-reaping parent, mirroring a container PID 1), while
+// a child that ignores SIGTERM lingers in the same group holding "the port".
+// KillVerifyAndCleanup must NOT short-circuit on the zombie leader — it must
+// wait out the SIGTERM window and SIGKILL the child. Discriminator: elapsed
+// time >= the SIGTERM window (pre-fix returned in ~ms via the leader-zombie
+// shortcut), plus the group ends up with no live member.
+func TestKillVerifyAndCleanup_ZombieLeaderLiveChild_Escalates(t *testing.T) {
+	tmp := t.TempDir()
+	defer WithRoot(tmp)()
+
+	// Outer sh = group leader (recorded PID): it backgrounds a SIGTERM-ignoring
+	// child in the same group, then exits -> becomes a zombie (we never Wait it
+	// until cleanup). The child stays alive and ignores SIGTERM.
+	cmd := exec.Command("sh", "-c", `sh -c "trap '' TERM; sleep 60" & exit 0`)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Skipf("sh not available: %v", err)
+	}
+	pid := cmd.Process.Pid
+	t.Cleanup(func() {
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+	})
+
+	// Let the leader exit into Z state and the child settle in the group.
+	time.Sleep(250 * time.Millisecond)
+
+	g := NewGroupID()
+	if err := WriteAgent("zleader", pid, g); err != nil {
+		t.Fatal(err)
+	}
+
+	const termTimeout = 800 * time.Millisecond
+	start := time.Now()
+	killed, err := KillVerifyAndCleanup("zleader", termTimeout)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("KillVerifyAndCleanup: %v", err)
+	}
+	if !killed {
+		t.Error("expected killed=true")
+	}
+	if elapsed < termTimeout {
+		t.Errorf("returned in %v (< SIGTERM window %v) — leader-zombie shortcut masked the live child", elapsed, termTimeout)
+	}
+	// The child must be dead: no live (non-zombie) member left in the group.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if az, err := groupAllZombie(pid); err == nil && az {
+			break
+		}
+		if !IsAliveOrGroupAlive(pid) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if az, _ := groupAllZombie(pid); IsAliveOrGroupAlive(pid) && !az {
+		t.Errorf("a live child survived in group %d — escalation did not kill it", pid)
+	}
+}
+
 // TestKillVerifyAndCleanup_ParentDeadGroupRefusesToDie verifies that when the
 // orphan group survives SIGTERM and SIGKILL the function errors and does NOT
 // remove the PID file — the user must be able to retry.
@@ -463,20 +550,24 @@ func TestKillVerifyAndCleanup_ParentDeadGroupRefusesToDie(t *testing.T) {
 	}
 }
 
-// TestPollUntilGroupDead_TreatsZombieAsDead guards the zombie-as-dead invariant
-// in the group-aware poll loop — init-reaped orphans must not be a false
-// negative.
-func TestPollUntilGroupDead_TreatsZombieAsDead(t *testing.T) {
-	prevGroup, prevZombie := groupAliveFn, isZombieFn
-	groupAliveFn = func(pid int) bool { return true } // never empty
-	isZombieFn = func(pid int) (bool, error) { return true, nil }
+// TestPollUntilGroupDead_TreatsAllZombieGroupAsDead guards the zombie-as-dead
+// invariant in the group-aware poll loop: when the group probe still reports
+// "alive" (an unreaped orphan zombie keeps kill(-pgid, 0) from returning ESRCH)
+// but EVERY remaining member is a zombie, the group counts as dead. The signal
+// is groupAllZombieFn, NOT the tracked PID's own zombie state — a zombie leader
+// with a live child must still be treated as alive (see
+// TestGroupConfirmedDead_ZombieLeaderLiveChild_NotDead).
+func TestPollUntilGroupDead_TreatsAllZombieGroupAsDead(t *testing.T) {
+	prevGroup, prevAllZ := groupAliveFn, groupAllZombieFn
+	groupAliveFn = func(pid int) bool { return true } // zombie present -> probe never empty
+	groupAllZombieFn = func(pid int) (bool, error) { return true, nil }
 	t.Cleanup(func() {
 		groupAliveFn = prevGroup
-		isZombieFn = prevZombie
+		groupAllZombieFn = prevAllZ
 	})
 
 	if !pollUntilGroupDead(12345, 100*time.Millisecond) {
-		t.Error("pollUntilGroupDead must treat zombie as dead even when group probe stays alive")
+		t.Error("pollUntilGroupDead must treat an all-zombie group as dead even when the group probe stays alive")
 	}
 }
 

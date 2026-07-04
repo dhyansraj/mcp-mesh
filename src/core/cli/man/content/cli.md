@@ -70,7 +70,7 @@ crashed processes, run under a real supervisor (systemd, Kubernetes, etc.).
 
 ### `meshctl stop`
 
-Stops detached processes. Without arguments, stops everything (agents + UI + registry). Pass one or more names to stop only those agents and keep shared services running.
+Stops detached processes. Without arguments, stops everything (agents + UI + registry). Pass one or more names to stop only those agents; the registry and UI server keep running as long as another agent still depends on them, and are torn down once the last dependent stops. Use `--keep-registry` / `--keep-ui` to hold a shared service up regardless.
 
 ```bash
 meshctl stop                    # Stop all agents + UI + registry

@@ -699,6 +699,14 @@ export class MeshAgent {
 
       // Extract _mesh_headers from args for header propagation
       let propagatedHeaders: Record<string, string> = {};
+      // Issue #1273: the RAW inbound _mesh_headers, lowercased but NOT
+      // allowlist-filtered. Job-dispatch infra headers (x-mesh-job-id /
+      // x-mesh-claim-epoch) are the DISPATCH DISCRIMINATOR, deliberately kept
+      // OUT of the propagate allowlist (so a nested outbound call doesn't look
+      // like a job dispatch to every downstream). They must therefore be read
+      // from the raw map — reading them off `propagatedHeaders` would drop them
+      // and misclassify a genuine inbound job dispatch as a plain tools/call.
+      let rawMeshHeaders: Record<string, string> | null = null;
 
       if (args && typeof args === "object") {
         const argsObj = args as Record<string, unknown>;
@@ -710,9 +718,13 @@ export class MeshAgent {
         }
         if (argsObj._mesh_headers && typeof argsObj._mesh_headers === "object") {
           const meshHeaders = argsObj._mesh_headers as Record<string, unknown>;
-          // Filter against allowlist
+          rawMeshHeaders = {};
           for (const [key, value] of Object.entries(meshHeaders)) {
-            if (typeof value === "string" && matchesPropagateHeader(key)) {
+            if (typeof value !== "string") continue;
+            // Raw copy for job-dispatch detection (bypasses the allowlist).
+            rawMeshHeaders[key.toLowerCase()] = value;
+            // Allowlist-filtered copy for onward propagation.
+            if (matchesPropagateHeader(key)) {
               propagatedHeaders[key.toLowerCase()] = value;
             }
           }
@@ -746,7 +758,11 @@ export class MeshAgent {
       //     (UserError → isError result) so the caller classifies it as
       //     retryable topology, not application failure.
       if (missingRequiredCap !== null) {
-        const [guardJobId, , guardClaimEpoch] = readJobHeaders(propagatedHeaders);
+        // Read job headers from the RAW inbound map (not the allowlist-filtered
+        // propagatedHeaders), so a genuine inbound job dispatch is classified as
+        // one — and released, not refused — even though x-mesh-job-id is not in
+        // the propagate allowlist.
+        const [guardJobId, , guardClaimEpoch] = readJobHeaders(rawMeshHeaders);
         const isJobDispatch =
           isTaskTool &&
           guardJobId !== null &&

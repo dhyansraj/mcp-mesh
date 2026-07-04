@@ -50,6 +50,16 @@ def _make_tool_wrapper(func, deps, required_caps):
 class TestToolDirectInvokeRefusal:
     def setup_method(self):
         _clear()
+        # Force a SETTLED state (no grace window) so the unavailable-cases refuse
+        # immediately regardless of env / prior-test order — the guard is
+        # evaluated after settle, so a leftover armed window would otherwise make
+        # these block instead of refuse (mirrors TestToolGuardVsSettle).
+        os.environ["MCP_MESH_SETTLE_TIMEOUT"] = "0"
+        settle._reset_settle_state_for_tests()
+
+    def teardown_method(self):
+        os.environ.pop("MCP_MESH_SETTLE_TIMEOUT", None)
+        settle._reset_settle_state_for_tests()
 
     def test_required_unavailable_raises_refusal_handler_not_invoked(self):
         called = []
@@ -267,3 +277,45 @@ class TestToolGuardVsSettle:
 
         assert json.loads(str(excinfo.value))["capability"] == "lookup"
         assert called == []
+
+
+class TestToolMinimalPathRequiredWarns:
+    """Issue #1273: a required dep declared on a tool with NO injectable
+    McpMeshTool slot takes the minimal path — the refusal has no slot to
+    evaluate (the handler can never observe the dep), so enforcement stays OFF
+    and a one-line INACTIVE warning is emitted (mirrors the route perimeter's
+    INACTIVE handling at #1249). The handler still runs."""
+
+    def setup_method(self):
+        _clear()
+        os.environ["MCP_MESH_SETTLE_TIMEOUT"] = "0"
+        settle._reset_settle_state_for_tests()
+
+    def teardown_method(self):
+        os.environ.pop("MCP_MESH_SETTLE_TIMEOUT", None)
+        settle._reset_settle_state_for_tests()
+
+    def test_required_dep_no_slot_warns_and_runs(self, caplog):
+        called = []
+
+        async def tool():  # zero injectable params → minimal path
+            called.append(True)
+            return {"ok": True}
+
+        injector = DependencyInjector()
+        with caplog.at_level("WARNING"):
+            # Real analyze_injection_strategy → mesh_positions == [] for a
+            # zero-param function → minimal wrapper.
+            wrapper = injector.create_injection_wrapper(
+                tool, ["lookup"], tool_required_caps=["lookup"]
+            )
+
+        assert any(
+            "required-dependency guard" in rec.message and "INACTIVE" in rec.message
+            for rec in caplog.records
+        ), "a slotless required dep must emit the INACTIVE guard warning"
+
+        # Enforcement is OFF (no slot to evaluate) — the handler still runs.
+        result = asyncio.run(wrapper())
+        assert result == {"ok": True}
+        assert called == [True]

@@ -364,4 +364,17 @@ class MeshToolWrapperRequiredDepGuardTest {
             TraceContext.clearPropagatedHeaders();
         }
     }
+
+    @Test
+    void releaseLeaseForJobGuard_openThrows_swallowed_staysRetryable() throws Exception {
+        // A failure constructing the controller (e.g. JobController.open) must
+        // NOT escape — the job stays retryable (re-queues on lease expiry).
+        RequiredDepBean bean = new RequiredDepBean();
+        MeshToolWrapper wrapper = wrapperFor(bean, true);
+
+        assertDoesNotThrow(() -> wrapper.releaseLeaseForJobGuard(
+            "job-1", "lookup",
+            () -> { throw new RuntimeException("open failed"); }),
+            "a controller-open failure in the job guard must be swallowed (retryable)");
+    }
 }

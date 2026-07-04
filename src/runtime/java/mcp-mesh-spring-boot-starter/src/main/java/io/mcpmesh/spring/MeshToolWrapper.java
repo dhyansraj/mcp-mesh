@@ -534,6 +534,31 @@ public class MeshToolWrapper implements McpToolHandler {
     }
 
     /**
+     * Best-effort lease release for the inbound job-dispatch required-dependency
+     * guard (issue #1273). Opens the controller via {@code opener}, releases the
+     * lease, and closes it — swallowing ANY failure (from {@code open()} OR
+     * {@code releaseLease()}) so the job stays retryable (re-queues on lease
+     * expiry) instead of surfacing to the caller as a tool-call error. The
+     * controller is always closed when it was opened. Package-private with a
+     * controller-factory seam so unit tests can drive the swallow path without
+     * an FFI-backed {@link JobController}.
+     */
+    void releaseLeaseForJobGuard(String jobId, String missingCap,
+            java.util.function.Supplier<JobController> opener) {
+        try {
+            JobController controller = opener.get();
+            try {
+                controller.releaseLease("required dependency unavailable: " + missingCap);
+            } finally {
+                controller.close();
+            }
+        } catch (Exception e) {
+            log.warn("Job-dispatch guard for tool={} job={}: lease release failed "
+                + "({}); job re-queues on lease expiry instead", funcId, jobId, e.toString());
+        }
+    }
+
+    /**
      * Update a MeshLlmAgent at the given index.
      *
      * @param llmIndex The LLM agent index
@@ -1233,14 +1258,9 @@ public class MeshToolWrapper implements McpToolHandler {
                 + "'{}' unavailable at invocation time — releasing lease so the job "
                 + "re-queues (NOT invoking, NOT failing)", funcId, jobId, missingRequiredJob);
             if (canInjectController) {
-                JobController controller = JobController.open(
-                    jobId, instanceId.get(), registryUrl.get(), claimEpoch);
-                try {
-                    controller.releaseLease(
-                        "required dependency unavailable: " + missingRequiredJob);
-                } finally {
-                    controller.close();
-                }
+                releaseLeaseForJobGuard(jobId, missingRequiredJob,
+                    () -> JobController.open(
+                        jobId, instanceId.get(), registryUrl.get(), claimEpoch));
             } else {
                 log.warn("Job-dispatch guard for tool={} job={}: cannot release lease "
                     + "(controller wiring incomplete); job re-queues on lease expiry",
