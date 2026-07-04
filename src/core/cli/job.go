@@ -115,7 +115,11 @@ func runJobStatus(cmd *cobra.Command, args []string) error {
 	jsonOut, _ := cmd.Flags().GetBool("json")
 
 	endpoint := strings.TrimRight(registryURL, "/") + "/jobs/" + jobID
-	resp, err := client.Get(endpoint)
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to connect to registry at %s: %w", registryURL, err)
 	}
@@ -194,7 +198,12 @@ func runJobReclaim(cmd *cobra.Command, args []string) error {
 	}
 
 	endpoint := strings.TrimRight(registryURL, "/") + "/jobs/" + jobID + "/reclaim"
-	resp, err := client.Post(endpoint, "application/json", nil)
+	req, err := http.NewRequest(http.MethodPost, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to connect to registry at %s: %w", registryURL, err)
 	}

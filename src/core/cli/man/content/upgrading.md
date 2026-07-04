@@ -50,9 +50,9 @@ meshctl registry resume
 While draining, new claims are paused (queued jobs stay queued — no attempt is burned), running jobs keep renewing their leases and complete normally, and submissions are still accepted for after resume. `drain --wait` returns once `live_claims` reaches zero, and aborts with an error if the registry stops draining mid-wait (a concurrent `resume` or restart) rather than falsely reporting the window is safe.
 
 > Note: an event-gated job parked in `input_required` counts as a live claim and holds the drain open until it is answered or completes — answer or cancel such jobs before draining if you need a bounded window.
-
+>
 > Multi-replica (HA): drain state is per-replica and in-memory (not shared; a restart clears it). A load balancer may route each `meshctl registry` command to a different replica, so status can flap and one `registry drain` pauses only the replica that served it — drain EVERY replica (target each address with `--registry-url`) before an HA upgrade.
-
+>
 > Separate admin port: if the registry runs a dedicated admin port (`MCP_MESH_ADMIN_PORT`), the `/admin/drain` endpoints live only on that port — pass `--registry-url http://<host>:<admin-port>`.
 
 See the **Drain Mode** section of `meshctl man registry` for the full command reference (`status`, `--wait-timeout`, `--poll-interval`).

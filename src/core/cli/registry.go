@@ -96,7 +96,7 @@ func runRegistryDrain(cmd *cobra.Command, args []string) error {
 		pollInterval = 1
 	}
 
-	st, err := postDrain(client, registryURL, http.MethodPost)
+	st, err := fetchDrainState(client, registryURL, http.MethodPost)
 	if err != nil {
 		return err
 	}
@@ -121,7 +121,7 @@ func runRegistryDrain(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("timed out after %ds with %d live claim(s) still running", waitTimeout, st.LiveClaims)
 		}
 		time.Sleep(time.Duration(pollInterval) * time.Second)
-		st, err = getDrain(client, registryURL)
+		st, err = fetchDrainState(client, registryURL, http.MethodGet)
 		if err != nil {
 			return err
 		}
@@ -159,7 +159,7 @@ func runRegistryResume(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	st, err := postDrain(client, registryURL, http.MethodDelete)
+	st, err := fetchDrainState(client, registryURL, http.MethodDelete)
 	if err != nil {
 		return err
 	}
@@ -194,15 +194,9 @@ func runRegistryStatus(cmd *cobra.Command, args []string) error {
 	}
 	jsonOut, _ := cmd.Flags().GetBool("json")
 
-	endpoint := strings.TrimRight(registryURL, "/") + "/admin/drain"
-	resp, err := client.Get(endpoint)
+	body, err := drainRequest(client, registryURL, http.MethodGet)
 	if err != nil {
-		return fmt.Errorf("failed to connect to registry at %s: %w", registryURL, err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return drainHTTPError(resp.StatusCode, body)
+		return err
 	}
 
 	if jsonOut {
@@ -224,8 +218,13 @@ func runRegistryStatus(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// postDrain sends POST/DELETE to /admin/drain and decodes the drain state.
-func postDrain(client *http.Client, registryURL, method string) (*drainState, error) {
+// drainRequest is the single HTTP flow for the /admin/drain endpoint used by
+// every verb (POST enter, DELETE resume, GET status/poll). It builds the URL,
+// issues the request via NewRequest+Do (noctx-compliant, matching the rest of
+// the CLI), and returns the raw response body on 200 so callers that need the
+// unmodified JSON (e.g. `registry status --json`) can pass it through before
+// decoding. Non-200 responses map through drainHTTPError.
+func drainRequest(client *http.Client, registryURL, method string) ([]byte, error) {
 	endpoint := strings.TrimRight(registryURL, "/") + "/admin/drain"
 	req, err := http.NewRequest(method, endpoint, nil)
 	if err != nil {
@@ -239,6 +238,17 @@ func postDrain(client *http.Client, registryURL, method string) (*drainState, er
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return nil, drainHTTPError(resp.StatusCode, body)
+	}
+	return body, nil
+}
+
+// fetchDrainState issues a /admin/drain request and decodes the drain state.
+// Wraps drainRequest for the callers that only need the parsed state (drain,
+// resume, and the --wait poll loop).
+func fetchDrainState(client *http.Client, registryURL, method string) (*drainState, error) {
+	body, err := drainRequest(client, registryURL, method)
+	if err != nil {
+		return nil, err
 	}
 	var st drainState
 	if err := json.Unmarshal(body, &st); err != nil {
@@ -257,23 +267,4 @@ func drainHTTPError(status int, body []byte) error {
 			strings.TrimSpace(string(body)))
 	}
 	return fmt.Errorf("registry returned status %d: %s", status, string(body))
-}
-
-// getDrain reads the current drain state via GET /admin/drain.
-func getDrain(client *http.Client, registryURL string) (*drainState, error) {
-	endpoint := strings.TrimRight(registryURL, "/") + "/admin/drain"
-	resp, err := client.Get(endpoint)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to registry at %s: %w", registryURL, err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return nil, drainHTTPError(resp.StatusCode, body)
-	}
-	var st drainState
-	if err := json.Unmarshal(body, &st); err != nil {
-		return nil, fmt.Errorf("failed to parse drain status: %w", err)
-	}
-	return &st, nil
 }

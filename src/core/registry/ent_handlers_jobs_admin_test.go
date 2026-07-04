@@ -8,11 +8,11 @@ package registry
 // ent_handlers_jobs_extended_test.go.
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -78,16 +78,14 @@ func TestGetJob_ExposesClaimEpochOwnerAttemptLease(t *testing.T) {
 
 // ---------- #1265: admin force-reclaim ----------
 
-func reclaimViaHTTP(t *testing.T, srvURL, jobID string) (*http.Response, []byte) {
+func reclaimViaHTTP(t *testing.T, srvURL, jobID string) (int, []byte) {
 	t.Helper()
 	resp, err := http.Post(srvURL+"/jobs/"+jobID+"/reclaim", "application/json", nil)
 	require.NoError(t, err)
-	body := make([]byte, 0)
-	buf := new(bytes.Buffer)
-	_, _ = buf.ReadFrom(resp.Body)
-	resp.Body.Close()
-	body = buf.Bytes()
-	return resp, body
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return resp.StatusCode, body
 }
 
 func TestReclaimJob_ForcesReclaimabilityAndNextClaimBumpsEpoch(t *testing.T) {
@@ -104,8 +102,8 @@ func TestReclaimJob_ForcesReclaimabilityAndNextClaimBumpsEpoch(t *testing.T) {
 	assert.Equal(t, int64(1), c1.ClaimEpoch)
 
 	// Force-reclaim over HTTP.
-	resp, body := reclaimViaHTTP(t, srv.URL, seed.ID)
-	require.Equal(t, http.StatusOK, resp.StatusCode, "body: %s", string(body))
+	status, body := reclaimViaHTTP(t, srv.URL, seed.ID)
+	require.Equal(t, http.StatusOK, status, "body: %s", string(body))
 
 	var rr generated.ReclaimJobResponse
 	require.NoError(t, json.Unmarshal(body, &rr))
@@ -142,8 +140,8 @@ func TestReclaimJob_TerminalJobIsConflictNoOp(t *testing.T) {
 	_, _, err := service.CancelJob(ctx, seed.ID, "")
 	require.NoError(t, err)
 
-	resp, body := reclaimViaHTTP(t, srv.URL, seed.ID)
-	require.Equal(t, http.StatusConflict, resp.StatusCode, "terminal job cannot be reclaimed; body: %s", string(body))
+	status, body := reclaimViaHTTP(t, srv.URL, seed.ID)
+	require.Equal(t, http.StatusConflict, status, "terminal job cannot be reclaimed; body: %s", string(body))
 
 	// Terminal state is untouched.
 	after, err := service.GetJob(ctx, seed.ID)
@@ -155,8 +153,8 @@ func TestReclaimJob_NotFoundIs404(t *testing.T) {
 	srv, _, cleanup := newJobsEndpointTestEnvWithService(t)
 	defer cleanup()
 
-	resp, _ := reclaimViaHTTP(t, srv.URL, "no-such-job")
-	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	status, _ := reclaimViaHTTP(t, srv.URL, "no-such-job")
+	require.Equal(t, http.StatusNotFound, status)
 }
 
 // TestForceReclaimJob_RaceWithCompletion_NeverResurrects exercises the
