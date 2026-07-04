@@ -104,21 +104,9 @@ func runStopCommand(cmd *cobra.Command, args []string) error {
 		shutdownTimeout = 0
 	}
 
-	// Handle specific agent stop (one or more names)
+	// Handle specific agent stop (one or more names).
 	if len(args) > 0 {
-		var failures []string
-		for _, name := range args {
-			if err := stopSpecificAgent(name, shutdownTimeout, quiet, keepRegistry, keepUI); err != nil {
-				failures = append(failures, fmt.Sprintf("%s: %v", name, err))
-				if !quiet {
-					fmt.Printf("Warning: failed to stop %s: %v\n", name, err)
-				}
-			}
-		}
-		if len(failures) > 0 {
-			return fmt.Errorf("failed to stop %d agent(s): %s", len(failures), strings.Join(failures, "; "))
-		}
-		return nil
+		return stopNamedAgents(args, shutdownTimeout, quiet, keepRegistry, keepUI)
 	}
 
 	// --registry: force-kill only the registry, after WARNing about deps.
@@ -148,6 +136,32 @@ func runStopCommand(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	return nil
+}
+
+// stopNamedAgents stops each of the named agents in turn, applying the same
+// flags (timeout, --keep-registry, --keep-ui) to every one. Failures are
+// collected per-agent so one un-stoppable agent never aborts the rest: each is
+// warned inline (unless quiet), and a single aggregated error naming every
+// failure is returned at the end so the command exits non-zero if ANY agent
+// failed. Returns nil only when every named agent stopped cleanly.
+//
+// A single name behaves exactly like the historical single-agent stop (one
+// iteration, its error surfaced verbatim); the per-agent group refcount reap
+// in stopSpecificAgent still runs for each name independently.
+func stopNamedAgents(names []string, timeout time.Duration, quiet, keepRegistry, keepUI bool) error {
+	var failures []string
+	for _, name := range names {
+		if err := stopSpecificAgent(name, timeout, quiet, keepRegistry, keepUI); err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", name, err))
+			if !quiet {
+				fmt.Printf("Warning: failed to stop %s: %v\n", name, err)
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("failed to stop %d agent(s): %s", len(failures), strings.Join(failures, "; "))
+	}
 	return nil
 }
 

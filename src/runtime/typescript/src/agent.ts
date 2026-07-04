@@ -10,6 +10,7 @@
  */
 
 import type { FastMCP } from "fastmcp";
+import { UserError } from "fastmcp";
 import type { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { isMainThread } from "node:worker_threads";
@@ -670,6 +671,26 @@ export class MeshAgent {
       );
       const injectedCount = depsArray.filter((d) => d !== null).length;
 
+      // Issue #1273: detect a required dependency slot that is still
+      // unresolved AFTER the settle wait above (depsArray was built
+      // post-settle). The ACTION is deferred until the invocation flavor is
+      // known (see the flavor-aware guard below the header extraction) —
+      // direct tools/call refuses, an inbound JOB dispatch releases the
+      // lease. Optional deps keep null-passthrough; the MeshJob submitter
+      // slot is skipped (built locally, never a resolved proxy).
+      let missingRequiredCap: string | null = null;
+      for (let depIndex = 0; depIndex < normalizedDeps.length; depIndex++) {
+        const dep = normalizedDeps[depIndex];
+        if (
+          dep.required === true &&
+          depIndex !== meshJobDepIndex &&
+          depsArray[depIndex] == null
+        ) {
+          missingRequiredCap = dep.capability;
+          break;
+        }
+      }
+
       // Extract trace context from arguments (injected by upstream proxy)
       // This is the fallback mechanism since fastmcp doesn't expose HTTP headers
       let incomingTraceId: string | null = null;
@@ -708,6 +729,67 @@ export class MeshAgent {
       const spanId = generateSpanId();
       const parentSpanId = incomingParentSpan ?? null;
       const traceContext: TraceContext = { traceId, parentSpanId: spanId };
+
+      // Issue #1273: flavor-aware required-dependency guard. The claim path
+      // (requiredProbe, #1268) and the @mesh.route perimeter (503) already
+      // refuse before a handler can observe a null REQUIRED dep; the plain
+      // tool-dispatch path did not. A required dep flapping DOWN→UP flips the
+      // registry view available before THIS callee's own heartbeat refills
+      // its slot; a call landing in that window would invoke with a null
+      // required proxy. Now that the propagated headers are extracted we can
+      // tell the flavor apart:
+      //   - inbound JOB dispatch (task tool + X-Mesh-Job-Id) → RELEASE the
+      //     lease so the claimed row re-queues (retryable), mirroring the
+      //     claim path — NEVER a bare throw (which would strand the row
+      //     `working` until lease expiry) and never a terminal fail.
+      //   - plain tools/call → structured dependency_unavailable refusal
+      //     (UserError → isError result) so the caller classifies it as
+      //     retryable topology, not application failure.
+      if (missingRequiredCap !== null) {
+        const [guardJobId, , guardClaimEpoch] = readJobHeaders(propagatedHeaders);
+        const isJobDispatch =
+          isTaskTool &&
+          guardJobId !== null &&
+          !!this.config.registryUrl &&
+          !!this.agentId;
+        if (isJobDispatch) {
+          console.warn(
+            `[mesh-jobs] releasing job=${guardJobId} for tool '${toolName}' — ` +
+              `required dependency '${missingRequiredCap}' unavailable at ` +
+              `invocation time; releasing lease for retry (not invoking, not failing)`,
+          );
+          try {
+            const controller = makeJobController(
+              guardJobId as string,
+              this.agentId as string,
+              this.config.registryUrl as string,
+              guardClaimEpoch,
+            );
+            await controller.releaseLease(
+              `required dependency '${missingRequiredCap}' unavailable at ` +
+                `job-dispatch (issue #1273)`,
+            );
+          } catch (err) {
+            console.debug(
+              `[mesh-jobs] release-lease for job=${guardJobId} raised:`,
+              err,
+            );
+          }
+          // The row is released and will be re-claimed; nothing to return.
+          return "";
+        }
+        console.warn(
+          `🚫 Tool '${toolName}': required dependency '${missingRequiredCap}' ` +
+            `unavailable at invocation time — refusing with dependency_unavailable ` +
+            `(not invoking the handler with a null required proxy)`,
+        );
+        throw new UserError(
+          JSON.stringify({
+            error: "dependency_unavailable",
+            capability: missingRequiredCap,
+          }),
+        );
+      }
 
       const startTime = Date.now() / 1000;
       let success = true;

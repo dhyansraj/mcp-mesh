@@ -139,6 +139,83 @@ class TestPreInvokeGuard:
         assert called == [{}], "optional-dep handler must still be invoked"
         assert released == []
 
+    @pytest.mark.asyncio
+    async def test_wrapper_refusal_during_handler_releases_not_fails(
+        self, clean_injector
+    ):
+        """Issue #1273: the dispatcher's own gate passes (dep resolved) but the
+        handler — the DI wrapper — raises a dependency_unavailable refusal
+        because the required dep flapped DOWN mid-dispatch. That refusal must
+        RELEASE the lease (retryable), NEVER terminal-fail: release semantics
+        win over the wrapper's tool-error carrier."""
+        import json
+
+        from fastmcp.exceptions import ToolError
+
+        # Gate passes: dep_0 resolved locally when _dispatch checks it.
+        clean_injector._dependencies[f"{_FUNC_ID}:dep_0"] = object()
+
+        async def handler(**kwargs):
+            # Simulate the DI wrapper's #1273 guard firing on the race.
+            raise ToolError(
+                json.dumps(
+                    {"error": "dependency_unavailable", "capability": "cap_a"}
+                )
+            )
+
+        d = _make_dispatcher(handler=handler, required_deps=[(0, "cap_a")])
+
+        released: list = []
+        failed: list = []
+
+        async def fake_release(job_id, capability, claim_epoch=None):
+            released.append((job_id, capability))
+
+        async def fake_fail(job_id, error, claim_epoch=None):
+            failed.append((job_id, error))
+
+        d._release_lease = fake_release
+        d._report_terminal_fail = fake_fail
+
+        await d._dispatch({"id": "job-9", "submitted_payload": {}})
+
+        assert released == [("job-9", "cap_a")], (
+            "a mid-dispatch dependency_unavailable refusal must release the lease"
+        )
+        assert failed == [], (
+            "a mid-dispatch refusal must NEVER terminal-fail (that would "
+            "reproduce the very race the guard prevents)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_real_handler_exception_still_terminal_fails(
+        self, clean_injector
+    ):
+        """Regression: an ordinary handler exception (NOT a dependency_unavailable
+        refusal) still routes to terminal fail, unchanged by #1273."""
+        clean_injector._dependencies[f"{_FUNC_ID}:dep_0"] = object()
+
+        async def handler(**kwargs):
+            raise RuntimeError("boom")
+
+        d = _make_dispatcher(handler=handler, required_deps=[(0, "cap_a")])
+
+        released: list = []
+        failed: list = []
+        d._release_lease = lambda *a, **k: released.append(a)
+
+        async def fake_fail(job_id, error, claim_epoch=None):
+            failed.append((job_id, str(error)))
+
+        d._report_terminal_fail = fake_fail
+
+        await d._dispatch({"id": "job-10", "submitted_payload": {}})
+
+        assert released == [], "an app error must NOT release the lease"
+        assert failed and failed[0][0] == "job-10", (
+            "an ordinary handler exception must terminal-fail as before"
+        )
+
 
 class TestMeshJobDepExcludedFromGate:
     """A required dep paired with the MeshJob slot is a locally-constructed

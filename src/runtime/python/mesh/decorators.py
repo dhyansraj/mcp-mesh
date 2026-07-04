@@ -1226,11 +1226,24 @@ def tool(
             # Extract dependency names for injector (empty list for functions without dependencies)
             dependency_names = [dep["capability"] for dep in validated_dependencies]
 
+            # Issue #1273: index-aligned required-dep capabilities for the
+            # direct-dispatch guard — capability name where the slot is
+            # required=True, else None. Only carried when at least one slot is
+            # required (else None, so the wrapper's guard stays a no-op).
+            tool_required_caps = [
+                dep["capability"] if dep.get("required") else None
+                for dep in validated_dependencies
+            ]
+            if not any(c is not None for c in tool_required_caps):
+                tool_required_caps = None
+
             # Log the original function pointer
             logger.debug(f"🔸 ORIGINAL function pointer: {target} at {hex(id(target))}")
 
             injector = get_global_injector()
-            wrapped = injector.create_injection_wrapper(target, dependency_names)
+            wrapped = injector.create_injection_wrapper(
+                target, dependency_names, tool_required_caps=tool_required_caps
+            )
 
             # Log the wrapper function pointer
             logger.debug(
