@@ -1,6 +1,27 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.8.1...HEAD)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.8.2...HEAD)
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.8.1...v2.8.2)
+
+## v2.8.2 (2026-07-04)
+
+A reliability patch closing two field-reported gaps: process-group teardown on `meshctl stop`/watch reload, and the `required=true` pre-invoke guard on the direct `tools/call` dispatch path.
+
+v2.8.1 made required-dependency claim-gating race-free and expanded MeshJob operability; v2.8.2 closes the remaining teardown and guard edges around them. `meshctl stop` — and the equivalent watch-reload path — now verifies and force-kills the entire process group rather than the parent PID alone, so a child process that outlives its parent can no longer hold a port or keep heartbeating, and the drain probe is zombie-aware so an unreaped process group under a non-reaping container PID 1 no longer hangs the wait. In parallel, the v2.8.1 required-dependency pre-invoke guard is extended to the last unguarded dispatch path — direct `tools/call` — so a `required=true` handler never observes a null dependency on any invocation path across the runtimes.
+
+### 🛑 Group-scoped stop + watch reload (#1274)
+
+`meshctl stop` now scopes its graceful-then-forceful teardown to the whole process group instead of the parent PID. Previously the graceful branch verified and escalated against the parent only, so a child process (for example a spawned child JVM) could survive the stop, hold its port for minutes, and keep heartbeating. Teardown is now group-scoped end to end: `terminateAgent` polls `ESRCH`-only after `SIGKILL` and logs a WARN if a group survives. The drain probe is **zombie-aware** — on Linux an unreaped zombie process group answers `kill(-pgid, 0)` with success, so a container PID 1 that does not reap its children would otherwise hang the wait forever (macOS reaps instantly, which had masked the case locally). Watch reload routes through the same teardown logic (a regression here was caught by `tc29` and fixed). Multi-name stop (`meshctl stop a b c`) is now unit-tested and documented, along with stop's group-teardown semantics (including the `setsid`-escape caveat), the content-write reload trigger, and the by-design statement that watch is not a crash supervisor.
+
+### 🔒 `required=true` guard on direct tool calls (#1273)
+
+The v2.8.1 pre-invoke guard now covers the direct `tools/call` dispatch path — the last path that could reach a handler with a required dependency unresolved. The cross-runtime invariant: after the settle window, a direct call to a handler with an unavailable `required=true` dependency refuses with a structured `{"error":"dependency_unavailable","capability":...}` tool error (byte-identical envelopes across runtimes); every job-flavored invocation (claim and inbound job-header paths) releases the lease rather than failing terminally, so a transient outage never strands a job row; and a local / self-dependency dispatch raises rather than returning a refusal that could masquerade as a successful result to an LLM or local caller. The guard fires only after the settle-grace wait, so an ordinary agent restart does not burst refusals while the topology settles. Handlers therefore never observe null for a `required=true` dependency on any invocation path.
+
+### ⚠️ Notes
+
+- **Job status vocabulary is `working`.** The jobs docs are aligned to the runtime's actual `working` status wording (no behavior change).
+- Both fixes are internal hardening of existing contracts — no API, declaration-syntax, or wire changes, and no coordinated upgrade is required.
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.8.0...v2.8.1)
 

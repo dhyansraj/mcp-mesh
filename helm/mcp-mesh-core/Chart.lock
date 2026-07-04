@@ -1,21 +1,21 @@
 dependencies:
 - name: mcp-mesh-postgres
   repository: file://../mcp-mesh-postgres
-  version: 2.8.1
+  version: 2.8.2
 - name: mcp-mesh-redis
   repository: file://../mcp-mesh-redis
-  version: 2.8.1
+  version: 2.8.2
 - name: mcp-mesh-registry
   repository: file://../mcp-mesh-registry
-  version: 2.8.1
+  version: 2.8.2
 - name: mcp-mesh-grafana
   repository: file://../mcp-mesh-grafana
-  version: 2.8.1
+  version: 2.8.2
 - name: mcp-mesh-tempo
   repository: file://../mcp-mesh-tempo
-  version: 2.8.1
+  version: 2.8.2
 - name: mcp-mesh-ui
   repository: file://../mcp-mesh-ui
-  version: 2.8.1
-digest: sha256:c9f186a520f95e1ecae93006a1cf887047a3db3edfeb11e9d82c2fe8921ec925
-generated: "2026-07-04T12:54:56.15743-04:00"
+  version: 2.8.2
+digest: sha256:63385d471d01ba7934c961b2f9e30d3b463147bef8a4003d0d3011116538bd72
+generated: "2026-07-04T18:18:01.838988-04:00"
