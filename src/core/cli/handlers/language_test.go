@@ -398,10 +398,11 @@ func TestPythonHandler_GetDockerImage(t *testing.T) {
 	if image == "" {
 		t.Error("GetDockerImage() returned empty string")
 	}
-	// Should contain python
-	if image != "mcpmesh/python-runtime:2.8" && image != "mcpmesh/python-runtime:latest" {
-		// Just check it's not empty - version may vary
-		t.Logf("Docker image: %s", image)
+	// Must equal the exact release tag GetDockerImage() ships (kept in sync by
+	// scripts/bump_version.py). Hard failure, not a log — this is the assertion
+	// that should have caught the 2.8.0 partial bump.
+	if want := "mcpmesh/python-runtime:2.8.0"; image != want {
+		t.Errorf("GetDockerImage() = %q, want %q", image, want)
 	}
 }
 
@@ -411,10 +412,11 @@ func TestTypeScriptHandler_GetDockerImage(t *testing.T) {
 	if image == "" {
 		t.Error("GetDockerImage() returned empty string")
 	}
-	// Should contain typescript
-	if image != "mcpmesh/typescript-runtime:2.8" && image != "mcpmesh/typescript-runtime:latest" {
-		// Just check it's not empty - version may vary
-		t.Logf("Docker image: %s", image)
+	// Must equal the exact release tag GetDockerImage() ships (kept in sync by
+	// scripts/bump_version.py). Hard failure, not a log — this is the assertion
+	// that should have caught the 2.8.0 partial bump.
+	if want := "mcpmesh/typescript-runtime:2.8.0"; image != want {
+		t.Errorf("GetDockerImage() = %q, want %q", image, want)
 	}
 }
 

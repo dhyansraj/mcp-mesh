@@ -30,7 +30,7 @@ The agent will start on port 8091 by default.
 
 ## Project Structure
 
-```
+```text
 report-consumer/
 ├── pom.xml
 ├── Dockerfile

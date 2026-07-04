@@ -30,7 +30,7 @@ The agent will start on port 8090 by default.
 
 ## Project Structure
 
-```
+```text
 data-provider/
 ├── pom.xml
 ├── Dockerfile

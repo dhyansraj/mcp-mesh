@@ -573,17 +573,19 @@ HANDLERS: list[Handler] = [
         ),
         replacement=r"\g<1>NEW",
     ),
-    # --- NEW: language_test.go uses the MINOR-tag form (e.g., :1.3) ------
-    # Minor tag — (?![\d.\-+]) prevents matching `:1.3` as the prefix of `:1.30` or `:1.3.0`.
+    # --- NEW: language_test.go pins the FULL release tag (e.g., :1.3.0) --
+    # TestPythonHandler_GetDockerImage / TestTypeScriptHandler_GetDockerImage
+    # assert the exact tag GetDockerImage() returns, so their expected literal
+    # must track the full version (was minor, which never matched the full tag
+    # the handlers return — the loose assertion missed the 2.8.0 partial bump).
     Handler(
-        name="Language Test Hardcoded Image Tags (minor version)",
+        name="Language Test Hardcoded Image Tags (full version)",
         globs=["src/core/cli/handlers/language_test.go"],
         pattern=(
             r"(mcpmesh/(?:registry|python-runtime|typescript-runtime"
             r"|java-runtime|ui|cli):)OLD(?![\d.\-+])"
         ),
         replacement=r"\g<1>NEW",
-        version_format="minor",
     ),
 ]
 
@@ -736,7 +738,12 @@ def _guard_patterns(old: str) -> list[re.Pattern]:
     return [
         re.compile(img + o + boundary),
         re.compile(r"mcp-mesh(?:>=|==)" + op),
-        re.compile(r"@mcpmesh/[^\"']*[\"']\^?" + o + boundary),
+        # package.json: "@mcpmesh/sdk": "^X" / "@mcpmesh/core": "X" (the key
+        # quote, ": ", then the value's opening quote sit between the package
+        # name and the version), plus the npm `@mcpmesh/sdk@^X` shorthand.
+        re.compile(
+            r"@mcpmesh/[^\"'@\s]+(?:[\"']\s*:\s*[\"']|@)\^?" + o + boundary
+        ),
         re.compile(r"<mcp-mesh\.version>" + o + r"</mcp-mesh\.version>"),
         re.compile(r"--version\s+v?" + o + boundary),
         re.compile(r'tag:\s*"' + o + r'"'),
@@ -744,12 +751,16 @@ def _guard_patterns(old: str) -> list[re.Pattern]:
     ]
 
 
-def coverage_guard(old: str) -> list[str]:
+def coverage_guard(old: str) -> tuple[bool, list[str]]:
     """Final safety net: after a bump, scan every tracked file for mesh-shaped
-    references that still carry the OLD version. Returns a list of
-    'path:lineno: text' survivors (empty = clean). Vendored trees
-    (node_modules) and history files are skipped; third-party version pins on
-    the same line are allowlisted."""
+    references that still carry the OLD version.
+
+    Returns ``(ran, survivors)``. ``ran`` is False when the scan could not
+    execute (git unavailable / errored) — the caller must fail closed rather
+    than treat that as clean. When ``ran`` is True, ``survivors`` is the list
+    of 'path:lineno: text' hits (empty = clean). Vendored trees (node_modules)
+    and history files are skipped; third-party version pins on the same line
+    are allowlisted."""
     try:
         out = subprocess.run(
             ["git", "ls-files"],
@@ -758,9 +769,8 @@ def coverage_guard(old: str) -> list[str]:
             text=True,
             check=True,
         ).stdout
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print("⚠️  Coverage guard skipped: git not available.")
-        return []
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return (False, [])
 
     patterns = _guard_patterns(old)
     survivors: list[str] = []
@@ -778,7 +788,7 @@ def coverage_guard(old: str) -> list[str]:
                 continue
             if any(p.search(line) for p in patterns):
                 survivors.append(f"{rel}:{lineno}: {line.strip()}")
-    return survivors
+    return (True, survivors)
 
 
 # ---------------------------------------------------------------------------
@@ -885,8 +895,15 @@ def main() -> int:
     # Final step: verify no mesh-shaped reference to the OLD version survived.
     # Skipped on --dry-run (nothing was written, so every ref would "survive").
     if not dry_run:
-        survivors = coverage_guard(old)
+        ran, survivors = coverage_guard(old)
         print()
+        if not ran:
+            print(
+                "❌ Coverage guard did NOT run (git ls-files unavailable or "
+                "errored). Failing closed — cannot confirm the bump is "
+                "complete. Re-run from a git checkout with git on PATH."
+            )
+            return 1
         if survivors:
             print(
                 f"❌ Coverage guard: {len(survivors)} stale mesh-shaped "

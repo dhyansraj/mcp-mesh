@@ -1093,18 +1093,15 @@ mod tests {
         let req = minimal_request("cyc-agent", &server.url());
         let result = client.send_heartbeat(&req).await;
 
-        match result {
-            Err(RegistryError::SemanticRejection { message }) => {
+        match &result {
+            Err(err @ RegistryError::SemanticRejection { message }) => {
                 assert!(
                     message.contains("required dependency cycle"),
                     "message must carry the registry reason, got: {message}"
                 );
                 // Issue #1260: the Display form must not print a status code —
                 // the HTTP transport succeeded (200 OK); only the reason matters.
-                let rendered = RegistryError::SemanticRejection {
-                    message: message.clone(),
-                }
-                .to_string();
+                let rendered = err.to_string();
                 assert!(
                     !rendered.contains("200"),
                     "semantic rejection must not surface an HTTP status, got: {rendered}"

@@ -99,9 +99,12 @@ export MCP_MESH_TOOL_WORKERS=1
 # - Python: only async tools are wrapped (sync tools already run off-loop via
 #   FastMCP); streaming tools are always inline (progress notifications must
 #   run on the main loop).
-# - TypeScript: requires `tsx` in your dependencies. A2A-consumer tools and
-#   MeshJob/task tools force-disable isolation (their injected handles cannot
-#   cross the worker_threads boundary) regardless of this setting.
+# - TypeScript: when the agent's entrypoint is a TypeScript source file
+#   (.ts/.mts/.cts/.tsx), the worker loads it through `tsx`, which must be in
+#   your dependencies; a precompiled .js entrypoint needs nothing extra.
+#   A2A-consumer tools and MeshJob/task tools force-disable isolation (their
+#   injected handles cannot cross the worker_threads boundary) regardless of
+#   this setting.
 export MCP_MESH_TOOL_ISOLATION=true
 ```
 

@@ -10,9 +10,10 @@ image:
 agent:
   name: report-consumer
   runtime: python
-  # K8s uses port 8080 by default (each pod has its own IP, no conflicts)
-  # http:
-  #   port: 8080
+  # This agent listens on 8081 (see @mesh.agent http_port in main.py and the
+  # Dockerfile EXPOSE) — keep the chart's port in sync so the Service targets it.
+  http:
+    port: 8081
 
 resources:
   limits:

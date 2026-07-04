@@ -4,7 +4,10 @@ A MCP Mesh agent generated using `meshctl scaffold`.
 
 ## Overview
 
-This is a basic MCP Mesh agent that provides simple tools for demonstration.
+Provider half of the `required=true` example: it publishes the `data_service`
+capability that `report-consumer` declares as a required dependency. While this
+agent is healthy the consumer's `report` capability stays available; stop it and
+the consumer's required dependency goes unavailable.
 
 ## Getting Started
 
@@ -44,7 +47,7 @@ To override the port, modify the `http_port` parameter in the `@mesh.agent` deco
 
 ## Project Structure
 
-```
+```text
 data-provider/
 ├── __init__.py        # Package init
 ├── __main__.py        # Module entry point

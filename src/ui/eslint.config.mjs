@@ -22,13 +22,13 @@ const eslintConfig = defineConfig([
     files: ["**/*.ts", "**/*.tsx"],
   })),
   {
-    files: ["**/*.ts", "**/*.tsx"],
+    files: ["**/*.ts", "**/*.tsx", "**/*.jsx"],
     plugins: { "react-hooks": reactHooks },
     languageOptions: {
       parserOptions: {
         ecmaFeatures: { jsx: true },
       },
-      globals: { ...globals.browser },
+      globals: { ...globals.browser, ...globals.node },
     },
     rules: {
       ...reactHooks.configs.recommended.rules,

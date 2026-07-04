@@ -44,7 +44,7 @@ To override the port, modify the `http_port` parameter in the `@mesh.agent` deco
 
 ## Project Structure
 
-```
+```text
 report-consumer/
 ├── __init__.py        # Package init
 ├── __main__.py        # Module entry point
