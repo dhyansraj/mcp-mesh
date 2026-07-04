@@ -1,0 +1,44 @@
+# UC-level routines for uc36_meshjob_admin (issues #1265 / #1267).
+#
+# DEFAULT registry knobs on purpose — no fast sweep, no stale ceiling:
+#
+#   - The reclaim test (#1265) exercises `meshctl job reclaim`, which forces
+#     the lease-expiry path ON DEMAND. The sweep must NOT be a confounder:
+#     with the default 5min tick and a 45-60s lease renewed every 2s gate
+#     poll, the admin command is provably the only actor that can evict an
+#     owner inside the test window.
+#   - The drain test (#1267) parks a queued job (owner NULL, attempt 0) for a
+#     polling window. MCP_MESH_JOB_STALE_TIMEOUT is opt-in/disabled by
+#     default, so nothing reaps the parked row (same rationale as uc35).
+#   - Terminal event-log reads happen seconds after completion; the default
+#     1h retention never GCs them mid-test.
+
+routines:
+  start_registry:
+    description: "Start the mesh registry with default knobs (admin surface must be the only lease actor)"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: |
+          meshctl start --registry-only -d
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              echo "registry ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "ERROR: registry did not become ready in 20s"
+          tail -50 ~/.mcp-mesh/logs/registry.log 2>/dev/null || true
+          exit 1
+        capture: registry_start
+        timeout: 30
+
+  # Stop everything started by this test (agents + registry).
+  stop_all:
+    description: "Stop all mesh processes started by this test"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: meshctl stop 2>/dev/null || true
+        ignore_errors: true

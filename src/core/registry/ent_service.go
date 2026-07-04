@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -15,6 +16,7 @@ import (
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
 	"mcp-mesh/src/core/ent/dependencyresolution"
+	"mcp-mesh/src/core/ent/job"
 	"mcp-mesh/src/core/ent/llmproviderresolution"
 	"mcp-mesh/src/core/ent/llmtoolresolution"
 	"mcp-mesh/src/core/ent/registryevent"
@@ -270,6 +272,36 @@ type EntService struct {
 	// path, which is not a hot loop (steady-state heartbeats without tools, HEAD
 	// polls, and reads never take it).
 	cycleWriteMu sync.Mutex
+
+	// draining holds the registry-wide maintenance/drain flag (issue #1267).
+	// In-memory only — a registry restart clears it (documented; a restarted
+	// registry is a fresh dispatcher). While set, ClaimNextJob returns no work
+	// so queued jobs stay queued (no attempt burn — same posture as #1258
+	// claim-gating); submissions, leases, deltas, events, and reads are all
+	// unaffected, so running jobs keep renewing their leases and complete
+	// normally. Toggled via POST/DELETE /admin/drain; observed via GET.
+	draining atomic.Bool
+}
+
+// SetDraining toggles the registry-wide drain flag (issue #1267). While
+// draining, ClaimNextJob dispatches no new work. In-memory only — not
+// persisted across a registry restart.
+func (s *EntService) SetDraining(v bool) { s.draining.Store(v) }
+
+// IsDraining reports whether the registry is in drain mode.
+func (s *EntService) IsDraining() bool { return s.draining.Load() }
+
+// CountLiveClaims returns the number of "live claims": non-terminal jobs
+// (working / input_required) that currently have a non-null owner_instance_id.
+// This is the drain-progress signal — the count an operator watches drop to
+// zero before restarting a replica (see `meshctl registry drain --wait`).
+func (s *EntService) CountLiveClaims(ctx context.Context) (int, error) {
+	return s.entDB.Client.Job.Query().
+		Where(
+			job.StatusIn(job.StatusWorking, job.StatusInputRequired),
+			job.OwnerInstanceIDNotNil(),
+		).
+		Count(ctx)
 }
 
 // NewEntService creates a new Ent-based registry service instance

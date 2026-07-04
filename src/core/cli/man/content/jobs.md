@@ -591,7 +591,7 @@ executing *as*", `calling_job()` answers "what job *invoked* me".
 
 Three SDK-managed helper tools are auto-registered on every mesh
 agent. They are regular MCP tools (prefixed `__mesh_job_` to mark them
-framework-internal) — no separate `meshctl` subcommand:
+framework-internal) and route through a consumer agent:
 
 ```bash
 # Inspect status (registry returns the full job row)
@@ -611,6 +611,36 @@ Submission goes through the consumer's actual capability (e.g.
 `commission_report`), not a dedicated `__mesh_job_submit` helper —
 the submitter needs the dependency context to know which capability
 to route to and which retry / deadline policy to apply.
+
+### Reading job state directly from the registry
+
+`meshctl job` talks to the registry row directly (no consumer agent
+in the loop) and surfaces the fencing / lease fields used for
+post-incident forensics — `claim_epoch`, `owner`, `attempt_count`,
+`lease_expires_at`:
+
+```bash
+# Full job state, including claim_epoch and lease
+meshctl job status 01HXY...
+
+# A claim_epoch > 1 means the job was re-claimed at least once
+# (owner change / fencing event) during its lifetime.
+```
+
+### Forcing a re-claim (fencing drills)
+
+A healthy handler renews its lease on every poll, so supersession is
+otherwise almost impossible to trigger on demand. `meshctl job reclaim`
+forces the lease-expiry path for one job — it clears the owner and
+lease so the job is claimable again, leaving `claim_epoch` unchanged
+(the next claim mints the new generation, which fences the superseded
+execution as `claim_superseded`). Use it to validate epoch fencing in
+staging / incident drills, or to evict a job from a replica you're
+about to drain. Terminal jobs cannot be reclaimed.
+
+```bash
+meshctl job reclaim 01HXY...
+```
 
 ## Auth model
 

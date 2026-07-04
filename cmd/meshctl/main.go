@@ -46,6 +46,8 @@ func main() {
 	rootCmd.AddCommand(cli.NewAuditCommand())  // Issue #836
 	rootCmd.AddCommand(cli.NewSchemaCommand()) // Issue #547
 	rootCmd.AddCommand(cli.NewEntityCommand())
+	rootCmd.AddCommand(cli.NewJobCommand())      // Issue #1264, #1265
+	rootCmd.AddCommand(cli.NewRegistryCommand()) // Issue #1267
 	rootCmd.AddCommand(man.NewManCommand())
 
 	// Suppress the usage block on runtime/business errors. Flag-parse

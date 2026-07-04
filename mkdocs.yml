@@ -295,6 +295,7 @@ nav:
 
   - Deployment:
       - deployment.md
+      - Upgrading a Live Mesh: upgrading.md
       - Docker:
           - Overview: 03-docker-deployment.md
           - Networking: 03-docker-deployment/04-networking.md

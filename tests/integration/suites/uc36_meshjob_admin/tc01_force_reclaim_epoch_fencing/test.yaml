@@ -1,0 +1,310 @@
+# tc01_force_reclaim_epoch_fencing — `meshctl job reclaim` evicts a HEALTHY
+# owner's lease; the next claim mints epoch 2 and fences the superseded
+# execution (issue #1265).
+#
+# Scenario: admin_gated attempt 1 blocks on a recv_event('finish') gate
+# polled in 2s rounds — every round renews the lease (poll-liveness), so
+# with max_duration=60 and the default 5min sweep tick a natural re-claim is
+# IMPOSSIBLE inside the test window. `meshctl job reclaim <id>` is therefore
+# provably the only eviction actor: it clears owner + lease, normalises the
+# row to claimable, and leaves claim_epoch at 1 (the NEXT claim mints the new
+# generation — the CLI echoes exactly that contract).
+#
+# After the reclaim, the worker's claim worker re-claims the job (epoch 2,
+# attempt 2 — possibly the SAME instance; the same-instance gap is exactly
+# what epochs close). The stale attempt 1's next gate poll carries epoch 1
+# against the reclaimed/newer-epoch row → rejected claim_superseded → the
+# Rust core fires its per-epoch cancel token and surfaces the cancellation
+# at the gate (Python sees RuntimeError("job cancelled by enclosing
+# context") from recv_event, or CancelledError at any other await — the two
+# documented SDK cancellation channels). The handler records the observation
+# SYNCHRONOUSLY in /tmp/uc36-cancel-observed-<job_id> and re-raises, so its
+# duplicate side effects (finish_seen / progress / complete) can never land.
+#
+# Asserts:
+#   - CLI reclaim output: owner actually evicted, row claimable, epoch
+#     reported unchanged at 1
+#   - the job is re-claimed: epoch 2, attempt_count 2, new claimed marker
+#   - the superseded execution OBSERVED cancellation (positive marker file)
+#   - exactly-once completion: ONE finish_seen (attempt 2 / epoch 2), result
+#     stamped attempt 2 / epoch 2, exactly TWO claimed markers ever
+#   - terminal reclaim: CLI rejects, raw endpoint returns 409
+
+name: "meshctl job reclaim: force-evict a healthy owner, next claim fences via epoch 2"
+description: "Admin reclaim clears owner/lease with epoch unchanged; re-claim mints epoch 2, the superseded attempt observes cancellation, job completes exactly once; terminal reclaim is a 409"
+tags:
+  - meshjob
+  - python
+  - admin
+  - issue-1265
+  - lease
+  - fencing
+  - slow
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/admin-worker /workspace/
+      cp -rL /uc-artifacts/admin-driver /workspace/
+
+  - name: "Install worker deps"
+    handler: pip-install
+    path: /workspace/admin-worker
+
+  - name: "Install driver deps"
+    handler: pip-install
+    path: /workspace/admin-driver
+
+  # Default knobs — the admin command must be the ONLY lease actor.
+  - routine: start_registry
+
+  - name: "Start worker (port 9161)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start admin-worker/main.py --env MCP_MESH_HTTP_PORT=9161 -d
+
+  - name: "Start driver (port 9160)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start admin-driver/main.py --env MCP_MESH_HTTP_PORT=9160 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  # Liveness only — dependency resolution is covered by the settle window.
+  - name: "Wait for worker and driver to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        WORKER=$(curl -s http://localhost:8000/agents | jq '[.agents[] | select(.name == "admin-worker")] | length' 2>/dev/null || echo 0)
+        DRIVER=$(curl -s http://localhost:8000/agents | jq '[.agents[] | select(.name == "admin-driver")] | length' 2>/dev/null || echo 0)
+        if [ "$WORKER" -ge 1 ] && [ "$DRIVER" -ge 1 ]; then
+          echo "AGENTS_READY=1 after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: agents did not register within 60s (worker=$WORKER driver=$DRIVER)"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_registration
+    timeout: 90
+
+  # max_retries=1 budgets exactly the one forced reclaim this test performs.
+  - name: "Submit admin_gated (max_duration=60, max_retries=1)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call submit_admin_gated '{"max_duration":60,"max_retries":1}'
+    capture: submit_resp
+    timeout: 30
+
+  - name: "Capture job_id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1 | xargs -I{} echo "JOB_ID={}"
+    capture: job_id_extract
+
+  # First claim, observed through the NEW status surface (meshctl job status
+  # --json now carries the fencing fields).
+  - name: "Wait for attempt 1 to claim (owner set, epoch 1)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      echo "JOB_ID=${JOB_ID}"
+      for i in $(seq 1 30); do
+        ROW=$(meshctl job status "${JOB_ID}" --json 2>/dev/null || echo '{}')
+        OK=$(echo "$ROW" | jq '((.owner_instance_id // "") != "") and (.claim_epoch == 1) and (.attempt_count == 1)')
+        if [ "$OK" = "true" ]; then
+          echo "CLAIMED_E1=1 after ~${i}s"
+          echo "$ROW" | jq -c '{status, owner_instance_id, claim_epoch, attempt_count}'
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: attempt 1 never claimed within 30s"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '.'
+      exit 1
+    capture: claim1_wait
+    timeout: 45
+
+  # The admin surface under test. The CLI echoes the registry contract:
+  # evicted owner, row claimable, claim_epoch UNCHANGED (next claim mints).
+  - name: "Force-reclaim the job via meshctl"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      meshctl job reclaim "${JOB_ID}"
+    capture: reclaim_out
+    timeout: 30
+
+  # Re-claim: the worker's claim poll (~5s cadence) picks the row back up,
+  # minting epoch 2 / attempt 2.
+  - name: "Wait for the re-claim (epoch 2, attempt 2)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      for i in $(seq 1 30); do
+        ROW=$(curl -s "http://localhost:8000/jobs/${JOB_ID}")
+        OK=$(echo "$ROW" | jq '((.owner_instance_id // "") != "") and (.claim_epoch == 2) and (.attempt_count == 2)')
+        if [ "$OK" = "true" ]; then
+          echo "RECLAIMED_E2=1 after ~${i}s"
+          echo "$ROW" | jq -c '{status, owner_instance_id, claim_epoch, attempt_count}'
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: job was not re-claimed at epoch 2 within 30s"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '.'
+      exit 1
+    capture: reclaim2_wait
+    timeout: 45
+
+  # Positive supersession signal: attempt 1's next 2s gate poll after the
+  # reclaim is rejected claim_superseded → cancel token → CancelledError →
+  # the handler's synchronous marker file.
+  - name: "Wait for the superseded attempt to observe cancellation"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      for i in $(seq 1 30); do
+        if grep -q '^attempt=1$' "/tmp/uc36-cancel-observed-${JOB_ID}" 2>/dev/null; then
+          echo "CANCEL_OBSERVED=1 after ~${i}s"
+          cat "/tmp/uc36-cancel-observed-${JOB_ID}"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: superseded attempt 1 never observed cancellation within 30s"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '.'
+      curl -s "http://localhost:8000/jobs/${JOB_ID}/events?after=0&limit=100" | jq '.'
+      exit 1
+    capture: cancel_wait
+    timeout: 45
+
+  # Release attempt 2's gate; the job must complete exactly once, from the
+  # epoch-2 execution.
+  - name: "Post finish and wait for completion"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      curl -s -X POST "http://localhost:8000/jobs/${JOB_ID}/events" \
+        -H 'Content-Type: application/json' \
+        -d '{"type":"finish","payload":{}}' | jq -c '.'
+      for i in $(seq 1 30); do
+        ST=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.status')
+        if [ "$ST" = "completed" ]; then
+          echo "COMPLETED=1 after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: job did not complete within 30s of finish"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '.'
+      exit 1
+    capture: completion_wait
+    timeout: 45
+
+  # Terminal reclaim must be rejected: CLI error + raw 409 from the endpoint.
+  - name: "Reclaim of the terminal job is rejected"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      if OUT=$(meshctl job reclaim "${JOB_ID}" 2>&1); then
+        echo "FAIL: reclaim of a terminal job unexpectedly succeeded: $OUT"
+        exit 1
+      fi
+      echo "$OUT"
+      echo "TERMINAL_RECLAIM_REJECTED=1"
+      CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://localhost:8000/jobs/${JOB_ID}/reclaim")
+      echo "HTTP_CODE=$CODE"
+    capture: terminal_reclaim
+    timeout: 30
+
+  - name: "Capture final job row"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      curl -s "http://localhost:8000/jobs/${JOB_ID}"
+    capture: final_job
+
+  - name: "Capture final event log"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      curl -s "http://localhost:8000/jobs/${JOB_ID}/events?after=0&limit=100"
+    capture: final_events
+
+assertions:
+  # IDIOM: equality lives INSIDE the jq filter so the interpolation yields a
+  # bare true/false (the interpolation body cannot contain '}').
+
+  # Scenario markers
+  - expr: "${captured.wait_registration} contains 'AGENTS_READY=1'"
+    message: "worker and driver must register before the job is submitted"
+  - expr: "${captured.claim1_wait} contains 'CLAIMED_E1=1'"
+    message: "attempt 1 must claim (owner set, epoch 1) before the forced reclaim"
+  - expr: "${captured.reclaim2_wait} contains 'RECLAIMED_E2=1'"
+    message: "the reclaimed job must become claimable and be re-claimed at epoch 2 / attempt 2"
+  - expr: "${captured.cancel_wait} contains 'CANCEL_OBSERVED=1'"
+    message: "the superseded attempt 1 must observe cancellation (fenced gate poll fires its cancel token)"
+  - expr: "${captured.completion_wait} contains 'COMPLETED=1'"
+    message: "the re-claimed attempt must complete the job after finish"
+
+  # CLI reclaim contract: a real owner was evicted, row is claimable again,
+  # epoch reported UNCHANGED (the next claim mints the new generation).
+  - expr: "${captured.reclaim_out} contains 'reclaimed'"
+    message: "meshctl job reclaim must report success"
+  - expr: "${captured.reclaim_out} contains 'Evicted owner:'"
+    message: "the reclaim response must carry the evicted owner"
+  - expr: "${captured.reclaim_out} not contains '(none'"
+    message: "an actual owner must have been evicted — the job was claimed when reclaimed"
+  - expr: "${captured.reclaim_out} contains 'working (claimable)'"
+    message: "the reclaimed row must be normalised to working / claimable"
+  - expr: "${captured.reclaim_out} contains 'unchanged; next claim mints the next epoch'"
+    message: "reclaim must NOT bump claim_epoch — the next claim mints the new generation"
+
+  # Terminal reclaim: CLI rejection + raw 409.
+  - expr: "${captured.terminal_reclaim} contains 'TERMINAL_RECLAIM_REJECTED=1'"
+    message: "meshctl job reclaim must fail on a terminal job"
+  - expr: "${captured.terminal_reclaim} contains 'already in a terminal state'"
+    message: "the CLI must surface the terminal-state rejection message"
+  - expr: "${captured.terminal_reclaim} contains 'HTTP_CODE=409'"
+    message: "POST /jobs/:id/reclaim on a terminal job must return 409"
+
+  # Exactly two claims ever, epochs minted 1 then 2.
+  - expr: "${jq:captured.final_events:([.events[] | select(.type == \"transition\") | select(.payload.marker == \"claimed\")] | length) == 2} == 'true'"
+    message: "exactly two claims must execute the handler (attempts 1 and 2)"
+  - expr: "${jq:captured.final_events:([.events[] | select(.type == \"transition\") | select(.payload.marker == \"claimed\") | .payload.epoch] | sort) == [1,2]} == 'true'"
+    message: "the claims must carry epochs 1 then 2 — the re-claim mints a fresh epoch"
+
+  # Exactly-once completion: only the epoch-2 execution reached the
+  # post-gate side effects.
+  - expr: "${jq:captured.final_events:([.events[] | select(.type == \"transition\") | select(.payload.marker == \"finish_seen\")] | length) == 1} == 'true'"
+    message: "exactly ONE execution may pass the gate — the superseded attempt must never post finish_seen"
+  - expr: "${jq:captured.final_events:([.events[] | select(.type == \"transition\") | select(.payload.marker == \"finish_seen\")] | all((.payload.epoch == 2) and (.payload.attempt == 2)))} == 'true'"
+    message: "the surviving execution must be attempt 2 under claim epoch 2"
+
+  # Final row: completed after exactly two claims, result stamped by the
+  # epoch-2 execution.
+  - expr: "${jq:captured.final_job:(.status == \"completed\") and (.attempt_count == 2) and (.claim_epoch == 2)} == 'true'"
+    message: "the job must complete exactly once, at epoch 2 after two claims"
+  - expr: "${jq:captured.final_job:(.result.attempt == 2) and (.result.epoch == 2)} == 'true'"
+    message: "the terminal result must come from attempt 2 / epoch 2 — not the superseded owner"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

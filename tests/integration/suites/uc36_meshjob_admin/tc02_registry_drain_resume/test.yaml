@@ -1,0 +1,376 @@
+# tc02_registry_drain_resume — drain mode pauses NEW job dispatch while
+# in-flight jobs finish normally; resume restores FIFO dispatch (issue #1267).
+#
+# Scenario:
+#   1. Job A claims and gates on 'finish' (2s liveness-renewing polls) — a
+#      job RUNNING at drain-entry.
+#   2. `meshctl registry drain` — the CLI reports draining + Live claims: 1
+#      (job A is the live claim); `meshctl registry status --json` agrees.
+#   3. Job B is submitted WHILE draining (submissions stay accepted) and is
+#      watched over a 15s window (>= 3 worker claim-poll cycles at ~5s):
+#      owner must stay NULL, attempt_count must stay 0 — queued jobs stay
+#      queued with no attempt burn.
+#   4. 'finish' is posted to job A mid-drain: its finish_seen transition,
+#      progress delta and complete() must all be ACCEPTED — running jobs'
+#      deltas flow and they finish normally during drain. live_claims then
+#      drops to 0 (job B, unclaimed, never counts).
+#   5. `meshctl registry resume` — job B claims (epoch 1, attempt 1) on the
+#      next poll and completes normally.
+#
+# Asserts:
+#   - drain/status/resume CLI outputs + --json fields (draining, live_claims)
+#   - job B: owner NULL + attempt_count 0 across the entire drain window,
+#     then exactly one claim + completion after resume
+#   - job A: completes DURING drain, attempt_count 1 / epoch 1, its
+#     finish_seen delta accepted mid-drain
+
+name: "meshctl registry drain/resume: queued jobs stay parked, running jobs finish, resume re-dispatches"
+description: "Drain pauses claims (queued job keeps owner NULL / attempt 0 over a polling window) while a running job's deltas are accepted and it completes; resume lets the parked job claim and complete"
+tags:
+  - meshjob
+  - python
+  - admin
+  - issue-1267
+  - drain
+  - slow
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/admin-worker /workspace/
+      cp -rL /uc-artifacts/admin-driver /workspace/
+
+  - name: "Install worker deps"
+    handler: pip-install
+    path: /workspace/admin-worker
+
+  - name: "Install driver deps"
+    handler: pip-install
+    path: /workspace/admin-driver
+
+  # Default knobs — MCP_MESH_JOB_STALE_TIMEOUT is unset (opt-in), so nothing
+  # can reap the deliberately-parked queued job during the drain window.
+  - routine: start_registry
+
+  - name: "Start worker (port 9161)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start admin-worker/main.py --env MCP_MESH_HTTP_PORT=9161 -d
+
+  - name: "Start driver (port 9160)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start admin-driver/main.py --env MCP_MESH_HTTP_PORT=9160 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  - name: "Wait for worker and driver to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        WORKER=$(curl -s http://localhost:8000/agents | jq '[.agents[] | select(.name == "admin-worker")] | length' 2>/dev/null || echo 0)
+        DRIVER=$(curl -s http://localhost:8000/agents | jq '[.agents[] | select(.name == "admin-driver")] | length' 2>/dev/null || echo 0)
+        if [ "$WORKER" -ge 1 ] && [ "$DRIVER" -ge 1 ]; then
+          echo "AGENTS_READY=1 after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: agents did not register within 60s (worker=$WORKER driver=$DRIVER)"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_registration
+    timeout: 90
+
+  # Job A — the "running at drain-entry" job. max_duration=90 outlasts the
+  # whole drain phase so only completion (never a lease event) ends it.
+  - name: "Submit job A (running at drain-entry)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call submit_admin_gated '{"max_duration":90,"max_retries":2}'
+    capture: submit_a
+    timeout: 30
+
+  - name: "Capture job A id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo '${captured.submit_a}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1 | xargs -I{} echo "JOB_A={}"
+    capture: job_a_extract
+
+  - name: "Wait for job A to claim (owner set, epoch 1)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_A=$(echo '${captured.job_a_extract}' | grep '^JOB_A=' | cut -d= -f2)
+      echo "JOB_A=${JOB_A}"
+      for i in $(seq 1 30); do
+        ROW=$(curl -s "http://localhost:8000/jobs/${JOB_A}")
+        OK=$(echo "$ROW" | jq '((.owner_instance_id // "") != "") and (.claim_epoch == 1)')
+        if [ "$OK" = "true" ]; then
+          echo "A_CLAIMED=1 after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: job A never claimed within 30s"
+      curl -s "http://localhost:8000/jobs/${JOB_A}" | jq '.'
+      exit 1
+    capture: a_claim_wait
+    timeout: 45
+
+  # Enter drain. Job A is the one live claim, so both the drain response and
+  # the status surface must report exactly 1.
+  - name: "Enter drain mode"
+    handler: shell
+    workdir: /workspace
+    command: meshctl registry drain
+    capture: drain_out
+    timeout: 30
+
+  - name: "Registry status while draining (json + human)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl registry status --json
+    capture: status_draining
+    timeout: 30
+
+  - name: "Registry status human render while draining"
+    handler: shell
+    workdir: /workspace
+    command: meshctl registry status
+    capture: status_human
+    timeout: 30
+
+  # Submissions stay accepted while draining — job B queues behind the gate.
+  - name: "Submit job B while draining"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call submit_admin_gated '{"max_duration":60,"max_retries":2}'
+    capture: submit_b
+    timeout: 30
+
+  - name: "Capture job B id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo '${captured.submit_b}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1 | xargs -I{} echo "JOB_B={}"
+    capture: job_b_extract
+
+  # 15s watch window (>= 3 worker claim-poll cycles): any claim or attempt
+  # burn during drain is an IMMEDIATE loud failure. Scenario wait — not a
+  # registration/dep wait.
+  - name: "Job B stays queued across the drain window"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_B=$(echo '${captured.job_b_extract}' | grep '^JOB_B=' | cut -d= -f2)
+      echo "JOB_B=${JOB_B}"
+      for i in $(seq 1 5); do
+        ROW=$(curl -s "http://localhost:8000/jobs/${JOB_B}")
+        echo "$ROW" | jq -c '{status, owner_instance_id, claim_epoch, attempt_count}'
+        BAD=$(echo "$ROW" | jq '((.owner_instance_id // "") != "") or (.attempt_count != 0)')
+        if [ "$BAD" = "true" ]; then
+          echo "FAIL: job B was claimed (or burned an attempt) while the registry was draining"
+          exit 1
+        fi
+        sleep 3
+      done
+      echo "STAYED_QUEUED=1"
+    capture: queued_watch
+    timeout: 45
+
+  - name: "Capture job B row at the end of the drain window"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_B=$(echo '${captured.job_b_extract}' | grep '^JOB_B=' | cut -d= -f2)
+      curl -s "http://localhost:8000/jobs/${JOB_B}"
+    capture: queued_row
+
+  # A job running at drain-entry finishes normally: its finish_seen
+  # transition, progress delta and complete() all land WHILE draining.
+  - name: "Post finish to job A mid-drain and wait for completion"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_A=$(echo '${captured.job_a_extract}' | grep '^JOB_A=' | cut -d= -f2)
+      curl -s -X POST "http://localhost:8000/jobs/${JOB_A}/events" \
+        -H 'Content-Type: application/json' \
+        -d '{"type":"finish","payload":{}}' | jq -c '.'
+      for i in $(seq 1 30); do
+        ST=$(curl -s "http://localhost:8000/jobs/${JOB_A}" | jq -r '.status')
+        if [ "$ST" = "completed" ]; then
+          echo "A_COMPLETED_DURING_DRAIN=1 after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: job A did not complete within 30s of finish while draining"
+      curl -s "http://localhost:8000/jobs/${JOB_A}" | jq '.'
+      exit 1
+    capture: a_completion_wait
+    timeout: 45
+
+  - name: "Capture job A final row and events"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_A=$(echo '${captured.job_a_extract}' | grep '^JOB_A=' | cut -d= -f2)
+      curl -s "http://localhost:8000/jobs/${JOB_A}"
+    capture: final_a
+
+  - name: "Capture job A event log"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_A=$(echo '${captured.job_a_extract}' | grep '^JOB_A=' | cut -d= -f2)
+      curl -s "http://localhost:8000/jobs/${JOB_A}/events?after=0&limit=100"
+    capture: a_events
+
+  # A is terminal, B is unclaimed — live claims must be 0, still draining.
+  - name: "Registry status after A drained out"
+    handler: shell
+    workdir: /workspace
+    command: meshctl registry status --json
+    capture: status_after_a
+    timeout: 30
+
+  - name: "Job B is STILL queued just before resume"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_B=$(echo '${captured.job_b_extract}' | grep '^JOB_B=' | cut -d= -f2)
+      curl -s "http://localhost:8000/jobs/${JOB_B}"
+    capture: b_pre_resume
+
+  - name: "Resume dispatch"
+    handler: shell
+    workdir: /workspace
+    command: meshctl registry resume
+    capture: resume_out
+    timeout: 30
+
+  # The parked job claims on the next worker poll (~5s cadence).
+  - name: "Job B claims after resume (epoch 1, attempt 1)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_B=$(echo '${captured.job_b_extract}' | grep '^JOB_B=' | cut -d= -f2)
+      for i in $(seq 1 30); do
+        ROW=$(curl -s "http://localhost:8000/jobs/${JOB_B}")
+        OK=$(echo "$ROW" | jq '((.owner_instance_id // "") != "") and (.claim_epoch == 1) and (.attempt_count == 1)')
+        if [ "$OK" = "true" ]; then
+          echo "B_CLAIMED=1 after ~${i}s"
+          echo "$ROW" | jq -c '{status, owner_instance_id, claim_epoch, attempt_count}'
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: job B did not claim within 30s of resume"
+      curl -s "http://localhost:8000/jobs/${JOB_B}" | jq '.'
+      exit 1
+    capture: b_claim_wait
+    timeout: 45
+
+  - name: "Post finish to job B and wait for completion"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_B=$(echo '${captured.job_b_extract}' | grep '^JOB_B=' | cut -d= -f2)
+      curl -s -X POST "http://localhost:8000/jobs/${JOB_B}/events" \
+        -H 'Content-Type: application/json' \
+        -d '{"type":"finish","payload":{}}' | jq -c '.'
+      for i in $(seq 1 30); do
+        ST=$(curl -s "http://localhost:8000/jobs/${JOB_B}" | jq -r '.status')
+        if [ "$ST" = "completed" ]; then
+          echo "B_COMPLETED=1 after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: job B did not complete within 30s of finish"
+      curl -s "http://localhost:8000/jobs/${JOB_B}" | jq '.'
+      exit 1
+    capture: b_completion_wait
+    timeout: 45
+
+  - name: "Capture job B final row"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_B=$(echo '${captured.job_b_extract}' | grep '^JOB_B=' | cut -d= -f2)
+      curl -s "http://localhost:8000/jobs/${JOB_B}"
+    capture: final_b
+
+  - name: "Registry status after resume"
+    handler: shell
+    workdir: /workspace
+    command: meshctl registry status --json
+    capture: status_final
+    timeout: 30
+
+assertions:
+  # IDIOM: equality lives INSIDE the jq filter so the interpolation yields a
+  # bare true/false (the interpolation body cannot contain '}').
+
+  # Scenario markers
+  - expr: "${captured.wait_registration} contains 'AGENTS_READY=1'"
+    message: "worker and driver must register before any job is submitted"
+  - expr: "${captured.a_claim_wait} contains 'A_CLAIMED=1'"
+    message: "job A must be running (claimed) BEFORE drain enters"
+  - expr: "${captured.queued_watch} contains 'STAYED_QUEUED=1'"
+    message: "job B must stay unclaimed across the entire drain watch window"
+  - expr: "${captured.a_completion_wait} contains 'A_COMPLETED_DURING_DRAIN=1'"
+    message: "a job running at drain-entry must finish normally while draining"
+  - expr: "${captured.b_claim_wait} contains 'B_CLAIMED=1'"
+    message: "the parked job must claim after resume"
+  - expr: "${captured.b_completion_wait} contains 'B_COMPLETED=1'"
+    message: "the parked job must complete normally after resume"
+
+  # CLI surfaces
+  - expr: "${captured.drain_out} contains 'Registry draining'"
+    message: "meshctl registry drain must report drain entry"
+  - expr: "${captured.drain_out} contains 'Live claims: 1'"
+    message: "the drain response must count job A as the one live claim"
+  - expr: "${captured.status_human} contains 'DRAINING'"
+    message: "meshctl registry status must render the draining state"
+  - expr: "${captured.resume_out} contains 'Registry resumed'"
+    message: "meshctl registry resume must report dispatch is active again"
+
+  # Drain state machine via --json
+  - expr: "${jq:captured.status_draining:(.draining == true) and (.live_claims == 1)} == 'true'"
+    message: "while draining with job A running, status must show draining=true and live_claims=1"
+  - expr: "${jq:captured.status_after_a:(.draining == true) and (.live_claims == 0)} == 'true'"
+    message: "after A completes (B unclaimed), status must show draining=true and live_claims=0 — unclaimed queued jobs never count"
+  - expr: "${jq:captured.status_final:.draining == false} == 'true'"
+    message: "after resume the registry must report draining=false"
+
+  # Queued job parked with NO attempt burn during drain.
+  - expr: "${jq:captured.queued_row:(.owner_instance_id == null) and (.attempt_count == 0) and (.status == \"working\")} == 'true'"
+    message: "during drain the queued job must keep owner NULL and attempt_count 0"
+  - expr: "${jq:captured.b_pre_resume:(.owner_instance_id == null) and (.attempt_count == 0)} == 'true'"
+    message: "the queued job must still be parked right up to resume"
+
+  # Job A finished normally DURING drain — deltas accepted, single claim.
+  - expr: "${jq:captured.final_a:(.status == \"completed\") and (.attempt_count == 1) and (.claim_epoch == 1)} == 'true'"
+    message: "the drain-entry job must complete from its single epoch-1 claim"
+  - expr: "${jq:captured.final_a:(.result.attempt == 1) and (.result.epoch == 1)} == 'true'"
+    message: "job A's terminal result (a delta written mid-drain) must be accepted and stamped attempt 1 / epoch 1"
+  - expr: "${jq:captured.a_events:([.events[] | select(.type == \"transition\") | select(.payload.marker == \"finish_seen\")] | all(.payload.epoch == 1)) and ([.events[] | select(.type == \"transition\") | select(.payload.marker == \"finish_seen\")] | length) == 1} == 'true'"
+    message: "job A's finish_seen transition (posted mid-drain) must land exactly once, from epoch 1"
+
+  # Job B claimed exactly once after resume.
+  - expr: "${jq:captured.final_b:(.status == \"completed\") and (.attempt_count == 1) and (.claim_epoch == 1)} == 'true'"
+    message: "the parked job must complete from a single first claim after resume — no attempt was burned during drain"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

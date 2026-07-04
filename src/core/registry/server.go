@@ -298,6 +298,9 @@ func (s *Server) setupOperationalEndpoints() {
 	if s.config.AdminPort <= 0 {
 		s.engine.GET("/admin/entities", s.handleListEntities)
 		s.engine.POST("/admin/rotate", s.handleRotateTrigger)
+		s.engine.POST("/admin/drain", s.handleDrainStart)
+		s.engine.DELETE("/admin/drain", s.handleDrainStop)
+		s.engine.GET("/admin/drain", s.handleDrainStatus)
 	}
 }
 
@@ -512,6 +515,9 @@ func (s *Server) startAdminServer(port int) {
 
 	adminEngine.GET("/admin/entities", s.handleListEntities)
 	adminEngine.POST("/admin/rotate", s.handleRotateTrigger)
+	adminEngine.POST("/admin/drain", s.handleDrainStart)
+	adminEngine.DELETE("/admin/drain", s.handleDrainStop)
+	adminEngine.GET("/admin/drain", s.handleDrainStatus)
 
 	go func() {
 		addr := fmt.Sprintf(":%d", port)
@@ -623,4 +629,60 @@ func (s *Server) handleRotateTrigger(c *gin.Context) {
 		"affected_agents": count,
 		"entity_id":       entityID,
 	})
+}
+
+// drainStatusResponse writes the current drain state plus the live-claim
+// count. live_claims = non-terminal jobs with a non-null owner (the signal an
+// operator watches drop to zero before restarting). Shared by all three
+// /admin/drain verbs so they always report a consistent view.
+func (s *Server) drainStatusResponse(c *gin.Context) {
+	live, err := s.service.CountLiveClaims(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": fmt.Sprintf("failed to count live claims: %v", err),
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"draining":    s.service.IsDraining(),
+		"live_claims": live,
+	})
+}
+
+// handleDrainStart implements POST /admin/drain (issue #1267). Enters drain
+// mode: ClaimNextJob dispatches no new work while running jobs finish
+// normally. In-memory only — a registry restart clears drain.
+//
+// The live-claim count is taken BEFORE engaging the flag so a backend error
+// returns 503 without silently leaving the registry drained (the operator sees
+// a clean failure and can retry, rather than a registry that has quietly
+// stopped dispatching behind a 503).
+func (s *Server) handleDrainStart(c *gin.Context) {
+	live, err := s.service.CountLiveClaims(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": fmt.Sprintf("failed to count live claims: %v", err),
+		})
+		return
+	}
+	s.service.SetDraining(true)
+	s.logger.Info("🛠️ Registry drain mode ENABLED — new job claims are paused")
+	c.JSON(http.StatusOK, gin.H{
+		"draining":    true,
+		"live_claims": live,
+	})
+}
+
+// handleDrainStop implements DELETE /admin/drain (issue #1267). Resumes
+// normal dispatch; queued jobs become claimable again in FIFO order.
+func (s *Server) handleDrainStop(c *gin.Context) {
+	s.service.SetDraining(false)
+	s.logger.Info("🛠️ Registry drain mode DISABLED — job claims resumed")
+	s.drainStatusResponse(c)
+}
+
+// handleDrainStatus implements GET /admin/drain (issue #1267). Reports
+// {draining, live_claims} without changing state.
+func (s *Server) handleDrainStatus(c *gin.Context) {
+	s.drainStatusResponse(c)
 }

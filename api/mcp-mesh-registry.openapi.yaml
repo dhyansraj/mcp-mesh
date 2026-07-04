@@ -585,6 +585,63 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /jobs/{job_id}/reclaim:
+    post:
+      tags: [jobs]
+      summary: Admin force-reclaim (evict the current owner's lease)
+      description: |
+        Forces the lease-expiry path for a single job exactly as the registry
+        sweep's `ReclaimExpiredLeaseJobs` does: clears `owner_instance_id`,
+        `lease_expires_at`, and `last_heartbeat_at`, and normalises status to
+        `working` so the row is immediately claimable again. `claim_epoch` is
+        left UNTOUCHED — the NEXT claim mints the new generation, so the
+        superseded execution's in-flight deltas/reads are fenced as
+        `claim_superseded` on the standard supersession path.
+
+        Semantics are identical to a natural lease expiry — no new state
+        transition, just an operator trigger. Used to deliberately exercise
+        epoch fencing / supersession in staging and incident drills (a healthy
+        handler renews its lease on every poll, so a re-claim is otherwise
+        nearly impossible to produce on demand), and to evict a job from a
+        replica that must be drained.
+
+        Terminal jobs (`completed`/`failed`/`cancelled`) are rejected 409 —
+        there is no owner to evict. Same auth posture as `/jobs/{job_id}/cancel`
+        (possession of `job_id` is the capability; no per-caller verification).
+      operationId: reclaimJob
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Server-assigned job identifier (UUID)
+      responses:
+        "200":
+          description: Owner evicted; job reset to claimable (claim_epoch unchanged)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReclaimJobResponse"
+        "404":
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Job already in a terminal state — nothing to reclaim
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Registry backend unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /jobs/{job_id}/events:
     post:
       tags: [jobs]
@@ -2903,6 +2960,7 @@ components:
           status,
           submitted_payload,
           attempt_count,
+          claim_epoch,
           max_retries,
           submitted_at,
           submitted_by,
@@ -2923,6 +2981,19 @@ components:
           nullable: true
           example: "claude-provider-replica-2"
           description: Instance currently leasing this job (null if unclaimed/orphaned).
+        claim_epoch:
+          type: integer
+          format: int64
+          minimum: 0
+          example: 2
+          description: |
+            Monotonic claim generation, incremented by +1 on every successful
+            claim (including a same-instance re-claim after a lease reclaim).
+            `claim_epoch > 1` means the job was re-claimed at least once (owner
+            change / fencing event) — observable here so operators can answer
+            "did this job get re-claimed mid-run?" from a single status read
+            rather than agent-pod log archaeology. Reclaim itself never bumps
+            it; the next claim does. See MESHJOB_DESIGN.org > Fencing & liveness.
         status:
           $ref: "#/components/schemas/JobStatus"
         progress:
@@ -3325,6 +3396,30 @@ components:
           nullable: true
           example: "claude-provider-replica-2"
           description: Owner instance the cancel was forwarded to (null if owner was already dead/orphaned).
+
+    ReclaimJobResponse:
+      type: object
+      required: [status, claim_epoch]
+      description: Result of an admin force-reclaim.
+      properties:
+        status:
+          allOf:
+            - $ref: "#/components/schemas/JobStatus"
+          description: Post-reclaim status — always `working` (row reset to claimable).
+        previous_owner_instance_id:
+          type: string
+          nullable: true
+          example: "claude-provider-replica-2"
+          description: Owner instance that was evicted (null if the job was already unclaimed/orphaned).
+        claim_epoch:
+          type: integer
+          format: int64
+          minimum: 0
+          example: 2
+          description: |
+            Claim generation after the reclaim — UNCHANGED from before the
+            call. Reclaim never bumps the epoch; the next successful claim
+            does, which is what fences the superseded execution.
 
     JobEventPostRequest:
       type: object

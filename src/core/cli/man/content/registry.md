@@ -153,6 +153,38 @@ meshctl status
 meshctl list
 ```
 
+## Drain Mode (Maintenance)
+
+Before a registry upgrade or restart, drain mode turns the informal "quiet window" into a supported operation. While draining, the registry stops handing out new job claims (queued jobs stay queued — no attempt is burned), but running jobs keep renewing their leases and complete normally, and new job submissions are still accepted.
+
+```bash
+# Enter drain mode and block until every running job has released its owner
+meshctl registry drain --wait
+
+# Enter drain mode without waiting (poll separately)
+meshctl registry drain
+
+# Show drain state and how many live claims remain
+meshctl registry status
+
+# Resume normal dispatch (queued jobs become claimable again, FIFO)
+meshctl registry resume
+```
+
+`live_claims` counts non-terminal jobs that still have an owner — the number to watch drop to zero before restarting. Drain state is held in memory only: **restarting the registry clears drain**, so a restarted process comes back dispatching normally. `--wait` aborts with an error if the registry stops draining mid-wait (a concurrent `resume` or restart), rather than falsely reporting "safe to restart".
+
+### Separate admin port
+
+If the registry is hardened with a dedicated admin port (`MCP_MESH_ADMIN_PORT`), the `/admin/drain` endpoints live **only** on that port — the public port returns 404. Point `--registry-url` at the admin address:
+
+```bash
+meshctl registry status --registry-url http://localhost:<admin-port>
+```
+
+### Multi-replica (HA) caveat
+
+Drain state is **per-replica** (in-memory, not shared). In a multi-replica deployment a load balancer may route each `meshctl registry` command to a different replica, so `registry status` can flap between replicas and a single `registry drain` pauses only the replica that served the request — not the whole fleet. Before an HA upgrade, **drain every replica** by targeting each replica's address directly (`--registry-url`), and remember that restarting any replica clears its own drain.
+
 ## High Availability
 
 The registry supports multiple replicas for high availability. All replicas share the same PostgreSQL database — no additional configuration is needed.

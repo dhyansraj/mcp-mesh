@@ -666,6 +666,60 @@ func (h *EntBusinessLogicHandlers) CancelJob(c *gin.Context, jobId string) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// ReclaimJob implements POST /jobs/{job_id}/reclaim.
+//
+// Admin force-reclaim: forces the lease-expiry path for a single job exactly
+// as the sweep's ReclaimExpiredLeaseJobs does — clears owner + lease +
+// last_heartbeat, normalises status to `working` so the row is claimable
+// again, and leaves claim_epoch UNTOUCHED (the next claim mints the new
+// generation, fencing the superseded execution). See ForceReclaimJob.
+//
+// Terminal jobs are rejected 409 (mirrors CancelJob's already-terminal idiom)
+// — there is no owner to evict. Same auth posture as CancelJob (possession of
+// job_id is the capability).
+func (h *EntBusinessLogicHandlers) ReclaimJob(c *gin.Context, jobId string) {
+	if jobId == "" {
+		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
+			Error:     "job_id is required",
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+
+	updated, prevOwner, err := h.entService.ForceReclaimJob(c.Request.Context(), jobId)
+	if err != nil {
+		switch {
+		case ent.IsNotFound(err):
+			c.JSON(http.StatusNotFound, generated.ErrorResponse{
+				Error:     fmt.Sprintf("job not found: %s", jobId),
+				Timestamp: time.Now().UTC(),
+			})
+		case errors.Is(err, ErrJobAlreadyTerminal):
+			c.JSON(http.StatusConflict, generated.ErrorResponse{
+				Error:     "job is already in a terminal state",
+				Timestamp: time.Now().UTC(),
+			})
+		case errors.Is(err, ErrJobReclaimConflict):
+			c.JSON(http.StatusConflict, generated.ErrorResponse{
+				Error:     "job was re-claimed concurrently; reclaim not applied",
+				Timestamp: time.Now().UTC(),
+			})
+		default:
+			c.JSON(http.StatusServiceUnavailable, generated.ErrorResponse{
+				Error:     fmt.Sprintf("Failed to reclaim job: %v", err),
+				Timestamp: time.Now().UTC(),
+			})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, generated.ReclaimJobResponse{
+		Status:                  generated.JobStatus(string(updated.Status)),
+		PreviousOwnerInstanceId: prevOwner,
+		ClaimEpoch:              updated.ClaimEpoch,
+	})
+}
+
 // forwardCancelToOwner POSTs the cancel to the owner agent's HTTP endpoint
 // best-effort. Any failure (agent unknown, unreachable, non-2xx) is logged
 // and swallowed: the registry row already shows status=cancelled, and a
@@ -875,6 +929,7 @@ func jobToAPI(j *ent.Job) generated.Job {
 		Status:           generated.JobStatus(string(j.Status)),
 		SubmittedPayload: j.SubmittedPayload,
 		AttemptCount:     j.AttemptCount,
+		ClaimEpoch:       j.ClaimEpoch,
 		MaxRetries:       j.MaxRetries,
 		SubmittedAt:      int(j.SubmittedAt.Unix()),
 		OwnerInstanceId:  j.OwnerInstanceID,

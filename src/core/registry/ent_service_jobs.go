@@ -671,6 +671,21 @@ func (s *EntService) ClaimNextJob(ctx context.Context, capability, instanceID st
 		return nil, fmt.Errorf("ClaimNextJob: instance_id is required")
 	}
 
+	// Drain gate (issue #1267). While the registry is draining we dispatch no
+	// new work: return "no work" before any candidate query or guarded UPDATE,
+	// so queued jobs stay queued with owner=NULL and attempt_count unchanged
+	// (no attempt burn — same self-healing posture as #1258 claim-gating).
+	// Running jobs are untouched: their leases/deltas/reads all still flow, so
+	// they renew and complete normally. Resume simply clears the flag and the
+	// next poll claims in FIFO order as today.
+	if s.IsDraining() {
+		s.logger.Debug(
+			"ClaimNextJob: registry draining — skipping claim for capability %q (instance %q)",
+			capability, instanceID,
+		)
+		return nil, nil
+	}
+
 	now := time.Now().UTC()
 
 	// Claim gating (issue #1249) is evaluated LAZILY — only once a candidate
@@ -837,6 +852,128 @@ func (s *EntService) CancelJob(ctx context.Context, jobID string, reason string)
 // ErrJobAlreadyTerminal is returned by CancelJob when the target job has
 // already reached a terminal state. The handler maps this to HTTP 409.
 var ErrJobAlreadyTerminal = fmt.Errorf("job is already in a terminal state")
+
+// ForceReclaimJob performs an admin-triggered reclaim of a single job,
+// reproducing the reset branch of ReclaimExpiredLeaseJobs on demand (issue
+// #1265). It exists so operators can deliberately exercise epoch fencing /
+// supersession — a healthy handler renews its lease on every poll, so a
+// natural re-claim is nearly impossible to produce for validation/drills —
+// and to evict a job from a replica that must be drained.
+//
+// Field semantics are identical to the sweep's reset branch:
+//   - clears owner_instance_id, lease_expires_at, last_heartbeat_at
+//   - normalises status to `working` (a reclaimed input_required row would
+//     otherwise never be picked back up — ClaimNextJob only claims working)
+//   - leaves claim_epoch UNTOUCHED — reclaim never bumps it; the NEXT claim
+//     (ClaimNextJob's AddClaimEpoch(1)) mints the new generation, which is what
+//     fences the superseded execution's deltas/reads as claim_superseded
+//   - attempt_count is NOT incremented — the claim itself counts as the attempt
+//
+// Unlike the sweep this does not require the lease to have expired: the admin
+// is forcing the reclaim regardless of lease state. Terminal jobs return
+// ErrJobAlreadyTerminal (handler: 409) — there is no owner to evict.
+//
+// Concurrency: the mutation is a GUARDED update (same discipline as
+// ReclaimExpiredLeaseJobs / ClaimNextJob), NOT a read-then-blind-write. The
+// row we read may transition between the read and the write — the live owner's
+// complete()/fail()/cancel() can commit, or a peer can re-claim — under READ
+// COMMITTED with no row lock. The UPDATE is therefore predicated on the row
+// still being non-terminal (working|input_required) AND still carrying the
+// exact owner we observed; if either changed, Affected=0 and we return the
+// conflict outcome (ErrJobAlreadyTerminal on a terminal transition,
+// ErrJobReclaimConflict on a concurrent re-claim) rather than resurrecting a
+// finished job to working/ownerless (which would cause silent double
+// execution).
+//
+// Returns the updated row plus the evicted owner_instance_id (if any), and
+// ent.NotFoundError when the job_id is unknown (handler: 404).
+func (s *EntService) ForceReclaimJob(ctx context.Context, jobID string) (*ent.Job, *string, error) {
+	if jobID == "" {
+		return nil, nil, fmt.Errorf("ForceReclaimJob: job_id is required")
+	}
+
+	var (
+		updated   *ent.Job
+		prevOwner *string
+	)
+
+	err := s.entDB.Transaction(ctx, func(tx *ent.Tx) error {
+		current, err := tx.Job.Query().Where(job.IDEQ(jobID)).Only(ctx)
+		if err != nil {
+			return err // includes ent.NotFoundError
+		}
+		if isTerminalStatus(current.Status) {
+			return ErrJobAlreadyTerminal
+		}
+
+		if current.OwnerInstanceID != nil {
+			owner := *current.OwnerInstanceID
+			prevOwner = &owner
+		}
+
+		// Guarded update (mirrors ReclaimExpiredLeaseJobs' reset branch). The
+		// predicate re-asserts the state we observed: still non-terminal AND
+		// still the same owner. A completion / re-claim racing between the read
+		// above and this write fails the predicate → Affected=0 → we classify
+		// the conflict below instead of clobbering. claim_epoch is left
+		// untouched on purpose — bumping it here would fence the very
+		// re-claimer we are about to hand the job to; minting the new
+		// generation is the next claim's job.
+		guard := []predicate.Job{
+			job.IDEQ(jobID),
+			job.StatusIn(job.StatusWorking, job.StatusInputRequired),
+		}
+		if current.OwnerInstanceID != nil {
+			guard = append(guard, job.OwnerInstanceIDEQ(*current.OwnerInstanceID))
+		} else {
+			guard = append(guard, job.OwnerInstanceIDIsNil())
+		}
+
+		affected, err := tx.Job.Update().
+			Where(guard...).
+			SetStatus(job.StatusWorking).
+			ClearOwnerInstanceID().
+			ClearLeaseExpiresAt().
+			ClearLastHeartbeatAt().
+			Save(ctx)
+		if err != nil {
+			return fmt.Errorf("reclaim job: %w", err)
+		}
+		if affected == 0 {
+			// Lost the race: the row moved on between our read and this write.
+			// Re-read to report the accurate conflict — terminal transition vs
+			// concurrent re-claim.
+			after, rerr := tx.Job.Query().Where(job.IDEQ(jobID)).Only(ctx)
+			if rerr != nil {
+				return rerr // includes ent.NotFoundError (row deleted under us)
+			}
+			if isTerminalStatus(after.Status) {
+				return ErrJobAlreadyTerminal
+			}
+			return ErrJobReclaimConflict
+		}
+
+		// Re-fetch the post-update row (guarded Update().Save returns only the
+		// affected count, not the entity).
+		u, err := tx.Job.Query().Where(job.IDEQ(jobID)).Only(ctx)
+		if err != nil {
+			return fmt.Errorf("reload reclaimed job: %w", err)
+		}
+		updated = u
+		return nil
+	})
+
+	if err != nil {
+		return nil, nil, err
+	}
+	return updated, prevOwner, nil
+}
+
+// ErrJobReclaimConflict is returned by ForceReclaimJob when the target job was
+// re-claimed by a peer (owner changed, still non-terminal) between the read
+// and the guarded write. The handler maps this to HTTP 409 — the reclaim as
+// requested no longer applies.
+var ErrJobReclaimConflict = fmt.Errorf("job was re-claimed concurrently")
 
 // ErrJobNotOwner is returned by ReleaseJob when the caller's instance_id
 // does not match the current owner_instance_id. The handler maps this to

@@ -1,0 +1,198 @@
+# tc03_job_status_claim_fields — the job status surface exposes the fencing /
+# lease forensics fields after a claim (issue #1265, observability half).
+#
+# GET /jobs/{id} (and its CLI wrapper `meshctl job status`) must carry
+# claim_epoch, owner_instance_id, attempt_count and lease_expires_at once a
+# worker has claimed the job — the fields operators use to attribute an
+# execution to a (owner, epoch) pair post-incident. On the terminal row the
+# fencing history must survive (claim_epoch stays at its minted value).
+#
+# Asserts:
+#   - --json output: all four fields PRESENT; claim_epoch == 1,
+#     attempt_count == 1, owner_instance_id non-empty, lease_expires_at a
+#     future-ish positive epoch
+#   - human render: Claim epoch / Lease expiry / owner lines populated
+#   - after completion: status flips, claim_epoch still 1
+
+name: "meshctl job status: claim_epoch/owner/attempt/lease fields visible after claim"
+description: "GET /jobs/:id via meshctl job status --json carries claim_epoch, owner_instance_id, attempt_count and lease_expires_at once claimed; epoch survives to the terminal row"
+tags:
+  - meshjob
+  - python
+  - admin
+  - issue-1265
+  - observability
+timeout: 240
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/admin-worker /workspace/
+      cp -rL /uc-artifacts/admin-driver /workspace/
+
+  - name: "Install worker deps"
+    handler: pip-install
+    path: /workspace/admin-worker
+
+  - name: "Install driver deps"
+    handler: pip-install
+    path: /workspace/admin-driver
+
+  - routine: start_registry
+
+  - name: "Start worker (port 9161)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start admin-worker/main.py --env MCP_MESH_HTTP_PORT=9161 -d
+
+  - name: "Start driver (port 9160)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start admin-driver/main.py --env MCP_MESH_HTTP_PORT=9160 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  - name: "Wait for worker and driver to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        WORKER=$(curl -s http://localhost:8000/agents | jq '[.agents[] | select(.name == "admin-worker")] | length' 2>/dev/null || echo 0)
+        DRIVER=$(curl -s http://localhost:8000/agents | jq '[.agents[] | select(.name == "admin-driver")] | length' 2>/dev/null || echo 0)
+        if [ "$WORKER" -ge 1 ] && [ "$DRIVER" -ge 1 ]; then
+          echo "AGENTS_READY=1 after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: agents did not register within 60s (worker=$WORKER driver=$DRIVER)"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_registration
+    timeout: 90
+
+  - name: "Submit admin_gated (max_duration=45)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call submit_admin_gated '{"max_duration":45,"max_retries":2}'
+    capture: submit_resp
+    timeout: 30
+
+  - name: "Capture job_id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1 | xargs -I{} echo "JOB_ID={}"
+    capture: job_id_extract
+
+  - name: "Wait for the claim (owner set)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      echo "JOB_ID=${JOB_ID}"
+      for i in $(seq 1 30); do
+        OK=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '((.owner_instance_id // "") != "")')
+        if [ "$OK" = "true" ]; then
+          echo "CLAIMED=1 after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: job never claimed within 30s"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '.'
+      exit 1
+    capture: claim_wait
+    timeout: 45
+
+  - name: "Fetch claimed status via meshctl (--json)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      meshctl job status "${JOB_ID}" --json
+    capture: status_json
+    timeout: 30
+
+  - name: "Fetch claimed status via meshctl (human render)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      meshctl job status "${JOB_ID}"
+    capture: status_human
+    timeout: 30
+
+  - name: "Post finish and wait for completion"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      curl -s -X POST "http://localhost:8000/jobs/${JOB_ID}/events" \
+        -H 'Content-Type: application/json' \
+        -d '{"type":"finish","payload":{}}' | jq -c '.'
+      for i in $(seq 1 30); do
+        ST=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.status')
+        if [ "$ST" = "completed" ]; then
+          echo "COMPLETED=1 after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: job did not complete within 30s of finish"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '.'
+      exit 1
+    capture: completion_wait
+    timeout: 45
+
+  - name: "Fetch terminal status via meshctl (--json)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      meshctl job status "${JOB_ID}" --json
+    capture: status_terminal
+    timeout: 30
+
+assertions:
+  # IDIOM: equality lives INSIDE the jq filter so the interpolation yields a
+  # bare true/false (the interpolation body cannot contain '}').
+
+  - expr: "${captured.wait_registration} contains 'AGENTS_READY=1'"
+    message: "worker and driver must register before the job is submitted"
+  - expr: "${captured.claim_wait} contains 'CLAIMED=1'"
+    message: "the job must be claimed before the status surface is inspected"
+  - expr: "${captured.completion_wait} contains 'COMPLETED=1'"
+    message: "the job must complete after finish"
+
+  # Field PRESENCE on the claimed row (the #1265 forensics contract).
+  - expr: "${jq:captured.status_json:(has(\"claim_epoch\")) and (has(\"owner_instance_id\")) and (has(\"attempt_count\")) and (has(\"lease_expires_at\"))} == 'true'"
+    message: "GET /jobs/:id must carry claim_epoch, owner_instance_id, attempt_count and lease_expires_at after a claim"
+
+  # Field VALUES on the claimed row.
+  - expr: "${jq:captured.status_json:(.claim_epoch == 1) and (.attempt_count == 1) and (.status == \"working\")} == 'true'"
+    message: "first claim must show claim_epoch=1 and attempt_count=1 on a working row"
+  - expr: "${jq:captured.status_json:((.owner_instance_id // \"\") != \"\")} == 'true'"
+    message: "owner_instance_id must be populated while the job is claimed"
+  - expr: "${jq:captured.status_json:((.lease_expires_at // 0) > 0)} == 'true'"
+    message: "lease_expires_at must be a positive epoch while the lease is held"
+
+  # Human render surfaces the same fields.
+  - expr: "${captured.status_human} contains 'Claim epoch:  1'"
+    message: "meshctl job status must render the claim epoch"
+  - expr: "${captured.status_human} not contains '(unclaimed)'"
+    message: "the owner line must show the claiming instance, not (unclaimed)"
+  - expr: "${captured.status_human} not contains 'Lease expiry: -'"
+    message: "the lease expiry line must render a timestamp while the lease is held"
+
+  # Fencing history survives to the terminal row.
+  - expr: "${jq:captured.status_terminal:(.status == \"completed\") and (.claim_epoch == 1) and (.attempt_count == 1)} == 'true'"
+    message: "claim_epoch and attempt_count must survive on the terminal row for post-incident forensics"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

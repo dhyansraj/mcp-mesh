@@ -328,6 +328,10 @@ func (h *TestHandlers) CancelJob(c *gin.Context, jobId string) {
 	c.JSON(http.StatusNotImplemented, gin.H{"error": "not implemented"})
 }
 
+func (h *TestHandlers) ReclaimJob(c *gin.Context, jobId string) {
+	c.JSON(http.StatusNotImplemented, gin.H{"error": "not implemented"})
+}
+
 func (h *TestHandlers) ReleaseJob(c *gin.Context, jobId string) {
 	c.JSON(http.StatusNotImplemented, gin.H{"error": "not implemented"})
 }
