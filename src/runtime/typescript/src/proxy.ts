@@ -85,6 +85,63 @@ export function getCurrentPropagatedHeaders(): Record<string, string> {
 }
 
 /**
+ * Propagated-header names carrying the CALLING job's identity (issue #1263).
+ * A dedicated pair — distinct from the push-mode dispatch protocol's
+ * x-mesh-job-id / x-mesh-claim-epoch (x-mesh-job-id doubles as the dispatch
+ * discriminator, so it cannot also carry calling identity).
+ */
+const HDR_CALLING_JOB_ID = "x-mesh-calling-job-id";
+const HDR_CALLING_CLAIM_EPOCH = "x-mesh-calling-claim-epoch";
+
+/**
+ * Identity of the job whose handler made the CURRENT inbound call
+ * (issue #1263). Returned by {@link callingJob}.
+ */
+export interface CallingJob {
+  /** Server-assigned job UUID of the calling job. */
+  jobId: string;
+  /**
+   * Claim generation the caller executes under, or `null` for a push-mode
+   * inbound job / an old SDK that did not seed it.
+   */
+  claimEpoch: number | null;
+}
+
+/**
+ * Return the identity of the job that made the current inbound call, or
+ * `null` when the call did not originate from a job handler (issue #1263).
+ *
+ * Provider-side dual of `currentJob()`: `currentJob()` answers "what job am I
+ * executing as", while `callingJob()` answers "what job invoked me". Reads the
+ * `x-mesh-calling-job-id` / `x-mesh-calling-claim-epoch` propagated headers the
+ * mesh seeds on outbound calls made from within a job execution context, so a
+ * provider can fence stale-executor writes without the caller threading
+ * identity through every payload. It is `null` inside a directly-claimed job
+ * handler (that handler's OWN identity lives on `currentJob()`).
+ *
+ * Safe to call from any tool body — never throws; returns `null` for regular
+ * (non-job) `tools/call` invocations and for calls from an old SDK that did
+ * not propagate the identity. Purely additive.
+ */
+export function callingJob(): CallingJob | null {
+  const headers = getCurrentPropagatedHeaders();
+  const jobId = headers[HDR_CALLING_JOB_ID];
+  if (!jobId) return null;
+  let claimEpoch: number | null = null;
+  const raw = headers[HDR_CALLING_CLAIM_EPOCH];
+  // Strict: only a clean, wholly-numeric, non-negative integer string is a
+  // real epoch (mirrors readJobHeaders / the claim dispatcher). Never
+  // fabricate a `0` the registry didn't mint.
+  if (raw !== undefined && /^\d+$/.test(raw)) {
+    const parsed = Number(raw);
+    if (Number.isInteger(parsed) && parsed >= 0) {
+      claimEpoch = parsed;
+    }
+  }
+  return { jobId, claimEpoch };
+}
+
+/**
  * Run a function with trace context.
  * The context is automatically propagated to all async operations within the callback.
  * This is the preferred way to set trace context for tool execution.
@@ -294,6 +351,25 @@ function buildMcpRequest(
       if (matchesPropagateHeader(key)) {
         mergedHeaders[key.toLowerCase()] = value;
       }
+    }
+  }
+
+  // Issue #1263: overlay the CALLING job's identity so a nested outbound call
+  // made from within a job execution context carries who invoked the
+  // downstream (x-mesh-calling-job-id + x-mesh-calling-claim-epoch), letting
+  // the provider fence out-of-epoch writes via callingJob(). Distinct from the
+  // push-dispatch x-mesh-job-id. Seeded atomically from ONE snapshot and
+  // REPLACING any inherited calling-* pair entirely (both-or-none): set the id
+  // and set-or-clear the epoch together, so a stale inherited epoch can never
+  // ride along with this job's id. When there is no active job the inherited
+  // pair passes through unchanged (transitive identity).
+  const outboundJob = currentJob();
+  if (outboundJob?.jobId) {
+    mergedHeaders[HDR_CALLING_JOB_ID] = outboundJob.jobId;
+    if (outboundJob.claimEpoch !== null) {
+      mergedHeaders[HDR_CALLING_CLAIM_EPOCH] = String(outboundJob.claimEpoch);
+    } else {
+      delete mergedHeaders[HDR_CALLING_CLAIM_EPOCH];
     }
   }
 

@@ -257,6 +257,17 @@ re-runs only the latter on a peer replica.
 `max_retries=3` means up to 4 total attempts. The default is conservative
 — check your runtime's per-tool default and set explicitly when in doubt.
 
+!!! danger "`max_retries` does not soften a real failure"
+
+    A handler exception **not** matched by `retry_on` — and any explicit
+    `fail()` — is **terminal immediately**, regardless of how much of the
+    `max_retries` budget is unspent. That budget covers only crash-style
+    recoveries the runtime retries for you: lease expiry, orphan reclaim,
+    `max_duration` timeout, plus `retry_on`-matched releases. A job that
+    shows `attempt_count: 1` with `max_retries: 3` after a non-transient
+    error has **zero** retries left — not two — it already reached its
+    terminal `failed` state on that first attempt.
+
 !!! warning "Retries restart from scratch"
 
     There are no idempotency keys in v2.x. Every retry runs the handler
@@ -522,6 +533,30 @@ TypeScript, `JobContext.current().claimEpoch` in Java) can be stamped onto
 external side effects so downstream can dedupe a fenced re-execution's
 duplicate write.
 
+**Calling-job identity (provider-side dual).** The stamp above lets a
+handler fence *its own* side effects. When the dedupe target is itself a
+mesh provider — a state-authority agent that must reject writes from a
+*stale executor* it doesn't control — the caller need not thread `job_id` /
+`claim_epoch` through the payload. The mesh seeds them automatically: any
+outbound mesh→mesh tool call made from within a job handler carries the
+calling job's identity on two dedicated propagated headers,
+`x-mesh-calling-job-id` and (when known) `x-mesh-calling-claim-epoch`,
+forwarded by default across every mesh→mesh hop (including the registry's
+proxy hop). The provider reads the pair with `mesh.calling_job()` in Python
+(→ `CallingJob(job_id, claim_epoch)` or `None`), `callingJob()` in TypeScript
+(→ `{ jobId, claimEpoch }` or `null`, exported from the package root), and
+`MeshCallContext.callingJob()` in Java (→ `CallingJob(jobId, claimEpoch)`,
+package `io.mcpmesh.spring`). Each reports the identity of the job that
+**called this tool**, not the job the handler is itself running as — so each
+is the provider-side dual of the job-context accessor: `current_job()` /
+`currentJob()` / `JobContext.current()` answer "what job am I executing
+*as*", while the calling-job accessor answers "what job *invoked* me". All
+three return the empty/`null` identity for a regular (non-job) `tools/call`,
+a caller on an older SDK, and — critically — inside a handler that was
+**claimed directly** (its own identity lives on the job-context accessor,
+not here); the epoch is `null` for a push-mode inbound job. Reading them is
+purely additive and read-only.
+
 The **agent runtime** is a thin client. On the producer side, it
 maintains a claim queue per `task=true` capability (`UPDATE jobs SET
 owner_instance_id = $self WHERE capability = $cap AND status =
@@ -559,6 +594,19 @@ actually exists — so an idle queue pays nothing. Claiming resumes
 automatically within one claim-poll cycle (≤5s backoff ceiling) of the
 required chain recovering, so no retry budget is spent while the capability
 is down.
+
+The gate is **belt-and-suspenders — enforced at both layers.** The
+registry-side transitive predicate (above) keeps the job out of any claim
+response whose `required` chain is down. Consumer-side, the claim worker
+independently **skips claiming** while a `required` dependency slot is still
+unresolved *locally* — the claim gate and the handler's injection read one
+clock, so a dep flapping DOWN→UP cannot slip a job past the registry gate
+into a handler that would see `null`. As a last resort, a **pre-invoke
+guard** that finds a required slot still unresolved at invoke time
+**releases the claim back to the queue** (a lease release, mirroring the
+`retry_on` path — never a terminal `fail()`) rather than running the handler
+with a missing dependency. Net effect: a handler never observes `null` for a
+`required` dependency, including during dependency recovery.
 
 ## What it does NOT do (v2 limitations)
 

@@ -1,0 +1,348 @@
+# tc01_required_dep_flap_claim_gating — a required dep flapping DOWN→UP must
+# NOT let a claim invoke the handler with a null proxy (issue #1268).
+#
+# Contract under test (man jobs, #1258 + #1268): "A claim worker never pulls
+# a job for a capability whose required dependencies are currently
+# unavailable." Pre-fix, the registry-side claim gate and the consumer's
+# local injection ran on two independent clocks: the gate flipped available
+# the moment the provider re-registered, while the consumer's injected proxy
+# slot refilled only on its next heartbeat. A claim granted inside that
+# window ran the handler with a NULL required proxy → TypeError →
+# terminal fail() at attempt_count 1 — a purely topological race
+# permanently failing the job.
+#
+# Topology: flap-provider (flap_data) + flap-worker (checked_task,
+# task=True, required=True dep on flap_data; the handler calls the dep
+# UNGUARDED so a null injection dies loudly). Jobs are submitted directly
+# via POST /jobs (tc07/uc21 precedent) so submission never depends on any
+# agent's own dep availability.
+#
+# Flow:
+#   1. BASELINE — both agents up: submit, job completes normally,
+#      attempt_count == 1.
+#   2. DOWN — stop flap-provider; poll until checked_task flips
+#      available=false (reason names flap_data). Submit a second job and
+#      WATCH it for 24s of claim polls (worker polls every ≤5s): it must
+#      stay queued — owner NULL, attempt_count == 0, no attempt burned.
+#   3. UP — restart flap-provider: the job self-heals — claimed and
+#      completed EXACTLY ONCE (final attempt_count == 1, one stamped
+#      "executed" event), result carries the provider's marker (the handler
+#      really called the required dep), and the worker log has no
+#      NoneType/not-callable signature (the pre-fix symptom).
+#
+# Registration waits are liveness-only (issue #1193); dependency resolution
+# is covered by the settle window + the claim gate itself (a queued baseline
+# job is claimed only once the required slot resolves) — no dep-resolution
+# waits. Availability-transition polls are the scenario itself, with
+# deadlines, never fixed sleeps.
+
+name: "MeshJob claim gating: required dep DOWN->UP flap never burns an attempt or invokes with a null proxy"
+description: "Baseline completes; with the required dep down a submitted job stays queued (owner NULL, attempt_count 0) across 24s of claim polls; after provider restart the job completes exactly once at attempt_count 1 with no null-injection error"
+tags:
+  - integration
+  - meshjob
+  - python
+  - required-deps
+  - claim-gating
+  - issue-1268
+  - slow
+timeout: 420
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/flap-provider /workspace/
+      cp -rL /uc-artifacts/flap-worker /workspace/
+
+  - name: "Install provider deps"
+    handler: pip-install
+    path: /workspace/flap-provider
+
+  - name: "Install worker deps"
+    handler: pip-install
+    path: /workspace/flap-worker
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start flap-provider (port 9101)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start flap-provider/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  - name: "Start flap-worker (port 9102)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start flap-worker/main.py --env MCP_MESH_HTTP_PORT=9102 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  # Liveness only (issue #1193) — no dep-resolution wait: the baseline job
+  # below queues until the worker's required slot resolves and the claim
+  # gate opens, which IS the mechanism under test.
+  - routine: global.wait_for_agents_registered
+    params:
+      agents: "flap-provider flap-worker"
+
+  # ---- Phase 1: baseline (provider UP) --------------------------------
+
+  - name: "Submit baseline job via POST /jobs"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -X POST http://localhost:8000/jobs \
+        -H 'Content-Type: application/json' \
+        -d '{"capability":"checked_task","submitted_payload":{"label":"baseline"},"submitted_by":"tc01-baseline","max_retries":3,"max_duration":30}'
+    capture: baseline_submit
+    timeout: 15
+
+  - name: "Wait for baseline completion"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.baseline_submit}' | jq -r '.id')
+      echo "BASELINE_JOB_ID=${JOB_ID}"
+      for i in $(seq 1 45); do
+        ST=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.status')
+        if [ "$ST" = "completed" ]; then
+          echo "BASELINE_COMPLETED=1 after ~$((i*2))s"
+          exit 0
+        fi
+        if [ "$ST" = "failed" ] || [ "$ST" = "cancelled" ]; then
+          echo "ERROR: baseline job went terminal ${ST}"
+          curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '.'
+          exit 1
+        fi
+        sleep 2
+      done
+      echo "ERROR: baseline job did not complete within 90s (last=${ST})"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '.'
+      meshctl logs flap-worker 2>/dev/null | tail -30 || true
+      exit 1
+    capture: baseline_wait
+    timeout: 110
+
+  - name: "Capture baseline job row"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.baseline_submit}' | jq -r '.id')
+      curl -s "http://localhost:8000/jobs/${JOB_ID}"
+    capture: baseline_job
+
+  # ---- Phase 2: required dep DOWN --------------------------------------
+
+  - name: "Stop flap-provider (graceful — unregister is immediate)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl stop flap-provider
+    capture: stop_provider
+
+  # The registry re-derives checked_task's availability once the provider's
+  # death lands (graceful unregister is immediate; a hard death takes the
+  # cranked health debounce). Poll with a deadline that covers both paths.
+  - name: "Wait for checked_task to flip unavailable"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AVAIL=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name == "flap-worker") | .capabilities[] | select(.name == "checked_task") | .available' 2>/dev/null || echo "")
+        if [ "$AVAIL" = "false" ]; then
+          echo "CHECKED_TASK_UNAVAILABLE=1 after ~$((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: checked_task never flipped to available=false within 120s (last=$AVAIL)"
+      curl -s http://localhost:8000/agents | jq '.agents[] | select(.name == "flap-worker")' 2>/dev/null || true
+      exit 1
+    capture: wait_unavailable
+    timeout: 140
+
+  - name: "Capture /agents snapshot during outage"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:8000/agents
+    capture: agents_during_outage
+
+  - name: "Submit flap-window job via POST /jobs"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -X POST http://localhost:8000/jobs \
+        -H 'Content-Type: application/json' \
+        -d '{"capability":"checked_task","submitted_payload":{"label":"flap"},"submitted_by":"tc01-flap","max_retries":3,"max_duration":30}'
+    capture: flap_submit
+    timeout: 15
+
+  # THE WINDOW: 24s = ~5+ worker claim polls (base 0.5s, backoff cap 5s).
+  # Every poll must leave the row untouched: no owner, attempt_count 0.
+  # This is the #1258/#1268 posture — the job stays queued with NO attempt
+  # burned while the capability's required dep is down. This is the scenario
+  # watch itself, NOT a registration/dep wait.
+  - name: "Watch the down window — job must stay queued, zero attempts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.flap_submit}' | jq -r '.id')
+      echo "FLAP_JOB_ID=${JOB_ID}"
+      for i in $(seq 1 12); do
+        ROW=$(curl -s "http://localhost:8000/jobs/${JOB_ID}")
+        OWNER=$(echo "$ROW" | jq -r '.owner_instance_id // empty')
+        ATTEMPTS=$(echo "$ROW" | jq -r '.attempt_count')
+        ST=$(echo "$ROW" | jq -r '.status')
+        echo "poll ${i}: status=${ST} owner=${OWNER:-null} attempts=${ATTEMPTS}"
+        if [ -n "$OWNER" ]; then
+          echo "FAIL: job was claimed (owner=${OWNER}) while its required dep was DOWN"
+          echo "$ROW" | jq '.'
+          exit 1
+        fi
+        if [ "$ATTEMPTS" != "0" ]; then
+          echo "FAIL: attempt_count=${ATTEMPTS} burned while the required dep was DOWN"
+          echo "$ROW" | jq '.'
+          exit 1
+        fi
+        sleep 2
+      done
+      echo "WINDOW_CLEAN=1"
+    capture: window_watch
+    timeout: 60
+
+  - name: "Capture still-queued flap job row"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.flap_submit}' | jq -r '.id')
+      curl -s "http://localhost:8000/jobs/${JOB_ID}"
+    capture: queued_job
+
+  # ---- Phase 3: required dep back UP ------------------------------------
+
+  - name: "Restart flap-provider"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start flap-provider/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  # Self-heal: provider re-registers -> registry re-derives availability ->
+  # the worker's next heartbeat refills the proxy slot -> the local claim
+  # gate opens within one base poll interval. Post-fix BOTH orderings of
+  # (registry gate open, local slot refilled) are safe — pre-fix the
+  # registry-gate-first ordering invoked the handler on a null proxy.
+  - name: "Wait for flap job completion after recovery"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.flap_submit}' | jq -r '.id')
+      for i in $(seq 1 60); do
+        ST=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.status')
+        if [ "$ST" = "completed" ]; then
+          echo "FLAP_COMPLETED=1 after ~$((i*2))s"
+          exit 0
+        fi
+        if [ "$ST" = "failed" ] || [ "$ST" = "cancelled" ]; then
+          echo "ERROR: flap job went terminal ${ST} — pre-fix symptom is a terminal fail() on the null-proxy TypeError"
+          curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '.'
+          meshctl logs flap-worker 2>/dev/null | tail -40 || true
+          exit 1
+        fi
+        sleep 2
+      done
+      echo "ERROR: flap job did not complete within 120s of provider restart (last=${ST})"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '.'
+      meshctl logs flap-worker 2>/dev/null | tail -40 || true
+      exit 1
+    capture: recovery_wait
+    timeout: 140
+
+  - name: "Capture final flap job row"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.flap_submit}' | jq -r '.id')
+      curl -s "http://localhost:8000/jobs/${JOB_ID}"
+    capture: final_job
+
+  - name: "Capture flap job event log"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.flap_submit}' | jq -r '.id')
+      curl -s "http://localhost:8000/jobs/${JOB_ID}/events?after=0&limit=100"
+    capture: final_events
+
+  # The pre-fix symptom in the worker log: the handler invoked with a null
+  # required proxy raises TypeError: 'NoneType' object is not callable
+  # (Java sibling: NullPointerException). Scan for all of them explicitly
+  # and emit a positive marker so the assertion reads unambiguously.
+  - name: "Scan worker log for null-injection error signatures"
+    handler: shell
+    workdir: /workspace
+    command: |
+      LOG=$( (meshctl logs flap-worker 2>/dev/null; cat ~/.mcp-mesh/logs/flap-worker*.log 2>/dev/null) || true )
+      HITS=$(echo "$LOG" | grep -Ei "NoneType|not callable|NullPointerException" || true)
+      if [ -n "$HITS" ]; then
+        echo "NULL_CALL_ERROR_FOUND=1"
+        echo "$HITS" | head -10
+        exit 1
+      fi
+      echo "NO_NULL_CALL_ERRORS=1"
+    capture: log_scan
+    timeout: 30
+
+assertions:
+  # IDIOM: equality lives INSIDE the jq filter so the interpolation yields a
+  # bare true/false (tsuite Go-formats extracted values, and the interpolation
+  # body cannot contain '}' — hence no object construction in filters).
+
+  # Scenario gates surfaced by the poll steps
+  - expr: "${captured.baseline_wait} contains 'BASELINE_COMPLETED=1'"
+    message: "baseline: with the required dep UP the job must complete normally"
+  - expr: "${captured.wait_unavailable} contains 'CHECKED_TASK_UNAVAILABLE=1'"
+    message: "stopping the provider must flip checked_task to available=false"
+  - expr: "${captured.window_watch} contains 'WINDOW_CLEAN=1'"
+    message: "with the required dep DOWN the job must survive 24s of claim polls unclaimed with zero attempts"
+  - expr: "${captured.recovery_wait} contains 'FLAP_COMPLETED=1'"
+    message: "restarting the provider must self-heal the queued job to completion"
+  - expr: "${captured.log_scan} contains 'NO_NULL_CALL_ERRORS=1'"
+    message: "the worker log must contain no NoneType/not-callable signature — the handler must never run with a null required proxy"
+
+  # Baseline row: completed on its first and only claim, and the handler
+  # really called the required dep (result carries the provider's marker).
+  - expr: "${jq:captured.baseline_job:(.status == \"completed\") and (.attempt_count == 1)} == 'true'"
+    message: "baseline job must complete at attempt_count == 1"
+  - expr: "${jq:captured.baseline_job:(.result.dep_marker // \"\") | contains(\"flap-provider-live\")} == 'true'"
+    message: "baseline result must carry the provider marker — the handler called the required dep"
+
+  # Outage observability (#1258): checked_task unavailable, reason names the
+  # broken required edge, WHILE flap-worker itself stays registered+healthy.
+  - expr: "${jq:captured.agents_during_outage:(.agents[] | select(.name == \"flap-worker\") | .capabilities[] | select(.name == \"checked_task\") | .available == false)} == 'true'"
+    message: "checked_task must be available=false while its required flap_data edge is broken"
+  - expr: "${jq:captured.agents_during_outage:(.agents[] | select(.name == \"flap-worker\") | .capabilities[] | select(.name == \"checked_task\") | .unavailable_reason // \"\" | contains(\"flap_data\"))} == 'true'"
+    message: "checked_task's unavailable_reason must name the broken required edge (flap_data)"
+  - expr: "${jq:captured.agents_during_outage:(.agents[] | select(.name == \"flap-worker\") | .status == \"healthy\")} == 'true'"
+    message: "flap-worker must stay HEALTHY — unavailability is capability-level derived state"
+
+  # The window row: queued shape — status working, NO owner, ZERO attempts.
+  - expr: "${jq:captured.queued_job:(.status == \"working\") and (.owner_instance_id == null) and (.attempt_count == 0)} == 'true'"
+    message: "after the watch window the job row must still be the unclaimed shape: working, owner NULL, attempt_count 0"
+
+  # Recovery: completed EXACTLY ONCE — attempt_count 1 means no attempt was
+  # burned by a claim granted inside the race window (a pre-invoke-guard
+  # release would show attempt_count > 1; a pre-fix terminal fail would show
+  # status failed).
+  - expr: "${jq:captured.final_job:(.status == \"completed\") and (.attempt_count == 1)} == 'true'"
+    message: "flap job must complete on its FIRST claim after recovery (attempt_count == 1 — no attempts burned in the race window)"
+  - expr: "${jq:captured.final_job:(.result.label == \"flap\") and ((.result.dep_marker // \"\") | contains(\"flap-provider-live\"))} == 'true'"
+    message: "flap result must carry the provider marker — the handler called the restarted required dep for real"
+
+  # Exactly-once from the event log: ONE stamped execution, claim epoch 1.
+  - expr: "${jq:captured.final_events:([.events[] | select(.type == \"transition\") | select(.payload.marker == \"executed\") | select(.payload.label == \"flap\")] | length) == 1} == 'true'"
+    message: "exactly ONE stamped 'executed' event — the handler must have run exactly once"
+  - expr: "${jq:captured.final_events:([.events[] | select(.type == \"transition\") | select(.payload.label == \"flap\")] | all(.payload.epoch == 1))} == 'true'"
+    message: "the single execution must carry claim epoch 1 — no earlier claim ever ran"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

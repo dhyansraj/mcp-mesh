@@ -210,6 +210,15 @@ def __getattr__(name):
         from _mcp_mesh.tracing.context import TraceContext
 
         return TraceContext
+    elif name == "calling_job":
+        # Issue #1263: provider-side accessor for the calling job's identity.
+        from _mcp_mesh.engine.job_context import calling_job
+
+        return calling_job
+    elif name == "CallingJob":
+        from _mcp_mesh.engine.job_context import CallingJob
+
+        return CallingJob
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 

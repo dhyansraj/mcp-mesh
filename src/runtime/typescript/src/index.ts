@@ -192,7 +192,7 @@ export {
 } from "./route.js";
 
 // Proxy utilities (for advanced use)
-export { createProxy, normalizeDependency, getCurrentPropagatedHeaders, extractContent, streamMcpTool, type MultiContentResult } from "./proxy.js";
+export { createProxy, normalizeDependency, getCurrentPropagatedHeaders, callingJob, type CallingJob, extractContent, streamMcpTool, type MultiContentResult } from "./proxy.js";
 
 // Tracing utilities (for advanced use)
 export {

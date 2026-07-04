@@ -30,6 +30,19 @@ function parsePropagateHeaders(): string[] {
   if (!headers.includes("x-mesh-timeout")) {
     headers.push("x-mesh-timeout");
   }
+  // Issue #1263: the CALLING job's identity travels as a dedicated infra header
+  // pair so a downstream provider can fence out-of-epoch writes (callingJob())
+  // without every app hand-threading job_id/claim_epoch through payloads. This
+  // is a distinct pair from x-mesh-job-id / x-mesh-claim-epoch — those are the
+  // push-mode dispatch protocol (x-mesh-job-id doubles as the dispatch
+  // discriminator, so it CANNOT also carry calling identity). Always
+  // allowlisted so they survive the downstream capture filter (same treatment
+  // as x-mesh-timeout).
+  for (const infra of ["x-mesh-calling-job-id", "x-mesh-calling-claim-epoch"]) {
+    if (!headers.includes(infra)) {
+      headers.push(infra);
+    }
+  }
   return headers;
 }
 

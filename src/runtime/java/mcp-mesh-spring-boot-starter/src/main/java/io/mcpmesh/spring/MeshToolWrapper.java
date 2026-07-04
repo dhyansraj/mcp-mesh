@@ -111,6 +111,15 @@ public class MeshToolWrapper implements McpToolHandler {
     // Dependency names for error messages
     private final List<String> dependencyNames;
 
+    // Per declared-dependency-index required flags (issue #1268), parallel to
+    // {@link #dependencyNames}. Threaded by {@link MeshToolBeanPostProcessor}
+    // from {@code @MeshTool(dependencies=...)} {@code Selector.required()}.
+    // All-false (optional) until set, so the claim gate is a no-op for tools
+    // with no required deps and for the many test constructors that never set
+    // it. Consulted by {@link #requiredDepsResolved()} (pre-claim gate) and
+    // {@link #invokeForClaim} (pre-invoke safety net).
+    private volatile boolean[] dependencyRequired;
+
     // Positional pairing between the DECLARED dependency list and this
     // method's injectable slots (issue #1193 fix round). Declared
     // dependencies pair positionally with injectable parameters
@@ -234,6 +243,9 @@ public class MeshToolWrapper implements McpToolHandler {
         this.task = task;
         this.retryOn = retryOn != null ? retryOn : EMPTY_RETRY_ON;
         this.dependencyNames = dependencyNames != null ? dependencyNames : List.of();
+        // Default all-optional (#1268) until MeshToolBeanPostProcessor threads
+        // the per-dep required flags via setDependencyRequired.
+        this.dependencyRequired = new boolean[this.dependencyNames.size()];
         this.objectMapper = objectMapper;
 
         // Make method accessible (for private methods)
@@ -432,6 +444,66 @@ public class MeshToolWrapper implements McpToolHandler {
             MeshSettleState.getInstance().markResolved(
                 MeshToolWrapperRegistry.buildDependencyKey(funcId, depIndex));
         }
+    }
+
+    /**
+     * Thread the per-declared-dependency {@code required} flags (issue #1268)
+     * from {@code @MeshTool(dependencies=...)} {@code Selector.required()}.
+     * The list is positional to the DECLARED dependency list (the same order
+     * as {@code dependencyNames}); shorter/longer lists are tolerated (missing
+     * entries default optional). Called once at wrapper registration by
+     * {@link MeshToolBeanPostProcessor}.
+     *
+     * @param required per-declared-dependency required flags, or null (no-op)
+     */
+    public void setDependencyRequired(List<Boolean> required) {
+        if (required == null) {
+            return;
+        }
+        boolean[] flags = new boolean[dependencyNames.size()];
+        for (int i = 0; i < flags.length && i < required.size(); i++) {
+            flags[i] = Boolean.TRUE.equals(required.get(i));
+        }
+        this.dependencyRequired = flags;
+    }
+
+    /**
+     * Issue #1268 pre-claim / pre-invoke gate: whether every {@code required}
+     * McpMeshTool dependency slot is locally resolved — non-null AND
+     * {@link McpMeshTool#isAvailable()} (the same notion the route interceptor
+     * enforces at {@code MeshRouteHandlerInterceptor}). Optional slots never
+     * gate. Consulted by the {@link ClaimDispatcher} before each
+     * {@code /jobs/claim} attempt so a job whose required dep is momentarily
+     * unresolved stays queued (no owner, no attempt burn) and self-heals on a
+     * later poll.
+     *
+     * @return true when all required deps are resolved (safe to claim/invoke)
+     */
+    public boolean requiredDepsResolved() {
+        return firstUnresolvedRequiredDependency() == null;
+    }
+
+    /**
+     * The capability name of the first {@code required} McpMeshTool dependency
+     * that is currently unresolved (null slot OR present-but-{@code !isAvailable()}),
+     * or {@code null} when every required dep is resolved (issue #1268).
+     * Package-private: method-referenced by {@link JobsRuntimeManager} to gate
+     * the claim loop with a named reason, and asserted directly in unit tests.
+     */
+    @SuppressWarnings("rawtypes")
+    String firstUnresolvedRequiredDependency() {
+        boolean[] req = this.dependencyRequired;
+        for (int slot = 0; slot < meshToolPositions.size(); slot++) {
+            int depIdx = slotToDepIndex[slot];
+            if (depIdx < 0 || depIdx >= req.length || !req[depIdx]) {
+                continue;
+            }
+            McpMeshTool proxy = injectedDeps.get(slot);
+            if (proxy == null || !proxy.isAvailable()) {
+                return dependencyNames.get(depIdx);
+            }
+        }
+        return null;
     }
 
     /**
@@ -734,7 +806,9 @@ public class MeshToolWrapper implements McpToolHandler {
             // claim dispatcher (which re-enters its wrapper and seeds the
             // header) forwarding into a Java tool. Absent ⇒ null ⇒ legacy
             // owner-only fencing; never fabricate a 0. Parse kept regardless
-            // (harmless, future-proof).
+            // (harmless, future-proof). NOTE (#1263): the calling-job identity
+            // carrier (x-mesh-calling-*) is intentionally SEPARATE from this
+            // protocol pair and never feeds this dispatch gate.
             Long claimEpoch = parseClaimEpochHeader(
                 propagated != null ? propagated.get("x-mesh-claim-epoch") : null);
             return dispatchAsJob(cleanArgs, jobIdHeader, deadlineSecs, claimEpoch);
@@ -918,6 +992,42 @@ public class MeshToolWrapper implements McpToolHandler {
      */
     Object invokeForClaim(Map<String, Object> payload, JobController controller, Long deadlineSecs)
             throws Exception {
+        return invokeForClaim(payload, controller, deadlineSecs,
+            reason -> {
+                if (controller != null) {
+                    controller.releaseLease(reason);
+                }
+            });
+    }
+
+    /**
+     * Claim-path entry point with an injectable lease-release action
+     * (issue #1268). The {@code leaseReleaser} seam lets unit tests assert the
+     * pre-invoke guard's release path without an FFI-backed
+     * {@link JobController}; the production overload above supplies
+     * {@link JobController#releaseLease(String)}.
+     *
+     * <p><b>Pre-invoke required-dependency guard (safety net):</b> the claim
+     * gate ({@link #requiredDepsResolved()}) and the consumer's local proxy
+     * injection run on two independent clocks, so a required dep flapping
+     * DOWN→UP can grant a claim whose slot is still null at invocation time. If
+     * a required slot is null/unavailable here, do NOT invoke the handler (it
+     * would observe a null required proxy and NPE) and do NOT {@code fail()}
+     * (terminal by design — that would reproduce the very bug this guards). The
+     * lease is released so the job returns to the queue (retryable while budget
+     * remains) and self-heals once the proxy lands.
+     */
+    Object invokeForClaim(Map<String, Object> payload, JobController controller, Long deadlineSecs,
+                          java.util.function.Consumer<String> leaseReleaser)
+            throws Exception {
+        String missing = firstUnresolvedRequiredDependency();
+        if (missing != null) {
+            log.warn("Claim-invoke guard for {}: required dependency '{}' unavailable at "
+                + "invocation time — releasing lease so the job re-queues (NOT failing; "
+                + "a handler exception would be terminal by design)", funcId, missing);
+            leaseReleaser.accept("required dependency unavailable: " + missing);
+            return null;
+        }
         Object[] fullArgs = buildFullArgs(payload != null ? payload : Map.of());
         if (meshJobParamIndex != null) {
             fullArgs[meshJobParamIndex] = controller;

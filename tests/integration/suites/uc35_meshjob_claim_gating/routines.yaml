@@ -1,0 +1,58 @@
+# UC-level routines for uc35_meshjob_claim_gating (issue #1268).
+#
+# Clone of uc33's fast-sweep registry routine. The knobs that matter here:
+#
+#   - MCP_MESH_SWEEP_INTERVAL=10s + HEALTH knobs — a DOWN provider is
+#     detected fast, so the availability flip the flap scenario polls for
+#     lands in seconds, not minutes (see uc21/routines.yaml for the full
+#     knob-chain documentation).
+#   - MCP_MESH_RETENTION=60s (NOT 10s) — the tc reads the job's event log
+#     AFTER the job goes terminal to assert exactly-once execution; at 10s
+#     the terminal-event GC could wipe the log before the final captures
+#     (same rationale as uc33).
+#   - MCP_MESH_JOB_STALE_TIMEOUT deliberately NOT set — the whole point of
+#     the flap window is a job that sits QUEUED (owner NULL, attempt 0) for
+#     tens of seconds while its capability's required dep is down. A stale
+#     ceiling would reap exactly that job and mask the claim-gating
+#     behaviour under test.
+
+routines:
+  start_registry_with_fast_sweep:
+    description: "Start the mesh registry with sweep/health knobs cranked for fast down-detection"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: |
+          MCP_MESH_SWEEP_INTERVAL=10s \
+          MCP_MESH_RETENTION=60s \
+          MCP_MESH_HEALTH_CHECK_INTERVAL=5 \
+          DEFAULT_TIMEOUT_THRESHOLD=15 \
+            meshctl start --registry-only -d
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              echo "registry ready after ${i}s"
+              # Verify the sweep override actually stamped its log line.
+              # If MCP_MESH_SWEEP_INTERVAL didn't take effect the suite
+              # must fail loudly here, not via slow per-test timeouts.
+              tail -n 200 ~/.mcp-mesh/logs/registry.log \
+                | grep -qE '\[sweep\] using MCP_MESH_SWEEP_INTERVAL' \
+                || { echo "FAIL: MCP_MESH_SWEEP_INTERVAL override did not take effect"; exit 1; }
+              echo "[setup] confirmed sweep override active"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "ERROR: registry did not become ready in 20s"
+          tail -50 ~/.mcp-mesh/logs/registry.log 2>/dev/null || true
+          exit 1
+        capture: registry_start
+        timeout: 30
+
+  # Stop everything started by this test (agents + registry).
+  stop_all:
+    description: "Stop all mesh processes started by this test"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: meshctl stop 2>/dev/null || true
+        ignore_errors: true
