@@ -1,5 +1,5 @@
 # Dockerfile for ts-report-agent MCP Mesh agent
-FROM mcpmesh/typescript-runtime:2.8.1
+FROM mcpmesh/typescript-runtime:2.8.2
 
 WORKDIR /app
 
