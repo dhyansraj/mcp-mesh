@@ -227,6 +227,12 @@ var guideRegistry = map[string]*Guide{
 		Title:       "TripPlanner Tutorial",
 		Description: "10-day tutorial: scaffold to Kubernetes (use --day N for a single chapter)",
 	},
+	"upgrading": {
+		Name:        "upgrading",
+		Aliases:     []string{"upgrade", "migration", "migrations", "rollback"},
+		Title:       "Upgrading a Live Mesh",
+		Description: "Upgrade order, version-skew guarantees, schema migrations, and in-flight job safety (drain mode)",
+	},
 }
 
 // aliasMap maps aliases to canonical guide names.
@@ -340,7 +346,7 @@ func ListGuides() []*Guide {
 		"schema-matching", "decorators",
 		"dependency-injection", "audit", "streaming", "jobs", "a2a", "health", "registry", "llm", "media", "multimodal",
 		"proxies", "api", "environment", "kwargs", "deployment", "observability", "headers",
-		"testing", "scaffold", "cli", "security",
+		"testing", "scaffold", "cli", "security", "upgrading",
 	}
 	for _, name := range order {
 		if guide, ok := guideRegistry[name]; ok {
