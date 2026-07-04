@@ -299,6 +299,12 @@ public class MeshToolBeanPostProcessor implements BeanPostProcessor, Ordered {
             annotation.retryOn()
         );
 
+        // Issue #1268: thread the per-declared-dependency required flags so
+        // the claim gate (pre-claim skip + pre-invoke guard) knows which
+        // dependency slots must be resolved before a job may run. Aligned to
+        // the same filtered declaration order as dependencyNames.
+        wrapper.setDependencyRequired(extractDependencyRequired(annotation));
+
         // Issue #923: when @A2AConsumer wired this method, hand the
         // wrapper the cached A2AClient + slot index so dispatch
         // populates the parameter at invoke time.
@@ -331,5 +337,24 @@ public class MeshToolBeanPostProcessor implements BeanPostProcessor, Ordered {
             }
         }
         return names;
+    }
+
+    /**
+     * Extract the per-declared-dependency {@code required} flags (issue #1268)
+     * in the SAME filtered order as {@link #extractDependencyNames} — only
+     * selectors with a non-empty capability contribute — so the two lists are
+     * positionally aligned.
+     *
+     * @param annotation The @MeshTool annotation
+     * @return required flags in declaration order (parallel to dependency names)
+     */
+    private List<Boolean> extractDependencyRequired(MeshTool annotation) {
+        List<Boolean> required = new ArrayList<>();
+        for (Selector selector : annotation.dependencies()) {
+            if (!selector.capability().isEmpty()) {
+                required.add(selector.required());
+            }
+        }
+        return required;
     }
 }

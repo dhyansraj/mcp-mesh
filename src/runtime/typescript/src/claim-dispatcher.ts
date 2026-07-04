@@ -88,6 +88,23 @@ export class ClaimDispatcher {
    * fail-on-throw behaviour).
    */
   private readonly retryOn?: ReadonlyArray<new (...args: unknown[]) => Error>;
+  /**
+   * Issue #1268: required-dependency claim gate. Returns the capability of
+   * the first `required=true` dependency slot that is still unresolved
+   * locally (its proxy is null/absent in the agent's resolved-deps map), or
+   * `null` when every required dep is live. Consulted BEFORE `/jobs/claim`
+   * (pre-claim skip — the job stays queued, no attempt burned) and BEFORE
+   * invoking the handler (pre-invoke guard — release the lease, never fail).
+   * `undefined` (no required deps) disables the gate entirely.
+   */
+  private readonly requiredProbe?: () => string | null;
+  /**
+   * Transition-edge state for the required-dep gate (issue #1268): the
+   * capability we're currently gated on, or `null` when the gate is open.
+   * Logged only on the edges (close/open) so a long-gated worker doesn't spam
+   * one line per poll (console.debug == console.log in Node).
+   */
+  private _gateMissingCap: string | null = null;
 
   private _stopped = false;
   private _loopPromise: Promise<void> | null = null;
@@ -134,12 +151,14 @@ export class ClaimDispatcher {
     registryUrl: string,
     handler: ClaimHandler,
     retryOn?: ReadonlyArray<new (...args: unknown[]) => Error>,
+    requiredProbe?: () => string | null,
   ) {
     this.capability = capability;
     this.instanceId = instanceId;
     this.registryUrl = registryUrl;
     this.handler = handler;
     this.retryOn = retryOn;
+    this.requiredProbe = requiredProbe;
   }
 
   /** Spawn the polling loop. Idempotent. */
@@ -435,6 +454,33 @@ export class ClaimDispatcher {
       return;
     }
 
+    // Pre-invoke guard (issue #1268, safety net for the gate/injection
+    // race). If a required dep is still unresolved at claim-invoke time, do
+    // NOT run the handler with a null proxy — release the lease so the job
+    // returns to the queue and can be re-claimed once the dep lands. This
+    // mirrors the retryOn release path (releaseLease, NOT fail): a terminal
+    // fail() here would reproduce the very bug the guard prevents (a
+    // topological race permanently failing the job).
+    const missingCap = this.requiredProbe?.() ?? null;
+    if (missingCap !== null) {
+      console.warn(
+        `[mesh-claim] releasing job=${jobId} for capability=${this.capability} — ` +
+          `required dependency '${missingCap}' is unresolved at invoke time; ` +
+          `releasing lease for retry (not failing)`,
+      );
+      try {
+        await controller.releaseLease(
+          `required dependency '${missingCap}' unavailable at claim-invoke (issue #1268)`,
+        );
+      } catch (err) {
+        console.debug(
+          `[mesh-claim] release-lease for job=${jobId} raised:`,
+          err,
+        );
+      }
+      return;
+    }
+
     // Seed the propagated-headers ALS so outbound calls made by the
     // handler continue the submitter's trace tree and carry the job
     // context onward. Mirrors Python's
@@ -495,6 +541,41 @@ export class ClaimDispatcher {
       }
       let permitTransferred = false;
       try {
+        // Pre-claim local skip (issue #1268, primary defense). Do NOT POST
+        // /jobs/claim while a required dep is unresolved locally — the job
+        // stays queued with no owner and no attempt increment (the #1258
+        // posture), self-healing on a later poll.
+        const missingCap = this.requiredProbe?.() ?? null;
+        if (missingCap !== null) {
+          // Transition-edge log only (issue #1268 review): emit once when the
+          // gate closes (or the missing capability changes), then stay silent
+          // every poll until it opens — a cheap local probe running every base
+          // interval must not spam ~7200 lines/hour.
+          if (missingCap !== this._gateMissingCap) {
+            console.warn(
+              `[mesh-claim] capability=${this.capability} instance=${this.instanceId}: ` +
+                `gate CLOSED — required dependency '${missingCap}' not yet ` +
+                `resolved locally; holding claims (job stays queued, no attempt ` +
+                `burned) until it resolves`,
+            );
+            this._gateMissingCap = missingCap;
+          }
+          this._release();
+          permitTransferred = true; // already released; finally must skip
+          // Cheap local probe (no network) — re-check at the BASE cadence so
+          // we claim within one base interval of the dep landing, rather than
+          // growing the backoff. The real-work backoff is left untouched.
+          await this._sleep(_POLL_BASE_MS);
+          continue;
+        }
+        // Gate just opened (was gated, now all required deps resolved).
+        if (this._gateMissingCap !== null) {
+          console.log(
+            `[mesh-claim] capability=${this.capability} instance=${this.instanceId}: ` +
+              `gate OPEN — required dependencies resolved; resuming claims`,
+          );
+          this._gateMissingCap = null;
+        }
         const claimed = await this._claimOnce();
         if (claimed.length > 1) {
           // Defensive warn (W3): the Phase 1 wire is single-claim by

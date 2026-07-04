@@ -265,12 +265,20 @@ export class MeshAgent {
    * Issue #894: also carries the per-tool retryOn whitelist so the
    * dispatcher can pass it into `runWithJobContext` for the
    * release-lease-on-retry-eligible-throw path.
+   *
+   * Issue #1268: also carries a `requiredProbe` closure that reports the
+   * first `required=true` dependency slot that is still unresolved locally
+   * (its proxy is null/absent in `resolvedDeps`), or null when all required
+   * deps are live. The dispatcher consults it BEFORE claiming (pre-claim
+   * skip) and BEFORE invoking (pre-invoke guard) so the claim gate and the
+   * handler's injection read one clock.
    */
   private _taskHandlers: Map<
     string,
     {
       handler: ClaimHandler;
       retryOn?: ReadonlyArray<new (...args: unknown[]) => Error>;
+      requiredProbe?: () => string | null;
     }
   > = new Map();
   /**
@@ -968,7 +976,32 @@ export class MeshAgent {
         }
         return await (execute as (...a: unknown[]) => unknown)(...callArgs);
       };
-      this._taskHandlers.set(capability, { handler, retryOn });
+      // Issue #1268: required-dep claim gate. Collect the `required=true`
+      // proxy slots (the MeshJob submitter slot is excluded — it is built
+      // locally, never resolved by an event) and expose a probe that reports
+      // the first one still unresolved in `resolvedDeps`. `?? null`-equality
+      // covers both an absent key and an explicit null slot.
+      const requiredSlots: Array<[number, string]> = [];
+      normalizedDeps.forEach((dep, depIndex) => {
+        if (dep.required && depIndex !== meshJobDepIndex) {
+          requiredSlots.push([depIndex, dep.capability]);
+        }
+      });
+      const requiredProbe: (() => string | null) | undefined =
+        requiredSlots.length > 0
+          ? () => {
+              for (const [depIndex, cap] of requiredSlots) {
+                if (
+                  (this.resolvedDeps.get(`${toolName}:dep_${depIndex}`) ??
+                    null) === null
+                ) {
+                  return cap;
+                }
+              }
+              return null;
+            }
+          : undefined;
+      this._taskHandlers.set(capability, { handler, retryOn, requiredProbe });
     }
 
     // Store mesh metadata with JSON Schema for LLM tool resolution
@@ -1412,6 +1445,7 @@ export class MeshAgent {
         this.config.registryUrl,
         entry.handler,
         entry.retryOn,
+        entry.requiredProbe,
       );
       dispatcher.start();
       this._claimDispatchers.push(dispatcher);

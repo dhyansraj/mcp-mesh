@@ -692,6 +692,29 @@ class UnifiedMCPProxy:
                 if matches_propagate_header(k):
                     merged_headers[k.lower()] = v
 
+        # Issue #1263: overlay the CALLING job's identity so a nested outbound
+        # call made from within a job execution context carries who invoked the
+        # downstream (x-mesh-calling-job-id + x-mesh-calling-claim-epoch),
+        # letting the provider fence out-of-epoch writes via calling_job().
+        # Distinct from the push-dispatch x-mesh-job-id (attached later in
+        # _http_call). Seeded atomically from ONE snapshot and REPLACING any
+        # inherited calling-* pair entirely (both-or-none): set the id and
+        # set-or-clear the epoch together, so a stale inherited epoch can never
+        # ride along with this job's id. When there is no active job the
+        # inherited pair passes through unchanged (transitive identity).
+        try:
+            from .job_context import current_job as _calling_snap
+
+            _snap = _calling_snap()
+        except Exception:
+            _snap = None
+        if _snap is not None and getattr(_snap, "job_id", None):
+            merged_headers["x-mesh-calling-job-id"] = _snap.job_id
+            if _snap.claim_epoch is not None:
+                merged_headers["x-mesh-calling-claim-epoch"] = str(_snap.claim_epoch)
+            else:
+                merged_headers.pop("x-mesh-calling-claim-epoch", None)
+
         if current_trace:
             try:
                 import mcp_mesh_core

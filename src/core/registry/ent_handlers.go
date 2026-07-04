@@ -35,7 +35,8 @@ func init() {
 	// (e.g., "x-trace-*"). Matching is performed in proxyRequest below.
 	//
 	// Baked-in defaults (always forwarded, regardless of this env var):
-	//   X-Trace-ID, X-Parent-Span, X-Mesh-Timeout, X-Mesh-Job-Id
+	//   X-Trace-ID, X-Parent-Span, X-Mesh-Timeout, X-Mesh-Job-Id,
+	//   X-Mesh-Calling-Job-Id, X-Mesh-Calling-Claim-Epoch
 	// MCP_MESH_PROPAGATE_HEADERS is purely *additive* on top of the defaults.
 	// TODO(test): extract this parser into a pure helper so it can be unit-tested
 	// without env-var mutation. Coverage today is via integration tests.
@@ -71,23 +72,23 @@ func init() {
 // Lifecycle/shutdown coordination
 // -------------------------------
 // Some handlers spawn best-effort background goroutines (notably
-// ``forwardCancelToOwner`` in ``ent_handlers_jobs.go``) that outlive the
+// “forwardCancelToOwner“ in “ent_handlers_jobs.go“) that outlive the
 // inbound request. Those goroutines pull their context from
-// ``shutdownCtx`` and register their lifetime on ``shutdownWG`` so the
-// registry's graceful-shutdown path (``Server.Stop``) can:
+// “shutdownCtx“ and register their lifetime on “shutdownWG“ so the
+// registry's graceful-shutdown path (“Server.Stop“) can:
 //
-//  1. Cancel ``shutdownCtx`` — in-flight HTTP forwards observe the
-//     cancellation on their ``http.Request`` context and return promptly
+//  1. Cancel “shutdownCtx“ — in-flight HTTP forwards observe the
+//     cancellation on their “http.Request“ context and return promptly
 //     instead of running to their per-call timeout.
-//  2. Wait on ``shutdownWG`` — the shutdown sequence either drains the
+//  2. Wait on “shutdownWG“ — the shutdown sequence either drains the
 //     forwards or surfaces the wait-timeout in the log (so an operator
 //     sees that some forwards were abandoned), rather than letting them
 //     run on a background goroutine after the process is supposedly
 //     stopped.
 //
-// When the handlers are constructed via ``NewEntBusinessLogicHandlers``
+// When the handlers are constructed via “NewEntBusinessLogicHandlers“
 // (no shutdown context provided — used by tests and older callers), the
-// background goroutines fall back to ``context.Background()`` and a
+// background goroutines fall back to “context.Background()“ and a
 // no-op WaitGroup so the existing best-effort behaviour is preserved.
 type EntBusinessLogicHandlers struct {
 	entService *EntService
@@ -110,11 +111,11 @@ type EntBusinessLogicHandlers struct {
 // NewEntBusinessLogicHandlers creates a new handler instance using EntService
 //
 // Background goroutines spawned by handlers fall back to a detached
-// ``context.Background()`` and a private WaitGroup — i.e. NO shutdown
+// “context.Background()“ and a private WaitGroup — i.e. NO shutdown
 // coordination. Production code paths should prefer
 // :func:`NewEntBusinessLogicHandlersWithShutdown` which wires the
 // registry's graceful-shutdown context in. This constructor is kept for
-// the test suite (where the registry never calls ``Stop``) and to
+// the test suite (where the registry never calls “Stop“) and to
 // preserve the legacy zero-arg surface.
 func NewEntBusinessLogicHandlers(entService *EntService) *EntBusinessLogicHandlers {
 	return &EntBusinessLogicHandlers{
@@ -126,15 +127,15 @@ func NewEntBusinessLogicHandlers(entService *EntService) *EntBusinessLogicHandle
 
 // NewEntBusinessLogicHandlersWithShutdown is the production constructor
 // that wires the registry's graceful-shutdown context and WaitGroup
-// into the handlers. Background goroutines (``forwardCancelToOwner``)
-// derive their HTTP-request context from ``shutdownCtx`` so a server
+// into the handlers. Background goroutines (“forwardCancelToOwner“)
+// derive their HTTP-request context from “shutdownCtx“ so a server
 // shutdown cancels in-flight forwards cleanly, and they register on
-// ``shutdownWG`` so the shutdown sequence can wait for them to drain.
+// “shutdownWG“ so the shutdown sequence can wait for them to drain.
 //
-// ``shutdownCtx`` MUST be the context produced by the caller's shutdown
-// machinery (typically ``context.WithCancel`` whose ``cancel`` is
-// invoked from ``Server.Stop``). ``shutdownWG`` MUST be the same
-// WaitGroup the shutdown sequence calls ``Wait`` on.
+// “shutdownCtx“ MUST be the context produced by the caller's shutdown
+// machinery (typically “context.WithCancel“ whose “cancel“ is
+// invoked from “Server.Stop“). “shutdownWG“ MUST be the same
+// WaitGroup the shutdown sequence calls “Wait“ on.
 func NewEntBusinessLogicHandlersWithShutdown(
 	entService *EntService,
 	shutdownCtx context.Context,
@@ -449,102 +450,102 @@ func ConvertMeshAgentRegistrationToMap(reg generated.MeshAgentRegistration) map[
 	if reg.Tools != nil {
 		toolsData = make([]interface{}, len(reg.Tools))
 		for i, tool := range reg.Tools {
-		toolData := map[string]interface{}{
-			"function_name": tool.FunctionName,
-			"capability":    tool.Capability,
-		}
-		if tool.Description != nil {
-			toolData["description"] = *tool.Description
-		}
-		if tool.Version != nil {
-			toolData["version"] = *tool.Version
-		}
-		if tool.Tags != nil {
-			toolData["tags"] = *tool.Tags
-		}
-		if tool.InputSchema != nil {
-			toolData["inputSchema"] = *tool.InputSchema
-		}
-		// Schema-aware filtering inputs (issue #547). Forwarded to ent_service
-		// upsertSchemaEntry; absence preserves legacy behavior (no canonical stored).
-		if tool.OutputSchema != nil {
-			toolData["outputSchema"] = *tool.OutputSchema
-		}
-		if tool.InputSchemaCanonical != nil {
-			toolData["inputSchemaCanonical"] = *tool.InputSchemaCanonical
-		}
-		if tool.InputSchemaHash != nil {
-			toolData["inputSchemaHash"] = *tool.InputSchemaHash
-		}
-		if tool.OutputSchemaCanonical != nil {
-			toolData["outputSchemaCanonical"] = *tool.OutputSchemaCanonical
-		}
-		if tool.OutputSchemaHash != nil {
-			toolData["outputSchemaHash"] = *tool.OutputSchemaHash
-		}
-		if tool.SchemaWarnings != nil {
-			toolData["schemaWarnings"] = *tool.SchemaWarnings
-		}
-		if tool.LlmFilter != nil {
-			toolData["llm_filter"] = *tool.LlmFilter
-		}
-		if tool.LlmProvider != nil {
-			toolData["llm_provider"] = *tool.LlmProvider
-		}
-		if tool.Dependencies != nil {
-			deps := make([]map[string]interface{}, len(*tool.Dependencies))
-			for j, dep := range *tool.Dependencies {
-				depData := map[string]interface{}{
-					"capability": dep.Capability,
-				}
-				// Required flag (issue #1249). Only forwarded when the wire
-				// payload carried it; absence keeps the default (false) in the
-				// stored JSON and downstream parseDependencySpec.
-				if dep.Required != nil {
-					depData["required"] = *dep.Required
-				}
-				if dep.Namespace != nil {
-					depData["namespace"] = *dep.Namespace
-				}
-				if dep.Tags != nil {
-					// Convert union type items to actual values (string or []string for OR alternatives)
-					tags := make([]interface{}, len(*dep.Tags))
-					for k, tagItem := range *dep.Tags {
-						// Try to extract as string first
-						if str, err := tagItem.AsMeshToolDependencyRegistrationTags0(); err == nil {
-							tags[k] = str
-						} else if arr, err := tagItem.AsMeshToolDependencyRegistrationTags1(); err == nil {
-							// OR alternative: convert []string to []interface{} for parseDependencySpec
-							arrInterface := make([]interface{}, len(arr))
-							for m, s := range arr {
-								arrInterface[m] = s
-							}
-							tags[k] = arrInterface
-						}
-					}
-					depData["tags"] = tags
-				}
-				if dep.Version != nil {
-					depData["version"] = *dep.Version
-				}
-				// Schema-aware filtering inputs (issue #547). Forwarded to the
-				// resolver's schema stage; absence keeps the stage a pass-through.
-				if dep.MatchMode != nil {
-					depData["match_mode"] = string(*dep.MatchMode)
-				}
-				if dep.ExpectedSchemaHash != nil {
-					depData["expected_schema_hash"] = *dep.ExpectedSchemaHash
-				}
-				if dep.ExpectedSchemaCanonical != nil {
-					depData["expected_schema_canonical"] = *dep.ExpectedSchemaCanonical
-				}
-				deps[j] = depData
+			toolData := map[string]interface{}{
+				"function_name": tool.FunctionName,
+				"capability":    tool.Capability,
 			}
-			toolData["dependencies"] = deps
-		}
-		if tool.Kwargs != nil {
-			toolData["kwargs"] = *tool.Kwargs
-		}
+			if tool.Description != nil {
+				toolData["description"] = *tool.Description
+			}
+			if tool.Version != nil {
+				toolData["version"] = *tool.Version
+			}
+			if tool.Tags != nil {
+				toolData["tags"] = *tool.Tags
+			}
+			if tool.InputSchema != nil {
+				toolData["inputSchema"] = *tool.InputSchema
+			}
+			// Schema-aware filtering inputs (issue #547). Forwarded to ent_service
+			// upsertSchemaEntry; absence preserves legacy behavior (no canonical stored).
+			if tool.OutputSchema != nil {
+				toolData["outputSchema"] = *tool.OutputSchema
+			}
+			if tool.InputSchemaCanonical != nil {
+				toolData["inputSchemaCanonical"] = *tool.InputSchemaCanonical
+			}
+			if tool.InputSchemaHash != nil {
+				toolData["inputSchemaHash"] = *tool.InputSchemaHash
+			}
+			if tool.OutputSchemaCanonical != nil {
+				toolData["outputSchemaCanonical"] = *tool.OutputSchemaCanonical
+			}
+			if tool.OutputSchemaHash != nil {
+				toolData["outputSchemaHash"] = *tool.OutputSchemaHash
+			}
+			if tool.SchemaWarnings != nil {
+				toolData["schemaWarnings"] = *tool.SchemaWarnings
+			}
+			if tool.LlmFilter != nil {
+				toolData["llm_filter"] = *tool.LlmFilter
+			}
+			if tool.LlmProvider != nil {
+				toolData["llm_provider"] = *tool.LlmProvider
+			}
+			if tool.Dependencies != nil {
+				deps := make([]map[string]interface{}, len(*tool.Dependencies))
+				for j, dep := range *tool.Dependencies {
+					depData := map[string]interface{}{
+						"capability": dep.Capability,
+					}
+					// Required flag (issue #1249). Only forwarded when the wire
+					// payload carried it; absence keeps the default (false) in the
+					// stored JSON and downstream parseDependencySpec.
+					if dep.Required != nil {
+						depData["required"] = *dep.Required
+					}
+					if dep.Namespace != nil {
+						depData["namespace"] = *dep.Namespace
+					}
+					if dep.Tags != nil {
+						// Convert union type items to actual values (string or []string for OR alternatives)
+						tags := make([]interface{}, len(*dep.Tags))
+						for k, tagItem := range *dep.Tags {
+							// Try to extract as string first
+							if str, err := tagItem.AsMeshToolDependencyRegistrationTags0(); err == nil {
+								tags[k] = str
+							} else if arr, err := tagItem.AsMeshToolDependencyRegistrationTags1(); err == nil {
+								// OR alternative: convert []string to []interface{} for parseDependencySpec
+								arrInterface := make([]interface{}, len(arr))
+								for m, s := range arr {
+									arrInterface[m] = s
+								}
+								tags[k] = arrInterface
+							}
+						}
+						depData["tags"] = tags
+					}
+					if dep.Version != nil {
+						depData["version"] = *dep.Version
+					}
+					// Schema-aware filtering inputs (issue #547). Forwarded to the
+					// resolver's schema stage; absence keeps the stage a pass-through.
+					if dep.MatchMode != nil {
+						depData["match_mode"] = string(*dep.MatchMode)
+					}
+					if dep.ExpectedSchemaHash != nil {
+						depData["expected_schema_hash"] = *dep.ExpectedSchemaHash
+					}
+					if dep.ExpectedSchemaCanonical != nil {
+						depData["expected_schema_canonical"] = *dep.ExpectedSchemaCanonical
+					}
+					deps[j] = depData
+				}
+				toolData["dependencies"] = deps
+			}
+			if tool.Kwargs != nil {
+				toolData["kwargs"] = *tool.Kwargs
+			}
 			toolsData[i] = toolData
 		}
 	}
@@ -832,16 +833,30 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		proxyReq.Header.Set("X-Mesh-Job-Id", meshJobID)
 	}
 
+	// Forward the calling-job identity pair so the downstream producer can
+	// attribute the call to the originating MeshJob (#1263). Baked-in defaults
+	// like X-Mesh-Job-Id above so registry-proxied topologies keep the identity
+	// feature without setting MCP_MESH_PROPAGATE_HEADERS. Forwarded atomically:
+	// each header is only forwarded if it actually arrived — never synthesized.
+	if callingJobID := c.Request.Header.Get("X-Mesh-Calling-Job-Id"); callingJobID != "" {
+		proxyReq.Header.Set("X-Mesh-Calling-Job-Id", callingJobID)
+	}
+	if callingClaimEpoch := c.Request.Header.Get("X-Mesh-Calling-Claim-Epoch"); callingClaimEpoch != "" {
+		proxyReq.Header.Set("X-Mesh-Calling-Claim-Epoch", callingClaimEpoch)
+	}
+
 	// Names already set explicitly above — don't duplicate via propagation.
 	// MCP_MESH_PROPAGATE_HEADERS is additive on top of these baked-in defaults;
 	// the env var does not need to (and should not) re-list them.
 	explicitlySet := map[string]bool{
-		"content-type":   true,
-		"accept":         true,
-		"x-trace-id":     true,
-		"x-parent-span":  true,
-		"x-mesh-timeout": true,
-		"x-mesh-job-id":  true,
+		"content-type":               true,
+		"accept":                     true,
+		"x-trace-id":                 true,
+		"x-parent-span":              true,
+		"x-mesh-timeout":             true,
+		"x-mesh-job-id":              true,
+		"x-mesh-calling-job-id":      true,
+		"x-mesh-calling-claim-epoch": true,
 	}
 
 	// Forward headers matching MCP_MESH_PROPAGATE_HEADERS allowlist (#769, #790).

@@ -1,9 +1,11 @@
 package io.mcpmesh.spring.tracing;
 
+import io.mcpmesh.JobContext;
 import io.mcpmesh.core.MeshCoreBridge;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
@@ -63,6 +65,22 @@ public class TraceContext {
         // Python / TypeScript propagation behavior.
         if (!names.contains("x-mesh-job-id")) {
             names.add("x-mesh-job-id");
+        }
+        // Issue #1263: the calling job's identity rides a DEDICATED carrier —
+        // x-mesh-calling-job-id + x-mesh-calling-claim-epoch — kept strictly
+        // separate from the push-dispatch protocol pair (x-mesh-job-id /
+        // x-mesh-claim-epoch). Seeding the protocol pair on an outbound call
+        // would make a nested same-instance task=true call self-dispatch as
+        // the CALLER's job (owner + epoch match) and auto-complete it with the
+        // wrong result — see MeshToolWrapper.invokeInternal's dispatch gate.
+        // Both the inbound capture (TracingFilter) and outbound extra-header
+        // filtering key off this allowlist, so the carrier pair must be present
+        // for the provider-side MeshCallContext accessor to observe it.
+        if (!names.contains("x-mesh-calling-job-id")) {
+            names.add("x-mesh-calling-job-id");
+        }
+        if (!names.contains("x-mesh-calling-claim-epoch")) {
+            names.add("x-mesh-calling-claim-epoch");
         }
         PROPAGATE_HEADERS = Collections.unmodifiableList(names);
         PROPAGATE_HEADERS_CSV = String.join(",", PROPAGATE_HEADERS);
@@ -159,6 +177,60 @@ public class TraceContext {
 
     public static void clearPropagatedHeaders() {
         PROPAGATED_HEADERS.set(Collections.emptyMap());
+    }
+
+    /** Issue #1263: dedicated calling-job identity carrier header names. */
+    public static final String CALLING_JOB_ID_HEADER = "x-mesh-calling-job-id";
+    public static final String CALLING_CLAIM_EPOCH_HEADER = "x-mesh-calling-claim-epoch";
+
+    /**
+     * Issue #1263: the calling job's identity headers, derived from the active
+     * {@link JobContext} on this thread. Returns {@code x-mesh-calling-job-id}
+     * (when a job is in scope with a non-empty id) plus
+     * {@code x-mesh-calling-claim-epoch} (only when the snapshot carries a
+     * non-null claim generation — a null epoch seeds just the id). Empty when no
+     * job is active.
+     *
+     * <p>Deliberately a DEDICATED carrier, NOT the push-dispatch protocol pair
+     * ({@code x-mesh-job-id} / {@code x-mesh-claim-epoch}): seeding the protocol
+     * pair on an outbound call would make a nested same-instance
+     * {@code task=true} call self-dispatch as the caller's job and auto-complete
+     * it — see {@code MeshToolWrapper.invokeInternal}'s dispatch gate.
+     */
+    public static Map<String, String> callingJobHeaders() {
+        JobContext.Snapshot snap = JobContext.current();
+        if (snap == null || snap.jobId == null || snap.jobId.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put(CALLING_JOB_ID_HEADER, snap.jobId);
+        if (snap.claimEpoch != null) {
+            headers.put(CALLING_CLAIM_EPOCH_HEADER, String.valueOf(snap.claimEpoch));
+        }
+        return headers;
+    }
+
+    /**
+     * Issue #1263: overlay the active job's calling-identity onto an outbound
+     * header map. When a job is in scope, the pair is REPLACED atomically — any
+     * inherited calling-* pair is removed first so a stale foreign epoch can
+     * never ride along with a fresh id (both or none, from ONE snapshot). When
+     * no job is active this is a no-op, so an inherited calling-* pair
+     * propagates transitively through non-job intermediaries unchanged.
+     *
+     * <p>Called by {@code McpHttpClient} on every downstream tool call so a
+     * provider can fence out-of-epoch writes via
+     * {@code MeshCallContext.callingJob()} without the caller threading identity
+     * through the payload.
+     */
+    public static void applyCallingJobIdentity(Map<String, String> headers) {
+        Map<String, String> identity = callingJobHeaders();
+        if (identity.isEmpty()) {
+            return;
+        }
+        headers.remove(CALLING_JOB_ID_HEADER);
+        headers.remove(CALLING_CLAIM_EPOCH_HEADER);
+        headers.putAll(identity);
     }
 
     /**

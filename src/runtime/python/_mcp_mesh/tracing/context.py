@@ -17,6 +17,17 @@ PROPAGATE_HEADERS: list[str] = [h.strip().lower() for h in _raw.split(",") if h.
 # Always propagate mesh infrastructure headers
 if "x-mesh-timeout" not in PROPAGATE_HEADERS:
     PROPAGATE_HEADERS.append("x-mesh-timeout")
+# Issue #1263: the CALLING job's identity travels as a dedicated infra header
+# pair so a downstream provider can fence out-of-epoch writes
+# (mesh.calling_job()) without every app hand-threading job_id/claim_epoch
+# through payloads. This is a distinct pair from x-mesh-job-id /
+# x-mesh-claim-epoch — those are the push-mode dispatch protocol (x-mesh-job-id
+# doubles as the dispatch discriminator, so it CANNOT also carry calling
+# identity). Always allowlisted so they survive the downstream capture filter
+# (same treatment as x-mesh-timeout).
+for _infra in ("x-mesh-calling-job-id", "x-mesh-calling-claim-epoch"):
+    if _infra not in PROPAGATE_HEADERS:
+        PROPAGATE_HEADERS.append(_infra)
 PROPAGATE_HEADERS_CSV: str = ",".join(PROPAGATE_HEADERS)
 
 

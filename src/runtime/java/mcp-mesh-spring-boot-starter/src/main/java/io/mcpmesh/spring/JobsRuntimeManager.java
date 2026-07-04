@@ -171,13 +171,21 @@ public final class JobsRuntimeManager implements SmartLifecycle {
             // the claim-path matches the inbound-HTTP-path's release-and-retry
             // semantics. invokeForClaim unwraps InvocationTargetException to the
             // user exception so the dispatcher's retryOn matching still applies.
+            // Issue #1268: gate the claim loop on the wrapper's required
+            // dependency slots. firstUnresolvedRequiredDependency() names the
+            // capability of an unresolved required dep (or null when clear),
+            // so a job whose required dep is momentarily unresolved stays
+            // queued registry-side with no attempt burn and self-heals on a
+            // later poll — the pre-invoke guard in invokeForClaim is the
+            // safety net for the narrow window the two clocks leave open.
             ClaimDispatcher dispatcher = new ClaimDispatcher(
                 meta.capability(),
                 instanceId,
                 registryUrl,
                 (payload, controller) -> wrapper.invokeForClaim(
                     payload, controller, deadlineFromJobContext()),
-                meta.retryOn()
+                meta.retryOn(),
+                wrapper::firstUnresolvedRequiredDependency
             );
             dispatcher.start();
             dispatchers.put(meta.capability(), dispatcher);

@@ -449,9 +449,20 @@ public class McpHttpClient {
             // Get current trace context for propagation
             TraceInfo traceInfo = TraceContext.get();
 
-            // Build merged headers: session propagated + per-call (per-call wins, filtered by allowlist)
+            // Build merged headers: session propagated + calling-job identity +
+            // per-call (per-call wins, filtered by allowlist)
             Map<String, String> propagatedHeaders = TraceContext.getPropagatedHeaders();
             Map<String, String> mergedHeaders = new LinkedHashMap<>(propagatedHeaders);
+            // Issue #1263: when this call originates from within a job execution
+            // context, seed the calling job's identity on the DEDICATED carrier
+            // (x-mesh-calling-job-id + x-mesh-calling-claim-epoch) so a
+            // downstream provider can fence out-of-epoch writes. Never seeds the
+            // push-dispatch protocol pair (x-mesh-job-id / x-mesh-claim-epoch) —
+            // that would self-dispatch a nested same-instance task call as the
+            // caller's job. Replaces any inherited calling-* pair atomically;
+            // no-op outside a job context. Applied before extraHeaders so an
+            // explicit per-call header still wins.
+            TraceContext.applyCallingJobIdentity(mergedHeaders);
             if (extraHeaders != null) {
                 for (Map.Entry<String, String> entry : extraHeaders.entrySet()) {
                     if (TraceContext.matchesPropagateHeader(entry.getKey())) {
@@ -973,9 +984,14 @@ public class McpHttpClient {
 
             TraceInfo traceInfo = TraceContext.get();
 
-            // Build merged headers: session propagated + per-call (per-call wins)
+            // Build merged headers: session propagated + calling-job identity +
+            // per-call (per-call wins)
             Map<String, String> propagatedHeaders = TraceContext.getPropagatedHeaders();
             Map<String, String> mergedHeaders = new LinkedHashMap<>(propagatedHeaders);
+            // Issue #1263: seed the calling job's dedicated identity carrier on
+            // outbound tool calls made from within a job context (see callTool
+            // for the rationale — never the push-dispatch protocol pair).
+            TraceContext.applyCallingJobIdentity(mergedHeaders);
             if (extraHeaders != null) {
                 for (Map.Entry<String, String> entry : extraHeaders.entrySet()) {
                     if (TraceContext.matchesPropagateHeader(entry.getKey())) {

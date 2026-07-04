@@ -117,6 +117,8 @@ class PythonClaimDispatcher:
         instance_id: str,
         registry_url: str,
         handler: Any,
+        func_id: Optional[str] = None,
+        required_deps: Optional[list[tuple[int, str]]] = None,
     ) -> None:
         self.capability = capability
         self.instance_id = instance_id
@@ -126,6 +128,23 @@ class PythonClaimDispatcher:
         # job-context dispatch via maybe_dispatch_as_job. We just pass
         # the claimed payload as kwargs.
         self.handler = handler
+        # Claim-gating on required deps (issue #1268). ``func_id`` is the
+        # DI injector's composite-key prefix ("<module>.<qualname>") and
+        # ``required_deps`` is the list of ``(dep_index, capability)`` pairs
+        # this tool declared ``required=True``. The dispatcher consults the
+        # injector's resolved-proxy cache (keyed ``<func_id>:dep_<index>``)
+        # so the claim gate and the handler's injection read ONE clock: a
+        # required slot that is still ``None`` locally must never let a claim
+        # proceed (pre-claim skip) nor invoke the handler (pre-invoke guard).
+        # Empty ⇒ no required deps ⇒ predicate is a no-op (optional deps keep
+        # their None-passthrough semantics).
+        self._func_id = func_id
+        self._required_deps: list[tuple[int, str]] = list(required_deps or [])
+        # Transition-edge state for the required-dep gate (issue #1268): the
+        # capability we're currently gated on, or ``None`` when the gate is
+        # open. Logged only on the edges (close/open) so a long-gated worker
+        # doesn't spam one line per poll.
+        self._gate_missing_cap: Optional[str] = None
         self._task: Optional[asyncio.Task] = None
         self._stop = asyncio.Event()
         # One httpx.AsyncClient per dispatcher instead of per poll —
@@ -145,6 +164,38 @@ class PythonClaimDispatcher:
         # set also lets stop() drain in-flight dispatches so their
         # best-effort terminal fail() reports aren't killed with the loop.
         self._dispatch_tasks: set[asyncio.Task] = set()
+
+    def _first_unresolved_required(self) -> Optional[str]:
+        """Return the capability of the first ``required=True`` dependency slot
+        that is NOT locally resolved (its injected proxy is ``None``/absent),
+        or ``None`` when every required dep has a live proxy (issue #1268).
+
+        Consults the SAME resolved-proxy cache the DI wrapper injects from —
+        the global :class:`DependencyInjector` keyed by
+        ``<func_id>:dep_<index>`` — so the claim gate and the handler's
+        injection observe one clock. A required dep flapping DOWN→UP therefore
+        gates the claim locally instead of racing the registry-side gate.
+
+        No-op (returns ``None``) when this tool declared no required deps, so
+        optional deps keep their documented None-passthrough behaviour.
+        """
+        if not self._required_deps or not self._func_id:
+            return None
+        try:
+            from .dependency_injector import get_global_injector
+
+            injector = get_global_injector()
+        except Exception as e:  # noqa: BLE001 — best-effort gate
+            logger.debug(
+                "claim_dispatcher: could not read injector for required-dep "
+                "gate (%s); allowing claim",
+                e,
+            )
+            return None
+        for dep_index, cap in self._required_deps:
+            if injector.get_dependency(f"{self._func_id}:dep_{dep_index}") is None:
+                return cap
+        return None
 
     async def _claim_once(self) -> list[dict]:
         """Single ``POST /jobs/claim`` call. Returns the list of claimed
@@ -272,6 +323,26 @@ class PythonClaimDispatcher:
 
         claim_epoch = _valid_claim_epoch(claimed.get("claim_epoch"))
 
+        # Pre-invoke guard (issue #1268, safety net for the gate/injection
+        # race). If a required dep is still unresolved at claim-invoke time,
+        # do NOT run the handler with a null proxy — release the lease so the
+        # job returns to the queue and can be re-claimed once the dep lands.
+        # This mirrors the retry_on release path (release_lease, NOT fail):
+        # a terminal fail() here would reproduce the very bug the guard
+        # prevents (a topological race permanently failing the job).
+        missing_cap = self._first_unresolved_required()
+        if missing_cap is not None:
+            logger.warning(
+                "claim_dispatcher: releasing job=%s for capability=%s — "
+                "required dependency '%s' is unresolved at invoke time; "
+                "releasing lease for retry (not failing)",
+                job_id,
+                self.capability,
+                missing_cap,
+            )
+            await self._release_lease(job_id, missing_cap, claim_epoch)
+            return
+
         try:
             await self.handler(**payload)
         except Exception as e:
@@ -305,6 +376,36 @@ class PythonClaimDispatcher:
         except Exception as inner:
             logger.debug(
                 "claim_dispatcher: terminal-fail report failed: %s", inner
+            )
+
+    async def _release_lease(
+        self, job_id: str, capability: str, claim_epoch: Optional[int] = None
+    ) -> None:
+        """Best-effort: release the claim's lease so the job returns to the
+        queue (retryable) instead of staying "working" until lease expiry.
+
+        Used by the pre-invoke required-dep guard (issue #1268). Mirrors
+        :meth:`_report_terminal_fail`'s construction seam but calls
+        ``release_lease`` — the SAME mechanism the retry_on-matched exception
+        path uses in ``job_dispatch`` — so the guard never burns a terminal
+        fail(). Failures here are logged and swallowed; the registry's
+        lease sweep is the ultimate backstop.
+        """
+        try:
+            from mcp_mesh_core import JobController as _JobController
+
+            ctrl = _JobController(
+                job_id, self.instance_id, self.registry_url, claim_epoch
+            )
+            await ctrl.release_lease(
+                reason=(
+                    f"required dependency '{capability}' unavailable at "
+                    f"claim-invoke (issue #1268)"
+                )
+            )
+        except Exception as inner:
+            logger.debug(
+                "claim_dispatcher: release-lease report failed: %s", inner
             )
 
     async def _run_loop(self) -> None:
@@ -372,6 +473,50 @@ class PythonClaimDispatcher:
             try:
                 if self._stop.is_set():
                     break
+
+                # Pre-claim local skip (issue #1268, primary defense). Do NOT
+                # POST /jobs/claim while a required dep slot is unresolved
+                # locally — the job stays queued with no owner and no attempt
+                # increment (the #1258 posture), self-healing on a later poll.
+                missing_cap = self._first_unresolved_required()
+                if missing_cap is not None:
+                    # Transition-edge log only (issue #1268 review): emit once
+                    # when the gate closes (or the missing capability changes),
+                    # then stay silent every poll until it opens — a cheap local
+                    # probe running every base interval must not spam.
+                    if missing_cap != self._gate_missing_cap:
+                        logger.info(
+                            "claim_dispatcher: gate CLOSED for capability=%s — "
+                            "required dependency '%s' not yet resolved locally; "
+                            "holding claims (job stays queued, no attempt "
+                            "burned) until it resolves",
+                            self.capability,
+                            missing_cap,
+                        )
+                        self._gate_missing_cap = missing_cap
+                    # Release the permit (we won't claim) and re-check at the
+                    # BASE cadence — this is a cheap local probe (no network),
+                    # so we poll promptly rather than growing the backoff, and
+                    # claim within one base interval of the dep landing. The
+                    # real-work backoff below is left untouched.
+                    self._dispatch_sem.release()
+                    permit_held = False
+                    try:
+                        await asyncio.wait_for(
+                            self._stop.wait(), timeout=_POLL_BASE_SECS
+                        )
+                    except asyncio.TimeoutError:
+                        pass
+                    continue
+
+                # Gate just opened (was gated, now all required deps resolved).
+                if self._gate_missing_cap is not None:
+                    logger.info(
+                        "claim_dispatcher: gate OPEN for capability=%s — "
+                        "required dependencies resolved; resuming claims",
+                        self.capability,
+                    )
+                    self._gate_missing_cap = None
 
                 claimed = await self._claim_once()
                 if claimed:
@@ -632,12 +777,74 @@ def discover_task_handlers(
                 tool_name,
             )
             continue
+
+        # Claim-gating on required deps (issue #1268). Compute the DI
+        # injector's composite-key prefix and the required-dep slots so the
+        # dispatcher can consult the resolved-proxy cache. ``func_id`` mirrors
+        # ``DependencyInjector.create_injection_wrapper``'s
+        # "<module>.<qualname>"; functools.wraps copies these onto the wrapper,
+        # and the dep_index aligns with ``metadata["dependencies"]`` order (the
+        # same list the injector enumerates into ``:dep_<N>`` keys).
+        func_id: Optional[str] = None
+        orig = handler
+        try:
+            orig = getattr(handler, "_mesh_original_func", handler)
+            func_id = f"{orig.__module__}.{orig.__qualname__}"
+        except Exception as e:  # noqa: BLE001 — gate degrades to allow-claim
+            logger.debug(
+                "claim_dispatcher: could not derive func_id for tool %s (%s); "
+                "required-dep gate disabled for this handler",
+                tool_name,
+                e,
+            )
+
+        # A MeshJob-paired dep slot is a locally-constructed MeshJobSubmitter,
+        # never a resolved proxy in the injector — gating on it would deadlock
+        # the claim loop forever (issue #1268 review; matches TS's
+        # meshJobDepIndex exclusion and Java's structural exclusion). Its
+        # dep_index is the rank of the MeshJob parameter position among the
+        # sorted eligible (McpMeshTool ∪ MeshJob) positions — mirrors the
+        # injection loop in ``dependency_injector._prepare_injection_kwargs``.
+        mesh_job_dep_index: Optional[int] = None
+        try:
+            from .signature_analyzer import (
+                analyze_mesh_job_signature,
+                get_mesh_agent_positions,
+            )
+
+            _mj = analyze_mesh_job_signature(orig)
+            if _mj.mesh_job_param_index is not None:
+                _eligible = sorted(
+                    set(get_mesh_agent_positions(orig))
+                    | {_mj.mesh_job_param_index}
+                )
+                mesh_job_dep_index = _eligible.index(_mj.mesh_job_param_index)
+        except Exception as e:  # noqa: BLE001 — best-effort; err on allow-claim
+            logger.debug(
+                "claim_dispatcher: MeshJob dep-index analysis failed for tool "
+                "%s (%s); not excluding any slot from the required gate",
+                tool_name,
+                e,
+            )
+
+        required_deps: list[tuple[int, str]] = []
+        for dep_index, dep in enumerate(meta.get("dependencies") or []):
+            if dep_index == mesh_job_dep_index:
+                # MeshJob submitter slot — always locally available; skip.
+                continue
+            if isinstance(dep, dict) and dep.get("required"):
+                cap = dep.get("capability")
+                if cap:
+                    required_deps.append((dep_index, cap))
+
         dispatchers.append(
             PythonClaimDispatcher(
                 capability=capability,
                 instance_id=instance_id,
                 registry_url=registry_url,
                 handler=handler,
+                func_id=func_id,
+                required_deps=required_deps,
             )
         )
     return dispatchers

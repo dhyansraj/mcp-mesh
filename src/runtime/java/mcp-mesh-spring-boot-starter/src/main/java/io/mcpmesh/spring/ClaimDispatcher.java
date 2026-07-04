@@ -107,6 +107,23 @@ public final class ClaimDispatcher implements AutoCloseable {
      */
     private final Class<? extends Throwable>[] retryOn;
 
+    /**
+     * Issue #1268 pre-claim gate: returns the capability of a currently
+     * unresolved {@code required} dependency (naming the reason a claim is
+     * skipped), or {@code null} when the tool is clear to claim. Consulted
+     * before every {@code /jobs/claim} attempt so a job for a capability whose
+     * required dep is momentarily unresolved stays queued registry-side (no
+     * owner, no attempt burn) and self-heals on a later poll — exactly the
+     * #1258 claim-gating posture. Never null (defaults to "always ready").
+     */
+    private final java.util.function.Supplier<String> claimBlockedReason;
+
+    /**
+     * Tracks the gate's last observed state so the skip is logged once per
+     * DOWN→UP / UP→DOWN transition (info) rather than every poll (issue #1268).
+     */
+    private final AtomicBoolean claimGated = new AtomicBoolean(false);
+
     private final Semaphore permits = new Semaphore(MAX_CONCURRENT_DISPATCHES);
     private final AtomicBoolean stopped = new AtomicBoolean(false);
     private final AtomicInteger consecutiveFailures = new AtomicInteger(0);
@@ -132,20 +149,27 @@ public final class ClaimDispatcher implements AutoCloseable {
         this(capability, instanceId, registryUrl, handler, EMPTY_RETRY_ON);
     }
 
-    /**
-     * Construct a dispatcher with an explicit {@code retryOn} whitelist
-     * (issue #895). When the handler raises a Throwable matching one of
-     * the entries, the dispatcher calls
-     * {@link JobController#releaseLease(String)} instead of
-     * {@link JobController#fail(String)} so a peer replica can re-claim
-     * the job within ~5s.
-     *
-     * @param retryOn Per-tool retry-eligible exception classes from
-     *                {@link io.mcpmesh.MeshTool#retryOn()}. May be null
-     *                or empty for "no retry-eligible exceptions".
-     */
     public ClaimDispatcher(String capability, String instanceId, String registryUrl,
                            ClaimHandler handler, Class<? extends Throwable>[] retryOn) {
+        this(capability, instanceId, registryUrl, handler, retryOn, null);
+    }
+
+    /**
+     * Construct a dispatcher with an explicit {@code retryOn} whitelist AND a
+     * pre-claim gate (issue #1268). Before each {@code /jobs/claim} poll the
+     * loop consults {@code claimBlockedReason}; a non-null result names an
+     * unresolved {@code required} dependency and the poll is skipped (the job
+     * stays queued registry-side with no attempt burn) until the dep resolves.
+     *
+     * @param retryOn            Per-tool retry-eligible exception classes (may
+     *                           be null/empty for "no retry-eligible exceptions").
+     * @param claimBlockedReason Supplier returning the capability of an
+     *                           unresolved required dependency, or {@code null}
+     *                           when clear to claim. Null ⇒ "always ready".
+     */
+    public ClaimDispatcher(String capability, String instanceId, String registryUrl,
+                           ClaimHandler handler, Class<? extends Throwable>[] retryOn,
+                           java.util.function.Supplier<String> claimBlockedReason) {
         if (capability == null || capability.isEmpty()) {
             throw new IllegalArgumentException("capability is required");
         }
@@ -163,6 +187,7 @@ public final class ClaimDispatcher implements AutoCloseable {
         this.registryUrl = stripTrailingSlash(registryUrl);
         this.handler = handler;
         this.retryOn = retryOn != null ? retryOn : EMPTY_RETRY_ON;
+        this.claimBlockedReason = claimBlockedReason != null ? claimBlockedReason : () -> null;
         this.loopExecutor = Executors.newSingleThreadExecutor(named("mesh-claim-loop-" + capability));
         this.dispatchExecutor = Executors.newFixedThreadPool(MAX_CONCURRENT_DISPATCHES,
             named("mesh-claim-dispatch-" + capability));
@@ -279,6 +304,36 @@ public final class ClaimDispatcher implements AutoCloseable {
                 if (stopped.get()) {
                     permits.release();
                     return;
+                }
+
+                // Pre-claim local skip (issue #1268): do not POST /jobs/claim
+                // while any REQUIRED dependency slot is locally unresolved. The
+                // job stays queued registry-side with no owner and no attempt
+                // increment — the #1258 posture — and self-heals on a later
+                // poll once the dep lands. Logged once per DOWN→UP transition.
+                String blockedCap = claimBlockedReason.get();
+                if (blockedCap != null) {
+                    permits.release();
+                    if (claimGated.compareAndSet(false, true)) {
+                        log.info("[mesh-claim] capability={} instance={}: skipping claim — "
+                            + "required dependency '{}' unavailable; job stays queued (no attempt burn)",
+                            capability, instanceId, blockedCap);
+                    } else {
+                        log.debug("[mesh-claim] capability={} instance={}: still gated on "
+                            + "required dependency '{}'", capability, instanceId, blockedCap);
+                    }
+                    // Fixed base cadence while gated (matches Python/TS ~0.5s) —
+                    // do NOT ride the exponential no-work backoff, so claims
+                    // resume within ~one poll of the required dep landing.
+                    sleep(POLL_BASE_MS);
+                    continue;
+                }
+                if (claimGated.compareAndSet(true, false)) {
+                    // Gate just opened — reset any inherited no-work backoff so
+                    // the resumed claim cadence isn't delayed by a stale window.
+                    backoffMs = POLL_BASE_MS;
+                    log.info("[mesh-claim] capability={} instance={}: required dependencies resolved — "
+                        + "resuming claims", capability, instanceId);
                 }
 
                 Map<String, Object> claimed;

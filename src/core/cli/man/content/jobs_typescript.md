@@ -228,6 +228,16 @@ agent.addTool({
   instances, plain objects, etc).
 - Misuse surfaces at startup, not at retry time.
 
+**`maxRetries` does NOT soften a real failure.** A handler exception that
+is **not** matched by `retryOn` — and any explicit `fail()` — is
+**terminal immediately**, no matter how much of the `maxRetries` budget is
+unspent. That budget covers only crash-style recoveries the runtime
+retries on your behalf: lease expiry, orphan reclaim, `maxDuration`
+timeout, plus `retryOn`-matched releases. So a job that shows
+`attempt_count: 1` with `maxRetries: 3` after a non-transient error has
+**zero** retries left — not two — it already reached its terminal
+`failed` state on that first attempt.
+
 Retries restart the handler from scratch — there are no idempotency
 keys in v2.x. If the handler has external side effects, design for
 at-least-once: deterministic ids the downstream can dedupe on, or a
@@ -528,6 +538,19 @@ queue pays nothing. Claiming resumes automatically within one claim-poll
 cycle (≤5s backoff ceiling) of the required chain recovering, so no retry
 budget is spent while the capability is down.
 
+**Enforced at both layers.** The gate is belt-and-suspenders. Registry-side,
+the transitive availability predicate keeps the job out of any claim response
+whose `required` chain is down (the description above). Consumer-side, the
+claim worker independently **skips claiming** while a `required` dependency
+slot is still unresolved *locally* — the claim gate and the handler's
+injection read one clock, so a dep flapping DOWN→UP cannot slip a job past
+the registry gate into a handler that would see `null`. As a last resort, a
+**pre-invoke guard** that finds a required slot still unresolved at invoke
+time **releases the claim back to the queue** (`releaseLease`, mirroring the
+`retryOn` path — never a terminal `fail()`) rather than running the handler
+with a missing dependency. Net effect: a handler never observes `null` for a
+`required: true` dependency, including during dependency recovery.
+
 ## Multi-replica execution and fencing
 
 Several replicas may declare the same `task: true` capability. Each job is
@@ -560,6 +583,58 @@ import { currentJob } from "@mcpmesh/sdk";
 const claimEpoch = currentJob()?.claimEpoch ?? null;
 await ledger.upsert({ key: orderId, claimEpoch, amount });
 ```
+
+When the dedupe sink is **itself a mesh provider** (rather than a raw
+DB/client as above), don't plumb the epoch as a tool argument — the provider
+reads the caller's identity straight off the propagated headers via
+`callingJob()`. See **Calling-job identity** below.
+
+## Calling-job identity
+
+The epoch stamp above lets a handler fence *its own* side effects. The dual
+problem is a **downstream provider** fencing writes from a *stale executor*
+it doesn't control — e.g. a state-authority agent that must reject a write
+issued under a superseded claim. Rather than make every caller thread
+`jobId` / `claimEpoch` through the tool payload, the mesh seeds them
+automatically: any outbound mesh→mesh tool call made from within a job
+handler carries the calling job's identity on two dedicated propagated
+headers — `x-mesh-calling-job-id` and (when known)
+`x-mesh-calling-claim-epoch`. The mesh forwards this pair by default across
+every mesh→mesh hop, including the registry's proxy hop, so no per-agent
+`MCP_MESH_PROPAGATE_HEADERS` configuration is needed.
+
+The provider reads that identity with `callingJob()` (exported from the
+package root), which returns `{ jobId, claimEpoch }` or `null`:
+
+```typescript
+import { callingJob } from "@mcpmesh/sdk";
+
+agent.addTool({
+  name: "record_charge",
+  capability: "record_charge",
+  parameters: z.object({ order_id: z.string(), amount: z.number() }),
+  execute: async ({ order_id, amount }) => {
+    const caller = callingJob();          // { jobId, claimEpoch } | null
+    if (caller) {
+      // Fence: stamp the caller's claim epoch so a superseded
+      // re-execution's duplicate write is distinguishable / rejectable.
+      await ledger.upsert({ key: order_id, claimEpoch: caller.claimEpoch, amount });
+    }
+    return { order_id };
+  },
+});
+```
+
+`callingJob()` returns the identity of the job that **called this tool** —
+not the job this handler is itself running as. It returns `null` for a
+regular (non-job) `tools/call`, for a caller on an older SDK that did not
+seed the headers, and — critically — inside a handler that was **claimed
+directly** (a `task: true` handler pulled off its own claim queue): that
+handler's *own* identity lives on `currentJob()`, not here. The returned
+`claimEpoch` is `null` for a push-mode inbound job. It is purely additive
+and read-only — reading it has no effect on the call. This is the
+provider-side dual of `currentJob()`: `currentJob()` answers "what job am I
+executing *as*", `callingJob()` answers "what job *invoked* me".
 
 ## Out-of-band inspection
 

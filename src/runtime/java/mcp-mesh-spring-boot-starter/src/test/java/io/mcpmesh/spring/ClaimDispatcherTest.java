@@ -160,6 +160,57 @@ class ClaimDispatcherTest {
             "legacy snapshot must carry null claim epoch; got: " + noEpoch);
     }
 
+    // ---- Issue #1268: pre-claim required-dependency gate --------------------
+
+    @Test
+    void claimGate_blocksClaim_whileRequiredDepUnresolved() throws Exception {
+        // Registry would grant a claim, but the gate reports an unresolved
+        // required dep — the dispatcher must NOT POST /jobs/claim at all.
+        server.enqueue(new MockResponse().setResponseCode(204));
+        java.util.concurrent.atomic.AtomicReference<String> blocked =
+            new java.util.concurrent.atomic.AtomicReference<>("lookup");
+        AtomicInteger handlerCalls = new AtomicInteger(0);
+        ClaimDispatcher d = new ClaimDispatcher(
+            "test_cap",
+            "instance-1",
+            server.url("/").toString(),
+            (payload, controller) -> { handlerCalls.incrementAndGet(); return null; },
+            null,
+            blocked::get);
+        d.start();
+        Thread.sleep(800);
+        d.stop(0);
+        assertEquals(0, server.getRequestCount(),
+            "dispatcher must not POST /jobs/claim while a required dep is unresolved");
+        assertEquals(0, handlerCalls.get(), "handler must not run while gated");
+    }
+
+    @Test
+    void claimGate_resumesClaim_onceRequiredDepResolves() throws Exception {
+        // Gate starts closed, then opens; once open the loop polls /jobs/claim.
+        for (int i = 0; i < 5; i++) {
+            server.enqueue(new MockResponse().setResponseCode(204));
+        }
+        java.util.concurrent.atomic.AtomicReference<String> blocked =
+            new java.util.concurrent.atomic.AtomicReference<>("lookup");
+        ClaimDispatcher d = new ClaimDispatcher(
+            "test_cap",
+            "instance-1",
+            server.url("/").toString(),
+            (payload, controller) -> null,
+            null,
+            blocked::get);
+        d.start();
+        Thread.sleep(400);
+        assertEquals(0, server.getRequestCount(), "no polls while gated");
+        // Required dep resolves → gate opens.
+        blocked.set(null);
+        RecordedRequest req = server.takeRequest(2, TimeUnit.SECONDS);
+        d.stop(0);
+        assertNotNull(req, "dispatcher must poll /jobs/claim once the gate opens");
+        assertEquals("/jobs/claim", req.getPath());
+    }
+
     @Test
     void constructor_validatesRequiredArgs() {
         // capability

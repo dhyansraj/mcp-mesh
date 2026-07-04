@@ -32,7 +32,19 @@ __all__ = [
     "CURRENT_JOB",
     "current_job",
     "remaining_seconds",
+    "CallingJob",
+    "calling_job",
 ]
+
+# Propagated-header names carrying the CALLING job's identity (issue #1263).
+# A dedicated pair — distinct from the push-mode dispatch protocol's
+# x-mesh-job-id / x-mesh-claim-epoch (x-mesh-job-id doubles as the dispatch
+# discriminator, so it cannot also carry calling identity). Seeded on outbound
+# mesh→mesh calls made from within a job execution context (see
+# ``unified_mcp_proxy``'s calling-identity overlay) and read back here on the
+# provider side.
+_HDR_CALLING_JOB_ID = "x-mesh-calling-job-id"
+_HDR_CALLING_CLAIM_EPOCH = "x-mesh-calling-claim-epoch"
 
 
 @dataclass(frozen=True)
@@ -86,6 +98,66 @@ def current_job() -> Optional[JobContextSnapshot]:
     use ``mcp_mesh_core.current_job()`` (returns the same view as a dict).
     """
     return CURRENT_JOB.get()
+
+
+@dataclass(frozen=True)
+class CallingJob:
+    """Identity of the job whose handler made the CURRENT inbound call
+    (issue #1263).
+
+    This is the provider-side dual of :class:`JobContextSnapshot`:
+    ``current_job()`` answers "what job am I executing as", while
+    ``calling_job()`` answers "what job invoked me". A provider (e.g. a
+    state-authority agent) reads it to fence stale-executor writes without
+    the caller threading identity through every tool-call payload.
+
+    Attributes:
+        job_id: Server-assigned job UUID of the calling job (from the
+            incoming ``x-mesh-calling-job-id`` propagated header).
+        claim_epoch: Claim generation the caller executes under (from the
+            incoming ``x-mesh-calling-claim-epoch`` propagated header), or
+            ``None`` for a push-mode inbound job / an old SDK that did not
+            seed it.
+    """
+
+    job_id: str
+    claim_epoch: Optional[int] = None
+
+
+def calling_job() -> Optional[CallingJob]:
+    """Return the identity of the job that made the current inbound call,
+    or ``None`` when the call did not originate from a job handler
+    (issue #1263).
+
+    Reads the ``x-mesh-calling-job-id`` / ``x-mesh-calling-claim-epoch``
+    propagated headers the mesh seeds on outbound calls made from within a job
+    execution context. This is the "the job that CALLED me" view — it is
+    ``None`` inside a directly-claimed job handler (that handler's OWN identity
+    lives on :func:`current_job`). Safe to call from any tool body — never
+    raises; returns ``None`` for regular (non-job) ``tools/call`` invocations
+    and for calls from an old SDK that did not propagate the identity.
+
+    Purely additive: reading it has no effect on the call.
+    """
+    try:
+        from ..tracing.context import TraceContext
+
+        headers = TraceContext.get_propagated_headers() or {}
+    except Exception:
+        return None
+    job_id = headers.get(_HDR_CALLING_JOB_ID)
+    if not job_id:
+        return None
+    claim_epoch: Optional[int] = None
+    raw_epoch = headers.get(_HDR_CALLING_CLAIM_EPOCH)
+    if raw_epoch is not None:
+        try:
+            parsed = int(raw_epoch)
+            if parsed >= 0:
+                claim_epoch = parsed
+        except (TypeError, ValueError):
+            claim_epoch = None
+    return CallingJob(job_id=job_id, claim_epoch=claim_epoch)
 
 
 def remaining_seconds() -> Optional[float]:
