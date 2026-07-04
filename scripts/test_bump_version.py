@@ -17,8 +17,8 @@ bv = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(bv)
 
 
-def _matches(old: str, line: str) -> bool:
-    return any(p.search(line) for p in bv._guard_patterns(old))
+def _matches(old: str, line: str, new: str | None = None) -> bool:
+    return any(p.search(line) for p in bv._guard_patterns(old, new))
 
 
 def test_mcpmesh_package_json_forms():
@@ -38,6 +38,15 @@ def test_other_mesh_contexts():
     assert _matches(old, "RUN pip install mcp-mesh>=2.8.0")
     assert _matches(old, '  tag: "2.8.0"')
     assert _matches(old, '  tag: "2.8"')  # minor-tag form
+
+
+def test_patch_bump_leaves_minor_tag():
+    # The minor image tag (tag: "2.8") intentionally tracks the latest patch,
+    # so a patch bump must NOT flag it as stale (to_minor unchanged)...
+    assert not _matches("2.8.0", '  tag: "2.8"', new="2.8.1")
+    # ...but a minor/major bump still catches it, and the full tag always does.
+    assert _matches("2.8.0", '  tag: "2.8"', new="2.9.0")
+    assert _matches("2.8.0", '  tag: "2.8.0"', new="2.8.1")
 
 
 def test_non_mesh_lines_ignored():

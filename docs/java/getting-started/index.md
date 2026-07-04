@@ -83,13 +83,13 @@ Create `pom.xml`:
 
     <groupId>com.example</groupId>
     <artifactId>greeter-agent</artifactId>
-    <version>2.8.0</version>
+    <version>2.8.1</version>
 
     <dependencies>
         <dependency>
             <groupId>io.mcp-mesh</groupId>
             <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-            <version>2.8.0</version>
+            <version>2.8.1</version>
         </dependency>
     </dependencies>
 </project>
