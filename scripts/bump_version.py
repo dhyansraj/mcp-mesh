@@ -707,8 +707,12 @@ def bump_test_documentation(old: str, new: str, dry_run: bool) -> list[str]:
 # Post-bump coverage guard
 # ---------------------------------------------------------------------------
 
-# Files whose stale version strings are intentional history, not live pins.
-_GUARD_ALLOWLIST_FILES = re.compile(r"(?:^|/)(?:RELEASE_NOTES\.md|CHANGELOG[^/]*)$")
+# Files whose stale version strings are intentional history or fixtures, not
+# live pins. test_bump_version.py holds old/new literals to exercise the guard
+# regexes themselves, so it always carries the previous version by design.
+_GUARD_ALLOWLIST_FILES = re.compile(
+    r"(?:^|/)(?:RELEASE_NOTES\.md|CHANGELOG[^/]*|test_bump_version\.py)$"
+)
 
 # Lines mentioning these third-party projects legitimately carry their OWN
 # versions, which can collide numerically with ours.
@@ -725,8 +729,14 @@ _GUARD_ALLOWLIST_TOKENS = (
 )
 
 
-def _guard_patterns(old: str) -> list[re.Pattern]:
-    """Mesh-shaped contexts in which a surviving OLD version = a missed bump."""
+def _guard_patterns(old: str, new: str | None = None) -> list[re.Pattern]:
+    """Mesh-shaped contexts in which a surviving OLD version = a missed bump.
+
+    ``new`` lets the guard tell a patch bump from a minor/major one. The
+    minor-version image tag (e.g. ``tag: "2.8"``) intentionally tracks the
+    latest patch, so it is only stale when the MINOR changes — for a patch
+    bump it is left in place by design. When ``new`` is omitted the minor-tag
+    pattern is included (the conservative "could be stale" default)."""
     o = re.escape(old)
     om = re.escape(to_minor(old))
     op = re.escape(to_pep440(old))
@@ -735,7 +745,7 @@ def _guard_patterns(old: str) -> list[re.Pattern]:
         r"|java-runtime|ui|cli):"
     )
     boundary = r"(?![\d.\-+])"
-    return [
+    patterns = [
         re.compile(img + o + boundary),
         re.compile(r"mcp-mesh(?:>=|==)" + op),
         # package.json: "@mcpmesh/sdk": "^X" / "@mcpmesh/core": "X" (the key
@@ -747,11 +757,13 @@ def _guard_patterns(old: str) -> list[re.Pattern]:
         re.compile(r"<mcp-mesh\.version>" + o + r"</mcp-mesh\.version>"),
         re.compile(r"--version\s+v?" + o + boundary),
         re.compile(r'tag:\s*"' + o + r'"'),
-        re.compile(r'tag:\s*"' + om + r'"'),
     ]
+    if new is None or to_minor(old) != to_minor(new):
+        patterns.append(re.compile(r'tag:\s*"' + om + r'"'))
+    return patterns
 
 
-def coverage_guard(old: str) -> tuple[bool, list[str]]:
+def coverage_guard(old: str, new: str) -> tuple[bool, list[str]]:
     """Final safety net: after a bump, scan every tracked file for mesh-shaped
     references that still carry the OLD version.
 
@@ -772,7 +784,7 @@ def coverage_guard(old: str) -> tuple[bool, list[str]]:
     except (subprocess.CalledProcessError, FileNotFoundError, OSError):
         return (False, [])
 
-    patterns = _guard_patterns(old)
+    patterns = _guard_patterns(old, new)
     survivors: list[str] = []
     for rel in out.splitlines():
         if not rel:
@@ -895,7 +907,7 @@ def main() -> int:
     # Final step: verify no mesh-shaped reference to the OLD version survived.
     # Skipped on --dry-run (nothing was written, so every ref would "survive").
     if not dry_run:
-        ran, survivors = coverage_guard(old)
+        ran, survivors = coverage_guard(old, new)
         print()
         if not ran:
             print(

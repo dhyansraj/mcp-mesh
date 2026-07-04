@@ -1,6 +1,50 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.8.0...HEAD)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.8.1...HEAD)
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.8.0...v2.8.1)
+
+## v2.8.1 (2026-07-04)
+
+A reliability and operability patch: required-dependency claim-gating and injection are made race-free, MeshJob gains calling-job identity plus operator controls, and a partial 2.8.0 version bump is corrected.
+
+v2.8.0 turned the dependency graph availability-aware and hardened MeshJob for multi-replica consumers; v2.8.1 closes the reliability edges around it and adds the surfaces to operate it. A `required=true` job handler can no longer observe a null dependency — or burn retry attempts — while a dependency is briefly unavailable; a MeshJob-originated tool call now carries its caller's identity; and operators gain job status/reclaim, a registry drain mode, and an upgrading guide. The release also corrects a partial 2.8.0 version bump that left some published artifacts referencing 2.7 images.
+
+### 🔒 required-dep claim-gating + injection, race-free (#1268)
+
+The registry-side transitive availability gate (v2.8.0) is now paired with a consumer-side gate, so a `required=true` dependency is guaranteed resolved before a job runs. Claim workers skip claiming a job while any required dependency slot is locally unresolved — the job stays queued with `attempt_count` / epoch / lease untouched, so a transient dependency outage burns **zero** attempts (the earlier registry-only gate could still let a local claim proceed into a missing-dependency window). A last-resort pre-invoke guard releases the lease rather than invoking a handler with a missing dependency. Handlers therefore never observe null for a required dependency, including throughout dependency recovery. Required flags are threaded positionally into the wrappers/dispatchers across all three runtimes; Python excludes the MeshJob-paired dependency from the gate, matching the TypeScript/Java structural behavior. A new `uc35_meshjob_claim_gating` suite flaps a required dependency DOWN→UP and asserts `attempt_count == 0` on every poll through the outage window, then exactly-once execution at epoch 1 after recovery.
+
+### 🆔 Calling-job identity (#1263)
+
+A tool call made from within a job handler now automatically carries the caller's identity on a dedicated propagated pair, `x-mesh-calling-job-id` / `x-mesh-calling-claim-epoch` — deliberately separate from the push-dispatch protocol headers so that a nested same-instance task call cannot auto-complete the caller's own job. The pair is seeded atomically from a single job-context snapshot and replaced as a pair (never a mixed identity), forwarded by default across the registry proxy hop, and read via `MeshCallContext.callingJob()` (Java), `mesh.calling_job()` (Python), and `callingJob()` (TypeScript) — null when a handler was claimed directly rather than called from another job.
+
+### 🛠️ Job operability: status, reclaim, drain, upgrading guide (#1264, #1265, #1266, #1267)
+
+Operator surfaces for running MeshJob in production:
+
+- **Job status** (#1264) — `GET /jobs/{id}` and the list endpoint now include `claim_epoch` (owner / attempts / lease were already exposed), and `meshctl job status [--json]` surfaces the full claim state.
+- **Force reclaim** (#1265) — `POST /jobs/{id}/reclaim` + `meshctl job reclaim` force-supersede a claim, mirroring the lease-expiry sweep exactly (owner cleared via a guarded update, the next claim mints the epoch, terminal jobs return `409`). Enables replica eviction and fencing drills.
+- **Registry drain mode** (#1267) — `POST/DELETE/GET /admin/drain` (on the isolated admin port) + `meshctl registry drain [--wait] / resume / status`. Claims pause with zero attempt burn, running jobs finish, and submissions queue. Drain state is in-memory, so a registry restart clears it.
+- **Upgrading guide** (#1266) — `meshctl man upgrading` and its docs mirror document rollout order, the version-skew contract, automigrate behavior (including the drop-column downgrade caveat: a binary downgrade drops columns a newer binary added), and the freeze-vs-drain distinction.
+
+A new `uc36_meshjob_admin` suite proves force-reclaim (epoch 2, exactly-once, the superseded execution observes cancellation) and drain (new jobs park while a mid-drain running job completes).
+
+### 🩹 Partial 2.8.0 version bump corrected (#1271)
+
+The 2.8.0 release shipped a **partial** version bump: the helm charts still pulled 2.7 runtime/registry images and the CLI's default runtime images were pinned to `2.7.0`, so a fresh install or scaffold silently ran on the previous minor. This is now fixed — CLI handler defaults, helm values image tags, scaffold/compose sources, docker-compose examples, and test configs are all on the current version, and a handful of ancient example stragglers are brought forward. To prevent recurrence, `scripts/bump_version.py` gains deep `examples/**` coverage (57 POMs + 17 `package.json` now bumped vs a handful before) and a post-bump coverage guard that git-greps for any surviving mesh-shaped reference to the previous version — allowlisting legitimate third-party pins — and fails non-zero on a survivor.
+
+### 🧹 Backlog fixes (#1039, #1108, #1260)
+
+- **Empty-list route return pinned** (#1039) — an empty list returned from a `@mesh.route` handler round-trips as `[]` (not `null`), verified fixed by the 2.8.0 empty-return work and pinned with a route-layer test through a live handler (`[]` → `[]`, `None` → `null`).
+- **PyPI packaging: hatchling pin removed** (#1108) — the temporary hatchling pin is reverted; twine accepts Metadata-Version 2.5 and the upstream emission bug is fixed, so `twine check` passes on the built package.
+- **Hygiene batch** (#1260) — cancel-safe napi event pull; order-independent `required=true`-wins dependency dedupe across Java beans (the route 503 perimeter promoted in lockstep, so there is no wire-vs-local split-brain); a `SemanticRejection` variant replacing an "error: 200" log line; a runnable `examples/required-dependency/` (Python + Java, scaffold-complete); and a flat eslint config for `src/ui`.
+
+### ⚠️ Notes
+
+- **A non-`retryOn` handler exception is terminal — regardless of `max_retries`.** This is now stated plainly across the jobs man pages and docs: `max_retries` only governs exceptions matched by `retryOn`; any other exception fails the job immediately, with no retry.
+- **Drain is per-replica.** The drain flag is held in memory per registry instance, so in an HA registry topology each replica must be drained independently, and a restart clears drain state.
+- **`MCP_MESH_TOOL_ISOLATION`** is now documented on both the man-page and docs surfaces.
+- A runnable **`required=true` example** (`examples/required-dependency/`, Python + Java) demonstrates the availability-gated dependency contract end to end.
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.7.0...v2.8.0)
 

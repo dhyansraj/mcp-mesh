@@ -1,5 +1,5 @@
 # Dockerfile for analyst-py MCP Mesh LLM agent
-FROM mcpmesh/python-runtime:2.8.0
+FROM mcpmesh/python-runtime:2.8.1
 
 WORKDIR /app
 

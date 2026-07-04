@@ -1,5 +1,5 @@
 # Dockerfile for ts-optional-dep-agent MCP Mesh agent
-FROM mcpmesh/typescript-runtime:2.8.0
+FROM mcpmesh/typescript-runtime:2.8.1
 
 WORKDIR /app
 
