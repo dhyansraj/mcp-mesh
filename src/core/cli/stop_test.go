@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -97,6 +98,75 @@ func TestKillProcessByPID_RefusesPID1(t *testing.T) {
 
 	if !lifecycle.IsAlive(sleepPID) {
 		t.Errorf("benign sleep PID %d is dead — killProcessByPID(1, ...) appears to have broadcast", sleepPID)
+	}
+}
+
+// TestStopNamedAgents_AllUnknown verifies multi-name stop aggregates per-agent
+// failures: every unknown name is reported, and a single non-nil error naming
+// all failures (with the correct count) is returned so the command exits
+// non-zero.
+func TestStopNamedAgents_AllUnknown(t *testing.T) {
+	tmp := t.TempDir()
+	defer lifecycle.WithRoot(tmp)()
+
+	err := stopNamedAgents([]string{"ghost-a", "ghost-b"}, time.Second, true, false, false)
+	if err == nil {
+		t.Fatal("expected aggregated error for two unknown agents")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "2 agent(s)") {
+		t.Errorf("error should report a count of 2, got: %v", err)
+	}
+	for _, name := range []string{"ghost-a", "ghost-b"} {
+		if !strings.Contains(msg, name) {
+			t.Errorf("error should name %q, got: %v", name, err)
+		}
+	}
+}
+
+// TestStopNamedAgents_MixedKnownAndUnknown verifies that one un-stoppable agent
+// never aborts the rest: a tracked-but-dead agent is cleaned up successfully
+// (its PID file removed) while an unknown name fails, and the aggregated error
+// counts only the real failure.
+func TestStopNamedAgents_MixedKnownAndUnknown(t *testing.T) {
+	tmp := t.TempDir()
+	defer lifecycle.WithRoot(tmp)()
+
+	// A tracked agent whose PID is already dead: spawn a short sleep, kill and
+	// reap it so its PID is gone, then record it. stopSpecificAgent treats this
+	// as stale bookkeeping and cleans it up (no error).
+	dead := exec.Command("sleep", "30")
+	dead.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := dead.Start(); err != nil {
+		t.Fatalf("spawn sleep: %v", err)
+	}
+	deadPID := dead.Process.Pid
+	_ = dead.Process.Kill()
+	_ = dead.Wait()
+
+	if err := lifecycle.WriteAgent("known-dead", deadPID, lifecycle.NewGroupID()); err != nil {
+		t.Fatalf("WriteAgent: %v", err)
+	}
+
+	err := stopNamedAgents([]string{"known-dead", "ghost-x"}, time.Second, true, false, false)
+	if err == nil {
+		t.Fatal("expected an error because one name is unknown")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "1 agent(s)") {
+		t.Errorf("error should report exactly 1 failure, got: %v", err)
+	}
+	if !strings.Contains(msg, "ghost-x") {
+		t.Errorf("error should name the unknown agent, got: %v", err)
+	}
+	if strings.Contains(msg, "known-dead") {
+		t.Errorf("the tracked dead agent should have stopped cleanly, got: %v", err)
+	}
+	if _, statErr := lifecycle.LookupAgent("known-dead"); statErr != nil {
+		t.Errorf("LookupAgent after stop: %v", statErr)
+	}
+	if _, err := os.Stat(lifecycle.PIDFile("known-dead")); !os.IsNotExist(err) {
+		t.Errorf("known-dead pid file should be removed after stop")
 	}
 }
 

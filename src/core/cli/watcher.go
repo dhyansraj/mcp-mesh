@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -278,29 +277,15 @@ func (aw *AgentWatcher) terminateAgent() {
 	}
 
 	pid := aw.currentCmd.Process.Pid
-	// Process group ID equals PID since we set Setpgid
-	pgid := pid
 
-	// Send SIGTERM to the process group
-	if err := syscall.Kill(-pgid, syscall.SIGTERM); err != nil {
-		// Process may already be dead
-		aw.currentCmd = nil
-		return
+	// TERM the whole group, wait for it to drain, escalate to SIGKILL on
+	// timeout. KillGroupVerify's group-drain wait is zombie-aware, so a child
+	// orphaned to a non-reaping container PID 1 (whose zombie keeps
+	// kill(-pgid, 0) reporting "alive") is recognized as drained instead of
+	// producing a spurious "still alive after SIGKILL" on every watcher stop.
+	if !lifecycle.KillGroupVerify(pid, aw.config.StopTimeout) && !aw.quiet {
+		fmt.Printf("[watch] WARN: process group %d (%s) still alive after SIGKILL\n", pid, aw.config.AgentName)
 	}
-
-	// Poll every 50ms until StopTimeout
-	deadline := time.Now().Add(aw.config.StopTimeout)
-	for time.Now().Before(deadline) {
-		if err := syscall.Kill(-pgid, 0); err != nil {
-			// Process group no longer exists
-			aw.currentCmd = nil
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-
-	// Force kill
-	syscall.Kill(-pgid, syscall.SIGKILL)
 	aw.currentCmd = nil
 }
 
@@ -348,29 +333,21 @@ func (aw *AgentWatcher) shutdownCurrentForRestart() error {
 		}
 	}
 
+	// Direct-PID fallback: TERM the group, wait for it to drain, escalate to
+	// SIGKILL. KillGroupVerify's group-drain wait is zombie-aware — a child
+	// orphaned to a non-reaping container PID 1 counts as drained rather than
+	// hanging the timeout and forcing us to (incorrectly) skip the restart.
 	pid := cmd.Process.Pid
-	pgid := pid
-	_ = syscall.Kill(-pgid, syscall.SIGTERM)
-	deadline := time.Now().Add(aw.config.StopTimeout)
-	for time.Now().Before(deadline) {
-		// Only ESRCH definitively means the process group is gone. Other
-		// errors (EPERM, etc.) mean we can't tell — keep polling rather
-		// than declare success prematurely.
-		if err := syscall.Kill(-pgid, 0); err == syscall.ESRCH {
-			return nil
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	_ = syscall.Kill(-pgid, syscall.SIGKILL)
-	deadline = time.Now().Add(1 * time.Second)
-	for time.Now().Before(deadline) {
-		if err := syscall.Kill(-pgid, 0); err == syscall.ESRCH {
-			return nil
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if err := syscall.Kill(-pgid, 0); err != syscall.ESRCH {
-		return fmt.Errorf("process %d still alive after SIGKILL", pid)
+	if !lifecycle.KillGroupVerify(pid, aw.config.StopTimeout) {
+		// The group survived the kill. We cleared aw.currentCmd up front (to
+		// keep the exit reaper from racing our explicit kill); restore it so
+		// the watcher does NOT lose track of the still-live group. Otherwise a
+		// subsequent reload would see currentCmd==nil, treat the group as
+		// absent, and start a second process alongside the survivor.
+		aw.mu.Lock()
+		aw.currentCmd = cmd
+		aw.mu.Unlock()
+		return fmt.Errorf("process group %d still alive after SIGKILL", pid)
 	}
 	return nil
 }

@@ -4,6 +4,9 @@ import io.mcpmesh.types.McpMeshTool;
 import io.mcpmesh.types.MeshLlmAgent.ToolInfo;
 import io.mcpmesh.types.MeshToolCallException;
 import io.mcpmesh.types.MeshToolUnavailableException;
+import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
+import io.modelcontextprotocol.spec.McpSchema.Content;
+import io.modelcontextprotocol.spec.McpSchema.TextContent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -172,13 +175,48 @@ public class ToolInvoker {
         try (SpanScope span = tracer != null ? tracer.startSpan("proxy_call_wrapper", spanMeta) : SpanScope.NOOP) {
             try {
                 Object result = handler.invoke(args);
+                // Issue #1273: a handler may RETURN an isError CallToolResult
+                // rather than throw (e.g. the direct-invoke required-dependency
+                // refusal). Local / self-dependency / LLM callers expect a raw
+                // value or an exception — mirror the remote path
+                // ({@link McpHttpClient}), which throws MeshToolCallException on
+                // isError — so an isError envelope never leaks back as a
+                // successful value.
+                if (result instanceof CallToolResult ctr
+                        && Boolean.TRUE.equals(ctr.isError())) {
+                    String errorText = firstTextContent(ctr);
+                    MeshToolCallException ex = new MeshToolCallException(
+                        capability, handler.getMethodName(), errorText);
+                    span.withError(ex);
+                    throw ex;
+                }
                 span.withResult(result);
                 return result;
+            } catch (MeshToolCallException e) {
+                // Already the caller-facing type (isError translation above) —
+                // don't double-wrap.
+                throw e;
             } catch (Exception e) {
                 span.withError(e);
                 throw new MeshToolCallException(capability, handler.getMethodName(), e);
             }
         }
+    }
+
+    /**
+     * Extract the text of the first {@link TextContent} block in a tool
+     * result, or a generic message when none is present. Used to surface an
+     * isError result's payload (issue #1273) to local callers.
+     */
+    private static String firstTextContent(CallToolResult ctr) {
+        if (ctr.content() != null) {
+            for (Content c : ctr.content()) {
+                if (c instanceof TextContent tc) {
+                    return tc.text();
+                }
+            }
+        }
+        return "Unknown tool error";
     }
 
     /**

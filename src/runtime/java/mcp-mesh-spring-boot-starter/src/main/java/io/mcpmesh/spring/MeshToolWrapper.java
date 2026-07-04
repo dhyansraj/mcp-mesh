@@ -15,6 +15,8 @@ import io.mcpmesh.spring.tracing.TraceContext;
 import io.mcpmesh.spring.tracing.TraceInfo;
 import io.mcpmesh.types.McpMeshTool;
 import io.mcpmesh.types.MeshLlmAgent;
+import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
+import io.modelcontextprotocol.spec.McpSchema.TextContent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -507,6 +509,56 @@ public class MeshToolWrapper implements McpToolHandler {
     }
 
     /**
+     * Build the structured {@code dependency_unavailable} tool result (issue
+     * #1273) for a required dependency that is unresolved at direct-invoke
+     * time. Same semantic class as the {@code @MeshRoute} perimeter's 503 body
+     * {@code {"error":"dependency_unavailable","capability":"<cap>"}}; surfaced
+     * here as an {@code isError=true} {@link CallToolResult} whose single
+     * {@link TextContent} carries that JSON, so callers classify it as
+     * retryable topology rather than an application failure.
+     */
+    private CallToolResult dependencyUnavailableResult(String capability) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("error", "dependency_unavailable");
+        body.put("capability", capability);
+        String json;
+        try {
+            json = objectMapper.writeValueAsString(body);
+        } catch (Exception e) {
+            // Trivial two-scalar map — serialization never realistically fails,
+            // but fall back to a hand-built envelope so the contract holds.
+            json = "{\"error\":\"dependency_unavailable\",\"capability\":\""
+                + capability + "\"}";
+        }
+        return new CallToolResult(List.of(new TextContent(json)), true, null, null);
+    }
+
+    /**
+     * Best-effort lease release for the inbound job-dispatch required-dependency
+     * guard (issue #1273). Opens the controller via {@code opener}, releases the
+     * lease, and closes it — swallowing ANY failure (from {@code open()} OR
+     * {@code releaseLease()}) so the job stays retryable (re-queues on lease
+     * expiry) instead of surfacing to the caller as a tool-call error. The
+     * controller is always closed when it was opened. Package-private with a
+     * controller-factory seam so unit tests can drive the swallow path without
+     * an FFI-backed {@link JobController}.
+     */
+    void releaseLeaseForJobGuard(String jobId, String missingCap,
+            java.util.function.Supplier<JobController> opener) {
+        try {
+            JobController controller = opener.get();
+            try {
+                controller.releaseLease("required dependency unavailable: " + missingCap);
+            } finally {
+                controller.close();
+            }
+        } catch (Exception e) {
+            log.warn("Job-dispatch guard for tool={} job={}: lease release failed "
+                + "({}); job re-queues on lease expiry instead", funcId, jobId, e.toString());
+        }
+    }
+
+    /**
      * Update a MeshLlmAgent at the given index.
      *
      * @param llmIndex The LLM agent index
@@ -814,8 +866,38 @@ public class MeshToolWrapper implements McpToolHandler {
             return dispatchAsJob(cleanArgs, jobIdHeader, deadlineSecs, claimEpoch);
         }
 
-        // Build full argument array (MCP params + deps + LLM agents + a2a client)
+        // Build full argument array (MCP params + deps + LLM agents + a2a
+        // client). This runs the per-slot settle-grace wait (#1193), so a
+        // still-settling required dependency is given its full window before
+        // the guard below judges it — a fresh agent restart must block-then-
+        // succeed, not burst-refuse.
         Object[] fullArgs = buildFullArgs(cleanArgs);
+
+        // Issue #1273: direct-invoke required-dependency guard — evaluated
+        // AFTER buildFullArgs (i.e. AFTER settle grace), mirroring Python/TS
+        // and the @MeshRoute perimeter, all of which guard post-settle. The
+        // claim path ({@link #invokeForClaim}, #1268) and the route interceptor
+        // ({@link MeshRouteHandlerInterceptor}'s 503) already refuse before a
+        // handler can observe a null REQUIRED dependency — the plain tools/call
+        // dispatch did not. A required dep flapping DOWN→UP flips the registry
+        // view to available before THIS callee's own heartbeat refills its
+        // injection slot; a call landing in that ~sub-second window would invoke
+        // the handler with a null required proxy (an NPE-shaped 500 the caller
+        // can't classify). Refuse instead with the SAME dependency_unavailable
+        // semantic class as the route perimeter — surfaced here as an
+        // isError=true CallToolResult whose text carries
+        // {"error":"dependency_unavailable","capability":"<cap>"} so callers
+        // classify it as retryable topology, not application failure. Optional
+        // deps keep their null-passthrough. Routes never reach here (the
+        // interceptor 503s earlier, so no double-guard); the job-dispatch path
+        // guards separately (release-the-lease) and the claim path is unchanged.
+        String missingRequired = firstUnresolvedRequiredDependency();
+        if (missingRequired != null) {
+            log.warn("Direct-invoke guard for {}: required dependency '{}' unavailable "
+                + "at invocation time — refusing with dependency_unavailable (not "
+                + "invoking the handler with a null required proxy)", funcId, missingRequired);
+            return dependencyUnavailableResult(missingRequired);
+        }
 
         // Phase B MeshJob substrate: fill MeshJob slot for non-job paths.
         // - Consumer side (method has dependencies + jobSubmitter set): inject submitter.
@@ -1158,6 +1240,34 @@ public class MeshToolWrapper implements McpToolHandler {
         boolean canInjectController = meshJobParamIndex != null
             && instanceId.get() != null
             && registryUrl.get() != null;
+
+        // Issue #1273: required-dependency guard on the inbound JOB-header path
+        // (task tool called with X-Mesh-Job-Id — cross-runtime claim
+        // propagation). Settle grace already ran (buildFullArgs). A still-
+        // unresolved required dep here must NOT invoke the handler with a null
+        // proxy — and because this is a JOB-flavored invocation (the row is
+        // claimed / `working`), the correct recovery is to RELEASE THE LEASE so
+        // the job re-queues (retryable), mirroring {@link #invokeForClaim} and
+        // the claim dispatcher. Never a tool-error refusal and never a terminal
+        // fail (which would reproduce the very race the guard prevents). When
+        // the controller wiring is incomplete there is no lease to manage — the
+        // job re-queues on lease expiry instead.
+        String missingRequiredJob = firstUnresolvedRequiredDependency();
+        if (missingRequiredJob != null) {
+            log.warn("Job-dispatch guard for tool={} job={}: required dependency "
+                + "'{}' unavailable at invocation time — releasing lease so the job "
+                + "re-queues (NOT invoking, NOT failing)", funcId, jobId, missingRequiredJob);
+            if (canInjectController) {
+                releaseLeaseForJobGuard(jobId, missingRequiredJob,
+                    () -> JobController.open(
+                        jobId, instanceId.get(), registryUrl.get(), claimEpoch));
+            } else {
+                log.warn("Job-dispatch guard for tool={} job={}: cannot release lease "
+                    + "(controller wiring incomplete); job re-queues on lease expiry",
+                    funcId, jobId);
+            }
+            return null;
+        }
 
         if (!canInjectController) {
             log.warn("Job dispatch for tool={} job={} is missing wiring " +

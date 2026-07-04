@@ -87,6 +87,12 @@ func IsAliveOrGroupAlive(pid int) bool {
 // groupAliveFn is overridable for tests; production uses IsAliveOrGroupAlive.
 var groupAliveFn = IsAliveOrGroupAlive
 
+// groupAllZombieFn is overridable for tests; production uses groupAllZombie
+// (platform-specific). Reports whether every remaining member of the process
+// group is a zombie — see the platform files for the container/non-reaping-init
+// rationale.
+var groupAllZombieFn = groupAllZombie
+
 // readPIDFromFile reads and parses a PID file. Returns (0, nil) if missing.
 func readPIDFromFile(path string) (int, error) {
 	data, err := os.ReadFile(path)
@@ -157,18 +163,39 @@ func pollUntilDead(pid int, timeout time.Duration) bool {
 func pollUntilGroupDead(pid int, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if !groupAliveFn(pid) {
-			return true
-		}
-		if z, err := isZombieFn(pid); err == nil && z {
+		if groupConfirmedDead(pid) {
 			return true
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+	return groupConfirmedDead(pid)
+}
+
+// groupConfirmedDead is the shared "is this process group effectively gone"
+// predicate used by pollUntilGroupDead. The group counts as dead when EITHER:
+//
+//  1. the group probe reports empty (kill(-pid, 0) -> ESRCH); or
+//  2. every REMAINING member of the group is a zombie — a SIGKILLed child in a
+//     container whose PID 1 does not reap keeps kill(-pid, 0) reporting the
+//     group "alive" indefinitely even though the zombie holds no port or FDs.
+//     Without this, the group-drain waits would hang the full timeout and the
+//     watch-reload path would then skip the restart (issue surfaced by
+//     tc29_watch_mixed). Probe errors stay inconclusive — never treated as dead.
+//
+// It deliberately does NOT short-circuit on the TRACKED PID being a zombie:
+// for a multi-process group the tracked PID is the group *leader*, and a zombie
+// leader can still have LIVE children (e.g. a Maven parent that exited while
+// its child JVM ignores SIGTERM and holds the port). Treating a zombie leader
+// as "group dead" would mask those children and abort the SIGKILL escalation.
+// The leader-only-zombie case is covered by predicate (2) — groupAllZombieFn
+// finds the sole member is a zombie and reports the group drained. Single-PID
+// (non-group) zombie handling lives in pollUntilDead, which is correct there
+// because that path tracks exactly one process.
+func groupConfirmedDead(pid int) bool {
 	if !groupAliveFn(pid) {
 		return true
 	}
-	if z, err := isZombieFn(pid); err == nil && z {
+	if az, err := groupAllZombieFn(pid); err == nil && az {
 		return true
 	}
 	return false
@@ -200,8 +227,8 @@ func signalGroupOrPID(pid int, sig syscall.Signal) error {
 //  1. read <root>/pids/<name>.pid
 //  2. if missing -> return (false, nil)
 //  3. if process already dead -> remove PID file (and .group), return (false, nil)
-//  4. SIGTERM (process group preferred), poll up to timeout
-//  5. if still alive -> SIGKILL, poll up to 1s
+//  4. SIGTERM (process group preferred), poll until the whole group is dead
+//  5. if the group is still alive -> SIGKILL the group, poll up to 3s
 //  6. on confirmed death -> remove PID file (and .group), return (true, nil)
 //  7. on verify failure -> return error WITHOUT removing files (preserve state)
 //
@@ -251,16 +278,26 @@ func KillVerifyAndCleanup(name string, timeout time.Duration) (killed bool, err 
 		return true, nil
 	}
 
-	// Graceful: SIGTERM + poll.
+	// Graceful: SIGTERM to the whole process group, then wait for the ENTIRE
+	// group to die — not just the parent. For multi-process agents (e.g. a
+	// Maven `mvn spring-boot:run` parent whose child JVM holds the port) the
+	// parent can exit while the child lingers bound to the port and still
+	// heartbeating. Polling parent-only (pollUntilDead) would report "stopped"
+	// the instant the parent exits and remove the PID files while the child
+	// survives; a child that slow-walks or ignores SIGTERM would then never be
+	// force-killed. Mirror the orphan branch above: poll the group and escalate
+	// SIGKILL to the group at the timeout so stop blocks until the port is
+	// actually released.
 	_ = signalGroupOrPID(pid, syscall.SIGTERM)
-	if !pollUntilDead(pid, timeout) {
-		// Force: SIGKILL + extended poll. Window is 3s so a parent that's slow
-		// to reap (or has exited entirely, leaving init to reap) doesn't trip a
-		// false-negative — pollUntilDead also treats zombies as dead, so the
-		// only way to time out here is genuine refusal-to-die.
+	if !pollUntilGroupDead(pid, timeout) {
+		// Force: SIGKILL the whole group + extended poll. Window is 3s so a
+		// parent that's slow to reap (or has exited entirely, leaving init to
+		// reap) doesn't trip a false-negative — pollUntilGroupDead also treats
+		// zombies as dead, so the only way to time out here is a group member
+		// genuinely refusing to die.
 		_ = signalGroupOrPID(pid, syscall.SIGKILL)
-		if !pollUntilDead(pid, 3*time.Second) {
-			return false, fmt.Errorf("lifecycle: process %d (%s) still alive after SIGKILL", pid, name)
+		if !pollUntilGroupDead(pid, 3*time.Second) {
+			return false, fmt.Errorf("lifecycle: process group %d (%s) still alive after SIGKILL", pid, name)
 		}
 	}
 
@@ -285,4 +322,26 @@ func KillPIDVerify(pid int, timeout time.Duration) bool {
 	}
 	_ = signalGroupOrPID(pid, syscall.SIGKILL)
 	return pollUntilDead(pid, 3*time.Second)
+}
+
+// KillGroupVerify is the group-aware sibling of KillPIDVerify: TERM the process
+// group, wait for the WHOLE group to drain, escalate to SIGKILL on timeout, and
+// wait again. It routes through pollUntilGroupDead so callers inherit the
+// zombie-aware group-drain check — an all-zombie group (e.g. a SIGKILLed child
+// orphaned to a non-reaping container PID 1) counts as drained rather than
+// hanging the timeout. Returns true on confirmed group death.
+//
+// Used by the watch-mode paths (terminateAgent, the restart fallback) that hold
+// a bare PID with no <name>.pid bookkeeping. The 3s post-SIGKILL window matches
+// KillVerifyAndCleanup.
+func KillGroupVerify(pid int, timeout time.Duration) bool {
+	if pid <= 1 {
+		return true
+	}
+	_ = signalGroupOrPID(pid, syscall.SIGTERM)
+	if pollUntilGroupDead(pid, timeout) {
+		return true
+	}
+	_ = signalGroupOrPID(pid, syscall.SIGKILL)
+	return pollUntilGroupDead(pid, 3*time.Second)
 }

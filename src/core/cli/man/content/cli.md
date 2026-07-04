@@ -52,14 +52,30 @@ meshctl start agent.py --dte --ui --env-file .env.dev
 meshctl start agent.py --connect-only --registry-url https://registry.example.com
 ```
 
+**`--watch` (auto-rebuild on file changes).** Watch mode restarts the agent
+when you *write content* to a watched source file. It triggers on filesystem
+Write / Create / Rename events — so saving an edit in your editor reloads the
+agent. A pure `touch` that only bumps the modification time emits a Chmod
+event and is deliberately ignored, so metadata-only changes don't cause
+spurious rebuilds. On each rebuild `stop` waits for the old process to fully
+exit before the new one binds, so the agent re-binds to the same configured
+port every time.
+
+Watch mode is a **rebuild trigger, not a crash supervisor.** If an agent exits
+on its own — a crash, an uncaught exception, or an external `kill` — the
+watcher does **not** respawn it. It stays down until the next content write to
+a watched file, at which point the normal rebuild path brings it back. Use
+`--watch` for the edit-save-reload development loop; for automatic restart of
+crashed processes, run under a real supervisor (systemd, Kubernetes, etc.).
+
 ### `meshctl stop`
 
-Stops detached processes. Without arguments, stops everything (agents + UI + registry). With names, stops only those agents and keeps shared services running.
+Stops detached processes. Without arguments, stops everything (agents + UI + registry). Pass one or more names to stop only those agents; the registry and UI server keep running as long as another agent still depends on them, and are torn down once the last dependent stops. Use `--keep-registry` / `--keep-ui` to hold a shared service up regardless.
 
 ```bash
 meshctl stop                    # Stop all agents + UI + registry
 meshctl stop my-agent           # Stop only my-agent
-meshctl stop agent1 agent2      # Stop multiple
+meshctl stop agent1 agent2      # Stop multiple agents by name
 meshctl stop --agents           # Stop all agents, keep registry/UI alive
 meshctl stop --keep-registry    # Stop everything except the registry
 meshctl stop --keep-ui          # Stop everything except the UI server
@@ -70,6 +86,27 @@ meshctl stop --force            # Force-kill processes (no graceful shutdown)
 meshctl stop --quiet            # Suppress output messages
 meshctl stop --timeout 30       # Per-process shutdown timeout in seconds (default 10)
 ```
+
+When multiple names are given, each agent is stopped independently: a name
+that isn't running is reported and the rest still stop, and the command exits
+non-zero if any named agent failed. The shared flags (`--timeout`, `--force`,
+`--keep-registry`, `--keep-ui`) apply to every named agent.
+
+**Process-group semantics.** `stop` terminates the agent's whole process
+*group*, not just the recorded PID. Detached agents lead their own process
+group, so a multi-process launcher (for example a Maven `mvn spring-boot:run`
+parent whose child JVM actually holds the port) is torn down completely:
+`stop` sends `SIGTERM` to the group, then **blocks until every process in the
+group has exited** — so by the time it returns the port is released. If the
+group is still alive when `--timeout` elapses, `stop` escalates to `SIGKILL`
+against the whole group. A child that ignores `SIGTERM` or shuts down slowly is
+therefore always force-killed at the deadline rather than leaked. Behavior is
+identical on macOS and Linux.
+
+The one exception is a descendant that deliberately leaves the group — a child
+that calls `setsid()` (or is spawned into a new session/process group) is no
+longer part of the agent's group and is invisible to the group probe, so `stop`
+cannot see or reap it. Such processes must manage their own shutdown.
 
 ### `meshctl logs`
 

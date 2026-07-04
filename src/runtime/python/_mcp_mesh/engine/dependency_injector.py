@@ -9,6 +9,7 @@ the HTTP middleware layer for unified approach across MCP agents and FastAPI app
 import asyncio
 import functools
 import inspect
+import json
 import logging
 import weakref
 from collections.abc import Callable, Iterable
@@ -1284,6 +1285,7 @@ class DependencyInjector:
         func: Callable,
         dependencies: list[str],
         route_required_caps: Optional[list[Optional[str]]] = None,
+        tool_required_caps: Optional[list[Optional[str]]] = None,
     ) -> Callable:
         """
         Create in-place dependency injection by modifying the original function.
@@ -1300,8 +1302,21 @@ class DependencyInjector:
         dependency slot is ``required=True`` (perimeter 503), else ``None``.
         When any slot is required, the non-streaming DI wrapper returns HTTP
         503 (naming the capability) before invoking user code if that dep's
-        proxy is unavailable at call time. @mesh.tool never passes this —
-        mesh-internal calls are chain-gated, not perimeter-gated.
+        proxy is unavailable at call time. @mesh.tool passes
+        ``tool_required_caps`` instead — mesh-internal calls are chain-gated,
+        not perimeter-gated, but a direct ``tools/call`` for a tool with a
+        required dep is still refused (issue #1273).
+
+        ``tool_required_caps`` (issue #1273) is the @mesh.tool analogue set by
+        the tool decorator: an index-aligned list where each entry is the
+        capability name if that dependency slot is ``required=True`` (else
+        ``None``). When any slot is required, the tool DI wrapper REFUSES the
+        direct ``tools/call`` dispatch — raising a ``dependency_unavailable``
+        tool error (an ``isError`` result naming the capability, same semantic
+        class as the route perimeter's 503) rather than invoking the handler
+        with a null required proxy — if that dep is unresolved at call time.
+        This closes the same DOWN→UP flap window #1268 closed on the claim
+        path. Optional deps keep their None-passthrough.
         """
         func_id = f"{func.__module__}.{func.__qualname__}"
 
@@ -1309,6 +1324,12 @@ class DependencyInjector:
         # cheaply; None (the @mesh.tool case) short-circuits the whole check.
         _route_required_caps: list[Optional[str]] = list(route_required_caps or [])
         _has_route_required = any(c is not None for c in _route_required_caps)
+        # Issue #1273: @mesh.tool required-dep slots (index-aligned with
+        # ``dependencies``). The MeshJob-paired slot is nulled out below once
+        # ``mesh_job_index`` is known — its slot holds a locally-built
+        # submitter, never a resolved proxy, so gating on it would refuse
+        # every call (mirrors the claim dispatcher's mesh_job_dep_index skip).
+        _tool_required_caps: list[Optional[str]] = list(tool_required_caps or [])
 
         # Use new smart injection strategy
         mesh_positions = analyze_injection_strategy(func, dependencies)
@@ -1390,6 +1411,18 @@ class DependencyInjector:
             if _key is not None:
                 _settle_state.register_declared(_key)
 
+        # Issue #1273: exclude the MeshJob-paired dep slot from the tool
+        # required-dep refusal. Its dep_index is the rank of the MeshJob
+        # parameter position among the sorted eligible positions (same math
+        # as the settle loop and the claim dispatcher's mesh_job_dep_index).
+        # That slot injects a locally-built MeshJobSubmitter, never a resolved
+        # proxy, so leaving it in would refuse every call.
+        if mesh_job_index is not None and mesh_job_index in settle_eligible:
+            _mj_dep_index = settle_eligible.index(mesh_job_index)
+            if 0 <= _mj_dep_index < len(_tool_required_caps):
+                _tool_required_caps[_mj_dep_index] = None
+        _has_tool_required = any(c is not None for c in _tool_required_caps)
+
         # If no mesh positions to inject AND no MeshJob slot, fall back to
         # the minimal tracking wrapper. With a MeshJob slot we route to the
         # full path so the auto-injection block at line ~439 can fire.
@@ -1414,6 +1447,25 @@ class DependencyInjector:
                     f"503 perimeter cannot evaluate and is skipped. Fix: annotate "
                     f"the intended parameter(s) as McpMeshTool "
                     f"(e.g. 'dep: McpMeshTool = None')."
+                )
+
+            # Issue #1273: the @mesh.tool analogue — a required dep declared but
+            # the tool took the minimal path (no injectable McpMeshTool slot), so
+            # the direct-dispatch refusal (_tool_required_refusal) has nothing to
+            # evaluate. With NO slot the handler can never observe a null required
+            # proxy (the #1273 null-observation bug is structurally impossible
+            # here), so — exactly like the route perimeter above — enforcement
+            # stays OFF and we WARN instead: the mis-annotation (the dep param
+            # isn't typed McpMeshTool) is the thing to fix, not a refuse-all guard.
+            if _has_tool_required:
+                _req_caps = [c for c in _tool_required_caps if c is not None]
+                logger.warning(
+                    f"⚠️ Tool '{func.__name__}': required-dependency guard "
+                    f"INACTIVE — declared required {_req_caps} but the handler has "
+                    f"no injectable McpMeshTool parameter to receive them, so the "
+                    f"dependency_unavailable refusal cannot evaluate and is "
+                    f"skipped. Fix: annotate the intended parameter(s) as "
+                    f"McpMeshTool (e.g. 'dep: McpMeshTool = None')."
                 )
 
             if is_stream:
@@ -1528,6 +1580,49 @@ class DependencyInjector:
                 },
             )
 
+        # Issue #1273 tool-dispatch guard (shared by the async + sync
+        # dependency_wrapper closures): when a @mesh.tool has a required dep
+        # slot that is unresolved at direct ``tools/call`` time, raise a
+        # ``dependency_unavailable`` tool error naming the capability instead
+        # of invoking the handler with a null required proxy. FastMCP surfaces
+        # a raised ``ToolError`` as an ``isError`` result whose text carries
+        # the message, so the JSON body ``{"error":"dependency_unavailable",
+        # "capability":"<cap>"}`` reaches the caller — the SAME semantic class
+        # as the route perimeter's 503, letting callers classify it as
+        # retryable topology rather than application failure. Runs AFTER the
+        # settle wait / injection (so a still-settling dep gets its full window
+        # and caller-supplied mocks are honored) and is a no-op unless the tool
+        # declared a required dep (@mesh.tool sets ``tool_required_caps``).
+        def _tool_required_refusal(injected_deps, kwargs):
+            if not _has_tool_required:
+                return
+            unavailable = _first_unavailable_required(
+                func_id,
+                _tool_required_caps,
+                injected_deps,
+                self.get_dependency,
+                kwargs,
+                settle_params,
+            )
+            if unavailable is None:
+                return
+            from fastmcp.exceptions import ToolError
+
+            wrapper_logger.warning(
+                f"🚫 Tool '{func.__name__}': required dependency "
+                f"'{unavailable}' unavailable at invocation time — refusing "
+                f"with dependency_unavailable (not invoking the handler with a "
+                f"null required proxy)"
+            )
+            raise ToolError(
+                json.dumps(
+                    {
+                        "error": "dependency_unavailable",
+                        "capability": unavailable,
+                    }
+                )
+            )
+
         # Determine if we need async wrapper
         need_async_wrapper = inspect.iscoroutinefunction(func)
 
@@ -1592,6 +1687,12 @@ class DependencyInjector:
                 if _perimeter is not None:
                     return _perimeter
 
+                # Issue #1273 direct-dispatch guard (no-op for @mesh.route and
+                # for tools with no required dep). Raises ToolError → isError.
+                _tool_required_refusal(
+                    dependency_wrapper._mesh_injected_deps, kwargs
+                )
+
                 from ..tracing.execution_tracer import ExecutionTracer
                 from .job_dispatch import maybe_dispatch_as_job
 
@@ -1655,6 +1756,12 @@ class DependencyInjector:
                 )
                 if _perimeter is not None:
                     return _perimeter
+
+                # Issue #1273 direct-dispatch guard (sync variant). Raises
+                # ToolError → isError when a required tool dep is unresolved.
+                _tool_required_refusal(
+                    dependency_wrapper._mesh_injected_deps, kwargs
+                )
 
                 from ..tracing.execution_tracer import ExecutionTracer
 

@@ -35,19 +35,19 @@ Job rows persist across a registry restart, but **leases cannot renew while the 
 
 On restart the orphan/expired-lease **reclaim sweep** races the owner's first renewing poll: whichever lands first wins. If the sweep reclaims first, a newer-SDK owner's next delta carries a stale epoch and is fenced (`claim_superseded`) — safe. But an **older, unfenced SDK** that is re-claimed by the same instance can produce **dual ownership** (double execution), because epoch-less deltas get owner-only validation with no fencing.
 
-**Therefore: drain before a live upgrade** rather than pulling the registry out from under running jobs.
+**Therefore: drain before a live upgrade** rather than pulling the registry out from under in-flight jobs.
 
 ```bash
-# 1. Pause new claims; block until every running job releases its owner
+# 1. Pause new claims; block until every in-flight job releases its owner
 meshctl registry drain --wait
 
-# 2. Upgrade / restart the registry (running jobs have finished; queue is safe)
+# 2. Upgrade / restart the registry (in-flight jobs have finished; queue is safe)
 
 # 3. Resume normal dispatch — queued jobs become claimable again (FIFO)
 meshctl registry resume
 ```
 
-While draining, new claims are paused (queued jobs stay queued — no attempt is burned), running jobs keep renewing their leases and complete normally, and submissions are still accepted for after resume. `drain --wait` returns once `live_claims` reaches zero, and aborts with an error if the registry stops draining mid-wait (a concurrent `resume` or restart) rather than falsely reporting the window is safe.
+While draining, new claims are paused (queued jobs stay queued — no attempt is burned), `working` jobs keep renewing their leases and complete normally, and submissions are still accepted for after resume. `drain --wait` returns once `live_claims` reaches zero, and aborts with an error if the registry stops draining mid-wait (a concurrent `resume` or restart) rather than falsely reporting the window is safe.
 
 > Note: an event-gated job parked in `input_required` counts as a live claim and holds the drain open until it is answered or completes — answer or cancel such jobs before draining if you need a bounded window.
 >

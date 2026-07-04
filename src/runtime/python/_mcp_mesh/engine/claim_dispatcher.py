@@ -44,6 +44,7 @@ re-claim storm once the leases expired.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from typing import Any, Optional
@@ -51,6 +52,28 @@ from typing import Any, Optional
 from .job_dispatch import maybe_dispatch_as_job
 
 logger = logging.getLogger(__name__)
+
+
+def _dependency_unavailable_capability(exc: BaseException) -> Optional[str]:
+    """Return the capability named by a ``dependency_unavailable`` refusal, or
+    ``None`` when ``exc`` is an ordinary handler exception (issue #1273).
+
+    The DI wrapper's direct-dispatch guard raises a ``ToolError`` whose message
+    is the JSON envelope ``{"error":"dependency_unavailable","capability":"…"}``.
+    When a required dep flaps DOWN between the dispatcher's own pre-invoke gate
+    and the handler call, that refusal surfaces here — and because this is a
+    JOB invocation it must RELEASE the lease (retryable), not TERMINAL-fail.
+    Match on the JSON envelope (runtime-agnostic) rather than the exception
+    type so the contract, not the carrier, drives the classification.
+    """
+    try:
+        payload = json.loads(str(exc))
+    except (ValueError, TypeError):
+        return None
+    if isinstance(payload, dict) and payload.get("error") == "dependency_unavailable":
+        cap = payload.get("capability")
+        return cap if isinstance(cap, str) else None
+    return None
 
 
 # Polling cadence — matches the design's "backoff_min" / "backoff_max"
@@ -346,6 +369,25 @@ class PythonClaimDispatcher:
         try:
             await self.handler(**payload)
         except Exception as e:
+            # Issue #1273: the DI wrapper's direct-dispatch guard may raise a
+            # dependency_unavailable refusal if a required dep flapped DOWN
+            # between our pre-invoke gate above and the handler call. That is a
+            # topological race, NOT an application failure — RELEASE the lease
+            # (retryable) rather than TERMINAL-fail, so release semantics win
+            # over the wrapper's tool-error carrier (mirrors the guard 15 lines
+            # above and Java/TS job paths).
+            raced_cap = _dependency_unavailable_capability(e)
+            if raced_cap is not None:
+                logger.warning(
+                    "claim_dispatcher: releasing job=%s for capability=%s — "
+                    "required dependency '%s' flapped unavailable during handler "
+                    "dispatch; releasing lease for retry (not failing)",
+                    job_id,
+                    self.capability,
+                    raced_cap,
+                )
+                await self._release_lease(job_id, raced_cap, claim_epoch)
+                return
             logger.warning(
                 "claim_dispatcher: handler for job=%s capability=%s raised: %s",
                 job_id,

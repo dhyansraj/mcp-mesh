@@ -541,7 +541,12 @@ Here's what each flag does:
 
 - **`--debug`** -- verbose logging. Useful for seeing dependency resolution.
 - **`-d`** -- detach mode. All five agents run in the background.
-- **`-w`** -- watch mode. Monitors agent directories and auto-restarts on changes.
+- **`-w`** -- watch mode. Rebuilds an agent when you *save a content change* to
+  one of its source files. It reacts to real writes, not to metadata-only
+  changes -- a bare `touch` that just bumps the modification time is ignored.
+  Watch mode is a rebuild trigger, **not** a crash supervisor: if an agent
+  crashes or you `kill` it, the watcher leaves it down until the next time you
+  save a file. Save any watched file to bring it back.
 
 If no registry is running, `meshctl` starts one automatically, same as Day 1.
 
@@ -638,7 +643,17 @@ is not `None`. The `if user_prefs else {}` guard in the function handles the
 case where the dependency wasn't resolved.
 
 **Watch mode doesn't pick up changes.** Verify that the file you edited is in
-the same directory that `meshctl start` is watching.
+the same directory that `meshctl start` is watching, and that you actually
+*wrote content* to it -- watch mode reacts to real writes, so a bare `touch`
+that only updates the modification time is ignored on purpose. Re-save the file
+to trigger a rebuild.
+
+**A crashed agent stays down under watch mode.** Watch mode is a rebuild
+trigger, not a crash supervisor. If an agent exits on its own (crash, uncaught
+exception, or an external `kill`), the watcher does not respawn it -- it waits
+for the next content write to a watched file. Save any watched file to bring it
+back, or use a real supervisor (systemd, Kubernetes) if you need automatic
+crash recovery.
 
 **Agent ports stay stable across reloads.** When using `-w` (watch mode),
 meshctl waits for the previous process to fully exit before spawning the new
