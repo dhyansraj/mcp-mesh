@@ -900,7 +900,7 @@ public class MeshAutoConfiguration {
         // tool so the heartbeat path wires proxies the same way it does for
         // @MeshTool / @MeshRoute / @MeshA2A. Dedup is by capability name across
         // all four sources — see collectKnownCapabilities().
-        addMeshDependsOnDependencies(allTools);
+        addMeshDependsOnDependencies(allTools, routeRegistryProvider);
 
         if (consumerOnly) {
             MeshRouteRegistry routeRegistry = routeRegistryProvider.getIfAvailable();
@@ -1007,7 +1007,8 @@ public class MeshAutoConfiguration {
      * capability already appears in any prior source. Within
      * {@code @MeshDependsOn} itself the first occurrence wins.
      */
-    private void addMeshDependsOnDependencies(List<AgentSpec.ToolSpec> tools) {
+    private void addMeshDependsOnDependencies(List<AgentSpec.ToolSpec> tools,
+            ObjectProvider<MeshRouteRegistry> routeRegistryProvider) {
         Map<String, Object> beans = applicationContext.getBeansWithAnnotation(MeshDependsOn.class);
         if (beans.isEmpty()) {
             return;
@@ -1038,6 +1039,40 @@ public class MeshAutoConfiguration {
                     continue;
                 }
                 if (!seenCapabilities.add(capability)) {
+                    // Cross-source required-wins (2.8.1, extends #1249): the
+                    // capability is already declared by a prior source
+                    // (@MeshTool / @MeshRoute / @MeshA2A) OR an earlier
+                    // @MeshDependsOn bean. The edge itself is deduped away, but
+                    // a required=true @MeshDependsOn must not be silently
+                    // downgraded to the prior source's flag — required WINS
+                    // across sources, matching the within-source merge in
+                    // MeshRouteRegistry.getUniqueDependencySpecs.
+                    if (dep.required()) {
+                        // Scan BOTH the already-folded tool specs and the
+                        // pending `deps` list: a same-source @MeshDependsOn
+                        // sibling declared earlier in this loop lives in `deps`
+                        // (not yet folded into `tools`), so an order like
+                        // {optional bean, required bean} would otherwise drop
+                        // the required flag.
+                        boolean upgraded =
+                            upgradeExistingDependencyToRequired(tools, deps, capability);
+                        // The request-time 503 route perimeter reads the route
+                        // registry's own DependencySpec, not the AgentSpec copy
+                        // upgraded above — promote it too so the perimeter and
+                        // the wire advertisement agree (no split-brain).
+                        MeshRouteRegistry routeRegistry = routeRegistryProvider.getIfAvailable();
+                        if (routeRegistry != null
+                                && routeRegistry.promoteCapabilityToRequired(capability)) {
+                            upgraded = true;
+                        }
+                        if (upgraded) {
+                            log.info("@MeshDependsOn capability '{}' on {} already declared by another "
+                                    + "source — upgrading the deduped dependency to required=true "
+                                    + "(required wins across sources)",
+                                capability, targetClass.getName());
+                            continue;
+                        }
+                    }
                     log.debug("@MeshDependsOn capability '{}' on {} already declared by another source — skipping",
                         capability, targetClass.getName());
                     continue;
@@ -1128,6 +1163,49 @@ public class MeshAutoConfiguration {
             }
         }
         return seen;
+    }
+
+    /**
+     * Cross-source required-wins helper (2.8.1): promote every existing
+     * {@link AgentSpec.DependencySpec} matching {@code capability} to
+     * {@code required=true}, scanning BOTH the already-folded {@code tools}
+     * specs (prior {@code @MeshTool} / {@code @MeshRoute} / {@code @MeshA2A}
+     * sources) and the {@code pendingDeps} list still being accumulated for
+     * the synthetic {@code __mesh_depends_on_deps} tool (same-source
+     * {@code @MeshDependsOn} siblings declared earlier in the fold loop).
+     * Called when a {@code @MeshDependsOn} edge declares {@code required=true}
+     * for a capability that is already declared — the dependency edge is
+     * deduped away, but the required flag must still win rather than inherit
+     * the earlier declaration's (possibly non-required) value.
+     *
+     * @return {@code true} when at least one matching dependency spec was found
+     *         and upgraded; {@code false} when the capability is only present
+     *         as a producer surface (no consumable dependency spec to upgrade).
+     */
+    private static boolean upgradeExistingDependencyToRequired(
+            List<AgentSpec.ToolSpec> tools,
+            List<AgentSpec.DependencySpec> pendingDeps,
+            String capability) {
+        boolean upgraded = false;
+        for (AgentSpec.ToolSpec tool : tools) {
+            List<AgentSpec.DependencySpec> deps = tool.getDependencies();
+            if (deps == null) {
+                continue;
+            }
+            for (AgentSpec.DependencySpec dep : deps) {
+                if (capability.equals(dep.getCapability())) {
+                    dep.setRequired(true);
+                    upgraded = true;
+                }
+            }
+        }
+        for (AgentSpec.DependencySpec dep : pendingDeps) {
+            if (capability.equals(dep.getCapability())) {
+                dep.setRequired(true);
+                upgraded = true;
+            }
+        }
+        return upgraded;
     }
 
     /**

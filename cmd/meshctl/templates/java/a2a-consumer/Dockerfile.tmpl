@@ -8,9 +8,7 @@ USER root
 COPY pom.xml .
 COPY src/ src/
 
-RUN mvn package -DskipTests -q
-
-RUN chown -R mcp-mesh:mcp-mesh /app
+RUN mvn package -DskipTests -q && chown -R mcp-mesh:mcp-mesh /app
 
 USER mcp-mesh
 

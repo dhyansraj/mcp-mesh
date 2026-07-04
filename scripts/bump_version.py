@@ -24,6 +24,7 @@ Design:
 import argparse
 import os
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -147,6 +148,13 @@ def _glob_to_regex(pattern: str) -> re.Pattern:
     return re.compile("^" + "".join(parts) + "$")
 
 
+# Directory names never worth descending into: they hold no first-party
+# version pins we bump, but (especially node_modules) are enormous and, when
+# combined with the tutorial/example symlink webs, blow up the walk time.
+# Excludes still filter results defensively; pruning here is a pure speedup.
+_WALK_PRUNE_DIRS = frozenset({"node_modules", ".git", ".venv"})
+
+
 def _walk_files(base: Path):
     """Recursively yield every file under `base`, following symlinks but
     detecting cycles by tracking realpaths in the current ancestor chain.
@@ -154,6 +162,7 @@ def _walk_files(base: Path):
     Uses a stack so each branch carries its own ancestor set — multiple
     symlinks pointing to the same target are still each visited (we only
     skip a directory if descending would re-enter one of OUR ancestors).
+    Directories in `_WALK_PRUNE_DIRS` are not descended into.
     """
     if not base.exists():
         return
@@ -172,6 +181,8 @@ def _walk_files(base: Path):
                 if e.is_file(follow_symlinks=True):
                     yield Path(e.path)
                 elif e.is_dir(follow_symlinks=True):
+                    if e.name in _WALK_PRUNE_DIRS:
+                        continue
                     rp = os.path.realpath(e.path)
                     if rp in ancestors:
                         continue
@@ -309,12 +320,13 @@ HANDLERS: list[Handler] = [
         replacement=r"\g<1>NEW\2",
     ),
     # --- Category 6: Java Example POMs ------------------------------------
+    # Recurse the whole examples/ tree (multi-module examples nest POMs under
+    # subdirs like benchmark-chain/svc-a/pom.xml that the old two shallow
+    # globs missed). node_modules excluded defensively.
     Handler(
         name="Java Example POMs",
-        globs=[
-            "examples/java/*/pom.xml",
-            "examples/toolcalls/*/pom.xml",
-        ],
+        globs=["examples/**/pom.xml"],
+        excludes=["**/node_modules/**"],
         pattern=r"(<mcp-mesh\.version>)OLD(</mcp-mesh\.version>)",
         replacement=r"\g<1>NEW\2",
     ),
@@ -436,10 +448,15 @@ HANDLERS: list[Handler] = [
         pattern=r"(e\.g\.,\s*v)OLD",
         replacement=r"\g<1>NEW",
     ),
-    # --- Category 16: TypeScript Toolcall Examples -----------------------
+    # --- Category 16: TypeScript Example Packages (@mcpmesh/*) -----------
+    # Recurse the whole examples/ tree (was limited to toolcalls/*-ts). The
+    # version regex only matches pinned versions, so `file:` workspace refs
+    # (e.g. "@mcpmesh/sdk": "file:../..") are left untouched. node_modules
+    # excluded so vendored packages aren't rewritten.
     Handler(
-        name="TypeScript Toolcall Examples",
-        globs=["examples/toolcalls/*-ts/package.json"],
+        name="TypeScript Example Packages (@mcpmesh/*)",
+        globs=["examples/**/package.json"],
+        excludes=["**/node_modules/**"],
         # Match "@mcpmesh/x": "OLD" or "@mcpmesh/x": "^OLD" (replace with ^NEW)
         pattern=r'("@mcpmesh/[^"]+?":\s*")\^?OLD(")',
         replacement=r"\g<1>^NEW\2",
@@ -556,17 +573,19 @@ HANDLERS: list[Handler] = [
         ),
         replacement=r"\g<1>NEW",
     ),
-    # --- NEW: language_test.go uses the MINOR-tag form (e.g., :1.3) ------
-    # Minor tag — (?![\d.\-+]) prevents matching `:1.3` as the prefix of `:1.30` or `:1.3.0`.
+    # --- NEW: language_test.go pins the FULL release tag (e.g., :1.3.0) --
+    # TestPythonHandler_GetDockerImage / TestTypeScriptHandler_GetDockerImage
+    # assert the exact tag GetDockerImage() returns, so their expected literal
+    # must track the full version (was minor, which never matched the full tag
+    # the handlers return — the loose assertion missed the 2.8.0 partial bump).
     Handler(
-        name="Language Test Hardcoded Image Tags (minor version)",
+        name="Language Test Hardcoded Image Tags (full version)",
         globs=["src/core/cli/handlers/language_test.go"],
         pattern=(
             r"(mcpmesh/(?:registry|python-runtime|typescript-runtime"
             r"|java-runtime|ui|cli):)OLD(?![\d.\-+])"
         ),
         replacement=r"\g<1>NEW",
-        version_format="minor",
     ),
 ]
 
@@ -685,6 +704,94 @@ def bump_test_documentation(old: str, new: str, dry_run: bool) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Post-bump coverage guard
+# ---------------------------------------------------------------------------
+
+# Files whose stale version strings are intentional history, not live pins.
+_GUARD_ALLOWLIST_FILES = re.compile(r"(?:^|/)(?:RELEASE_NOTES\.md|CHANGELOG[^/]*)$")
+
+# Lines mentioning these third-party projects legitimately carry their OWN
+# versions, which can collide numerically with ours.
+_GUARD_ALLOWLIST_TOKENS = (
+    "spiffe",
+    "xyflow",
+    "python-dateutil",
+    "dateutil",
+    "grafana-tempo",
+    "grafana/tempo",
+    "/tempo:",
+    "tempo_",
+    "tempo/releases",
+)
+
+
+def _guard_patterns(old: str) -> list[re.Pattern]:
+    """Mesh-shaped contexts in which a surviving OLD version = a missed bump."""
+    o = re.escape(old)
+    om = re.escape(to_minor(old))
+    op = re.escape(to_pep440(old))
+    img = (
+        r"mcpmesh/(?:registry|python-runtime|typescript-runtime"
+        r"|java-runtime|ui|cli):"
+    )
+    boundary = r"(?![\d.\-+])"
+    return [
+        re.compile(img + o + boundary),
+        re.compile(r"mcp-mesh(?:>=|==)" + op),
+        # package.json: "@mcpmesh/sdk": "^X" / "@mcpmesh/core": "X" (the key
+        # quote, ": ", then the value's opening quote sit between the package
+        # name and the version), plus the npm `@mcpmesh/sdk@^X` shorthand.
+        re.compile(
+            r"@mcpmesh/[^\"'@\s]+(?:[\"']\s*:\s*[\"']|@)\^?" + o + boundary
+        ),
+        re.compile(r"<mcp-mesh\.version>" + o + r"</mcp-mesh\.version>"),
+        re.compile(r"--version\s+v?" + o + boundary),
+        re.compile(r'tag:\s*"' + o + r'"'),
+        re.compile(r'tag:\s*"' + om + r'"'),
+    ]
+
+
+def coverage_guard(old: str) -> tuple[bool, list[str]]:
+    """Final safety net: after a bump, scan every tracked file for mesh-shaped
+    references that still carry the OLD version.
+
+    Returns ``(ran, survivors)``. ``ran`` is False when the scan could not
+    execute (git unavailable / errored) — the caller must fail closed rather
+    than treat that as clean. When ``ran`` is True, ``survivors`` is the list
+    of 'path:lineno: text' hits (empty = clean). Vendored trees (node_modules)
+    and history files are skipped; third-party version pins on the same line
+    are allowlisted."""
+    try:
+        out = subprocess.run(
+            ["git", "ls-files"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return (False, [])
+
+    patterns = _guard_patterns(old)
+    survivors: list[str] = []
+    for rel in out.splitlines():
+        if not rel:
+            continue
+        if "node_modules/" in rel or _GUARD_ALLOWLIST_FILES.search(rel):
+            continue
+        try:
+            text = (PROJECT_ROOT / rel).read_text()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if any(tok in line for tok in _GUARD_ALLOWLIST_TOKENS):
+                continue
+            if any(p.search(line) for p in patterns):
+                survivors.append(f"{rel}:{lineno}: {line.strip()}")
+    return (True, survivors)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -784,6 +891,32 @@ def main() -> int:
             "Reminder: run 'cargo generate-lockfile' in src/runtime/core "
             "to refresh Cargo.lock with the new mcp-mesh-core version"
         )
+
+    # Final step: verify no mesh-shaped reference to the OLD version survived.
+    # Skipped on --dry-run (nothing was written, so every ref would "survive").
+    if not dry_run:
+        ran, survivors = coverage_guard(old)
+        print()
+        if not ran:
+            print(
+                "❌ Coverage guard did NOT run (git ls-files unavailable or "
+                "errored). Failing closed — cannot confirm the bump is "
+                "complete. Re-run from a git checkout with git on PATH."
+            )
+            return 1
+        if survivors:
+            print(
+                f"❌ Coverage guard: {len(survivors)} stale mesh-shaped "
+                f"reference(s) to {old} survived the bump:"
+            )
+            for s in survivors:
+                print(f"  {s}")
+            print(
+                "Add or broaden a handler in scripts/bump_version.py to cover "
+                "these, then re-run."
+            )
+            return 1
+        print(f"✅ Coverage guard: no stale mesh-shaped references to {old} remain.")
 
     return 0
 

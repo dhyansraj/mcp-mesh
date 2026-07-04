@@ -368,6 +368,17 @@ impl JsAgentHandle {
     ///
     /// This is an async method that blocks until an event is available.
     /// Returns a JsMeshEvent with eventType "shutdown" when the runtime has shut down.
+    ///
+    /// # Cancel-safety (issue #1256)
+    /// The event pull is delegated to [`RustAgentHandle::pull_next_event`],
+    /// which keeps the liveness timeout *inside* the future and never removes
+    /// a message from the channel it does not return. The previous raw
+    /// `rx.recv()` pattern carried the same lost-event exposure that #1256
+    /// fixed for the Python binding: a cancellation firing after the mpsc pop
+    /// but before delivery could silently drop a dequeued event and stall a
+    /// dependency edge. The internal timeout produces liveness ticks (`None`)
+    /// that we transparently loop over, so callers keep the "blocks until the
+    /// next real event" contract with no cancellable window mid-delivery.
     #[napi]
     pub async fn next_event(&self) -> Result<JsMeshEvent> {
         let handle = self.inner.lock().await;
@@ -376,10 +387,18 @@ impl JsAgentHandle {
         let event_rx = handle.event_rx();
         drop(handle); // Release the lock before awaiting
 
-        let mut rx = event_rx.lock().await;
-        match rx.recv().await {
-            Some(event) => Ok(event.into()),
-            None => Ok(MeshEvent::shutdown().into()),
+        loop {
+            match RustAgentHandle::pull_next_event(
+                event_rx.clone(),
+                std::time::Duration::from_secs(1),
+            )
+            .await
+            {
+                Some(event) => return Ok(event.into()),
+                // Liveness tick: no event within the internal timeout. Re-await
+                // cancel-safely instead of surfacing a null to the TS loop.
+                None => continue,
+            }
         }
     }
 

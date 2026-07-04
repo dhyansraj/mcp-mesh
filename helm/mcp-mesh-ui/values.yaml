@@ -7,7 +7,7 @@ image:
   registry: ""
   repository: mcpmesh/ui
   pullPolicy: IfNotPresent
-  tag: "2.7"
+  tag: "2.8"
 
 # Pull secrets for this chart's pods, merged with global.imagePullSecrets
 # (deduplicated by name). Standard shape:

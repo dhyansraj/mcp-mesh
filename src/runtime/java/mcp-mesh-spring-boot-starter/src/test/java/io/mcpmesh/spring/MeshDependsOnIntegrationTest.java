@@ -155,6 +155,53 @@ class MeshDependsOnIntegrationTest {
         @Bean public SharedCapDeclarer sharedCapDeclarer() { return new SharedCapDeclarer(); }
     }
 
+    // Cross-source required-wins (2.8.1): the SAME capability is declared
+    // non-required on a @MeshRoute and required=true on a @MeshDependsOn. The
+    // dependency edge is deduped away on the @MeshDependsOn side, but the
+    // required flag must win — the surviving route dependency must be
+    // upgraded to required=true rather than keeping the route's default.
+    @RestController
+    static class OptionalRouteController {
+        @PostMapping("/opt-route")
+        @MeshRoute(dependencies = @MeshDependency(capability = "xsrc_cap"))
+        public String handle() { return "ok"; }
+    }
+
+    @Component
+    @MeshDependsOn(@MeshDependency(capability = "xsrc_cap", required = true))
+    static class RequiredXsrcDeclarer {}
+
+    @Configuration
+    @MeshAgent(name = "xsrc-required-agent")
+    static class CrossSourceRequiredAgentConfig {
+        @Bean public OptionalRouteController optionalRouteController() { return new OptionalRouteController(); }
+        @Bean public RequiredXsrcDeclarer requiredXsrcDeclarer() { return new RequiredXsrcDeclarer(); }
+    }
+
+    // Within-@MeshDependsOn order independence (2.8.1): required must win the
+    // dedupe regardless of declaration order. Both orderings are exercised
+    // deterministically via a single annotation's ordered value() array:
+    //   * opt_first_cap: optional declared BEFORE required (the required flag
+    //     lives in the pending deps list and must be upgraded there);
+    //   * req_first_cap: required declared BEFORE optional (the later optional
+    //     must not downgrade the earlier required).
+    @Component
+    @MeshDependsOn({
+        @MeshDependency(capability = "opt_first_cap"),
+        @MeshDependency(capability = "opt_first_cap", required = true),
+        @MeshDependency(capability = "req_first_cap", required = true),
+        @MeshDependency(capability = "req_first_cap")
+    })
+    static class OrderIndependenceDeclarer {}
+
+    @Configuration
+    @MeshAgent(name = "order-independence-agent")
+    static class OrderIndependenceAgentConfig {
+        @Bean public OrderIndependenceDeclarer orderIndependenceDeclarer() {
+            return new OrderIndependenceDeclarer();
+        }
+    }
+
     // Name-conflict guard: user already has a bean named "conflicting_cap"
     @Component
     @MeshDependsOn(@MeshDependency(capability = "conflicting_cap"))
@@ -585,6 +632,86 @@ class MeshDependsOnIntegrationTest {
                 assertThat(routeHasShared)
                     .as("'shared_cap' must remain on __mesh_route_deps")
                     .isTrue();
+            });
+    }
+
+    @Test
+    @DisplayName("Cross-source required-wins: required=true @MeshDependsOn upgrades a non-required @MeshRoute edge")
+    void crossSourceRequiredWins() {
+        baseRunner
+            .withUserConfiguration(CrossSourceRequiredAgentConfig.class)
+            .run(context -> {
+                assertThat(context).hasNotFailed();
+                AgentSpec spec = context.getBean(MeshRuntime.class).getAgentSpec();
+
+                // The @MeshDependsOn edge is deduped away (already on the route),
+                // so xsrc_cap must NOT appear on __mesh_depends_on_deps.
+                boolean dependsOnHasXsrc = spec.getTools().stream()
+                    .filter(t -> "__mesh_depends_on_deps".equals(t.getCapability()))
+                    .flatMap(t -> t.getDependencies().stream())
+                    .anyMatch(d -> "xsrc_cap".equals(d.getCapability()));
+                assertThat(dependsOnHasXsrc)
+                    .as("xsrc_cap must be deduped off __mesh_depends_on_deps (already on the route)")
+                    .isFalse();
+
+                // The surviving route dependency must be upgraded to required=true:
+                // required wins across sources even though the route declared it
+                // with the default (non-required) flag.
+                AgentSpec.DependencySpec routeDep = spec.getTools().stream()
+                    .filter(t -> "__mesh_route_deps".equals(t.getCapability()))
+                    .flatMap(t -> t.getDependencies().stream())
+                    .filter(d -> "xsrc_cap".equals(d.getCapability()))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError(
+                        "xsrc_cap dependency missing from __mesh_route_deps tool"));
+                assertThat(routeDep.isRequired())
+                    .as("required=true @MeshDependsOn must upgrade the non-required @MeshRoute edge "
+                        + "(required wins across sources)")
+                    .isTrue();
+
+                // No perimeter split-brain: the request-time 503 perimeter
+                // reads the route registry's OWN DependencySpec, not the
+                // AgentSpec copy asserted above. It must also be promoted to
+                // required=true — otherwise the wire advertises required while
+                // the route soft-serves a null dependency.
+                io.mcpmesh.spring.web.MeshRouteRegistry routeRegistry =
+                    context.getBean(io.mcpmesh.spring.web.MeshRouteRegistry.class);
+                boolean perimeterRequired = routeRegistry.getAllRoutes().stream()
+                    .flatMap(r -> r.getDependencies().stream())
+                    .filter(d -> "xsrc_cap".equals(d.getCapability()))
+                    .findFirst()
+                    .map(io.mcpmesh.spring.web.MeshRouteRegistry.DependencySpec::isRequired)
+                    .orElseThrow(() -> new AssertionError(
+                        "xsrc_cap dependency missing from the route registry"));
+                assertThat(perimeterRequired)
+                    .as("route registry DependencySpec (503 perimeter source) must also be "
+                        + "promoted to required=true — no split-brain with the wire spec")
+                    .isTrue();
+            });
+    }
+
+    @Test
+    @DisplayName("Within-@MeshDependsOn required-wins is order-independent (both orderings)")
+    void withinDependsOnRequiredWinsOrderIndependent() {
+        baseRunner
+            .withUserConfiguration(OrderIndependenceAgentConfig.class)
+            .run(context -> {
+                assertThat(context).hasNotFailed();
+                AgentSpec spec = context.getBean(MeshRuntime.class).getAgentSpec();
+
+                for (String cap : new String[] {"opt_first_cap", "req_first_cap"}) {
+                    AgentSpec.DependencySpec dep = spec.getTools().stream()
+                        .filter(t -> "__mesh_depends_on_deps".equals(t.getCapability()))
+                        .flatMap(t -> t.getDependencies().stream())
+                        .filter(d -> cap.equals(d.getCapability()))
+                        .findFirst()
+                        .orElseThrow(() -> new AssertionError(
+                            cap + " dependency missing from __mesh_depends_on_deps tool"));
+                    assertThat(dep.isRequired())
+                        .as("required must win the within-@MeshDependsOn dedupe for '%s' "
+                            + "regardless of declaration order", cap)
+                        .isTrue();
+                }
             });
     }
 
