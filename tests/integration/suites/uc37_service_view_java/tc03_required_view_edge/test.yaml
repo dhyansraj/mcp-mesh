@@ -1,0 +1,315 @@
+# tc03_required_view_edge — required=true on a view method (RFC #1280 x
+# issue #1249): the edge feeds the registry's derived availability AND the
+# consumer-side failure surface, and heals organically.
+#
+# Topology: same as tc01. provider-charlie backs the view's ONLY required
+# edge (ReportService.charlie(), @Selector(required = true)) and is the
+# kill/restart target.
+#
+# Design guarantees under test:
+#   1. Wire expansion: the required view edge registers under the synthetic
+#      __mesh_service_deps tool, so killing provider-charlie flips the
+#      consumer's __mesh_service_deps capability to available=false with
+#      unavailable_reason naming view-cap-charlie — WHILE the consumer agent
+#      itself stays registered and healthy (capability-level derived state,
+#      mirrors uc34 tc01).
+#   2. The capability stays the atom: the consumer's REAL tool capabilities
+#      (view_report, view_critical) do NOT flip — only the declaring
+#      synthetic capability carries the required edge. (This is also what
+#      keeps view_critical resolvable so the failure below is observable.)
+#   3. Consumer-side failure surface: invoking view_critical (whose body
+#      calls the required charlie() method UNGUARDED) while provider-charlie
+#      is down must FAIL as a tool ERROR naming the missing edge
+#      (MeshToolUnavailableException / view-cap-charlie in the message).
+#
+#      WHY NOT the structured {"error":"dependency_unavailable"} envelope:
+#      that pre-invoke refusal (issue #1273's MeshToolWrapper guard) is a
+#      property of tool-DECLARED dependency slots — @MeshTool(dependencies=
+#      ...) with an injected proxy parameter. A view is a CLASS-LEVEL edge
+#      (same class as @MeshDependsOn): the framework cannot know which
+#      @MeshTool bodies call which view methods, so the RFC #1280 contract
+#      is "availability per method, identical to standalone edges" — the
+#      facade call raises MeshToolUnavailableException and the wrapper
+#      surfaces it through the ordinary error path. Do NOT "fix" this TC to
+#      expect the #1273 envelope; a consumer that wants the pre-invoke
+#      refusal declares the capability as a @MeshTool dependency slot
+#      instead of (or in addition to) the view.
+#   4. Organic recovery: restart provider-charlie -> view_critical answers
+#      ok again and __mesh_service_deps re-derives available=true, with no
+#      consumer restart.
+#
+# Timing: transitions ride the default health debounce (~15-25s) plus one
+# consumer heartbeat — polled with deadlines. No dependency-resolution
+# waits (issue #1193).
+
+name: "Service views: required=true view edge — derived availability + error surface + recovery (Java)"
+description: "Kill provider-charlie: __mesh_service_deps flips unavailable naming view-cap-charlie while the consumer stays healthy, view_critical errors naming the missing edge (class-level edge, no #1273 envelope); restart: both recover"
+tags:
+  - integration
+  - java
+  - python
+  - registry
+  - service-view
+  - rfc-1280
+  - required-deps
+  - availability
+  - issue-1249
+  - slow
+timeout: 900
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/provider-alpha /workspace/
+      cp -rL /uc-artifacts/provider-bravo /workspace/
+      cp -rL /uc-artifacts/provider-charlie /workspace/
+      cp -rL /uc-artifacts/java-view-consumer /workspace/
+
+  - name: "Install provider-alpha deps"
+    handler: pip-install
+    path: /workspace/provider-alpha
+
+  - name: "Install provider-bravo deps"
+    handler: pip-install
+    path: /workspace/provider-bravo
+
+  - name: "Install provider-charlie deps"
+    handler: pip-install
+    path: /workspace/provider-charlie
+
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-view-consumer
+    timeout: 600
+
+  - name: "Start provider-alpha (port 9101)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start provider-alpha/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  - name: "Start provider-bravo (port 9102)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start provider-bravo/main.py --env MCP_MESH_HTTP_PORT=9102 -d
+
+  - name: "Start provider-charlie (port 9103)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start provider-charlie/main.py --env MCP_MESH_HTTP_PORT=9103 -d
+
+  - name: "Start java-view-consumer (port 9201)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start /workspace/java-view-consumer --env MCP_MESH_HTTP_PORT=9201 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  # Liveness only (issue #1193): 240s deadline covers the cold JVM start.
+  - routine: global.wait_for_agents_registered
+    params:
+      agents: "provider-alpha provider-bravo provider-charlie java-view-consumer"
+
+  # Baseline: the required method answers through the facade (settle gate).
+  # ENVELOPE: Java tools carry the payload ONLY as an escaped JSON string in
+  # content[0].text (no structuredContent) — parse via
+  # `.content[0].text | fromjson` (suite idiom), equality inside the jq
+  # filter; keeps working if structuredContent is added later.
+  - name: "Wait for view_critical baseline ok"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESP=""
+      for i in $(seq 1 90); do
+        RESP=$(meshctl call view_critical '{}' --raw 2>&1 || true)
+        BOUND=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .charlie_agent == "provider-charlie"' 2>/dev/null || echo "")
+        if [ "$BOUND" = "true" ]; then
+          echo "CRITICAL_BASELINE_OK=1 after ~$((i*2))s"
+          echo "$RESP"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: view_critical never answered from provider-charlie within 180s"
+      echo "last response: $RESP"
+      meshctl logs java-view-consumer 2>/dev/null | tail -40 || true
+      exit 1
+    capture: critical_baseline
+    timeout: 200
+
+  # Pure-JSON snapshot for the baseline availability assertions.
+  - name: "Capture baseline /agents snapshot"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:8000/agents
+    capture: agents_baseline
+
+  - name: "Kill provider-charlie"
+    handler: shell
+    workdir: /workspace
+    command: meshctl stop provider-charlie
+    capture: kill_charlie
+
+  # Guarantee 1: the registry re-derives the synthetic capability once the
+  # death lands (graceful unregister is immediate; a hard death takes the
+  # ~15-25s health debounce).
+  - name: "Wait for __mesh_service_deps to flip unavailable"
+    handler: shell
+    workdir: /workspace
+    command: |
+      AVAIL=""
+      for i in $(seq 1 60); do
+        AVAIL=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name == "java-view-consumer") | .capabilities[] | select(.name == "__mesh_service_deps") | .available' 2>/dev/null || echo "")
+        if [ "$AVAIL" = "false" ]; then
+          echo "SERVICE_DEPS_UNAVAILABLE=1 after ~$((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: __mesh_service_deps never flipped to available=false within 120s (last=$AVAIL)"
+      curl -s http://localhost:8000/agents | jq '.agents[] | select(.name == "java-view-consumer")' 2>/dev/null || true
+      exit 1
+    capture: wait_deps_down
+    timeout: 140
+
+  # Pure-JSON snapshot WHILE the required edge is broken.
+  - name: "Capture /agents snapshot during outage"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:8000/agents
+    capture: agents_during_outage
+
+  # Guarantee 3: the call fails as a tool error naming the missing edge
+  # (class-level edge semantics — see the header; this is deliberately NOT
+  # the #1273 pre-invoke envelope). "Still ok?" is judged by parsing the
+  # success shape (`.content[0].text | fromjson | .status == "ok"`); the
+  # ERROR body may be PLAIN TEXT (not JSON), so its shape is judged
+  # STRUCTURALLY on the raw response — either the exception type or the
+  # capability name, never fromjson: the exact wording of a raw exception
+  # surfaced through the wrapper's error path is not a contract.
+  - name: "Wait for view_critical to error"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESP=""
+      SEEN_NOT_OK=0
+      for i in $(seq 1 60); do
+        RESP=$(meshctl call view_critical '{}' --raw 2>&1 || true)
+        OK=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .status == "ok"' 2>/dev/null || echo "")
+        if [ "$OK" != "true" ]; then
+          if [ "$SEEN_NOT_OK" = "0" ]; then
+            echo "CRITICAL_NOT_OK=1 after ~$((i*2))s"
+            SEEN_NOT_OK=1
+          fi
+          if echo "$RESP" | grep -q 'view-cap-charlie' || echo "$RESP" | grep -q 'MeshToolUnavailableException'; then
+            echo "ERROR_NAMES_MISSING_EDGE=1"
+            echo "$RESP"
+            exit 0
+          fi
+        fi
+        sleep 2
+      done
+      if [ "$SEEN_NOT_OK" = "1" ]; then
+        echo "ERROR: view_critical errored but never named the missing edge within 120s"
+      else
+        echo "ERROR: view_critical kept answering ok for 120s after provider-charlie died"
+      fi
+      echo "last response: $RESP"
+      meshctl logs java-view-consumer 2>/dev/null | tail -40 || true
+      exit 1
+    capture: critical_error
+    timeout: 140
+
+  - name: "Restart provider-charlie"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start provider-charlie/main.py --env MCP_MESH_HTTP_PORT=9103 -d
+
+  # Guarantee 4: organic recovery — no consumer restart.
+  - name: "Wait for view_critical recovery"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESP=""
+      for i in $(seq 1 75); do
+        RESP=$(meshctl call view_critical '{}' --raw 2>&1 || true)
+        RECOVERED=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .charlie_agent == "provider-charlie"' 2>/dev/null || echo "")
+        if [ "$RECOVERED" = "true" ]; then
+          echo "CRITICAL_RECOVERED=1 after ~$((i*2))s"
+          echo "$RESP"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: view_critical never recovered within 150s of restarting provider-charlie"
+      echo "last response: $RESP"
+      meshctl logs java-view-consumer 2>/dev/null | tail -40 || true
+      exit 1
+    capture: critical_recovery
+    timeout: 170
+
+  # Pure-JSON snapshot after recovery.
+  - name: "Wait for __mesh_service_deps to re-derive available"
+    handler: shell
+    workdir: /workspace
+    command: |
+      AVAIL=""
+      for i in $(seq 1 60); do
+        AVAIL=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name == "java-view-consumer") | .capabilities[] | select(.name == "__mesh_service_deps") | .available' 2>/dev/null || echo "")
+        if [ "$AVAIL" = "true" ]; then
+          echo "SERVICE_DEPS_RECOVERED=1 after ~$((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: __mesh_service_deps never re-derived available=true within 120s (last=$AVAIL)"
+      curl -s http://localhost:8000/agents | jq '.agents[] | select(.name == "java-view-consumer")' 2>/dev/null || true
+      exit 1
+    capture: wait_deps_recovered
+    timeout: 140
+
+assertions:
+  # IDIOM: equality lives INSIDE the jq filter so the interpolation yields a
+  # bare true/false; no '}' in interpolation bodies.
+
+  - expr: "${captured.critical_baseline} contains 'CRITICAL_BASELINE_OK=1'"
+    message: "the required charlie() view method must answer through the facade while its provider is up"
+  - expr: "${jq:captured.agents_baseline:(.agents[] | select(.name == \"java-view-consumer\") | .capabilities[] | select(.name == \"__mesh_service_deps\") | .available == true and .unavailable_reason == null)} == 'true'"
+    message: "baseline: the synthetic __mesh_service_deps capability must exist and be available with no unavailable_reason while all providers are up"
+
+  # Guarantee 1: derived availability on the synthetic capability
+  - expr: "${captured.wait_deps_down} contains 'SERVICE_DEPS_UNAVAILABLE=1'"
+    message: "killing provider-charlie must flip __mesh_service_deps to available=false within the health-debounce deadline (the required view edge feeds #1249 derivation)"
+  - expr: "${jq:captured.agents_during_outage:(.agents[] | select(.name == \"java-view-consumer\") | .capabilities[] | select(.name == \"__mesh_service_deps\") | .unavailable_reason // \"\" | contains(\"view-cap-charlie\"))} == 'true'"
+    message: "__mesh_service_deps' unavailable_reason must name the broken required edge (view-cap-charlie)"
+
+  # ...WHILE the consumer agent stays registered and healthy
+  - expr: "${jq:captured.agents_during_outage:([.agents[] | select(.name == \"java-view-consumer\")] | length == 1)} == 'true'"
+    message: "java-view-consumer must still be REGISTERED while its required view edge is broken"
+  - expr: "${jq:captured.agents_during_outage:(.agents[] | select(.name == \"java-view-consumer\") | .status == \"healthy\")} == 'true'"
+    message: "java-view-consumer must still be HEALTHY — unavailability is capability-level derived state"
+
+  # Guarantee 2: the capability remains the atom — real tool capabilities
+  # do not inherit the synthetic capability's required edge
+  - expr: "${jq:captured.agents_during_outage:(.agents[] | select(.name == \"java-view-consumer\") | .capabilities[] | select(.name == \"view_critical\") | .available == true)} == 'true'"
+    message: "view_critical must STAY available in the registry — the required edge belongs to the declaring (synthetic) capability, and staying resolvable is what makes the error surface observable"
+
+  # Guarantee 3: the class-level-edge error surface (structural, NOT the
+  # #1273 envelope — see the header comment before expecting one)
+  - expr: "${captured.critical_error} contains 'CRITICAL_NOT_OK=1'"
+    message: "view_critical must stop answering ok once the required provider dies"
+  - expr: "${captured.critical_error} contains 'ERROR_NAMES_MISSING_EDGE=1'"
+    message: "the tool error must name the missing edge (view-cap-charlie or MeshToolUnavailableException) — a view is a class-level edge, so the facade raises through the wrapper's ordinary error path rather than the tool-slot pre-invoke envelope"
+
+  # Guarantee 4: organic recovery
+  - expr: "${captured.critical_recovery} contains 'CRITICAL_RECOVERED=1'"
+    message: "view_critical must answer ok again after provider-charlie restarts, with no consumer restart"
+  - expr: "${captured.wait_deps_recovered} contains 'SERVICE_DEPS_RECOVERED=1'"
+    message: "__mesh_service_deps must re-derive available=true after the provider returns"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

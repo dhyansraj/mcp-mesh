@@ -1,0 +1,148 @@
+# tc01_per_method_multi_agent — THE service-view differentiator (RFC #1280):
+# one Java @McpMeshService interface whose three methods resolve to three
+# DIFFERENT provider agents.
+#
+# Topology: three independent Python providers (view-cap-alpha/bravo/charlie)
+# + the Java java-view-consumer whose ReportService view binds one capability
+# per method. The consumer's view_report @MeshTool calls all three view
+# methods and reports which agent served each (self-identifying payloads).
+#
+# Design guarantees under test:
+#   1. Each view method delegates to ITS OWN per-capability proxy: the report
+#      pairs alpha->provider-alpha, bravo->provider-bravo,
+#      charlie->provider-charlie. The pairing is verified with anchored
+#      key:value greps — a cross-wired binding (alpha served by bravo's
+#      agent) fails even though all three names appear somewhere.
+#   2. Each method carries its own capability payload (<m>_cap keys), proving
+#      capability routing, not just distinct endpoints.
+#   3. No method degrades at baseline: no *_error keys in the report.
+#
+# Timing: NO dependency-resolution waits (issue #1193) — registration waits
+# are liveness-only and the first view_report call rides the consumer's
+# settle window. The baseline poll's long deadline covers the cold-JVM
+# mvn spring-boot:run start.
+
+name: "Service views: per-method resolution to three different provider agents (Java)"
+description: "Java @McpMeshService with 3 methods -> 3 Python providers: view_report proves each method is served by its own agent with its own capability payload"
+tags:
+  - integration
+  - java
+  - python
+  - registry
+  - service-view
+  - rfc-1280
+  - slow
+timeout: 900
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/provider-alpha /workspace/
+      cp -rL /uc-artifacts/provider-bravo /workspace/
+      cp -rL /uc-artifacts/provider-charlie /workspace/
+      cp -rL /uc-artifacts/java-view-consumer /workspace/
+
+  - name: "Install provider-alpha deps"
+    handler: pip-install
+    path: /workspace/provider-alpha
+
+  - name: "Install provider-bravo deps"
+    handler: pip-install
+    path: /workspace/provider-bravo
+
+  - name: "Install provider-charlie deps"
+    handler: pip-install
+    path: /workspace/provider-charlie
+
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-view-consumer
+    timeout: 600
+
+  - name: "Start provider-alpha (port 9101)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start provider-alpha/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  - name: "Start provider-bravo (port 9102)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start provider-bravo/main.py --env MCP_MESH_HTTP_PORT=9102 -d
+
+  - name: "Start provider-charlie (port 9103)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start provider-charlie/main.py --env MCP_MESH_HTTP_PORT=9103 -d
+
+  - name: "Start java-view-consumer (port 9201)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start /workspace/java-view-consumer --env MCP_MESH_HTTP_PORT=9201 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  # Liveness only (issue #1193): 240s deadline covers the cold JVM start.
+  - routine: global.wait_for_agents_registered
+    params:
+      agents: "provider-alpha provider-bravo provider-charlie java-view-consumer"
+
+  # Baseline: poll view_report until every method reports its OWN provider.
+  # ENVELOPE: Java tools carry the payload ONLY as an escaped JSON string in
+  # content[0].text (no structuredContent), so parse the actual contract via
+  # `.content[0].text | fromjson` (suite idiom, see uc22/uc23) — equality
+  # INSIDE the jq filter yields a bare true/false, and the parse keeps
+  # working if structuredContent is added later. Pairing stays anchored
+  # (key AND expected value judged in ONE filter) so cross-wired bindings
+  # cannot pass. Emits verdict markers the assertions key on.
+  - name: "Wait for full per-method report"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESP=""
+      for i in $(seq 1 90); do
+        RESP=$(meshctl call view_report '{}' --raw 2>&1 || true)
+        A=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .alpha_agent == "provider-alpha"' 2>/dev/null || echo "")
+        B=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .bravo_agent == "provider-bravo"' 2>/dev/null || echo "")
+        C=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .charlie_agent == "provider-charlie"' 2>/dev/null || echo "")
+        if [ "$A" = "true" ] && [ "$B" = "true" ] && [ "$C" = "true" ]; then
+          echo "REPORT_ALL_BOUND=1 after ~$((i*2))s"
+          [ "$(echo "$RESP" | jq -r '.content[0].text | fromjson | .alpha_cap == "view-cap-alpha"' 2>/dev/null)" = "true" ] && echo "ALPHA_CAP_OK=1"
+          [ "$(echo "$RESP" | jq -r '.content[0].text | fromjson | .bravo_cap == "view-cap-bravo"' 2>/dev/null)" = "true" ] && echo "BRAVO_CAP_OK=1"
+          [ "$(echo "$RESP" | jq -r '.content[0].text | fromjson | .charlie_cap == "view-cap-charlie"' 2>/dev/null)" = "true" ] && echo "CHARLIE_CAP_OK=1"
+          echo "$RESP"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: view_report never reported all three provider bindings within 180s"
+      echo "last response: $RESP"
+      meshctl logs java-view-consumer 2>/dev/null | tail -40 || true
+      exit 1
+    capture: report_baseline
+    timeout: 200
+
+assertions:
+  # Guarantee 1: per-method binding to three DIFFERENT agents (anchored pairs
+  # verified in-shell; the markers are the verdicts).
+  - expr: "${captured.report_baseline} contains 'REPORT_ALL_BOUND=1'"
+    message: "each view method must resolve to its OWN provider agent (alpha->provider-alpha, bravo->provider-bravo, charlie->provider-charlie)"
+
+  # Guarantee 2: capability routing per method, not just distinct endpoints
+  - expr: "${captured.report_baseline} contains 'ALPHA_CAP_OK=1'"
+    message: "alpha() must carry provider-alpha's view-cap-alpha payload"
+  - expr: "${captured.report_baseline} contains 'BRAVO_CAP_OK=1'"
+    message: "bravo() must carry provider-bravo's view-cap-bravo payload"
+  - expr: "${captured.report_baseline} contains 'CHARLIE_CAP_OK=1'"
+    message: "charlie() must carry provider-charlie's view-cap-charlie payload"
+
+  # Guarantee 3: no degraded method at baseline
+  - expr: "${captured.report_baseline} not contains '_error'"
+    message: "no view method may degrade at baseline (all three providers up)"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

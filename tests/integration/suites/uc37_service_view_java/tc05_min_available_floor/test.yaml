@@ -1,0 +1,204 @@
+# tc05_min_available_floor — the minAvailable circuit breaker (RFC #1280):
+# below the floor, EVERY facade call fails — including a call to a method
+# whose own provider is perfectly healthy. That healthy-method failure is
+# the floor's entire point and cannot be shown by per-method soft-fail.
+#
+# Topology: provider-alpha + provider-bravo + the Java consumer.
+# provider-charlie is NOT started (FlooredService doesn't bind it; the
+# unresolved ReportService edges are irrelevant here and must not interfere
+# — floors are per-view). provider-bravo is the kill/restart target.
+#
+# Design guarantees under test:
+#   1. Baseline: FlooredService(minAvailable=2) with both providers up —
+#      alphaFloored() answers from provider-alpha.
+#   2. Kill provider-bravo -> 1/2 methods resolve, below floor=2: the
+#      view_floored tool call to alphaFloored() (alpha still UP) fails with
+#      MeshServiceUnavailableException carrying the exact accounting:
+#      service=FlooredService, available=1, total=2, minAvailable=2. The
+#      fixture catches ONLY that exception type — a raw
+#      MeshToolUnavailableException (or an alpha payload) would mean the
+#      floor did not gate the call.
+#   3. Restart provider-bravo -> the floor restores organically and
+#      alphaFloored() delegates again, with no consumer restart.
+#
+# Timing: transitions ride the default health debounce (~15-25s) plus one
+# consumer heartbeat — polled with deadlines. No dependency-resolution
+# waits (issue #1193): the first facade call performs the bounded settle
+# wait itself (floored views share the injected-proxy settle-grace path).
+
+name: "Service views: minAvailable=2 floor fails a HEALTHY method when a sibling edge dies (Java)"
+description: "Kill provider-bravo: alphaFloored() (provider up!) fails with MeshServiceUnavailableException 1/2 below minAvailable=2; restart: the floor restores and the method delegates again"
+tags:
+  - integration
+  - java
+  - python
+  - registry
+  - service-view
+  - rfc-1280
+  - availability
+  - slow
+timeout: 900
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/provider-alpha /workspace/
+      cp -rL /uc-artifacts/provider-bravo /workspace/
+      cp -rL /uc-artifacts/java-view-consumer /workspace/
+
+  - name: "Install provider-alpha deps"
+    handler: pip-install
+    path: /workspace/provider-alpha
+
+  - name: "Install provider-bravo deps"
+    handler: pip-install
+    path: /workspace/provider-bravo
+
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-view-consumer
+    timeout: 600
+
+  - name: "Start provider-alpha (port 9101)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start provider-alpha/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  - name: "Start provider-bravo (port 9102)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start provider-bravo/main.py --env MCP_MESH_HTTP_PORT=9102 -d
+
+  - name: "Start java-view-consumer (port 9201)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start /workspace/java-view-consumer --env MCP_MESH_HTTP_PORT=9201 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  # Liveness only (issue #1193): 240s deadline covers the cold JVM start.
+  - routine: global.wait_for_agents_registered
+    params:
+      agents: "provider-alpha provider-bravo java-view-consumer"
+
+  # Baseline: floor satisfied (2/2), alphaFloored() delegates.
+  # ENVELOPE: Java tools carry the payload ONLY as an escaped JSON string in
+  # content[0].text (no structuredContent) — parse via
+  # `.content[0].text | fromjson` (suite idiom), equality inside the jq
+  # filter; keeps working if structuredContent is added later.
+  - name: "Wait for view_floored baseline ok"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESP=""
+      for i in $(seq 1 90); do
+        RESP=$(meshctl call view_floored '{}' --raw 2>&1 || true)
+        BOUND=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .floored_agent == "provider-alpha"' 2>/dev/null || echo "")
+        if [ "$BOUND" = "true" ]; then
+          echo "FLOOR_BASELINE_OK=1 after ~$((i*2))s"
+          echo "$RESP"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: view_floored never answered from provider-alpha within 180s"
+      echo "last response: $RESP"
+      meshctl logs java-view-consumer 2>/dev/null | tail -40 || true
+      exit 1
+    capture: floor_baseline
+    timeout: 200
+
+  - name: "Kill provider-bravo"
+    handler: shell
+    workdir: /workspace
+    command: meshctl stop provider-bravo
+    capture: kill_bravo
+
+  # Below floor: the ALPHA call must fail even though provider-alpha is up.
+  # The verdict markers pin the exact floor arithmetic from the typed
+  # exception's getters (1 available, 2 total, floor 2) — parsed from the
+  # Java envelope via fromjson with equality inside the jq filter, so the
+  # integer checks are exact (no substring false-positives).
+  - name: "Wait for the floor to breach on a healthy method"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESP=""
+      for i in $(seq 1 60); do
+        RESP=$(meshctl call view_floored '{}' --raw 2>&1 || true)
+        BREACHED=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .floor_error == "MeshServiceUnavailableException"' 2>/dev/null || echo "")
+        if [ "$BREACHED" = "true" ]; then
+          echo "FLOOR_BREACHED=1 after ~$((i*2))s"
+          [ "$(echo "$RESP" | jq -r '.content[0].text | fromjson | .floor_service == "FlooredService"' 2>/dev/null)" = "true" ] && echo "FLOOR_SERVICE_OK=1"
+          [ "$(echo "$RESP" | jq -r '.content[0].text | fromjson | .floor_available == 1' 2>/dev/null)" = "true" ] && echo "FLOOR_AVAILABLE_1=1"
+          [ "$(echo "$RESP" | jq -r '.content[0].text | fromjson | .floor_total == 2' 2>/dev/null)" = "true" ] && echo "FLOOR_TOTAL_2=1"
+          [ "$(echo "$RESP" | jq -r '.content[0].text | fromjson | .floor_min == 2' 2>/dev/null)" = "true" ] && echo "FLOOR_MIN_2=1"
+          echo "$RESP"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: floor_error never appeared within 120s of killing provider-bravo"
+      echo "last response: $RESP"
+      meshctl logs java-view-consumer 2>/dev/null | tail -40 || true
+      exit 1
+    capture: floor_breached
+    timeout: 140
+
+  - name: "Restart provider-bravo"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start provider-bravo/main.py --env MCP_MESH_HTTP_PORT=9102 -d
+
+  # Floor restores organically: alphaFloored() delegates again.
+  - name: "Wait for the floor to restore"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESP=""
+      for i in $(seq 1 75); do
+        RESP=$(meshctl call view_floored '{}' --raw 2>&1 || true)
+        RESTORED=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .floored_agent == "provider-alpha"' 2>/dev/null || echo "")
+        if [ "$RESTORED" = "true" ]; then
+          echo "FLOOR_RESTORED=1 after ~$((i*2))s"
+          echo "$RESP"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: view_floored never recovered within 150s of restarting provider-bravo"
+      echo "last response: $RESP"
+      meshctl logs java-view-consumer 2>/dev/null | tail -40 || true
+      exit 1
+    capture: floor_restored
+    timeout: 170
+
+assertions:
+  - expr: "${captured.floor_baseline} contains 'FLOOR_BASELINE_OK=1'"
+    message: "with both providers up (2/2 >= floor 2) alphaFloored() must delegate to provider-alpha"
+
+  # Guarantee 2: the healthy-method floor failure with exact accounting
+  - expr: "${captured.floor_breached} contains 'FLOOR_BREACHED=1'"
+    message: "below the floor, alphaFloored() must fail with MeshServiceUnavailableException even though provider-alpha is UP — a floored view is all-or-nothing"
+  - expr: "${captured.floor_breached} contains 'FLOOR_SERVICE_OK=1'"
+    message: "the floor exception must name the view interface (FlooredService)"
+  - expr: "${captured.floor_breached} contains 'FLOOR_AVAILABLE_1=1'"
+    message: "the floor exception must count exactly 1 available method"
+  - expr: "${captured.floor_breached} contains 'FLOOR_TOTAL_2=1'"
+    message: "the floor exception must count exactly 2 total methods"
+  - expr: "${captured.floor_breached} contains 'FLOOR_MIN_2=1'"
+    message: "the floor exception must carry the declared minAvailable=2"
+  - expr: "${captured.floor_breached} not contains 'floored_agent'"
+    message: "no delegation may happen while below floor — a floored_agent payload means the breaker did not trip"
+
+  # Guarantee 3: organic restore
+  - expr: "${captured.floor_restored} contains 'FLOOR_RESTORED=1'"
+    message: "the floor must restore after provider-bravo returns, with no consumer restart"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

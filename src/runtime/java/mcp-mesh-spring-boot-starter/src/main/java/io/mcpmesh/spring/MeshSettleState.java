@@ -218,6 +218,11 @@ public final class MeshSettleState {
         return resolved.contains(depKey);
     }
 
+    /** Test accessor: whether {@code depKey} was registered as declared. */
+    boolean isDeclared(String depKey) {
+        return declared.contains(depKey);
+    }
+
     int getWaitCount() {
         return waitCount;
     }
