@@ -1,0 +1,292 @@
+# tc06_tool_param_refusal — RFC #1280 PHASE 2: a @McpMeshService view as a
+# @MeshTool METHOD PARAMETER. The CONTRAST case to tc03: because the view's
+# methods become dependency edges ON THE TOOL ITSELF, the REQUIRED
+# tp-cap-charlie edge participates in the issue #1273 pre-invoke guard, and
+# the tool's invocation is refused with the STRUCTURED
+# {"error":"dependency_unavailable","capability":"tp-cap-charlie"} envelope —
+# the exact envelope tc03 documents the class-level bean path does NOT get.
+# (tc03 says "class-level edges don't get the envelope — see tc06"; this is
+# the inverse pointer.)
+#
+# Topology: same three Python providers as tc01 (each also publishes its
+# tp-cap-* twin) + the Java consumer, whose view_tool_param tool takes the
+# ToolParamService view as a parameter. provider-charlie (backing the
+# required tp-cap-charlie edge) is the kill/restart target.
+#
+# Design guarantees under test:
+#   1. Baseline: view_tool_param answers with the per-method report — each
+#      tp-cap-* method served by its own provider (per-consumer-slot proxies
+#      resolve exactly like explicit @Selector deps).
+#   2. Kill provider-charlie -> invoking view_tool_param returns the
+#      structured refusal: isError=true and the body
+#      {"error":"dependency_unavailable","capability":"tp-cap-charlie"} —
+#      BEFORE user code runs (the fixture's per-method catches would
+#      otherwise report charlie_error instead; seeing the envelope proves
+#      the guard fired, not the handler).
+#   3. Registry: the required edge is the TOOL's own dep, so capability
+#      view_tool_param itself derives available=false with unavailable_reason
+#      naming tp-cap-charlie (per-tool #1249 derivation — the uc34 b-cap
+#      precedent) WHILE the consumer stays registered and healthy.
+#   4. Restart provider-charlie -> the tool answers the full report again and
+#      view_tool_param re-derives available=true, with no consumer restart.
+#
+# Timing: transitions ride the default health debounce (~15-25s) plus one
+# consumer heartbeat — polled with deadlines. No dependency-resolution waits
+# (issue #1193): the baseline call rides the settle window.
+
+name: "Service views phase 2: required tool-param edge refuses with structured dependency_unavailable (Java)"
+description: "Kill provider-charlie: view_tool_param (view as tool PARAMETER) is refused with isError + error=dependency_unavailable/capability=tp-cap-charlie and its capability derives unavailable; restart: both recover"
+tags:
+  - integration
+  - java
+  - python
+  - registry
+  - service-view
+  - rfc-1280
+  - required-deps
+  - availability
+  - issue-1249
+  - slow
+timeout: 900
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/provider-alpha /workspace/
+      cp -rL /uc-artifacts/provider-bravo /workspace/
+      cp -rL /uc-artifacts/provider-charlie /workspace/
+      cp -rL /uc-artifacts/java-view-consumer /workspace/
+
+  - name: "Install provider-alpha deps"
+    handler: pip-install
+    path: /workspace/provider-alpha
+
+  - name: "Install provider-bravo deps"
+    handler: pip-install
+    path: /workspace/provider-bravo
+
+  - name: "Install provider-charlie deps"
+    handler: pip-install
+    path: /workspace/provider-charlie
+
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-view-consumer
+    timeout: 600
+
+  - name: "Start provider-alpha (port 9101)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start provider-alpha/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  - name: "Start provider-bravo (port 9102)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start provider-bravo/main.py --env MCP_MESH_HTTP_PORT=9102 -d
+
+  - name: "Start provider-charlie (port 9103)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start provider-charlie/main.py --env MCP_MESH_HTTP_PORT=9103 -d
+
+  - name: "Start java-view-consumer (port 9201)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start /workspace/java-view-consumer --env MCP_MESH_HTTP_PORT=9201 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  # Liveness only (issue #1193): 240s deadline covers the cold JVM start.
+  - routine: global.wait_for_agents_registered
+    params:
+      agents: "provider-alpha provider-bravo provider-charlie java-view-consumer"
+
+  # Baseline: the full per-method report through the tool-param facade.
+  # ENVELOPE: Java tools carry the payload ONLY as an escaped JSON string in
+  # content[0].text (no structuredContent) — parse via
+  # `.content[0].text | fromjson` (suite idiom), equality inside the jq
+  # filter; anchored key:value pairing so cross-wired slots cannot pass.
+  - name: "Wait for full tool-param report (baseline)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESP=""
+      for i in $(seq 1 90); do
+        RESP=$(meshctl call view_tool_param '{"label":"tc06"}' --raw 2>&1 || true)
+        A=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .alpha_agent == "provider-alpha"' 2>/dev/null || echo "")
+        B=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .bravo_agent == "provider-bravo"' 2>/dev/null || echo "")
+        C=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .charlie_agent == "provider-charlie"' 2>/dev/null || echo "")
+        if [ "$A" = "true" ] && [ "$B" = "true" ] && [ "$C" = "true" ]; then
+          echo "TP_BASELINE_BOUND=1 after ~$((i*2))s"
+          [ "$(echo "$RESP" | jq -r '.content[0].text | fromjson | .charlie_cap == "tp-cap-charlie"' 2>/dev/null)" = "true" ] && echo "TP_CHARLIE_CAP_OK=1"
+          echo "$RESP"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: view_tool_param never reported all three tp-cap bindings within 180s"
+      echo "last response: $RESP"
+      meshctl logs java-view-consumer 2>/dev/null | tail -40 || true
+      exit 1
+    capture: tp_baseline
+    timeout: 200
+
+  # Pure-JSON snapshot for the baseline availability assertion.
+  - name: "Capture baseline /agents snapshot"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:8000/agents
+    capture: agents_baseline
+
+  - name: "Kill provider-charlie"
+    handler: shell
+    workdir: /workspace
+    command: meshctl stop provider-charlie
+    capture: kill_charlie
+
+  # Guarantee 2: the STRUCTURED refusal. Poll until the guard fires — the
+  # window between provider death and the consumer heartbeat dropping the
+  # slot may transiently surface a handler-level charlie_error report;
+  # ONLY the envelope with error=dependency_unavailable AND the exact
+  # capability name counts as the verdict (uc34's established assertion
+  # shape `.error == "..." and .capability == "..."`, applied to the tool
+  # result's content[0].text instead of a route's 503 body).
+  - name: "Wait for the structured dependency_unavailable refusal"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESP=""
+      for i in $(seq 1 60); do
+        RESP=$(meshctl call view_tool_param '{"label":"tc06"}' --raw 2>&1 || true)
+        REF=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .error == "dependency_unavailable" and .capability == "tp-cap-charlie"' 2>/dev/null || echo "")
+        if [ "$REF" = "true" ]; then
+          echo "TP_REFUSAL_STRUCTURED=1 after ~$((i*2))s"
+          [ "$(echo "$RESP" | jq -r '.isError == true' 2>/dev/null)" = "true" ] && echo "TP_REFUSAL_ISERROR=1"
+          echo "$RESP"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: the structured dependency_unavailable refusal never appeared within 120s"
+      echo "last response: $RESP"
+      meshctl logs java-view-consumer 2>/dev/null | tail -40 || true
+      exit 1
+    capture: tp_refusal
+    timeout: 140
+
+  # Guarantee 3: per-tool derived availability — the required edge belongs
+  # to view_tool_param itself.
+  - name: "Wait for view_tool_param to derive unavailable"
+    handler: shell
+    workdir: /workspace
+    command: |
+      AVAIL=""
+      for i in $(seq 1 60); do
+        AVAIL=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name == "java-view-consumer") | .capabilities[] | select(.name == "view_tool_param") | .available' 2>/dev/null || echo "")
+        if [ "$AVAIL" = "false" ]; then
+          echo "TP_CAP_UNAVAILABLE=1 after ~$((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: view_tool_param never derived available=false within 120s (last=$AVAIL)"
+      curl -s http://localhost:8000/agents | jq '.agents[] | select(.name == "java-view-consumer")' 2>/dev/null || true
+      exit 1
+    capture: wait_tp_cap_down
+    timeout: 140
+
+  # Pure-JSON snapshot WHILE the required tool edge is broken.
+  - name: "Capture /agents snapshot during outage"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:8000/agents
+    capture: agents_during_outage
+
+  - name: "Restart provider-charlie"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start provider-charlie/main.py --env MCP_MESH_HTTP_PORT=9103 -d
+
+  # Guarantee 4: organic recovery — no consumer restart.
+  - name: "Wait for view_tool_param recovery"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESP=""
+      for i in $(seq 1 75); do
+        RESP=$(meshctl call view_tool_param '{"label":"tc06"}' --raw 2>&1 || true)
+        RECOVERED=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .charlie_agent == "provider-charlie"' 2>/dev/null || echo "")
+        if [ "$RECOVERED" = "true" ]; then
+          echo "TP_RECOVERED=1 after ~$((i*2))s"
+          echo "$RESP"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: view_tool_param never recovered within 150s of restarting provider-charlie"
+      echo "last response: $RESP"
+      meshctl logs java-view-consumer 2>/dev/null | tail -40 || true
+      exit 1
+    capture: tp_recovery
+    timeout: 170
+
+  - name: "Wait for view_tool_param to re-derive available"
+    handler: shell
+    workdir: /workspace
+    command: |
+      AVAIL=""
+      for i in $(seq 1 60); do
+        AVAIL=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name == "java-view-consumer") | .capabilities[] | select(.name == "view_tool_param") | .available' 2>/dev/null || echo "")
+        if [ "$AVAIL" = "true" ]; then
+          echo "TP_CAP_RECOVERED=1 after ~$((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: view_tool_param never re-derived available=true within 120s (last=$AVAIL)"
+      curl -s http://localhost:8000/agents | jq '.agents[] | select(.name == "java-view-consumer")' 2>/dev/null || true
+      exit 1
+    capture: wait_tp_cap_recovered
+    timeout: 140
+
+assertions:
+  # IDIOM: equality lives INSIDE the jq filter so the interpolation yields a
+  # bare true/false; no '}' in interpolation bodies.
+
+  # Guarantee 1: per-method resolution through the tool-param facade
+  - expr: "${captured.tp_baseline} contains 'TP_BASELINE_BOUND=1'"
+    message: "each tool-param view method must resolve to its OWN provider (per-consumer-slot proxies, same resolution as explicit @Selector deps)"
+  - expr: "${captured.tp_baseline} contains 'TP_CHARLIE_CAP_OK=1'"
+    message: "the required charlie() method must carry provider-charlie's tp-cap-charlie payload at baseline"
+  - expr: "${jq:captured.agents_baseline:(.agents[] | select(.name == \"java-view-consumer\") | .capabilities[] | select(.name == \"view_tool_param\") | .available == true and .unavailable_reason == null)} == 'true'"
+    message: "baseline: view_tool_param must be available with no unavailable_reason while all providers are up"
+
+  # Guarantee 2: THE structured pre-invoke refusal (the tc03 contrast)
+  - expr: "${captured.tp_refusal} contains 'TP_REFUSAL_STRUCTURED=1'"
+    message: "the tool must be refused with the structured contract (error=dependency_unavailable, capability=tp-cap-charlie) — a charlie_error report would mean user code ran with a dead REQUIRED proxy (guard did not fire); contrast tc03, where the class-level bean path legitimately gets no envelope"
+  - expr: "${captured.tp_refusal} contains 'TP_REFUSAL_ISERROR=1'"
+    message: "the refusal must be an isError=true tool result (issue #1273 envelope), not a successful report"
+
+  # Guarantee 3: the required edge is the TOOL's own dep
+  - expr: "${captured.wait_tp_cap_down} contains 'TP_CAP_UNAVAILABLE=1'"
+    message: "capability view_tool_param must derive available=false — the required tp-cap-charlie edge belongs to THIS tool (per-tool #1249 derivation)"
+  - expr: "${jq:captured.agents_during_outage:(.agents[] | select(.name == \"java-view-consumer\") | .capabilities[] | select(.name == \"view_tool_param\") | .unavailable_reason // \"\" | contains(\"tp-cap-charlie\"))} == 'true'"
+    message: "view_tool_param's unavailable_reason must name the broken required edge (tp-cap-charlie)"
+  - expr: "${jq:captured.agents_during_outage:([.agents[] | select(.name == \"java-view-consumer\")] | length == 1)} == 'true'"
+    message: "java-view-consumer must still be REGISTERED while the required tool edge is broken"
+  - expr: "${jq:captured.agents_during_outage:(.agents[] | select(.name == \"java-view-consumer\") | .status == \"healthy\")} == 'true'"
+    message: "java-view-consumer must still be HEALTHY — unavailability is capability-level derived state"
+
+  # Guarantee 4: organic recovery
+  - expr: "${captured.tp_recovery} contains 'TP_RECOVERED=1'"
+    message: "view_tool_param must answer the full report again after provider-charlie restarts, with no consumer restart"
+  - expr: "${captured.wait_tp_cap_recovered} contains 'TP_CAP_RECOVERED=1'"
+    message: "capability view_tool_param must re-derive available=true after the provider returns"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

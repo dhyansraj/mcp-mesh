@@ -282,6 +282,13 @@ public class MeshToolBeanPostProcessor implements BeanPostProcessor, Ordered {
         // Extract dependency names from @MeshTool(dependencies=...)
         List<String> dependencyNames = extractDependencyNames(annotation);
 
+        // RFC #1280 phase 2: detect @McpMeshService view parameters (+ validate
+        // + boot-fail on @Param). Their method edges are appended to the tool's
+        // declared dependency list by the wrapper, in the SAME order the wire
+        // spec (MeshToolRegistry.extractAllDependencies) uses.
+        List<McpMeshServiceToolSupport.ViewParamInfo> viewParams =
+            McpMeshServiceToolSupport.analyzeViewParams(method);
+
         // Create wrapper. Phase B MeshJob substrate: the `task` flag controls
         // whether inbound calls bearing X-Mesh-Job-Id dispatch through the
         // job pipeline (JobController injection + auto-complete).
@@ -296,7 +303,8 @@ public class MeshToolBeanPostProcessor implements BeanPostProcessor, Ordered {
             dependencyNames,
             objectMapper,
             annotation.task(),
-            annotation.retryOn()
+            annotation.retryOn(),
+            viewParams
         );
 
         // Issue #1268: thread the per-declared-dependency required flags so

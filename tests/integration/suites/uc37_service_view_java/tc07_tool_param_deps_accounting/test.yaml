@@ -1,0 +1,132 @@
+# tc07_tool_param_deps_accounting — RFC #1280 phase 2 registration
+# accounting: the tool-param view's edges are the view_tool_param tool's OWN
+# dependencies (per-tool carrier), coexisting with — not folded into — the
+# bean-path __mesh_service_deps synthetic.
+#
+# Topology: ONLY the Java consumer, no providers (registration-time contract,
+# same posture as tc04).
+#
+# The registry's public API does not expose per-tool dependency LISTS
+# (CapabilityInfo carries name/available/unavailable_reason only), so "the
+# edges hang on THAT tool" is proven through the per-capability #1249
+# derivation, which IS keyed by the declaring tool:
+#   1. total_dependencies == 6: 3 tp-cap-* edges on view_tool_param + the 3
+#      deduped view-cap-* edges on __mesh_service_deps. (If the tool-param
+#      edges had been folded into the synthetic — or vice versa — the total
+#      and the per-capability reasons below could not BOTH hold.)
+#   2. With no providers up, capability view_tool_param derives
+#      available=false with unavailable_reason naming tp-cap-charlie — its
+#      OWN required edge, unresolved. A dep-less tool cannot derive
+#      unavailable, so this pins the edges to that tool.
+#   3. In the SAME snapshot, __mesh_service_deps derives available=false
+#      naming view-cap-charlie — the bean-path carrier survives, with its
+#      OWN distinct required edge (dedupe did NOT collapse the carriers:
+#      tp-cap-* vs view-cap-* namespaces are disjoint by design, see
+#      ToolParamService.java).
+#   4. The consumer's dep-less tool capabilities (view_report,
+#      view_critical, view_floored) stay available=true — the edges are NOT
+#      smeared agent-wide — and the consumer registers healthy.
+#
+# Timing: registration wait is liveness-only (issue #1193); the availability
+# polls below wait for the registry's initial DERIVATION of already-declared
+# edges (a registry-side computation), not for dependency resolution — with
+# no providers there is nothing to resolve.
+
+name: "Service views phase 2: tool-param edges are the tool's own deps, alongside the bean-path synthetic (Java)"
+description: "Consumer-only start: total_dependencies=6; view_tool_param derives unavailable naming its OWN required tp-cap-charlie edge while __mesh_service_deps independently names view-cap-charlie; dep-less tools stay available"
+tags:
+  - integration
+  - java
+  - registry
+  - service-view
+  - rfc-1280
+  - required-deps
+  - availability
+  - slow
+timeout: 900
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: cp -rL /uc-artifacts/java-view-consumer /workspace/
+
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-view-consumer
+    timeout: 600
+
+  - name: "Start java-view-consumer (port 9201)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start /workspace/java-view-consumer --env MCP_MESH_HTTP_PORT=9201 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  # Liveness only (issue #1193): 240s deadline covers the cold JVM start.
+  - routine: global.wait_for_agents_registered
+    params:
+      agents: "java-view-consumer"
+
+  # Wait for the registry's initial derivation of BOTH carriers' required
+  # edges (unresolved-with-no-provider => available=false). Registry-side
+  # computation, not dep resolution.
+  - name: "Wait for both dependency carriers to derive unavailable"
+    handler: shell
+    workdir: /workspace
+    command: |
+      TP=""; SV=""
+      for i in $(seq 1 60); do
+        SNAP=$(curl -s http://localhost:8000/agents)
+        TP=$(echo "$SNAP" | jq -r '.agents[] | select(.name == "java-view-consumer") | .capabilities[] | select(.name == "view_tool_param") | .available' 2>/dev/null || echo "")
+        SV=$(echo "$SNAP" | jq -r '.agents[] | select(.name == "java-view-consumer") | .capabilities[] | select(.name == "__mesh_service_deps") | .available' 2>/dev/null || echo "")
+        if [ "$TP" = "false" ] && [ "$SV" = "false" ]; then
+          echo "BOTH_CARRIERS_DERIVED=1 after ~$((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: carriers never derived unavailable within 120s (view_tool_param=$TP __mesh_service_deps=$SV)"
+      curl -s http://localhost:8000/agents | jq '.agents[] | select(.name == "java-view-consumer")' 2>/dev/null || true
+      exit 1
+    capture: wait_carriers_derived
+    timeout: 140
+
+  # Pure-JSON snapshot for the jq assertions (state is static: no providers).
+  - name: "Capture /agents snapshot"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:8000/agents
+    capture: agents_snapshot
+
+assertions:
+  # IDIOM: equality lives INSIDE the jq filter so the interpolation yields a
+  # bare true/false; no '}' in interpolation bodies.
+
+  - expr: "${captured.wait_carriers_derived} contains 'BOTH_CARRIERS_DERIVED=1'"
+    message: "both dependency carriers (view_tool_param and __mesh_service_deps) must derive available=false with no providers up"
+
+  # Guarantee 1: the combined dependency total across both carriers
+  - expr: "${jq:captured.agents_snapshot:(.agents[] | select(.name == \"java-view-consumer\") | .total_dependencies == 6)} == 'true'"
+    message: "total_dependencies must be 6: the 3 tp-cap-* edges on the view_tool_param tool PLUS the 3 deduped view-cap-* edges on __mesh_service_deps"
+
+  # Guarantee 2: the tool-param edges hang on the TOOL itself
+  - expr: "${jq:captured.agents_snapshot:(.agents[] | select(.name == \"java-view-consumer\") | .capabilities[] | select(.name == \"view_tool_param\") | .unavailable_reason // \"\" | contains(\"tp-cap-charlie\"))} == 'true'"
+    message: "view_tool_param's unavailable_reason must name ITS OWN required tp-cap-charlie edge — a dep-less tool cannot derive unavailable, so this pins the view edges to the tool"
+
+  # Guarantee 3: the bean-path synthetic survives with its OWN edge
+  - expr: "${jq:captured.agents_snapshot:([.agents[] | select(.name == \"java-view-consumer\") | .capabilities[] | select(.name == \"__mesh_service_deps\")] | length == 1)} == 'true'"
+    message: "the __mesh_service_deps synthetic must still be registered exactly once — the tool-param expansion must not fold the bean-path views away"
+  - expr: "${jq:captured.agents_snapshot:(.agents[] | select(.name == \"java-view-consumer\") | .capabilities[] | select(.name == \"__mesh_service_deps\") | .unavailable_reason // \"\" | contains(\"view-cap-charlie\"))} == 'true'"
+    message: "__mesh_service_deps' unavailable_reason must name view-cap-charlie — the bean-path carrier keeps its own distinct required edge"
+
+  # Guarantee 4: edges are per-tool, not agent-wide
+  - expr: "${jq:captured.agents_snapshot:([.agents[] | select(.name == \"java-view-consumer\") | .capabilities[] | select(.name == \"view_report\" or .name == \"view_critical\" or .name == \"view_floored\") | select(.available == true)] | length == 3)} == 'true'"
+    message: "the dep-less tool capabilities must all stay available=true — view edges belong to their declaring carrier, never the whole agent"
+  - expr: "${jq:captured.agents_snapshot:(.agents[] | select(.name == \"java-view-consumer\") | .status == \"healthy\")} == 'true'"
+    message: "the consumer must register HEALTHY with zero providers up — required view edges gate availability, never startup"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

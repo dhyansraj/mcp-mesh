@@ -2,6 +2,7 @@ package com.example.serviceview;
 
 import io.mcpmesh.MeshAgent;
 import io.mcpmesh.MeshTool;
+import io.mcpmesh.Param;
 import io.mcpmesh.types.MeshServiceUnavailableException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,17 +17,23 @@ import java.util.Map;
  * uc37 fixture — Java consumer proving RFC #1280 {@code @McpMeshService}
  * service views end-to-end.
  *
- * <p>Two views are discovered from this package:
+ * <p>Three views are discovered from this package:
  * <ul>
  *   <li>{@link ReportService} — alpha/bravo (optional) + charlie (required),
- *       three capabilities backed by three DIFFERENT Python provider agents.</li>
+ *       three view-cap-* capabilities backed by three DIFFERENT Python
+ *       provider agents. Consumed as a constructor-injected bean (phase 1).</li>
  *   <li>{@link FlooredService} — alpha+bravo with {@code minAvailable = 2}.</li>
+ *   <li>{@link ToolParamService} — three tp-cap-* capabilities (charlie
+ *       required), consumed as a {@code @MeshTool} METHOD PARAMETER
+ *       (RFC #1280 phase 2) by {@code view_tool_param}.</li>
  * </ul>
  *
- * <p>The registration must expand to exactly THREE dependency edges under the
- * synthetic {@code __mesh_service_deps} tool (the FlooredService bindings
- * dedupe onto the ReportService edges), so the registry reports
- * {@code total_dependencies == 3} (tc04).
+ * <p>Registration carries TWO dependency surfaces: the bean-path views expand
+ * to exactly THREE view-cap-* edges under the synthetic
+ * {@code __mesh_service_deps} tool (FlooredService dedupes onto ReportService),
+ * and the tool-param view expands to THREE tp-cap-* edges on the
+ * {@code view_tool_param} tool's OWN dependency list — so the registry reports
+ * {@code total_dependencies == 6} (tc04/tc07).
  *
  * <p>The {@code @MeshTool} surfaces below are the observation points the TCs
  * call via {@code meshctl call}:
@@ -49,8 +56,9 @@ import java.util.Map;
  *       know which tool bodies call which view methods, so RFC #1280's
  *       contract is "availability per method, identical to standalone
  *       edges". Do not rewrite this fixture (or tc03) to expect the
- *       envelope; a consumer wanting the pre-invoke refusal declares the
- *       capability as a tool dependency slot.</li>
+ *       envelope; a consumer wanting the pre-invoke refusal uses the
+ *       phase-2 tool-PARAMETER form instead — see {@code view_tool_param}
+ *       below, which DOES get it (tc06).</li>
  *   <li>{@code view_floored} — calls {@code FlooredService.alphaFloored()},
  *       reporting a floor breach via the typed
  *       {@link MeshServiceUnavailableException} getters. With provider-bravo
@@ -58,6 +66,16 @@ import java.util.Map;
  *       is healthy (tc05). Any other exception propagates on purpose: a
  *       MeshToolUnavailableException here would mean the floor did NOT gate
  *       the call, and the raw tool error fails the tc05 assertions.</li>
+ *   <li>{@code view_tool_param} — RFC #1280 PHASE 2: takes
+ *       {@link ToolParamService} as a METHOD PARAMETER (no {@code @Param}),
+ *       so its three tp-cap-* methods become dependency edges ON THIS TOOL
+ *       (per-consumer-slot proxies, appended after explicit deps in
+ *       method-name order). The REQUIRED {@code charlie()} edge therefore
+ *       DOES participate in the issue #1273 pre-invoke guard: calling this
+ *       tool while tp-cap-charlie is unresolved returns the structured
+ *       {@code {"error":"dependency_unavailable","capability":"tp-cap-charlie"}}
+ *       refusal BEFORE this body runs (tc06) — the exact envelope the
+ *       class-level {@code view_critical} path above does NOT get (tc03).</li>
  * </ul>
  */
 @MeshAgent(
@@ -136,6 +154,30 @@ public class JavaViewConsumerApplication {
                 out.put("floor_total", e.getMethodsTotal());
                 out.put("floor_min", e.getMinAvailable());
             }
+            return out;
+        }
+
+        /**
+         * RFC #1280 phase 2 entry point (tc06/tc07): the
+         * {@link ToolParamService} PARAMETER (deliberately NOT
+         * {@code @Param}-annotated — it is injected, not an MCP input)
+         * expands into three tp-cap-* dependency edges on THIS tool. With
+         * tp-cap-charlie (required) unresolved, the #1273 pre-invoke guard
+         * refuses with the structured dependency_unavailable envelope before
+         * this body runs, so the per-method catches below only ever see
+         * OPTIONAL-edge degradation.
+         */
+        @MeshTool(
+            capability = "view_tool_param",
+            description = "Call all three ToolParamService view methods (view injected as a tool parameter) and report which agent served each")
+        public Map<String, Object> viewToolParam(
+                @Param("label") String label,
+                ToolParamService view) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("label", label);
+            reportOne(out, "alpha", view::alpha);
+            reportOne(out, "bravo", view::bravo);
+            reportOne(out, "charlie", view::charlie);
             return out;
         }
 

@@ -31,9 +31,10 @@
 #      is "availability per method, identical to standalone edges" — the
 #      facade call raises MeshToolUnavailableException and the wrapper
 #      surfaces it through the ordinary error path. Do NOT "fix" this TC to
-#      expect the #1273 envelope; a consumer that wants the pre-invoke
-#      refusal declares the capability as a @MeshTool dependency slot
-#      instead of (or in addition to) the view.
+#      expect the #1273 envelope; the RFC #1280 PHASE 2 tool-PARAMETER form
+#      is the path that DOES get it — its view methods become the tool's own
+#      declared dependency edges. See tc06_tool_param_refusal for exactly
+#      that contrast case on this same consumer.
 #   4. Organic recovery: restart provider-charlie -> view_critical answers
 #      ok again and __mesh_service_deps re-derives available=true, with no
 #      consumer restart.

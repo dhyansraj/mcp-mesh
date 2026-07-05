@@ -22,6 +22,16 @@ async def charlie_tool() -> dict:
     return {"agent": "provider-charlie", "cap": "view-cap-charlie", "msg": "hello-from-charlie"}
 
 
+# RFC #1280 phase 2 (tc06/tc07): tp-cap-charlie is the REQUIRED edge of the
+# Java view_tool_param tool's view PARAMETER — killing THIS process drives
+# the tool's structured dependency_unavailable refusal (tc06). Namespace is
+# distinct from view-cap-* (see provider-alpha).
+@app.tool()
+@mesh.tool(capability="tp-cap-charlie", description="Self-identifying tool-param payload from provider-charlie")
+async def tp_charlie_tool() -> dict:
+    return {"agent": "provider-charlie", "cap": "tp-cap-charlie", "msg": "hello-from-charlie-tp"}
+
+
 @mesh.agent(
     name="provider-charlie",
     version="1.0.0",

@@ -1,31 +1,36 @@
 # tc04_deps_accounting — registration-time dependency expansion (RFC #1280):
-# a 3-method @McpMeshService view registers as exactly THREE ordinary
-# dependency edges under the synthetic __mesh_service_deps tool, visible in
-# the registry's dependency accounting.
+# the bean-path views register as THREE ordinary dependency edges under the
+# synthetic __mesh_service_deps tool, and (phase 2) the tool-param view adds
+# THREE more edges on the view_tool_param tool itself — both visible in the
+# registry's dependency accounting.
 #
 # Topology: ONLY the Java consumer — no providers on purpose. Dependency
 # expansion is a registration-time contract, and registering with all edges
-# unresolved also proves a view (even with a required edge) never blocks
+# unresolved also proves a view (even with required edges) never blocks
 # agent startup/registration (soft-fail philosophy: required gates
 # availability, not boot).
 #
 # Design guarantees under test:
-#   1. total_dependencies == 3 for the consumer: ReportService's three
-#      methods expand 1:1 into DependencySpecs, and FlooredService's two
-#      bindings (same capabilities, same resolved type) DEDUPE onto them —
-#      5 method bindings across 2 views, 3 wire edges.
+#   1. total_dependencies == 6 for the consumer:
+#      - bean path: ReportService's three view-cap-* methods expand 1:1 into
+#        __mesh_service_deps DependencySpecs, and FlooredService's two
+#        bindings (same capabilities, same resolved type) DEDUPE onto them —
+#        5 method bindings across 2 views, 3 wire edges;
+#      - tool-param path (phase 2): ToolParamService's three tp-cap-* methods
+#        become the view_tool_param tool's OWN dependency edges — 3 more.
+#      (Per-carrier structure is tc07's subject; here we pin the total.)
 #   2. The synthetic __mesh_service_deps capability is registered alongside
 #      the consumer's real tool capabilities (view_report, view_critical,
-#      view_floored).
+#      view_floored, view_tool_param).
 #   3. The consumer registers and reports healthy with ZERO providers up —
-#      including the required view-cap-charlie edge.
+#      including the required view-cap-charlie and tp-cap-charlie edges.
 #
 # Timing: registration wait is liveness-only (issue #1193); no view calls
 # are made, so no settle interaction. The /agents snapshot is polled only
 # for the consumer's appearance, never for dependency resolution.
 
-name: "Service views: 3-method view expands to 3 registry dependencies (Java)"
-description: "Consumer-only start: java-view-consumer registers healthy with total_dependencies=3 (cross-view dedupe) and the synthetic __mesh_service_deps capability"
+name: "Service views: bean + tool-param views expand to 6 registry dependencies (Java)"
+description: "Consumer-only start: java-view-consumer registers healthy with total_dependencies=6 (3 deduped bean-path edges + 3 tool-param edges) and the synthetic __mesh_service_deps capability"
 tags:
   - integration
   - java
@@ -77,17 +82,18 @@ assertions:
   # IDIOM: equality lives INSIDE the jq filter so the interpolation yields a
   # bare true/false; no '}' in interpolation bodies.
 
-  # Guarantee 1: the expanded-and-deduped dependency count
-  - expr: "${jq:captured.agents_snapshot:(.agents[] | select(.name == \"java-view-consumer\") | .total_dependencies == 3)} == 'true'"
-    message: "the consumer must register exactly 3 dependencies: ReportService's 3 methods expand 1:1 and FlooredService's 2 shared-capability bindings dedupe onto them"
+  # Guarantee 1: the expanded-and-deduped dependency count across BOTH
+  # carriers (3 bean-path synthetic + 3 tool-param edges)
+  - expr: "${jq:captured.agents_snapshot:(.agents[] | select(.name == \"java-view-consumer\") | .total_dependencies == 6)} == 'true'"
+    message: "the consumer must register exactly 6 dependencies: 3 deduped bean-path view-cap-* edges on __mesh_service_deps + 3 tp-cap-* edges on the view_tool_param tool"
 
   # Guarantee 2: the synthetic dependency-carrier capability is registered
   - expr: "${jq:captured.agents_snapshot:([.agents[] | select(.name == \"java-view-consumer\") | .capabilities[] | select(.name == \"__mesh_service_deps\")] | length == 1)} == 'true'"
     message: "the synthetic __mesh_service_deps capability must be registered exactly once"
 
   # ...alongside the real tool capabilities
-  - expr: "${jq:captured.agents_snapshot:([.agents[] | select(.name == \"java-view-consumer\") | .capabilities[] | select(.name == \"view_report\" or .name == \"view_critical\" or .name == \"view_floored\")] | length == 3)} == 'true'"
-    message: "the consumer's three real @MeshTool capabilities must register alongside the view expansion"
+  - expr: "${jq:captured.agents_snapshot:([.agents[] | select(.name == \"java-view-consumer\") | .capabilities[] | select(.name == \"view_report\" or .name == \"view_critical\" or .name == \"view_floored\" or .name == \"view_tool_param\")] | length == 4)} == 'true'"
+    message: "the consumer's four real @MeshTool capabilities must register alongside the view expansion"
 
   # Guarantee 3: providerless registration — a view never blocks boot
   - expr: "${jq:captured.agents_snapshot:(.agents[] | select(.name == \"java-view-consumer\") | .status == \"healthy\")} == 'true'"

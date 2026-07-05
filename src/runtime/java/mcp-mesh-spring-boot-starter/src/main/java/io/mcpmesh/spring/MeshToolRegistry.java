@@ -53,7 +53,7 @@ public class MeshToolRegistry {
             // on the record so existing readers (heartbeat builder,
             // tests) are unaffected.
             new ArrayList<>(Arrays.asList(annotation.tags())),
-            extractDependencies(annotation.dependencies()),
+            extractAllDependencies(annotation, method),
             extractInputSchema(method),
             outputType,
             // Issue #547 Phase 4: per-tool override (default true = current behavior).
@@ -435,6 +435,30 @@ public class MeshToolRegistry {
             }
         }
 
+        return deps;
+    }
+
+    /**
+     * RFC #1280 phase 2: the tool's full declared dependency list = explicit
+     * {@code @Selector} deps FIRST, then each {@code @McpMeshService} view
+     * parameter's method edges (parameter order, method-name order). This order
+     * MUST match {@link MeshToolWrapper}'s declared-index space so the Rust
+     * core's {@code funcId:dep_N} resolution events land on the right slot.
+     */
+    private List<DependencyInfo> extractAllDependencies(MeshTool annotation, Method method) {
+        List<DependencyInfo> deps = extractDependencies(annotation.dependencies());
+        for (McpMeshServiceToolSupport.ViewParamInfo vp
+                : McpMeshServiceToolSupport.analyzeViewParams(method)) {
+            for (McpMeshServiceRegistrar.ServiceMethodBinding b : vp.view().bindings()) {
+                deps.add(new DependencyInfo(
+                    b.capability(),
+                    Arrays.asList(b.tags()),
+                    b.version(),
+                    b.schemaExpectedType(),
+                    b.schemaMode(),
+                    b.required()));
+            }
+        }
         return deps;
     }
 

@@ -3,6 +3,7 @@ package io.mcpmesh.spring;
 import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.JobContext;
 import io.mcpmesh.JobController;
+import io.mcpmesh.McpMeshService;
 import io.mcpmesh.MeshJob;
 import io.mcpmesh.MeshJobSubmitter;
 import io.mcpmesh.Param;
@@ -19,6 +20,7 @@ import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import io.modelcontextprotocol.spec.McpSchema.TextContent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.core.annotation.AnnotationUtils;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -151,6 +153,24 @@ public class MeshToolWrapper implements McpToolHandler {
      */
     private final int meshJobDepIndex;
 
+    // RFC #1280 phase 2: @McpMeshService view parameters. Each view param is a
+    // facade whose N methods are ordinary tool dependency edges APPENDED after
+    // the explicit @Selector deps (declared indices >= explicitDepCount), in
+    // parameter order then method-name order. The facade reads live per-method
+    // proxy slots, so registry resolution events for a view edge update the
+    // correct view slot's method proxy.
+    private final List<ViewSlot> viewSlots;
+    /** Param positions that are view facades (exempt from @Param / MCP schema). */
+    private final Set<Integer> viewParamPositions;
+    /** Number of explicit @Selector deps — the prefix that pairs with McpMeshTool/MeshJob slots. */
+    private final int explicitDepCount;
+    /** Declared dep index → view slot ordinal (-1 if not a view edge). */
+    private final int[] depIndexToViewSlot;
+    /** Declared dep index → local method index within its view slot (-1 otherwise). */
+    private final int[] depIndexToViewLocal;
+    /** Declared dep index → view-method binding (null if not a view edge). */
+    private final McpMeshServiceRegistrar.ServiceMethodBinding[] depIndexToViewBinding;
+
     // Consumer-side: MeshJobSubmitter to inject when MeshJob slot is present
     // and this method depends on a task=true capability. Set by the runtime
     // wiring (MeshAutoConfiguration / MeshEventProcessor) once the registry
@@ -236,6 +256,31 @@ public class MeshToolWrapper implements McpToolHandler {
             ObjectMapper objectMapper,
             boolean task,
             Class<? extends Throwable>[] retryOn) {
+        this(funcId, capability, description, bean, method, dependencyNames,
+            objectMapper, task, retryOn, List.of());
+    }
+
+    /**
+     * Full constructor with {@code @McpMeshService} view parameters (RFC #1280
+     * phase 2). Each view param's method bindings are appended to the tool's
+     * declared dependency list as ordinary edges (after the explicit
+     * {@code @Selector} deps), and a per-param facade is built whose methods
+     * delegate to the wrapper's per-method proxy slots.
+     *
+     * @param viewParams service-view parameters (position + validated bindings),
+     *                   in parameter order; empty for the classic path.
+     */
+    public MeshToolWrapper(
+            String funcId,
+            String capability,
+            String description,
+            Object bean,
+            Method method,
+            List<String> dependencyNames,
+            ObjectMapper objectMapper,
+            boolean task,
+            Class<? extends Throwable>[] retryOn,
+            List<McpMeshServiceToolSupport.ViewParamInfo> viewParams) {
 
         this.funcId = funcId;
         this.capability = capability;
@@ -244,14 +289,18 @@ public class MeshToolWrapper implements McpToolHandler {
         this.method = method;
         this.task = task;
         this.retryOn = retryOn != null ? retryOn : EMPTY_RETRY_ON;
-        this.dependencyNames = dependencyNames != null ? dependencyNames : List.of();
-        // Default all-optional (#1268) until MeshToolBeanPostProcessor threads
-        // the per-dep required flags via setDependencyRequired.
-        this.dependencyRequired = new boolean[this.dependencyNames.size()];
         this.objectMapper = objectMapper;
 
         // Make method accessible (for private methods)
         method.setAccessible(true);
+
+        // RFC #1280 phase 2: record view-param positions so analyzeParameters
+        // treats them as an injected slot kind (exempt from @Param / MCP schema).
+        List<McpMeshServiceToolSupport.ViewParamInfo> vps = viewParams != null ? viewParams : List.of();
+        this.viewParamPositions = new HashSet<>();
+        for (McpMeshServiceToolSupport.ViewParamInfo vp : vps) {
+            this.viewParamPositions.add(vp.position());
+        }
 
         // Analyze parameters via the resolver so MeshJob index is captured.
         MeshJobResolver.Resolved resolved = MeshJobResolver.resolve(method);
@@ -269,11 +318,84 @@ public class MeshToolWrapper implements McpToolHandler {
         this.injectedDeps = new AtomicReferenceArray<>(meshToolPositions.size());
         this.injectedLlmAgents = new AtomicReferenceArray<>(llmAgentPositions.size());
 
-        // Build the declared-index ↔ slot-ordinal translation (see field
-        // javadoc). Eligible positions = McpMeshTool + MeshJob parameter
-        // positions in parameter order; dependencies[k] pairs with the
-        // k-th eligible position.
-        this.depIndexToSlot = new int[this.dependencyNames.size()];
+        // Build the FULL declared dependency list: explicit @Selector deps
+        // (positionally paired with McpMeshTool/MeshJob slots) then each view
+        // param's method edges (parameter order, method-name order). The two
+        // segments occupy disjoint declared-index ranges — view edges are NEVER
+        // paired with McpMeshTool slots.
+        List<String> explicitNames = dependencyNames != null ? dependencyNames : List.of();
+        this.explicitDepCount = explicitNames.size();
+        List<String> fullNames = new ArrayList<>(explicitNames);
+        List<ViewSlot> slots = new ArrayList<>();
+        List<Integer> edgeViewSlot = new ArrayList<>();
+        List<Integer> edgeViewLocal = new ArrayList<>();
+        List<McpMeshServiceRegistrar.ServiceMethodBinding> edgeBinding = new ArrayList<>();
+        for (int vsOrd = 0; vsOrd < vps.size(); vsOrd++) {
+            McpMeshServiceToolSupport.ViewParamInfo vp = vps.get(vsOrd);
+            List<McpMeshServiceRegistrar.ServiceMethodBinding> bindings = vp.view().bindings();
+            int m = bindings.size();
+            int declaredStart = fullNames.size();
+            @SuppressWarnings("rawtypes")
+            AtomicReferenceArray<McpMeshTool> proxies = new AtomicReferenceArray<>(m);
+            Map<Method, Integer> methodToLocal = new HashMap<>();
+            int[] localToDeclared = new int[m];
+            for (int local = 0; local < m; local++) {
+                McpMeshServiceRegistrar.ServiceMethodBinding b = bindings.get(local);
+                methodToLocal.put(b.method(), local);
+                localToDeclared[local] = declaredStart + local;
+                // Double-edge detection (RFC #1280 phase 2, LOW): a view edge
+                // capability already declared on this tool (by an explicit
+                // @Selector dep or an earlier view) produces two independent
+                // edges — kept, consistent with duplicate explicit deps, but
+                // WARNed so the accidental case has a signal.
+                if (fullNames.contains(b.capability())) {
+                    String priorSource = fullNames.indexOf(b.capability()) < explicitDepCount
+                        ? "an explicit @Selector dependency"
+                        : "another @McpMeshService view parameter";
+                    log.warn("Tool {} declares capability '{}' more than once: @McpMeshService view "
+                            + "{} (method {}) duplicates {} — two dependency edges are kept "
+                            + "(matches duplicate explicit deps); rename one if unintended.",
+                        funcId, b.capability(), vp.view().iface().getName(), b.method().getName(),
+                        priorSource);
+                }
+                fullNames.add(b.capability());
+                edgeViewSlot.add(vsOrd);
+                edgeViewLocal.add(local);
+                edgeBinding.add(b);
+            }
+            McpMeshServiceToolSupport.WrapperSlotViewProxyBinding strategy =
+                new McpMeshServiceToolSupport.WrapperSlotViewProxyBinding(
+                    proxies, methodToLocal, localToDeclared, funcId, bindings);
+            Object facade = McpMeshServiceToolSupport.buildFacade(vp.view(), strategy, objectMapper);
+            slots.add(new ViewSlot(vp.position(), facade, proxies, bindings, declaredStart));
+        }
+        this.viewSlots = List.copyOf(slots);
+        this.dependencyNames = List.copyOf(fullNames);
+        int fullSize = fullNames.size();
+
+        // Per-declared-dependency required flags (#1268). View-edge suffix is
+        // fixed here from each @Selector.required(); the explicit prefix stays
+        // all-optional until MeshToolBeanPostProcessor calls setDependencyRequired
+        // (which preserves this suffix).
+        boolean[] required = new boolean[fullSize];
+        this.depIndexToViewSlot = new int[fullSize];
+        this.depIndexToViewLocal = new int[fullSize];
+        this.depIndexToViewBinding = new McpMeshServiceRegistrar.ServiceMethodBinding[fullSize];
+        Arrays.fill(this.depIndexToViewSlot, -1);
+        Arrays.fill(this.depIndexToViewLocal, -1);
+        for (int e = 0; e < edgeBinding.size(); e++) {
+            int declaredIndex = explicitDepCount + e;
+            required[declaredIndex] = edgeBinding.get(e).required();
+            this.depIndexToViewSlot[declaredIndex] = edgeViewSlot.get(e);
+            this.depIndexToViewLocal[declaredIndex] = edgeViewLocal.get(e);
+            this.depIndexToViewBinding[declaredIndex] = edgeBinding.get(e);
+        }
+        this.dependencyRequired = required;
+
+        // Declared-index ↔ McpMeshTool-slot translation (see field javadoc).
+        // ONLY the explicit prefix pairs with eligible positions; view edges
+        // (index >= explicitDepCount) keep depIndexToSlot = -1.
+        this.depIndexToSlot = new int[fullSize];
         this.slotToDepIndex = new int[meshToolPositions.size()];
         Arrays.fill(this.depIndexToSlot, -1);
         Arrays.fill(this.slotToDepIndex, -1);
@@ -283,15 +405,9 @@ public class MeshToolWrapper implements McpToolHandler {
             Collections.sort(eligiblePositions);
         }
         int meshJobDep = -1;
-        for (int k = 0; k < eligiblePositions.size() && k < this.dependencyNames.size(); k++) {
+        for (int k = 0; k < eligiblePositions.size() && k < explicitDepCount; k++) {
             int paramPos = eligiblePositions.get(k);
             if (meshJobParamIndex != null && paramPos == meshJobParamIndex) {
-                // MeshJob-backed dependency: the submitter is wired
-                // locally (JobsRuntimeManager), never by a proxy event —
-                // no slot, no settle key. Capture the declared dependency
-                // index paired with the MeshJob param so the consumer-side
-                // wiring can bind the submitter to the EXACT declared
-                // capability (mirrors Python's positional MeshJob→dep_index).
                 meshJobDep = k;
                 continue;
             }
@@ -304,9 +420,10 @@ public class MeshToolWrapper implements McpToolHandler {
         // Generate input schema (excluding injected params)
         this.inputSchema = generateInputSchema();
 
-        log.debug("Created wrapper for {} with {} MCP params, {} mesh deps, {} LLM agents, task={}, meshJobParamIndex={}",
+        log.debug("Created wrapper for {} with {} MCP params, {} mesh deps, {} LLM agents, "
+                + "{} view param(s), {} declared deps, task={}, meshJobParamIndex={}",
             funcId, mcpParams.size(), meshToolPositions.size(), llmAgentPositions.size(),
-            task, meshJobParamIndex);
+            viewSlots.size(), fullSize, task, meshJobParamIndex);
     }
 
     /**
@@ -323,7 +440,12 @@ public class MeshToolWrapper implements McpToolHandler {
             Parameter param = params[i];
             Class<?> type = param.getType();
 
-            if (MeshJob.class.isAssignableFrom(type)) {
+            if (viewParamPositions.contains(i)) {
+                // RFC #1280 phase 2: @McpMeshService view facade param — injected
+                // (a facade whose methods are tool dependency edges), exempt from
+                // @Param and the MCP input schema. Its edges are wired separately.
+                continue;
+            } else if (MeshJob.class.isAssignableFrom(type)) {
                 // Phase B MeshJob substrate: this slot is filled separately
                 // by the dispatch wrapper (JobController on inbound job
                 // dispatch, MeshJobSubmitter on consumer side). No @Param
@@ -366,6 +488,24 @@ public class MeshToolWrapper implements McpToolHandler {
                 // LLM agent - will be injected
                 llmAgentPositions.add(i);
             } else {
+                // RFC #1280 phase 2: near-miss view param — annotated with
+                // @McpMeshService but NOT a directly-annotated interface (a
+                // class, or a sub-interface that only inherits the annotation).
+                // isServiceView requires interface + DIRECT annotation, so these
+                // fall through here; give a dedicated message rather than the
+                // generic "must have @Param" one. Sub-interface support is
+                // deliberately deferred — the annotation must be direct.
+                if (AnnotationUtils.findAnnotation(type, McpMeshService.class) != null) {
+                    throw new IllegalStateException(
+                        "@McpMeshService view used as a tool parameter must be a directly-annotated "
+                            + "interface: parameter at position " + i + " (type " + type.getName()
+                            + ") in method " + method.getName() + " of "
+                            + method.getDeclaringClass().getName() + " is "
+                            + (type.isInterface()
+                                ? "a sub-interface that only inherits @McpMeshService (annotate it directly)"
+                                : "a class annotated @McpMeshService (service views must be interfaces)")
+                            + ".");
+                }
                 // Regular MCP parameter - must have @Param
                 Param paramAnn = param.getAnnotation(Param.class);
                 if (paramAnn != null) {
@@ -380,7 +520,8 @@ public class MeshToolWrapper implements McpToolHandler {
                     // No @Param annotation on non-injectable parameter
                     throw new IllegalStateException(
                         "Parameter at position " + i + " in method " + method.getName() +
-                        " must have @Param annotation. Injectable types (McpMeshTool, MeshLlmAgent, MeshJob) are exempt."
+                        " must have @Param annotation. Injectable types (McpMeshTool, MeshLlmAgent, "
+                        + "MeshJob, A2AClient, @McpMeshService view interfaces) are exempt."
                     );
                 }
             }
@@ -432,6 +573,21 @@ public class MeshToolWrapper implements McpToolHandler {
         if (depIndex < 0 || depIndex >= depIndexToSlot.length) {
             return;
         }
+        // RFC #1280 phase 2: a view-edge index lands in its view slot's per-method
+        // proxy array (NOT a McpMeshTool param slot), then counts down the same
+        // funcId:dep_N settle latch.
+        int viewSlotOrd = depIndexToViewSlot[depIndex];
+        if (viewSlotOrd >= 0) {
+            int local = depIndexToViewLocal[depIndex];
+            viewSlots.get(viewSlotOrd).proxies.set(local, proxy);
+            log.debug("Updated view edge {} at declared index {} (view slot {}, method {}) for {}",
+                proxy != null ? proxy.getCapability() : "null", depIndex, viewSlotOrd, local, funcId);
+            if (proxy != null && proxy.isAvailable()) {
+                MeshSettleState.getInstance().markResolved(
+                    MeshToolWrapperRegistry.buildDependencyKey(funcId, depIndex));
+            }
+            return;
+        }
         int slot = depIndexToSlot[depIndex];
         if (slot < 0) {
             log.debug("Ignoring dependency update at declared index {} for {} — "
@@ -462,8 +618,11 @@ public class MeshToolWrapper implements McpToolHandler {
         if (required == null) {
             return;
         }
-        boolean[] flags = new boolean[dependencyNames.size()];
-        for (int i = 0; i < flags.length && i < required.size(); i++) {
+        // Overwrite ONLY the explicit @Selector prefix; the view-edge suffix was
+        // fixed at construction from each @Selector.required() (RFC #1280 phase 2)
+        // and must be preserved — the caller only knows the explicit flags.
+        boolean[] flags = this.dependencyRequired.clone();
+        for (int i = 0; i < explicitDepCount && i < required.size(); i++) {
             flags[i] = Boolean.TRUE.equals(required.get(i));
         }
         this.dependencyRequired = flags;
@@ -495,15 +654,40 @@ public class MeshToolWrapper implements McpToolHandler {
     @SuppressWarnings("rawtypes")
     String firstUnresolvedRequiredDependency() {
         boolean[] req = this.dependencyRequired;
-        for (int slot = 0; slot < meshToolPositions.size(); slot++) {
-            int depIdx = slotToDepIndex[slot];
-            if (depIdx < 0 || depIdx >= req.length || !req[depIdx]) {
+        // Iterate declared indices so BOTH McpMeshTool-slot deps AND view-edge
+        // deps (RFC #1280 phase 2) participate in the required guard. MeshJob /
+        // excess indices have no McpMeshTool backing and are not gated here
+        // (unchanged — the submitter is wired locally).
+        for (int depIdx = 0; depIdx < dependencyNames.size(); depIdx++) {
+            if (depIdx >= req.length || !req[depIdx]) {
                 continue;
             }
-            McpMeshTool proxy = injectedDeps.get(slot);
+            boolean backed = depIndexToViewSlot[depIdx] >= 0 || depIndexToSlot[depIdx] >= 0;
+            if (!backed) {
+                continue;
+            }
+            McpMeshTool proxy = currentProxyForDeclaredIndex(depIdx);
             if (proxy == null || !proxy.isAvailable()) {
                 return dependencyNames.get(depIdx);
             }
+        }
+        return null;
+    }
+
+    /**
+     * The current proxy backing a declared dependency index: a view edge's
+     * per-method slot proxy, or a McpMeshTool param slot proxy, or {@code null}
+     * for a MeshJob/excess index (no McpMeshTool backing).
+     */
+    @SuppressWarnings("rawtypes")
+    private McpMeshTool currentProxyForDeclaredIndex(int depIdx) {
+        int viewSlotOrd = depIndexToViewSlot[depIdx];
+        if (viewSlotOrd >= 0) {
+            return viewSlots.get(viewSlotOrd).proxies.get(depIndexToViewLocal[depIdx]);
+        }
+        int slot = depIndexToSlot[depIdx];
+        if (slot >= 0) {
+            return injectedDeps.get(slot);
         }
         return null;
     }
@@ -1002,6 +1186,24 @@ public class MeshToolWrapper implements McpToolHandler {
             }
 
             fullArgs[paramPos] = proxy;
+        }
+
+        // RFC #1280 phase 2: fill @McpMeshService view-facade params. Run the
+        // same per-slot settle-grace wait on each view edge (funcId:dep_N) so the
+        // required-dependency guard (evaluated AFTER buildFullArgs) sees resolved
+        // required view edges rather than prematurely refusing while settling.
+        // The facade itself is stable — it reads the live per-method proxy slots.
+        for (ViewSlot viewSlot : viewSlots) {
+            for (int local = 0; local < viewSlot.bindings.size(); local++) {
+                int declaredIndex = viewSlot.declaredStart + local;
+                McpMeshTool proxy = viewSlot.proxies.get(local);
+                if ((proxy == null || !proxy.isAvailable()) && !settleState.isSettled()) {
+                    settleState.awaitDependency(
+                        MeshToolWrapperRegistry.buildDependencyKey(funcId, declaredIndex),
+                        dependencyNames.get(declaredIndex));
+                }
+            }
+            fullArgs[viewSlot.position] = viewSlot.facade;
         }
 
         // Fill MeshLlmAgent dependencies and set context for template rendering
@@ -1779,11 +1981,18 @@ public class MeshToolWrapper implements McpToolHandler {
      * @return The return type, or null if not specified or index out of bounds
      */
     public Type getDependencyReturnType(int depIndex) {
-        if (depIndex >= 0 && depIndex < depIndexToSlot.length) {
-            int slot = depIndexToSlot[depIndex];
-            if (slot >= 0 && slot < meshToolReturnTypes.size()) {
-                return meshToolReturnTypes.get(slot);
-            }
+        if (depIndex < 0 || depIndex >= depIndexToSlot.length) {
+            return null;
+        }
+        // RFC #1280 phase 2: a view edge deserializes to its method's resolved
+        // return type (so the per-slot typed proxy gives typed responses).
+        McpMeshServiceRegistrar.ServiceMethodBinding viewBinding = depIndexToViewBinding[depIndex];
+        if (viewBinding != null) {
+            return viewBinding.resolvedProxyType();
+        }
+        int slot = depIndexToSlot[depIndex];
+        if (slot >= 0 && slot < meshToolReturnTypes.size()) {
+            return meshToolReturnTypes.get(slot);
         }
         return null;
     }
@@ -1799,7 +2008,9 @@ public class MeshToolWrapper implements McpToolHandler {
     List<Integer> getSettleDepIndices() {
         List<Integer> indices = new ArrayList<>();
         for (int depIndex = 0; depIndex < depIndexToSlot.length; depIndex++) {
-            if (depIndexToSlot[depIndex] >= 0) {
+            // McpMeshTool slots AND view edges (RFC #1280 phase 2) both receive
+            // a funcId:dep_N resolution event, so both get settle keys.
+            if (depIndexToSlot[depIndex] >= 0 || depIndexToViewSlot[depIndex] >= 0) {
                 indices.add(depIndex);
             }
         }
@@ -1823,6 +2034,31 @@ public class MeshToolWrapper implements McpToolHandler {
     // =========================================================================
     // Inner Classes
     // =========================================================================
+
+    /**
+     * RFC #1280 phase 2: a {@code @McpMeshService} view-facade parameter. Holds
+     * the facade to inject and the per-method proxy slot array that registry
+     * resolution events populate (a null slot = an unresolved edge; the facade
+     * substitutes an unavailable sentinel).
+     */
+    private static final class ViewSlot {
+        final int position;
+        final Object facade;
+        @SuppressWarnings("rawtypes")
+        final AtomicReferenceArray<McpMeshTool> proxies;
+        final List<McpMeshServiceRegistrar.ServiceMethodBinding> bindings;
+        final int declaredStart;
+
+        ViewSlot(int position, Object facade,
+                 @SuppressWarnings("rawtypes") AtomicReferenceArray<McpMeshTool> proxies,
+                 List<McpMeshServiceRegistrar.ServiceMethodBinding> bindings, int declaredStart) {
+            this.position = position;
+            this.facade = facade;
+            this.proxies = proxies;
+            this.bindings = bindings;
+            this.declaredStart = declaredStart;
+        }
+    }
 
     /**
      * Metadata for an MCP parameter.

@@ -234,7 +234,24 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
             new Class<?>[] {iface},
             new McpMeshServiceInvocationHandler(
                 iface, metadata.minAvailable(), metadata.bindings(),
-                beanFactory, injectorRef, objectMapper));
+                new InjectorViewProxyBinding(beanFactory, injectorRef), objectMapper));
+    }
+
+    /**
+     * Reusable interface→bindings analysis (RFC #1280 phase 2). Both the
+     * class-level bean path ({@link #postProcessBeanDefinitionRegistry}) and the
+     * {@code @MeshTool} view-parameter path ({@link McpMeshServiceToolSupport})
+     * call this so the bridge/synthetic filtering, {@link ResolvableType}
+     * resolution, diamond dedupe, and per-method param/return validation are
+     * defined exactly once. Uses a fresh conflicting-type map (a single view is
+     * self-contained); the scanning path uses the shared-map overload to detect
+     * conflicts across DIFFERENT discovered views.
+     *
+     * @param iface an interface annotated {@link McpMeshService}
+     */
+    static ServiceViewMetadata analyze(Class<?> iface) {
+        McpMeshService annotation = AnnotationUtils.findAnnotation(iface, McpMeshService.class);
+        return buildMetadata(iface, annotation, new LinkedHashMap<>());
     }
 
     /**
@@ -243,7 +260,7 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
      * {@link Class#getMethods()} order is NOT guaranteed by the JVM, and the
      * downstream wire-dependency expansion must be reproducible.
      */
-    private ServiceViewMetadata buildMetadata(Class<?> iface, McpMeshService annotation,
+    static ServiceViewMetadata buildMetadata(Class<?> iface, McpMeshService annotation,
                                               Map<String, CapabilityBinding> capabilityTypes) {
         List<Method> methods = collectViewMethods(iface);
 
@@ -333,7 +350,7 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
      * and parameter types are resolved against the concrete view interface by
      * {@link #analyzeReturn}/{@link #analyzeParams} via {@link ResolvableType}.
      */
-    private List<Method> collectViewMethods(Class<?> iface) {
+    private static List<Method> collectViewMethods(Class<?> iface) {
         Map<String, Method> bySignature = new LinkedHashMap<>();
         for (Method method : iface.getMethods()) {
             if (method.isBridge() || method.isSynthetic()) {
@@ -375,11 +392,11 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
             }
         }
         List<Method> methods = new ArrayList<>(bySignature.values());
-        methods.sort(Comparator.comparing(Method::getName).thenComparing(this::signatureKey));
+        methods.sort(Comparator.comparing(Method::getName).thenComparing(McpMeshServiceRegistrar::signatureKey));
         return methods;
     }
 
-    private String signatureKey(Method method) {
+    private static String signatureKey(Method method) {
         StringBuilder sb = new StringBuilder(method.getName()).append('(');
         Class<?>[] params = method.getParameterTypes();
         for (int i = 0; i < params.length; i++) {
@@ -406,7 +423,7 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
      * {@code interface View extends Base<Item>} binds {@code Item} rather than a
      * {@code TypeVariable} that silently deserializes to a {@code Map}.
      */
-    private ReturnBinding analyzeReturn(Class<?> iface, Method method) {
+    private static ReturnBinding analyzeReturn(Class<?> iface, Method method) {
         ResolvableType returnType = ResolvableType.forMethodReturnType(method, iface);
         Class<?> raw = returnType.resolve(Object.class);
 
@@ -451,7 +468,7 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
      * (the type must be Jackson-object-convertible — MED-1); otherwise EVERY
      * param must carry {@code @Param("name")} — a mixed signature is a boot-fail.
      */
-    private ParamBinding analyzeParams(Class<?> iface, Method method) {
+    private static ParamBinding analyzeParams(Class<?> iface, Method method) {
         Parameter[] params = method.getParameters();
         if (params.length == 0) {
             return new ParamBinding(ParamMode.NONE, new String[0]);

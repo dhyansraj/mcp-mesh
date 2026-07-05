@@ -973,6 +973,42 @@ class McpMeshServiceIntegrationTest {
     static class EmptyConfig {
     }
 
+    // RFC #1280 phase 2: a view used as BOTH a phase-1 bean and a @MeshTool param.
+    public static class CoexistTool {
+        @MeshTool(capability = "coexist_tool")
+        public String run(@Param("x") String x, io.mcpmesh.spring.svtool.ToolViews.CoexistView view) {
+            return "ok";
+        }
+    }
+
+    @Configuration
+    @MeshAgent(name = "coexist-agent")
+    static class CoexistConfig {
+        @Bean public CoexistTool coexistTool() { return new CoexistTool(); }
+    }
+
+    @Test
+    @DisplayName("Phase 2: bean-path and tool-param usage of the same view coexist independently")
+    void beanAndToolParamCoexist() {
+        runnerFor("io.mcpmesh.spring.svtool", CoexistConfig.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            // Phase-1 bean path: the facade bean is registered + injectable.
+            assertThat(context.getBean(io.mcpmesh.spring.svtool.ToolViews.CoexistView.class))
+                .as("phase-1 facade bean must still exist").isNotNull();
+            // Phase-2 tool-param path: the tool's DependencySpec list carries the
+            // view edges as ordinary tool deps.
+            AgentSpec spec = context.getBean(MeshRuntime.class).getAgentSpec();
+            List<String> toolDeps = spec.getTools().stream()
+                .filter(t -> "coexist_tool".equals(t.getCapability()))
+                .flatMap(t -> t.getDependencies().stream())
+                .map(AgentSpec.DependencySpec::getCapability)
+                .toList();
+            assertThat(toolDeps)
+                .as("tool-param view edges must be the tool's own dependencies")
+                .containsExactly("coexist.one", "coexist.two");
+        });
+    }
+
     /**
      * Minimal Logback appender recording level + message for a target logger.
      */
