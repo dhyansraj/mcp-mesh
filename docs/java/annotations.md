@@ -20,6 +20,7 @@ MCP Mesh provides annotations that transform regular Spring Boot methods into me
 | `@MeshTool`        | Register capability with DI               |
 | `@Param`           | Document tool parameters                  |
 | `@Selector`        | Capability/tag selection for dependencies |
+| `@McpMeshService`  | Typed service-view interface over several capabilities |
 | `@MeshLlm`         | Enable LLM-powered tools                  |
 | `@MeshLlmProvider` | Create zero-code LLM provider             |
 | `@MeshRoute`       | REST endpoint with mesh DI                |
@@ -127,6 +128,27 @@ Specifies capability and tag selection for dependencies, LLM providers, and filt
 | `version`    | No       | Semantic version constraint    |
 
 \*Required for dependencies; optional for LLM tool filters.
+
+`@Selector` is also used at the **method level** inside an `@McpMeshService` interface, where each abstract method carries one `@Selector` to bind its capability (see below).
+
+## @McpMeshService
+
+Marks an interface as a consumer-owned **service view**: one typed facade that aggregates several capability dependencies. Each abstract method binds one capability via a method-level `@Selector`, and each method delegates to its own resolved proxy — so different methods can resolve to different provider agents. Spring auto-discovers the interface and injects a facade bean you `@Autowired`.
+
+```java
+@McpMeshService
+public interface MediaService {
+    @Selector(capability = "media_caption", required = true) CaptionResult    caption(CaptionRequest req);
+    @Selector(capability = "media_thumbnail")                ThumbnailResult  thumbnail(ThumbnailRequest req);
+    @Selector(capability = "media_transcribe")               TranscriptResult transcribe(TranscribeRequest req);
+}
+```
+
+| Attribute      | Required | Description                                                                 |
+| -------------- | -------- | -------------------------------------------------------------------------- |
+| `minAvailable` | No       | Availability floor; below it every facade call throws `MeshServiceUnavailableException` (default `0` = no floor) |
+
+Each method expands into an ordinary dependency edge, so a view over N capabilities shows as N dependencies in `meshctl list`. For the full semantics — param-mapping rules, return types, `required`/optional behavior, and the availability floor — see the [Dependency Injection](dependency-injection.md#service-views-with-mcpmeshservice) guide.
 
 ## @MeshLlm
 

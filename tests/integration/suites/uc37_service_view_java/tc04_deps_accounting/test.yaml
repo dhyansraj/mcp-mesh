@@ -1,0 +1,98 @@
+# tc04_deps_accounting — registration-time dependency expansion (RFC #1280):
+# a 3-method @McpMeshService view registers as exactly THREE ordinary
+# dependency edges under the synthetic __mesh_service_deps tool, visible in
+# the registry's dependency accounting.
+#
+# Topology: ONLY the Java consumer — no providers on purpose. Dependency
+# expansion is a registration-time contract, and registering with all edges
+# unresolved also proves a view (even with a required edge) never blocks
+# agent startup/registration (soft-fail philosophy: required gates
+# availability, not boot).
+#
+# Design guarantees under test:
+#   1. total_dependencies == 3 for the consumer: ReportService's three
+#      methods expand 1:1 into DependencySpecs, and FlooredService's two
+#      bindings (same capabilities, same resolved type) DEDUPE onto them —
+#      5 method bindings across 2 views, 3 wire edges.
+#   2. The synthetic __mesh_service_deps capability is registered alongside
+#      the consumer's real tool capabilities (view_report, view_critical,
+#      view_floored).
+#   3. The consumer registers and reports healthy with ZERO providers up —
+#      including the required view-cap-charlie edge.
+#
+# Timing: registration wait is liveness-only (issue #1193); no view calls
+# are made, so no settle interaction. The /agents snapshot is polled only
+# for the consumer's appearance, never for dependency resolution.
+
+name: "Service views: 3-method view expands to 3 registry dependencies (Java)"
+description: "Consumer-only start: java-view-consumer registers healthy with total_dependencies=3 (cross-view dedupe) and the synthetic __mesh_service_deps capability"
+tags:
+  - integration
+  - java
+  - registry
+  - service-view
+  - rfc-1280
+  - slow
+timeout: 900
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: cp -rL /uc-artifacts/java-view-consumer /workspace/
+
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-view-consumer
+    timeout: 600
+
+  - name: "Start java-view-consumer (port 9201)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start /workspace/java-view-consumer --env MCP_MESH_HTTP_PORT=9201 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  # Liveness only (issue #1193): 240s deadline covers the cold JVM start.
+  - routine: global.wait_for_agents_registered
+    params:
+      agents: "java-view-consumer"
+
+  # Pure-JSON snapshot for the jq assertions.
+  - name: "Capture /agents snapshot"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:8000/agents
+    capture: agents_snapshot
+
+  # Human-readable corroboration (also lands in failure logs).
+  - name: "Capture meshctl list"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list --all 2>&1 || meshctl list 2>&1
+    capture: agent_list
+
+assertions:
+  # IDIOM: equality lives INSIDE the jq filter so the interpolation yields a
+  # bare true/false; no '}' in interpolation bodies.
+
+  # Guarantee 1: the expanded-and-deduped dependency count
+  - expr: "${jq:captured.agents_snapshot:(.agents[] | select(.name == \"java-view-consumer\") | .total_dependencies == 3)} == 'true'"
+    message: "the consumer must register exactly 3 dependencies: ReportService's 3 methods expand 1:1 and FlooredService's 2 shared-capability bindings dedupe onto them"
+
+  # Guarantee 2: the synthetic dependency-carrier capability is registered
+  - expr: "${jq:captured.agents_snapshot:([.agents[] | select(.name == \"java-view-consumer\") | .capabilities[] | select(.name == \"__mesh_service_deps\")] | length == 1)} == 'true'"
+    message: "the synthetic __mesh_service_deps capability must be registered exactly once"
+
+  # ...alongside the real tool capabilities
+  - expr: "${jq:captured.agents_snapshot:([.agents[] | select(.name == \"java-view-consumer\") | .capabilities[] | select(.name == \"view_report\" or .name == \"view_critical\" or .name == \"view_floored\")] | length == 3)} == 'true'"
+    message: "the consumer's three real @MeshTool capabilities must register alongside the view expansion"
+
+  # Guarantee 3: providerless registration — a view never blocks boot
+  - expr: "${jq:captured.agents_snapshot:(.agents[] | select(.name == \"java-view-consumer\") | .status == \"healthy\")} == 'true'"
+    message: "the consumer must register HEALTHY with zero providers up — view edges (even required=true) gate availability, never startup"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

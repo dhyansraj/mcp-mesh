@@ -162,6 +162,7 @@ public class HolidayChecker {
 | `@MeshTool` method needing remote helpers | `@MeshTool(dependencies = @Selector(...))` + parameter injection |
 | `@RestController` handler method | `@MeshRoute(dependencies = {...})` + `@MeshInject` parameter |
 | `@Service` / `@Component` / `Filter` / `@Scheduled` / any other Spring bean | **`@MeshDependsOn` + `@Qualifier`** |
+| Several capabilities behind one typed facade | **`@McpMeshService` interface + `@Autowired`** |
 
 `@MeshDependsOn` and `@MeshInject`/`@MeshRoute` are complementary — same heartbeat-driven proxy lifecycle, same auto-rewiring on topology change, same `isAvailable()` semantics. Pick the surface that matches where you need the dependency. If the same capability shows up via multiple sources the framework deduplicates: a single proxy and a single registry entry per capability name.
 
@@ -199,6 +200,77 @@ If you omit `expectedType` and the `@Qualifier`-injected field is declared as `M
 | `@Bean public Foo foo() { return new ConcreteFoo(); }` where `@MeshDependsOn` is ONLY on `ConcreteFoo` | ✗ — `findAnnotation` walks supertypes of the declared return type, not subtypes of it |
 
 Only the last shape is a real gap. If your factory method declares a supertype return, either narrow the declared return type to the concrete class, or place `@MeshDependsOn` on the supertype itself (or on the `@Configuration` class).
+
+## Service Views with `@McpMeshService`
+
+A **service view** aggregates several capability dependencies behind one typed interface. Annotate an interface with `@McpMeshService`; each abstract method binds one capability via a method-level `@Selector`. Spring auto-discovers the interface and injects a facade bean (named by the decapitalized interface name) that you `@Autowired` and call directly.
+
+The differentiator: **each method delegates to its own per-capability resolved proxy**, so different methods can resolve to different provider agents and rebind independently as the topology changes. The group is a typed view; the capability remains the atom. Nothing group-shaped crosses the wire — every method expands into an ordinary dependency edge with `required`/`tags`/`version`/settle semantics identical to a `@MeshDependsOn` dependency. A view over N capabilities therefore shows as **N separate dependencies** in `meshctl list`, not one.
+
+```java
+@McpMeshService
+public interface MediaService {
+    @Selector(capability = "media_caption", required = true) CaptionResult    caption(CaptionRequest req);
+    @Selector(capability = "media_thumbnail")                ThumbnailResult  thumbnail(ThumbnailRequest req);
+    @Selector(capability = "media_transcribe")               TranscriptResult transcribe(TranscribeRequest req);
+
+    record CaptionRequest(String assetId, String text) {}
+    record ThumbnailRequest(String assetId, int width) {}
+    record CaptionResult(String assetId, String caption, String provider) {}
+    record ThumbnailResult(String assetId, String uri, String size, String provider) {}
+    record TranscriptResult(String assetId, String transcript, int wordCount, String provider) {}
+}
+```
+
+The consumer autowires the facade and calls its methods directly. Because each method is its own edge, the results below may come from three different provider agents through one interface:
+
+```java
+@MeshAgent(name = "media-gateway", version = "1.0.0", port = 8113)
+@SpringBootApplication
+public class MediaGatewayApplication {
+    private final MediaService media;
+
+    public MediaGatewayApplication(MediaService media) {
+        this.media = media;
+    }
+
+    @MeshTool(capability = "process_media",
+              description = "Run an asset through a media service view")
+    public Map<String, Object> processMedia(
+            @Param(value = "assetId", description = "Asset id") String assetId,
+            @Param(value = "text", description = "Source text") String text) {
+
+        Map<String, Object> out = new LinkedHashMap<>();
+
+        // REQUIRED edge — expected to resolve; a failure surfaces to the caller.
+        out.put("caption", media.caption(new MediaService.CaptionRequest(assetId, text)));
+
+        // OPTIONAL edge — degrade gracefully when its provider is offline.
+        try {
+            out.put("thumbnail", media.thumbnail(new MediaService.ThumbnailRequest(assetId, 320)));
+        } catch (MeshToolUnavailableException e) {
+            out.put("thumbnail", "(no thumbnail — provider offline)");
+        }
+        return out;
+    }
+}
+```
+
+### Method rules
+
+- Every abstract method must carry `@Selector` with a non-empty `capability`. `default` / `static` interface methods are allowed and are not expanded as edges.
+- Parameters follow the `@MeshTool` convention: **0 params** → no-arg call; **exactly 1 unannotated POJO/record param** → that object becomes the params (scalars still need `@Param`); **2+ params** → each needs `@Param("name")`.
+- Return `T` (synchronous), `CompletableFuture<T>` (async), or `java.util.concurrent.Flow.Publisher<String>` (streaming).
+
+### Required, optional, and the availability floor
+
+`required = true` on a view method behaves like a class-level `@MeshDependsOn` required dependency (see [Required Dependencies](#required-dependencies) below): it participates in cross-source required-wins dedupe, flips the registry-side availability of that capability's carrier when unresolved (visible in `meshctl list` and the registry API), and promotes any matching route-perimeter 503 guard. An optional method whose provider is down throws `MeshToolUnavailableException` on **that call only**; catch it for graceful degradation while the rest of the view keeps working.
+
+> **One difference from a tool-declared slot.** A view is class-level, so the framework cannot know which `@MeshTool` methods call it and does **not** add a pre-invoke structured `dependency_unavailable` refusal to those tools — a call to a required-but-unresolved view method simply throws `MeshToolUnavailableException`, surfacing as an ordinary tool error. If a specific `@MeshTool` needs the pre-invoke structured refusal for a capability, declare it as a `@MeshTool` dependency slot (`dependencies = @Selector(...)`) instead; tool-declared slots get the guard, views do not.
+
+The optional `@McpMeshService(minAvailable = N)` adds a consumer-local availability floor: when fewer than `N` of the view's methods currently resolve, **every** facade call throws `MeshServiceUnavailableException` (settle-grace-aware). The default `0` means no floor — each method soft- or hard-fails per its own `required` flag.
+
+A service view is **consumer-local**, not a shared contract: two consumers may aggregate the same capabilities differently, and there is no group versioning or interface-level availability summary. Each method resolves independently.
 
 ## `McpMeshTool<T>` API Reference
 

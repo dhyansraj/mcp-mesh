@@ -1,5 +1,6 @@
 package io.mcpmesh;
 
+import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
@@ -9,6 +10,11 @@ import java.lang.annotation.Target;
  *
  * <p>Used in {@link MeshTool#dependencies()}, {@link MeshLlm#providerSelector()},
  * and {@link MeshLlm#filter()} to specify which capabilities to resolve.
+ *
+ * <p>Also usable directly on an abstract method of a {@link McpMeshService}
+ * interface (service views): the method binds the one capability named here,
+ * and calling it delegates to that capability's resolved proxy. The nested
+ * member usage inside the annotations above remains valid.
  *
  * <h2>Tag Syntax</h2>
  * <pre>
@@ -63,7 +69,7 @@ import java.lang.annotation.Target;
  * )
  * }</pre>
  */
-@Target({})
+@Target({ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
 public @interface Selector {
 

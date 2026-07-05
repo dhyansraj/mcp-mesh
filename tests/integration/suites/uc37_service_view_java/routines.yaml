@@ -1,0 +1,21 @@
+# UC-level routines for uc37_service_view_java (RFC #1280 @McpMeshService).
+#
+# Availability transitions in this UC ride the registry's DEFAULT health
+# debounce (~3 missed heartbeats, ~15-25s) plus one consumer heartbeat —
+# no knob-cranked registry on purpose (mirrors uc34): the derived
+# availability and rebinding semantics must hold under stock timing, and
+# every TC polls with a deadline instead of sleeping fixed. The registry
+# is auto-started by the first `meshctl start`.
+
+routines:
+  # Stop everything started by this test (agents + registry + the consumer JVM).
+  stop_all:
+    description: "Stop all mesh processes started by this test"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: |
+          meshctl stop 2>/dev/null || true
+          pkill -f "spring-boot:run" 2>/dev/null || true
+          pkill -f "java.*view-consumer" 2>/dev/null || true
+        ignore_errors: true

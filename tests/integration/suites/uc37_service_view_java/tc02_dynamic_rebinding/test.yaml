@@ -1,0 +1,204 @@
+# tc02_dynamic_rebinding — per-method dynamic rebinding (RFC #1280): killing
+# ONE provider degrades ONLY the corresponding view method; restarting it
+# heals that method with NO consumer restart.
+#
+# Topology: same as tc01 (three Python providers + the Java view consumer).
+# provider-bravo (an OPTIONAL edge) is the kill/restart target.
+#
+# Design guarantees under test:
+#   1. Kill provider-bravo -> bravo() degrades: view_report reports
+#      bravo_error=MeshToolUnavailableException (the per-capability proxy's
+#      soft-fail contract for an optional edge, surfaced by the consumer's
+#      own catch — the tool call itself still succeeds).
+#   2. Method independence: IN THE SAME degraded report, alpha() and
+#      charlie() still answer from their own agents. The view never turns a
+#      single dead edge into whole-view failure (no floor declared).
+#   3. Restart provider-bravo -> bravo() heals organically (facade delegates
+#      to the shared proxy the injector mutates in place) — the consumer JVM
+#      is NEVER restarted in this test.
+#
+# Timing: the degrade transition rides the default health debounce (~3
+# missed heartbeats, ~15-25s) plus one consumer heartbeat — polled with
+# deadlines, never fixed sleeps. No dependency-resolution waits (issue #1193).
+
+name: "Service views: kill/restart one provider rebinds only its method (Java)"
+description: "Kill provider-bravo: bravo() degrades to MeshToolUnavailableException while alpha()/charlie() keep answering; restart: bravo() heals with no consumer restart"
+tags:
+  - integration
+  - java
+  - python
+  - registry
+  - service-view
+  - rfc-1280
+  - availability
+  - slow
+timeout: 900
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/provider-alpha /workspace/
+      cp -rL /uc-artifacts/provider-bravo /workspace/
+      cp -rL /uc-artifacts/provider-charlie /workspace/
+      cp -rL /uc-artifacts/java-view-consumer /workspace/
+
+  - name: "Install provider-alpha deps"
+    handler: pip-install
+    path: /workspace/provider-alpha
+
+  - name: "Install provider-bravo deps"
+    handler: pip-install
+    path: /workspace/provider-bravo
+
+  - name: "Install provider-charlie deps"
+    handler: pip-install
+    path: /workspace/provider-charlie
+
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-view-consumer
+    timeout: 600
+
+  - name: "Start provider-alpha (port 9101)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start provider-alpha/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  - name: "Start provider-bravo (port 9102)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start provider-bravo/main.py --env MCP_MESH_HTTP_PORT=9102 -d
+
+  - name: "Start provider-charlie (port 9103)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start provider-charlie/main.py --env MCP_MESH_HTTP_PORT=9103 -d
+
+  - name: "Start java-view-consumer (port 9201)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start /workspace/java-view-consumer --env MCP_MESH_HTTP_PORT=9201 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  # Liveness only (issue #1193): 240s deadline covers the cold JVM start.
+  - routine: global.wait_for_agents_registered
+    params:
+      agents: "provider-alpha provider-bravo provider-charlie java-view-consumer"
+
+  # Baseline: all three methods bound to their own agents (settle gate).
+  - name: "Wait for full per-method report (baseline)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESP=""
+      for i in $(seq 1 90); do
+        RESP=$(meshctl call view_report '{}' --raw 2>&1 || true)
+        A=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .alpha_agent == "provider-alpha"' 2>/dev/null || echo "")
+        B=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .bravo_agent == "provider-bravo"' 2>/dev/null || echo "")
+        C=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .charlie_agent == "provider-charlie"' 2>/dev/null || echo "")
+        if [ "$A" = "true" ] && [ "$B" = "true" ] && [ "$C" = "true" ]; then
+          echo "BASELINE_BOUND=1 after ~$((i*2))s"
+          echo "$RESP"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: view_report never reported all three provider bindings within 180s"
+      echo "last response: $RESP"
+      meshctl logs java-view-consumer 2>/dev/null | tail -40 || true
+      exit 1
+    capture: report_baseline
+    timeout: 200
+
+  - name: "Kill provider-bravo"
+    handler: shell
+    workdir: /workspace
+    command: meshctl stop provider-bravo
+    capture: kill_bravo
+
+  # Degrade: poll until bravo reports an error WHILE alpha+charlie still
+  # answer in the SAME report — the independence check must be atomic to one
+  # response, or a transient could fake it. Parsed via
+  # `.content[0].text | fromjson` (Java envelope: escaped JSON string in
+  # content[0].text, no structuredContent), equality inside the jq filter.
+  - name: "Wait for bravo to degrade with alpha+charlie intact"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESP=""
+      for i in $(seq 1 60); do
+        RESP=$(meshctl call view_report '{}' --raw 2>&1 || true)
+        DEGRADED=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .bravo_error == "MeshToolUnavailableException"' 2>/dev/null || echo "")
+        if [ "$DEGRADED" = "true" ]; then
+          echo "BRAVO_DEGRADED=1 after ~$((i*2))s"
+          [ "$(echo "$RESP" | jq -r '.content[0].text | fromjson | .alpha_agent == "provider-alpha"' 2>/dev/null)" = "true" ] && echo "ALPHA_STILL_OK=1"
+          [ "$(echo "$RESP" | jq -r '.content[0].text | fromjson | .charlie_agent == "provider-charlie"' 2>/dev/null)" = "true" ] && echo "CHARLIE_STILL_OK=1"
+          echo "$RESP"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: bravo_error never appeared within 120s of killing provider-bravo"
+      echo "last response: $RESP"
+      meshctl logs java-view-consumer 2>/dev/null | tail -40 || true
+      exit 1
+    capture: report_degraded
+    timeout: 140
+
+  - name: "Restart provider-bravo"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start provider-bravo/main.py --env MCP_MESH_HTTP_PORT=9102 -d
+
+  # Recovery: the facade's cached proxy is mutated in place by the injector —
+  # bravo() must heal with NO consumer restart.
+  - name: "Wait for bravo to rebind"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESP=""
+      for i in $(seq 1 75); do
+        RESP=$(meshctl call view_report '{}' --raw 2>&1 || true)
+        REBOUND=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .bravo_agent == "provider-bravo"' 2>/dev/null || echo "")
+        if [ "$REBOUND" = "true" ]; then
+          echo "BRAVO_REBOUND=1 after ~$((i*2))s"
+          echo "$RESP"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: bravo_agent never reappeared within 150s of restarting provider-bravo"
+      echo "last response: $RESP"
+      meshctl logs java-view-consumer 2>/dev/null | tail -40 || true
+      exit 1
+    capture: report_recovered
+    timeout: 170
+
+assertions:
+  - expr: "${captured.report_baseline} contains 'BASELINE_BOUND=1'"
+    message: "all three view methods must bind to their own providers before the kill"
+
+  # Guarantee 1: only bravo degrades, with the per-capability soft-fail contract
+  - expr: "${captured.report_degraded} contains 'BRAVO_DEGRADED=1'"
+    message: "bravo() must degrade to MeshToolUnavailableException once provider-bravo dies (optional edge soft-fail)"
+
+  # Guarantee 2: method independence within the SAME degraded report
+  - expr: "${captured.report_degraded} contains 'ALPHA_STILL_OK=1'"
+    message: "alpha() must still answer from provider-alpha in the same report where bravo() is degraded"
+  - expr: "${captured.report_degraded} contains 'CHARLIE_STILL_OK=1'"
+    message: "charlie() must still answer from provider-charlie in the same report where bravo() is degraded"
+
+  # Guarantee 3: organic rebinding, no consumer restart (no restart step exists)
+  - expr: "${captured.report_recovered} contains 'BRAVO_REBOUND=1'"
+    message: "bravo() must heal after provider-bravo restarts, with no consumer restart"
+  - expr: "${captured.report_recovered} not contains 'bravo_error'"
+    message: "the recovered report must carry no bravo_error residue"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace
