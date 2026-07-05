@@ -198,7 +198,7 @@ public interface MediaService {
 
 | Attribute      | Required | Description                                                                 |
 | -------------- | -------- | -------------------------------------------------------------------------- |
-| `minAvailable` | No       | Availability floor; below it every facade call throws `MeshServiceUnavailableException` (default `0` = no floor) |
+| `minAvailable` | No       | Availability floor; below it every facade call fails with `MeshServiceUnavailableException` — synchronous methods throw, `CompletableFuture` methods return a failed future (default `0` = no floor) |
 
 Each method expands into an ordinary dependency edge, so a view over N capabilities shows as N dependencies in `meshctl list`. For the full semantics — param-mapping rules, return types, `required`/optional behavior, and the availability floor — see `meshctl man dependency-injection --java`.
 

@@ -705,6 +705,16 @@ class McpMeshServiceIntegrationTest {
     }
 
     @Test
+    @DisplayName("MED-4: duplicate @Param names boot-fail")
+    void duplicateParamNameBootFail() {
+        runnerFor("io.mcpmesh.spring.svbad.duplicateparam", PlainAgentConfig.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(collectMessages(context.getStartupFailure()))
+                .contains("get").contains("duplicate @Param name").contains("id");
+        });
+    }
+
+    @Test
     @DisplayName("Boot-fail: @Selector with a blank capability")
     void blankCapabilityBootFail() {
         runnerFor("io.mcpmesh.spring.svbad.blankcap", PlainAgentConfig.class).run(context -> {
@@ -770,7 +780,7 @@ class McpMeshServiceIntegrationTest {
 
     @Test
     @DisplayName("MED-2: floored view waits out the settling window and passes when deps resolve mid-window")
-    void floorWaitsThenSatisfiedMidWindow() {
+    void floorWaitsThenSatisfiedMidWindow() throws Exception {
         MeshSettleState.resetForTests(10.0);
         try {
             runnerFor("io.mcpmesh.spring.sv", FloorWaitConfig.class).run(context -> {
@@ -779,28 +789,77 @@ class McpMeshServiceIntegrationTest {
                 Views.FloorService floor = context.getBean(Views.FloorService.class);
                 MeshSettleState state = MeshSettleState.getInstance();
 
-                Thread resolver = new Thread(() -> {
+                // Run the (blocking) floored call on its own thread so we can
+                // deterministically observe it PARKED in the settle wait before
+                // resolving — no wall-clock sleep/threshold.
+                java.util.concurrent.atomic.AtomicReference<Throwable> error =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+                Thread caller = new Thread(() -> {
                     try {
-                        Thread.sleep(150);
-                    } catch (InterruptedException ignored) {
-                        Thread.currentThread().interrupt();
+                        floor.alpha();
+                    } catch (Throwable t) {
+                        error.set(t);
                     }
-                    injector.updateToolDependency("floor.a", "ep", "fn");
-                    injector.updateToolDependency("floor.b", "ep", "fn");
                 });
-                resolver.start();
+                caller.start();
 
-                long start = System.nanoTime();
-                floor.alpha(); // must NOT throw MeshServiceUnavailableException
-                long elapsedMs = (System.nanoTime() - start) / 1_000_000;
-                resolver.join(2000);
-
-                assertThat(elapsedMs)
-                    .as("floored call must wait for the deps to resolve, not fail fast")
-                    .isGreaterThanOrEqualTo(100L);
+                // Deterministic signal: the below-floor call must register a
+                // settle wait before we resolve anything.
+                long deadline = System.currentTimeMillis() + 3000;
+                while (state.getWaitCount() < 1 && System.currentTimeMillis() < deadline) {
+                    Thread.sleep(5);
+                }
                 assertThat(state.getWaitCount())
-                    .as("the below-floor call must trigger the settle wait")
+                    .as("the below-floor call must park in the settle wait")
                     .isGreaterThanOrEqualTo(1);
+                assertThat(caller.isAlive())
+                    .as("the call is still waiting, not failed fast").isTrue();
+
+                // Resolve two methods → floor satisfied → the wait unblocks.
+                injector.updateToolDependency("floor.a", "ep", "fn");
+                injector.updateToolDependency("floor.b", "ep", "fn");
+                caller.join(3000);
+
+                assertThat(caller.isAlive()).as("call must unblock once the floor is met").isFalse();
+                assertThat(error.get())
+                    .as("floor satisfied via the wait — no service-unavailable error")
+                    .isNull();
+            });
+        } finally {
+            MeshSettleState.resetForTests();
+        }
+    }
+
+    @Test
+    @DisplayName("MED-3: async floor check runs off-thread — the caller is not blocked by the settle wait")
+    void asyncFloorCheckDoesNotBlockCaller() throws Exception {
+        MeshSettleState.resetForTests(10.0);
+        try {
+            runnerFor("io.mcpmesh.spring.sv", FloorWaitConfig.class).run(context -> {
+                assertThat(context).hasNotFailed();
+                MeshDependencyInjector injector = context.getBean(MeshDependencyInjector.class);
+                Views.FloorService floor = context.getBean(Views.FloorService.class);
+                MeshSettleState state = MeshSettleState.getInstance();
+
+                // Below floor + armed window: the async method returns a future
+                // IMMEDIATELY (floor wait runs on the common pool), so the caller
+                // thread is never blocked.
+                CompletableFuture<String> future = floor.deltaAsync();
+                assertThat(future.isDone())
+                    .as("async method must return before the off-thread floor wait completes")
+                    .isFalse();
+
+                // The off-thread floor check parks in the settle wait.
+                long deadline = System.currentTimeMillis() + 3000;
+                while (state.getWaitCount() < 1 && System.currentTimeMillis() < deadline) {
+                    Thread.sleep(5);
+                }
+                assertThat(state.getWaitCount()).isGreaterThanOrEqualTo(1);
+
+                // Resolve two methods → floor satisfied → future completes.
+                injector.updateToolDependency("floor.a", "ep", "fn");
+                injector.updateToolDependency("floor.b", "ep", "fn");
+                assertThat(future.get(3, java.util.concurrent.TimeUnit.SECONDS)).isNull();
             });
         } finally {
             MeshSettleState.resetForTests();

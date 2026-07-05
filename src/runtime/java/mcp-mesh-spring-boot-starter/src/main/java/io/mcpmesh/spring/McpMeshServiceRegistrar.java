@@ -468,6 +468,7 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
             return new ParamBinding(ParamMode.SINGLE_POJO, new String[0]);
         }
         String[] names = new String[params.length];
+        Set<String> seenNames = new LinkedHashSet<>();
         for (int i = 0; i < params.length; i++) {
             Param param = params[i].getAnnotation(Param.class);
             if (param == null || param.value().isBlank()) {
@@ -476,6 +477,13 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
                         + "parameter must carry @Param(\"name\") (parameter #%d does not). Use a "
                         + "single POJO parameter for object-style calls, or annotate all params.",
                     iface.getName(), method.getName(), params.length, i));
+            }
+            // Duplicate @Param names would silently overwrite in the params map.
+            if (!seenNames.add(param.value())) {
+                throw new IllegalStateException(String.format(
+                    "@McpMeshService interface %s: method '%s' declares duplicate @Param name "
+                        + "'%s' (parameter #%d) — every parameter name must be unique.",
+                    iface.getName(), method.getName(), param.value(), i));
             }
             names[i] = param.value();
         }

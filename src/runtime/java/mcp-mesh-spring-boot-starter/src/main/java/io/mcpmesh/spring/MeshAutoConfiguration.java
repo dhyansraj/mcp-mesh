@@ -1213,6 +1213,20 @@ public class MeshAutoConfiguration {
             for (McpMeshServiceRegistrar.ServiceMethodBinding binding : view.bindings()) {
                 String capability = binding.capability();
 
+                // #6: self-produced capability takes the soft-fail path FIRST —
+                // the edge is deduped away and can never resolve, so WARN +
+                // markResolved (so the eager-settle latch isn't stranded) and
+                // skip. Ordered ahead of the cross-source conflict check so a
+                // self-produced capability is never turned into a boot-fail.
+                if (producerCapabilities.contains(capability)) {
+                    log.warn("@McpMeshService method {}.{} binds capability '{}' produced by this "
+                            + "agent — the method will never resolve; call the local bean directly.",
+                        view.iface().getName(), binding.method().getName(), capability);
+                    settleState.markResolved(capability);
+                    seenCapabilities.add(capability);
+                    continue;
+                }
+
                 // #5: cross-source resolved-type conflict — fail fast, identical
                 // types are fine. Skip when either side is untyped (Object).
                 Class<?> viewType = binding.resolvedRawType();
@@ -1226,18 +1240,6 @@ public class MeshAutoConfiguration {
                             + "expectedType). Align the types or split into separate capabilities.",
                         capability, viewType.getName(), view.iface().getName(),
                         binding.method().getName(), otherType.getName()));
-                }
-
-                // #6: self-produced capability — the edge is deduped away and can
-                // never resolve. Soft-fail per mesh philosophy: WARN + markResolved
-                // so the eager-settle latch isn't stranded on a dead key.
-                if (producerCapabilities.contains(capability)) {
-                    log.warn("@McpMeshService method {}.{} binds capability '{}' produced by this "
-                            + "agent — the method will never resolve; call the local bean directly.",
-                        view.iface().getName(), binding.method().getName(), capability);
-                    settleState.markResolved(capability);
-                    seenCapabilities.add(capability);
-                    continue;
                 }
 
                 if (!seenCapabilities.add(capability)) {

@@ -222,7 +222,7 @@ public class MediaGatewayApplication {
 !!! note "One difference from a tool-declared slot"
     A view is class-level, so the framework cannot know which `@MeshTool` methods call it and does **not** add a pre-invoke structured `dependency_unavailable` refusal to those tools — a call to a required-but-unresolved view method simply throws `MeshToolUnavailableException`, surfacing as an ordinary tool error. If a specific `@MeshTool` needs the pre-invoke structured refusal for a capability, declare it as a `@MeshTool` dependency slot (`dependencies = @Selector(...)`) instead; tool-declared slots get the guard, views do not.
 
-The optional `@McpMeshService(minAvailable = N)` adds a consumer-local availability floor: when fewer than `N` of the view's methods currently resolve, **every** facade call throws `MeshServiceUnavailableException` (settle-grace-aware). The default `0` means no floor — each method soft- or hard-fails per its own `required` flag.
+The optional `@McpMeshService(minAvailable = N)` adds a consumer-local availability floor: when fewer than `N` of the view's methods currently resolve, **every** facade call fails with `MeshServiceUnavailableException` — synchronous methods throw, `CompletableFuture` methods return a failed future (settle-grace-aware). The default `0` means no floor — each method soft- or hard-fails per its own `required` flag.
 
 A service view is **consumer-local**, not a shared contract: two consumers may aggregate the same capabilities differently, and there is no group versioning or interface-level availability summary. Each method resolves independently.
 

@@ -117,18 +117,26 @@ class McpMeshServiceInvocationHandler implements InvocationHandler {
                 + " on service view " + serviceName);
         }
 
-        // Async floor breach surfaces as a failed future, not a synchronous
-        // throw (the method contract returns CompletableFuture).
-        if (binding.returnMode() == McpMeshServiceRegistrar.ReturnMode.ASYNC) {
-            try {
-                enforceFloor();
-            } catch (MeshServiceUnavailableException e) {
-                return CompletableFuture.failedFuture(e);
-            }
-        } else {
-            enforceFloor();
+        // A floored async method must not block the caller: the floor check can
+        // perform a bounded settle-window wait, so for ASYNC + a floor we run it
+        // OFF the caller thread and compose the delegate call — a floor breach
+        // surfaces as a failed future. Executor = the CompletableFuture common
+        // pool, matching McpMeshToolProxy.callAsync; the caller's trace context
+        // is captured and restored on the pool thread (TraceContext.wrapSupplier).
+        // With no floor (minAvailable == 0) enforceFloor is a no-op — there is
+        // nothing to wait on — so we delegate directly (callAsync is already
+        // async) and avoid an extra thread hop.
+        if (binding.returnMode() == McpMeshServiceRegistrar.ReturnMode.ASYNC && minAvailable > 0) {
+            McpMeshServiceRegistrar.ServiceMethodBinding b = binding;
+            return CompletableFuture
+                .supplyAsync(io.mcpmesh.spring.tracing.TraceContext.wrapSupplier(() -> {
+                    enforceFloor();
+                    return asCompletableFuture(delegate(b, proxyFor(b), args));
+                }))
+                .thenCompose(future -> future);
         }
 
+        enforceFloor();
         McpMeshTool<?> tool = proxyFor(binding);
         return delegate(binding, tool, args);
     }
@@ -168,31 +176,32 @@ class McpMeshServiceInvocationHandler implements InvocationHandler {
         if (minAvailable <= 0) {
             return; // no floor declared
         }
-        int available = countAvailable();
-        if (available < minAvailable) {
-            // Settling-window grace (#1193): wait out the unresolved capabilities
-            // up to the remaining settle budget, matching the injected-proxy
-            // path (McpMeshToolProxy.awaitSettleIfUnavailable). Once settled the
-            // waits are no-ops and the floor fails fast as before.
-            MeshSettleState settle = MeshSettleState.getInstance();
-            if (!settle.isSettled()) {
-                // Track availability incrementally for the early-exit decision
-                // (avoids an O(n) recount per iteration); a single authoritative
-                // recount follows the loop.
-                for (McpMeshServiceRegistrar.ServiceMethodBinding b : bindings.values()) {
-                    if (available >= minAvailable) {
-                        break;
-                    }
-                    McpMeshTool<?> proxy = proxyFor(b);
-                    if (!proxy.isAvailable()) {
-                        settle.awaitDependency(b.capability(), b.capability());
-                        if (proxy.isAvailable()) {
-                            available++;
-                        }
-                    }
-                }
-                available = countAvailable();
+        // Single pass (O(n)): count available bindings, and while the agent is
+        // still settling (#1193) perform a bounded, capability-keyed wait on the
+        // unresolved ones — matching McpMeshToolProxy.awaitSettleIfUnavailable.
+        // The running counter drives an early exit (never wait past the floor)
+        // and also counts side-effect resolutions (a capability resolved by
+        // another consumer's event while we waited on an earlier one). Once
+        // settled the waits are no-ops and the floor fails fast as before.
+        MeshSettleState settle = MeshSettleState.getInstance();
+        boolean settled = settle.isSettled();
+        int available = 0;
+        for (McpMeshServiceRegistrar.ServiceMethodBinding b : bindings.values()) {
+            if (available >= minAvailable) {
+                break;
             }
+            McpMeshTool<?> proxy = proxyFor(b);
+            if (!proxy.isAvailable() && !settled) {
+                settle.awaitDependency(b.capability(), b.capability());
+            }
+            if (proxy.isAvailable()) {
+                available++;
+            }
+        }
+        if (available < minAvailable) {
+            // Authoritative final count (single recount) — catches a capability
+            // that resolved after the pass had already visited it.
+            available = countAvailable();
         }
         boolean below = available < minAvailable;
         Boolean prev = belowFloor.getAndSet(below);
@@ -272,6 +281,12 @@ class McpMeshServiceInvocationHandler implements InvocationHandler {
             params.put(names[i], args[i]);
         }
         return params;
+    }
+
+    /** The ASYNC delegate result is always a {@code CompletableFuture} (callAsync). */
+    @SuppressWarnings("unchecked")
+    private static CompletableFuture<Object> asCompletableFuture(Object result) {
+        return (CompletableFuture<Object>) result;
     }
 
     /** Convert a single POJO argument to a params map for the stream path. */

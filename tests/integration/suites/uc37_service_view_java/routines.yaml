@@ -8,14 +8,16 @@
 # is auto-started by the first `meshctl start`.
 
 routines:
-  # Stop everything started by this test (agents + registry + the consumer JVM).
+  # Stop everything started by this test (agents + registry). `meshctl stop`
+  # alone is sufficient for the mvn spring-boot:run JVM tree: meshctl starts
+  # agents with Setpgid and signals the WHOLE process group on stop (SIGTERM
+  # -> SIGKILL escalation), so the Maven parent and its forked java child
+  # die together — no pkill fallback needed (mirrors the uc23/uc30/uc34
+  # UC-level stop_all).
   stop_all:
     description: "Stop all mesh processes started by this test"
     steps:
       - handler: shell
         workdir: /workspace
-        command: |
-          meshctl stop 2>/dev/null || true
-          pkill -f "spring-boot:run" 2>/dev/null || true
-          pkill -f "java.*view-consumer" 2>/dev/null || true
+        command: meshctl stop 2>/dev/null || true
         ignore_errors: true
