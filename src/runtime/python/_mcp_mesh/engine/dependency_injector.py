@@ -608,6 +608,15 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
             )
         return []
 
+    # @mesh.service("prefix") producer-sugar wrappers carry the
+    # ``_mesh_service_served_name`` mark (stamped on the ``published`` callable
+    # in ``mesh._service._build_producer`` / ``_republish_tool_wins`` BEFORE
+    # ``@mesh.tool`` runs, so it is visible here — the DI wrapper is created
+    # inside that decoration and this analysis reads the marked ``func``
+    # directly). Their single ``args: dict`` parameter is the tool's MCP INPUT
+    # data, never a DI slot; typing it as McpMeshTool would be actively wrong.
+    is_producer_served = getattr(func, "_mesh_service_served_name", None) is not None
+
     # Single parameter rule: inject regardless of typing. Only applies when
     # no params are hidden — a hidden single param is framework-bound by the
     # hiding decorator itself, never an injection target — and when the lone
@@ -621,15 +630,37 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
                 # position to record here.
                 return []
 
-            # Informational only — injection still happens, so this stays a
-            # plain warning even under MCP_MESH_STRICT_DI.
-            param_name = params[0].name
-            logger.warning(
-                f"Single parameter '{param_name}' in function '{func_name}' found, "
-                f"injecting {dependencies[0] if dependencies else 'dependency'} proxy "
-                f"(consider typing as McpMeshTool for clarity: "
-                f"'{param_name}: McpMeshTool = None')"
-            )
+            if is_producer_served and not dependencies:
+                # Producer sugar with no declared dependencies: the lone param
+                # is MCP input data, and there is nothing to inject. Skip the
+                # untyped single-parameter heuristic entirely — no warning, no
+                # force-inject of position 0. (A tool-wins producer that
+                # legitimately declares a dependency has ``dependencies``
+                # non-empty and falls through to the normal path below.)
+                return []
+
+            # Deprecation notice — but ONLY when a dependency is actually
+            # being injected. A plain zero-dependency tool (e.g. 'def
+            # greet(name: str)') also lands here (no McpMeshTool/MeshJob slot,
+            # no deps): nothing is injected, and advising the user to annotate
+            # its lone data param as McpMeshTool would break the tool's schema.
+            # The deprecated behavior — force-injecting into an untyped single
+            # param — only occurs when ``dependencies`` is non-empty, so scope
+            # the warning to that case. Injection still happens, so this stays
+            # a plain warning even under MCP_MESH_STRICT_DI; the untyped
+            # single-parameter heuristic is the root of the positional-
+            # ambiguity bug class and explicit McpMeshTool typing is canonical.
+            if dependencies:
+                param_name = params[0].name
+                logger.warning(
+                    f"Untyped single-parameter injection is DEPRECATED as of v3 "
+                    f"and will be removed in a future major version. Parameter "
+                    f"'{param_name}' in function '{func_name}' is receiving the "
+                    f"{dependencies[0]} proxy via the untyped single-parameter "
+                    f"heuristic. Annotate it explicitly as "
+                    f"'{param_name}: McpMeshTool = None' to keep dependency "
+                    f"injection."
+                )
         return [0]  # Inject into the single parameter
 
     # Multiple parameters rule: only inject into McpMeshTool typed

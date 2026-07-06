@@ -204,6 +204,112 @@ def _public_methods(cls) -> list:
     return sorted(names)
 
 
+def _unwrap_optional(tp):
+    """Strip a trailing ``None`` from ``Optional[X]`` / ``X | None`` → ``X``.
+
+    Only a two-arm optional (exactly one non-``None`` member) is unwrapped, so
+    ``-> Optional[CaptionResult]`` derives ``CaptionResult``'s schema; a genuine
+    multi-arm ``Union[X, Y]`` is left intact (its extracted root ``anyOf`` is
+    caught as vacuous by :func:`_schema_is_constraining`).
+    """
+    import typing
+
+    origin = typing.get_origin(tp)
+    is_union = origin is typing.Union
+    try:  # PEP 604 ``X | None``
+        import types as _types
+
+        is_union = is_union or isinstance(tp, _types.UnionType)
+    except AttributeError:  # pragma: no cover — <3.10
+        pass
+    if is_union:
+        args = [a for a in typing.get_args(tp) if a is not type(None)]
+        if len(args) == 1:
+            return args[0]
+    return tp
+
+
+def _schema_is_constraining(schema) -> bool:
+    """True only when an extracted schema actually narrows provider matching.
+
+    Deriving from a LOOSE return annotation would silently filter providers:
+    ``-> dict`` extracts to a bare ``{"type": "object"}`` (evicts non-object
+    providers) and a root ``anyOf`` (from an un-unwrapped union) matches
+    everything vacuously. So a derived schema counts only when its ROOT
+    declares structure — non-empty ``properties`` / ``items`` / ``required`` or
+    a ``$ref`` — and is not a root-level ``anyOf``.
+    """
+    if not isinstance(schema, dict) or not schema:
+        return False
+    if "anyOf" in schema:  # root union → vacuous
+        return False
+    if schema.get("properties"):
+        return True
+    if schema.get("required"):
+        return True
+    if "$ref" in schema:
+        return True
+    items = schema.get("items")
+    if isinstance(items, dict) and items:  # ``list`` (bare) → items == {} → skip
+        return True
+    return False
+
+
+def _derive_selector_expected_type(member):
+    """Derive a selector's schema-matching type from the stub return annotation.
+
+    Java derives a view method's expected type from the method return type when
+    ``schemaMode`` is set; this is the Python analogue. The async facade stub's
+    declared return type IS the annotation itself (``-> Employee``), never
+    wrapped in ``Coroutine``.
+
+    Deliberately conservative divergence from Java: derivation takes effect
+    ONLY for STRUCTURED return types (Pydantic model / dataclass / TypedDict /
+    ``list[Model]`` / ``Optional[Model]``) that yield a constraining schema.
+    Bare containers (``dict``/``list``), ``Any``, ``None``, scalars, stringized
+    (unresolved future-annotations) and unannotated returns derive nothing
+    (``expected_type`` stays None → no schema, current behavior) — no surprise
+    provider filtering.
+    """
+    import inspect
+    import typing
+
+    ret = None
+    try:
+        ret = typing.get_type_hints(member).get("return")
+    except Exception:  # noqa: BLE001 — unresolved forward refs etc.
+        ret = None
+    if ret is None:
+        try:
+            ret = inspect.signature(member).return_annotation
+        except (TypeError, ValueError):
+            ret = None
+    # A stringized annotation (``from __future__ import annotations`` +
+    # get_type_hints failing above) is unusable — reject rather than storing a
+    # string that later crashes schema extraction.
+    if isinstance(ret, str):
+        return None
+    if (
+        ret is None
+        or ret is inspect.Signature.empty
+        or ret is type(None)
+        or ret is typing.Any
+    ):
+        return None
+
+    ret = _unwrap_optional(ret)
+
+    from _mcp_mesh.utils.fastmcp_schema_extractor import FastMCPSchemaExtractor
+
+    try:
+        schema = FastMCPSchemaExtractor.extract_type_schema(ret)
+    except Exception:  # noqa: BLE001 — non-extractable annotation → no derivation
+        return None
+    if not _schema_is_constraining(schema):
+        return None
+    return ret
+
+
 def _build_consumer_view(cls, min_available: int):
     """Validate a consumer-view class and stamp its metadata."""
     if not isinstance(min_available, int) or isinstance(min_available, bool):
@@ -246,6 +352,16 @@ def _build_consumer_view(cls, min_available: int):
         _validate_capability_segmented(
             capability, f"@mesh.service view '{cls.__name__}' method '{name}'"
         )
+        expected_type = sel.get("expected_type")
+        match_mode = sel.get("match_mode")
+        # Java parity: when schema matching is opted into (``match_mode`` set,
+        # mirroring Java's ``schemaMode`` gate) and no explicit ``expected_type``
+        # override is given, derive the expected type from the stub's return
+        # annotation. Requiring the ``match_mode`` opt-in matches Java exactly —
+        # deriving unconditionally would turn on schema matching where none was
+        # requested (a behavior change).
+        if expected_type is None and match_mode is not None:
+            expected_type = _derive_selector_expected_type(member)
         bindings.append(
             ServiceMethodBinding(
                 method_name=name,
@@ -253,8 +369,8 @@ def _build_consumer_view(cls, min_available: int):
                 tags=sel.get("tags", []),
                 version=sel.get("version"),
                 required=bool(sel.get("required", False)),
-                expected_type=sel.get("expected_type"),
-                match_mode=sel.get("match_mode"),
+                expected_type=expected_type,
+                match_mode=match_mode,
             )
         )
 
@@ -386,6 +502,12 @@ def _build_producer(cls, prefix: str, min_available: int):
         # silently clobber each other.
         published.__name__ = capability
         published.__qualname__ = capability
+        # Stamp the serving mark on ``published`` BEFORE @mesh.tool decorates
+        # it: the DI wrapper (and its untyped single-parameter analysis) is
+        # created inside that decoration, and the analyzer reads this marked
+        # callable directly — so the mark must already be present to suppress
+        # the false-positive DI warning on the ``args: dict`` input param.
+        _mark_for_serving(published, capability)
         wrapper = decorators.tool(capability=capability)(published)
         _mark_for_serving(wrapper, capability)
 
@@ -471,6 +593,9 @@ def _republish_tool_wins(method_name: str, bound, own_meta: dict, cls) -> None:
     # Unique identity: the user's own capability if set, else the bare name.
     published.__name__ = capability or method_name
     published.__qualname__ = published.__name__
+    # Stamp the serving mark before @mesh.tool runs so it's visible to the DI
+    # analyzer inside the decoration (see _build_producer for the rationale).
+    _mark_for_serving(published, published.__name__)
 
     # Reconstruct the tool() call from the standard fields; forward any extra
     # metadata (vendor kwargs) verbatim. ``retry_on`` is stored as a tuple

@@ -152,7 +152,7 @@ class TestAnalyzeInjectionStrategy:
             return_value=[],
         ):
             analyze_injection_strategy(func_single_untyped, ["dep1"])
-        assert "consider typing as McpMeshTool for clarity" in caplog.text
+        assert "Untyped single-parameter injection is DEPRECATED" in caplog.text
 
         caplog.clear()
 
@@ -1998,7 +1998,7 @@ class TestPrescriptiveDiagnosticsAndStrictDI:
             result = analyze_injection_strategy(f, ["dep1"])
 
         assert result == [0]  # injection semantics unchanged under strict
-        assert "consider typing as McpMeshTool for clarity" in caplog.text
+        assert "Untyped single-parameter injection is DEPRECATED" in caplog.text
 
     def test_strict_clean_configuration_does_not_raise(self, monkeypatch):
         """A correctly-typed, correctly-counted function is untouched by

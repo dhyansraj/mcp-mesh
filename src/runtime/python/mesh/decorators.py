@@ -2545,10 +2545,10 @@ def a2a_consumer(
 
         # Hide the user's ``_a2a`` parameter from the inner @mesh.tool
         # signature analyzer — we bind it ourselves in ``bridge`` and the
-        # DI single-parameter heuristic would otherwise log a noisy
-        # "consider typing as McpMeshTool" warning AND attempt to inject
-        # a remote-capability proxy into the slot. The user-facing
-        # signature for FastMCP / the agent card stays clean too.
+        # DI single-parameter heuristic would otherwise log the untyped
+        # single-parameter deprecation warning AND attempt to inject a
+        # remote-capability proxy into the slot. The user-facing signature
+        # for FastMCP / the agent card stays clean too.
         if wants_a2a:
             user_sig = _inspect.signature(target)
             cleaned_params = [
