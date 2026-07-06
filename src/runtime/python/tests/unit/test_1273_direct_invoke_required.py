@@ -170,7 +170,14 @@ class TestToolRequiredCapsWiring:
 
         real = DependencyInjector.create_injection_wrapper
 
-        def spy(self, func, dependencies, route_required_caps=None, tool_required_caps=None):
+        def spy(
+            self,
+            func,
+            dependencies,
+            route_required_caps=None,
+            tool_required_caps=None,
+            view_slots=None,
+        ):
             seen["tool_required_caps"] = tool_required_caps
             return real(
                 self,
@@ -178,6 +185,7 @@ class TestToolRequiredCapsWiring:
                 dependencies,
                 route_required_caps=route_required_caps,
                 tool_required_caps=tool_required_caps,
+                view_slots=view_slots,
             )
 
         with patch.object(DependencyInjector, "create_injection_wrapper", spy):
@@ -199,7 +207,14 @@ class TestToolRequiredCapsWiring:
 
         real = DependencyInjector.create_injection_wrapper
 
-        def spy(self, func, dependencies, route_required_caps=None, tool_required_caps=None):
+        def spy(
+            self,
+            func,
+            dependencies,
+            route_required_caps=None,
+            tool_required_caps=None,
+            view_slots=None,
+        ):
             seen["tool_required_caps"] = tool_required_caps
             return real(
                 self,
@@ -207,6 +222,7 @@ class TestToolRequiredCapsWiring:
                 dependencies,
                 route_required_caps=route_required_caps,
                 tool_required_caps=tool_required_caps,
+                view_slots=view_slots,
             )
 
         with patch.object(DependencyInjector, "create_injection_wrapper", spy):

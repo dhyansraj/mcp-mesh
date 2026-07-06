@@ -37,6 +37,7 @@ import { resolveConfig } from "@mcpmesh/core";
 import type { AgentConfig } from "../../types.js";
 import { RouteRegistry } from "../../route.js";
 import { normalizeDependency } from "../../proxy.js";
+import { assertNoServiceViewDeps } from "../../service-view.js";
 import { getApiRuntime } from "../../api-runtime.js";
 import { MeshJobSubmitter } from "../../mesh-job-submitter.js";
 
@@ -234,6 +235,9 @@ export function mount<D extends A2ADependencies = A2ADependencies>(
   }
 
   const dependencies = config.dependencies ?? [];
+  // RFC #1280: like mesh.route, the A2A producer surface has no tool-parameter
+  // facade form — reject a serviceView rather than shipping a nameless edge.
+  assertNoServiceViewDeps(dependencies, "mesh.a2a.mount");
   const normalizedDeps = dependencies.map(normalizeDependency);
 
   // ── Register dependencies via RouteRegistry (DDDI) ───────────────────

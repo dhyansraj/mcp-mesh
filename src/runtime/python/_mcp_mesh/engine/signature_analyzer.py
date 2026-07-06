@@ -118,6 +118,133 @@ def _is_mesh_job_type(param_type: Any) -> bool:
     return False
 
 
+def _service_view_meta(param_type: Any) -> Any:
+    """Return the ``ServiceViewMeta`` for a ``@mesh.service`` consumer-view
+    class (RFC #1280), unwrapping ``Optional[View]`` / ``View | None``, or
+    ``None`` if the type is not a service view.
+
+    Detection keys purely on the marker attribute stamped by ``@mesh.service``
+    (``SERVICE_VIEW_ATTR``, imported lazily from ``mesh._service`` — the marker
+    name only, never the decorator machinery, avoiding an import cycle).
+    Producer classes are NOT views (they publish tools and carry no marker), so
+    they are never detected here.
+    """
+    from mesh._service import SERVICE_VIEW_ATTR
+
+    candidates = [param_type]
+    if hasattr(param_type, "__args__"):
+        candidates.extend(param_type.__args__)
+    for candidate in candidates:
+        if inspect.isclass(candidate):
+            # DIRECT annotation only (``__dict__``, not ``getattr`` which walks
+            # the MRO): an UNDECORATED subclass of a view is NOT itself a view —
+            # inheriting the parent's marker would resolve the subclass's own
+            # selectors to the PARENT's bindings (wrong methods, wrong name in
+            # errors). Mirrors Java's direct-annotation scanning rule. A
+            # subclass that WANTS to be a view re-applies @mesh.service (its own
+            # marker then lands in its __dict__).
+            meta = candidate.__dict__.get(SERVICE_VIEW_ATTR)
+            if meta is not None:
+                return meta
+    return None
+
+
+def _is_service_view_type(param_type: Any) -> bool:
+    """Whether a type is a ``@mesh.service`` consumer view (RFC #1280)."""
+    return _service_view_meta(param_type) is not None
+
+
+def analyze_service_view_params(func: Any) -> list:
+    """Classify a function's ``@mesh.service`` consumer-view parameters.
+
+    Returns a list of ``(position, name, ServiceViewMeta)`` tuples in
+    declaration order — the parameter-order half of the RFC #1280 view-edge
+    layout (methods are name-sorted within each view by ``@mesh.service``).
+    A view parameter is a NEW type-detected slot kind (the MeshJob precedent),
+    orthogonal to the McpMeshTool/MeshJob positional namespace.
+    """
+    func = _get_original_func(func)
+    try:
+        sig = inspect.signature(func)
+    except (TypeError, ValueError):
+        return []
+
+    try:
+        type_hints = get_type_hints(func)
+    except Exception:
+        # get_type_hints is all-or-nothing: one unresolvable annotation (e.g. a
+        # TYPE_CHECKING-only import under ``from __future__ import annotations``)
+        # breaks it for the WHOLE function — including ordinary view-free tools.
+        # Fall back to per-parameter resolution so a resolvable view isn't
+        # silently lost, and warn ONLY when a view is actually recovered (never
+        # for a view-free function whose hints happen to fail elsewhere).
+        return _recover_view_params_per_param(func, sig)
+
+    result: list = []
+    for i, param_name in enumerate(sig.parameters.keys()):
+        if param_name not in type_hints:
+            continue
+        meta = _service_view_meta(type_hints[param_name])
+        if meta is not None:
+            result.append((i, param_name, meta))
+    return result
+
+
+def _recover_view_params_per_param(func: Any, sig: inspect.Signature) -> list:
+    """Best-effort per-parameter view detection when function-wide
+    :func:`get_type_hints` fails.
+
+    Resolves each parameter's annotation individually against the function's
+    module globals, so a view whose class IS importable survives a sibling
+    parameter's unresolvable annotation. Emits a single WARNING **only when a
+    view is recovered here** — that both names the ``from __future__`` cause AND
+    stays silent for ordinary view-free tools (whose hints fail for unrelated
+    reasons), satisfying RFC #1280's "don't spam" scoping.
+    """
+    import sys
+
+    module = getattr(func, "__module__", None)
+    globalns = getattr(sys.modules.get(module), "__dict__", {}) if module else {}
+
+    result: list = []
+    for i, (param_name, param) in enumerate(sig.parameters.items()):
+        raw = param.annotation
+        if raw is inspect.Parameter.empty:
+            continue
+        if isinstance(raw, str):
+            try:
+                resolved = eval(raw, globalns)  # noqa: S307 - module-scoped, best-effort
+            except Exception:
+                continue
+        else:
+            resolved = raw
+        meta = _service_view_meta(resolved)
+        if meta is not None:
+            result.append((i, param_name, meta))
+
+    if result:
+        logger.warning(
+            "analyze_service_view_params: function '%s' has @mesh.service view "
+            "parameter(s) %s but function-wide type-hint resolution failed "
+            "(recovered per-parameter). If this module uses "
+            "`from __future__ import annotations`, ensure every annotated type "
+            "is importable at module scope so the view is reliably detected.",
+            getattr(func, "__qualname__", getattr(func, "__name__", "?")),
+            [name for _pos, name, _meta in result],
+        )
+    return result
+
+
+def get_service_view_positions(func: Any) -> list[int]:
+    """Signature positions (0-indexed) of ``@mesh.service`` view parameters."""
+    return [pos for pos, _name, _meta in analyze_service_view_params(func)]
+
+
+def get_service_view_parameter_names(func: Any) -> list[str]:
+    """Parameter names of ``@mesh.service`` view parameters."""
+    return [name for _pos, name, _meta in analyze_service_view_params(func)]
+
+
 def _scan_params(
     func: Any,
     predicate: Callable[[Any], bool],
@@ -374,7 +501,22 @@ def validate_mesh_dependencies(func: Any, dependencies: list[dict]) -> tuple[boo
     if resolution is not None and resolution.mesh_job_param_name is not None:
         job_slots = 1
 
-    expected = len(mesh_positions) + job_slots
+    # RFC #1280: each @mesh.service view parameter expands to N dependency
+    # edges (one per selector method), appended AFTER the explicit deps. Those
+    # edges have no McpMeshTool/MeshJob parameter of their own, so the count
+    # must add them or the tool would be dropped from the heartbeat.
+    view_method_slots = 0
+    try:
+        for _pos, _name, _meta in analyze_service_view_params(func):
+            view_method_slots += len(_meta.bindings)
+    except Exception as e:  # noqa: BLE001 - never block validation on view introspection
+        logger.debug(
+            "validate_mesh_dependencies: service-view analysis skipped for %s: %s",
+            getattr(func, "__name__", "?"),
+            e,
+        )
+
+    expected = len(mesh_positions) + job_slots + view_method_slots
     if len(dependencies) != expected:
         # Name each typed slot (declaration order) so the message shows the
         # exact dep→param pairing positional binding uses, plus the fix.
@@ -401,8 +543,9 @@ def validate_mesh_dependencies(func: Any, dependencies: list[dict]) -> tuple[boo
 
         message = (
             f"Function {func.__name__} has "
-            f"{pluralize(len(mesh_positions), 'McpMeshTool parameter')} and "
-            f"{pluralize(job_slots, 'MeshJob slot')} "
+            f"{pluralize(len(mesh_positions), 'McpMeshTool parameter')}, "
+            f"{pluralize(job_slots, 'MeshJob slot')} and "
+            f"{pluralize(view_method_slots, 'service-view method edge')} "
             f"but {pluralize(len(dependencies), 'dependency', 'dependencies')} "
             f"declared. "
             f"Each typed slot needs a corresponding dependency. "

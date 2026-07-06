@@ -86,6 +86,36 @@ async def greet(name: str, date_svc: mesh.McpMeshTool = None) -> str:
 | `mesh.McpMeshTool`  | Tool calls via proxy                   |
 | `mesh.MeshLlmAgent` | LLM agent injection (with `@mesh.llm`) |
 
+## @mesh.service
+
+Aggregates capabilities behind a typed view, or — with a prefix — publishes a class's methods as tools (RFC #1280).
+
+**Consumer view** — a class of `async` `@mesh.selector` stubs, injected as a `@mesh.tool` parameter:
+
+```python
+@mesh.service                       # or @mesh.service(min_available=2)
+class MediaService:
+    @mesh.selector("media.caption", required=True)
+    async def caption(self, args: dict) -> dict: ...
+    @mesh.selector("media.thumbnail")
+    async def thumbnail(self, args: dict) -> dict: ...
+
+@mesh.tool(capability="process_media")
+async def process_media(req: dict, media: MediaService = None):
+    return await media.caption({"text": req["text"]})
+```
+
+**Producer** — a prefixed class whose real methods publish as `prefix.<method>`:
+
+```python
+@mesh.service("media")              # publishes media.caption, media.thumbnail
+class MediaTools:
+    async def caption(self, args: dict) -> dict: ...
+    async def thumbnail(self, args: dict) -> dict: ...
+```
+
+Each view method is an ordinary dependency edge and each producer method an ordinary tool — both show as `N` entries in `meshctl list`. `required` view edges get the pre-invoke `dependency_unavailable` refusal; `min_available` (consumer-only) adds a floor. For the full semantics see the [Dependency Injection](dependency-injection.md#service-views-rfc-1280) guide.
+
 ## @mesh.llm
 
 Enables LLM-powered tools with automatic tool discovery.

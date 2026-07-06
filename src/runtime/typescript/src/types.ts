@@ -3,6 +3,7 @@
  */
 
 import { z } from "zod";
+import type { ServiceView } from "./service-view.js";
 
 /**
  * Metadata for media-typed tool parameters.
@@ -511,6 +512,11 @@ export interface MeshToolDef<T extends z.ZodType = z.ZodType> {
    * Dependencies required by this tool.
    * Injected positionally as McpMeshTool params after args.
    *
+   * A `mesh.serviceView(...)` entry (RFC #1280) occupies ONE positional slot but
+   * expands into N ordinary dependency edges (one per method, name-sorted); the
+   * framework injects a facade at that slot whose methods delegate to each edge's
+   * own resolved proxy.
+   *
    * @example
    * ```typescript
    * dependencies: ["time-service", "calculator"],
@@ -521,7 +527,7 @@ export interface MeshToolDef<T extends z.ZodType = z.ZodType> {
    * ) => { ... }
    * ```
    */
-  dependencies?: DependencySpec[];
+  dependencies?: (DependencySpec | ServiceView)[];
   /**
    * Per-dependency configuration indexed by position.
    * Array index corresponds to dependencies array position.

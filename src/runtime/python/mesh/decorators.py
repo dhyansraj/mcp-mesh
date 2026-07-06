@@ -1165,6 +1165,89 @@ def tool(
         else:
             validated_dependencies = []
 
+        # RFC #1280: expand @mesh.service consumer-view parameters into
+        # dependency edges appended AFTER the explicit deps — parameter order
+        # across views, methods name-sorted WITHIN each view. The resulting
+        # edges are indistinguishable from hand-written deps on the wire; the
+        # ``view_slots`` descriptor tells the injector which appended indices
+        # belong to which view facade.
+        from _mcp_mesh.engine.signature_analyzer import (
+            analyze_mesh_job_signature,
+            analyze_service_view_params,
+            get_mesh_agent_positions,
+        )
+
+        from ._service import binding_to_dependency_dict
+
+        _view_params = analyze_service_view_params(target)
+
+        # RFC #1280 layout invariant: view edges are appended AFTER the explicit
+        # deps and are fanned out by a facade — they must NEVER be consumed by a
+        # positional McpMeshTool/MeshJob slot. That only holds if the explicit
+        # deps EXACTLY cover the explicit typed slots. A misdeclaration (e.g. a
+        # MeshJob param with no matching dependency) would otherwise silently
+        # steal the first view edge as its submitter/proxy target. Fail loudly
+        # with a precise message when views are present.
+        if _view_params:
+            _n_explicit = len(validated_dependencies)
+            _n_mesh = len(get_mesh_agent_positions(target))
+            _mj = analyze_mesh_job_signature(target)
+            _n_job = 1 if _mj.mesh_job_param_name else 0
+            _explicit_typed = _n_mesh + _n_job
+            if _n_explicit != _explicit_typed:
+                raise ValueError(
+                    f"@mesh.tool '{getattr(target, '__name__', '?')}': "
+                    f"{_n_explicit} explicit dependenc(ies) declared but the "
+                    f"signature has {_explicit_typed} explicit typed slot(s) "
+                    f"({_n_mesh} McpMeshTool + {_n_job} MeshJob) BEFORE the "
+                    f"@mesh.service view parameter(s). View edges are appended "
+                    f"after the explicit deps and fanned out by the facade — "
+                    f"they must not be positionally consumed. Fix: declare "
+                    f"exactly one dependency per explicit McpMeshTool/MeshJob "
+                    f"parameter (the view parameters take none)."
+                )
+
+        view_slots: list = []
+        for _vpos, _vname, _vmeta in _view_params:
+            _base = len(validated_dependencies)
+            _methods = []
+            for _rank, _binding in enumerate(_vmeta.bindings):
+                _dep_index = _base + _rank
+                validated_dependencies.append(binding_to_dependency_dict(_binding))
+                _methods.append(
+                    {
+                        "method_name": _binding.method_name,
+                        "capability": _binding.capability,
+                        "dep_index": _dep_index,
+                    }
+                )
+            view_slots.append(
+                {
+                    "param_name": _vname,
+                    "position": _vpos,
+                    "view_name": _vmeta.name,
+                    "min_available": _vmeta.min_available,
+                    "methods": _methods,
+                }
+            )
+
+        # A @mesh.service facade is async (its methods return coroutines), so a
+        # SYNC tool consuming a view could not await them — fail loudly at
+        # decoration rather than surface an un-awaited-coroutine bug at runtime.
+        # Async-generator (streaming) tools are async and allowed.
+        import inspect as _inspect
+
+        if view_slots and not (
+            asyncio.iscoroutinefunction(target)
+            or _inspect.isasyncgenfunction(target)
+        ):
+            _vnames = [v["param_name"] for v in view_slots]
+            raise ValueError(
+                f"@mesh.tool '{getattr(target, '__name__', '?')}': @mesh.service "
+                f"view parameter(s) {_vnames} require an `async def` tool — "
+                f"service-view facade methods are async. Mark the tool async."
+            )
+
         # Build tool metadata
         metadata = {
             "capability": capability,
@@ -1242,7 +1325,10 @@ def tool(
 
             injector = get_global_injector()
             wrapped = injector.create_injection_wrapper(
-                target, dependency_names, tool_required_caps=tool_required_caps
+                target,
+                dependency_names,
+                tool_required_caps=tool_required_caps,
+                view_slots=view_slots,
             )
 
             # Log the wrapper function pointer
@@ -1689,6 +1775,22 @@ def route(
     """
 
     def decorator(target: T) -> T:
+        # RFC #1280: @mesh.service views in @mesh.route are OUT OF SCOPE this
+        # round — fail loudly at decoration time rather than silently ignoring
+        # the parameter (which would inject nothing and surface as an
+        # AttributeError on first use). Views are supported on @mesh.tool.
+        from _mcp_mesh.engine.signature_analyzer import analyze_service_view_params
+
+        _route_views = analyze_service_view_params(target)
+        if _route_views:
+            _names = [name for _pos, name, _meta in _route_views]
+            raise ValueError(
+                f"@mesh.route '{getattr(target, '__name__', '?')}': @mesh.service "
+                f"view parameter(s) {_names} are not supported on routes "
+                f"(RFC #1280 views are @mesh.tool-only this round). Use "
+                f"McpMeshTool parameters with dependencies=[...] instead."
+            )
+
         # Validate and process dependencies (reuse logic from tool decorator)
         if dependencies is not None:
             if not isinstance(dependencies, list):

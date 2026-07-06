@@ -1,0 +1,1 @@
+# uc37 py-view-consumer deps. mesh + fastmcp come from the runtime image.

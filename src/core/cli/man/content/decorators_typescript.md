@@ -134,6 +134,40 @@ agent.addTool({
 
 See `meshctl man schema-matching` for modes, the cross-language convention table, and verdict tiers. See `meshctl man dependency-injection --typescript` for the full filter pipeline.
 
+## mesh.serviceView() / agent.addService()
+
+Service views aggregate capabilities behind one typed facade, or publish a group of tools under a dotted prefix (RFC #1280).
+
+**Consumer** — one `dependencies` entry expanding to N edges, injected as a facade argument:
+
+```ts
+const Media = mesh.serviceView({
+  methods: {
+    caption: { capability: "media.caption", required: true },
+    thumbnail: "media.thumbnail",
+  },
+});
+
+agent.addTool({
+  name: "process_media",
+  dependencies: [Media],
+  execute: async (args, media) =>
+    // dep params are inferred; cast the view slot to type its methods
+    (media as MeshServiceFacade<typeof Media>).caption({ text: args.text }),
+});
+```
+
+**Producer** — publish methods as `prefix.<method>` tools:
+
+```ts
+agent.addService("media", {
+  caption: async (args) => ({ caption: `a scene: ${args.text}` }),
+  thumbnail: async (args) => ({ uri: `thumb://${args.id}` }),
+});
+```
+
+`required` view edges get the pre-invoke `dependency_unavailable` refusal (a `UserError`); `minAvailable` (consumer-only) adds a floor; a view forces inline execution and is rejected in `mesh.route(...)` / `mesh.a2a.mount(...)`. For the full semantics see `meshctl man dependency-injection --typescript`.
+
 ## mesh.llm()
 
 Creates an LLM-powered tool with automatic tool discovery.

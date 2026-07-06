@@ -294,6 +294,47 @@ export class SettleState {
       await this.waitFor(depKey, capability);
     }
   }
+
+  /**
+   * Wait until ANY of `pending` resolves or the remaining settle budget
+   * elapses. Unlike {@link awaitPending} (which blocks on each key in turn),
+   * this races every pending key's resolution promise against ONE budget timer,
+   * so a caller gated on a floor wakes the moment ANY qualifying dependency
+   * lands — never sleeping on an already-satisfied floor because it happened to
+   * be awaiting a still-pending sibling key (RFC #1280 minAvailable).
+   */
+  async waitForAny(pending: PendingSettleDep[]): Promise<void> {
+    const remaining = this.remainingMs();
+    const unresolved = pending.filter((p) => !this.resolved.has(p.depKey));
+    if (remaining <= 0 || unresolved.length === 0) {
+      return;
+    }
+    const remainingSecs = (remaining / 1000).toFixed(1);
+    for (const { capability } of unresolved) {
+      const message = `waiting up to ${remainingSecs}s for dependency '${capability}' to settle`;
+      if (!this.loggedWaits.has(capability)) {
+        this.loggedWaits.add(capability);
+        console.log(message);
+      } else {
+        console.debug(message);
+      }
+    }
+    this.waitCount++;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        ...unresolved.map((p) => this.waiterFor(p.depKey).promise),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, remaining);
+          timer.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+    }
+  }
 }
 
 let settleState = new SettleState();

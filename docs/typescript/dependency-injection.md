@@ -224,6 +224,61 @@ agent.addTool({
 
 **Inspecting availability.** Each capability in the agents/capabilities API carries `available` (boolean) and, when false, `unavailable_reason` naming the first broken edge — e.g. `required dep 'data_service' unavailable (provider agent-7 unhealthy)` or `required dep 'weather-api' unresolved (no provider matches tags=[+prod])`. The capability stays visible in the registry, UI, and `meshctl`; availability is distinct from presence.
 
+## Service Views (RFC #1280)
+
+A **service view** aggregates several capability dependencies behind one typed facade. `mesh.serviceView({ methods })` returns a branded value you place as **one** entry in a tool's `dependencies` array; it expands into N ordinary edges (one per method, name-sorted) and the framework injects a single facade argument. Each method delegates to its own resolved proxy, so different methods can bind different provider agents and rebind independently.
+
+```ts
+const Media = mesh.serviceView({
+  methods: {
+    caption: { capability: "media.caption", required: true, tags: ["+fast"] },
+    thumbnail: "media.thumbnail",
+    transcribe: "media.transcribe",
+  },
+  // minAvailable: 2,
+});
+
+agent.addTool({
+  name: "process_media",
+  dependencies: ["audit_log", Media],
+  execute: async (args, auditLog, media) => {
+    // dep params are inferred; cast the view slot to type its methods
+    const svc = media as MeshServiceFacade<typeof Media>;
+    const caption = await svc.caption({ text: args.text });
+    let thumb: unknown = null;
+    try {
+      thumb = await svc.thumbnail({ id: args.id });
+    } catch (e) {
+      if (!(e instanceof TypeError)) throw e;               // optional method unresolved
+    }
+    return { caption, thumb };
+  },
+});
+```
+
+The view slot expands **in place** (name-sorted), so its edges keep contiguous indices and a view over N capabilities shows as **N dependencies** in `meshctl list`. A method spec is a capability string or an object (`capability`, `tags`, `version`, `required`, `expectedSchema`, `matchMode`). Leave the `execute` dependency params un-annotated (they're inferred) and cast the view slot at point of use — `const svc = view as MeshServiceFacade<typeof View>` — to type its method keys; a direct parameter annotation doesn't compile under `strictFunctionTypes`. Capability names are dot-namespaced (see the [naming rules](capabilities-tags.md#capability-naming-conventions)).
+
+- A `required` method joins the tool's pre-invoke guard: an unresolved required edge makes the tool refuse with a `UserError` carrying the structured `dependency_unavailable` payload before the handler runs (direct and claim paths). An unresolved **optional** method rejects with a `TypeError` (the null-proxy passthrough) on its own call only.
+- `minAvailable` adds a consumer-local floor: below it every facade call throws `MeshServiceUnavailableError` (settle-aware).
+- A view **forces inline execution** — per-tool worker isolation is disabled for a view-bearing tool, with a warning logged at registration when `MCP_MESH_TOOL_WORKERS>1`.
+- Views are a **tool-parameter** surface only: a `mesh.serviceView(...)` in `mesh.route(...)` or `mesh.a2a.mount(...)` dependencies is rejected.
+
+### Publishing a service (producer side)
+
+`agent.addService("prefix", { ... })` publishes each entry as an ordinary tool with capability `prefix.<method>` (name-sorted). An entry is a bare `execute` function or an object carrying `execute` plus `addTool` passthrough (`tags`, `description`, …); `name`/`capability` are derived and must not be supplied.
+
+```ts
+agent.addService("media", {
+  caption: async (args) => ({ caption: `a scene: ${args.text}` }),
+  thumbnail: {
+    execute: async (args) => ({ uri: `thumb://${args.id}` }),
+    tags: ["fast"],
+  },
+});
+```
+
+The `prefix` is segment-validated against the dotted-capability grammar — the SDK's only capability-name check, mirroring the registry contract. A derived name that collides with an existing tool throws.
+
 ## Proxy Configuration
 
 Configure proxy behavior via `dependencyKwargs` — an array indexed by dependency position (aligned with `dependencies`):

@@ -257,6 +257,61 @@ The agents/capabilities API carries two derived fields per capability:
 
 The capability stays visible in the registry, UI, and `meshctl` (availability is distinct from presence), so the reason chain is a diagnostic upgrade, not a disappearance.
 
+## Service Views (RFC #1280)
+
+A **service view** aggregates several capability dependencies behind one typed class. Decorate a class with `@mesh.service`; every public method is an **`async` stub** carrying `@mesh.selector("cap", ...)` that binds one capability. Pass the view class as a `@mesh.tool` parameter (detected by type, like `MeshJob`) and the framework injects a facade whose methods each delegate to their capability's own resolved proxy — so different methods can resolve to different provider agents and rebind independently.
+
+```python
+@mesh.service                       # or @mesh.service(min_available=2)
+class MediaService:
+    @mesh.selector("media.caption", required=True, tags=["+fast"])
+    async def caption(self, args: dict) -> dict: ...
+    @mesh.selector("media.thumbnail")
+    async def thumbnail(self, args: dict) -> dict: ...
+    @mesh.selector("media.transcribe")
+    async def transcribe(self, args: dict) -> dict: ...
+
+
+@app.tool()
+@mesh.tool(capability="process_media", dependencies=["audit_log"])
+async def process_media(
+    req: dict,
+    audit: mesh.McpMeshTool = None,
+    media: MediaService = None,
+):
+    caption = await media.caption({"text": req["text"]})   # dict → the target tool's named args
+    try:
+        thumb = await media.thumbnail({"asset_id": req["id"]})
+    except ToolError:                                       # optional method unresolved
+        thumb = None
+    return {"caption": caption, "thumbnail": thumb}
+```
+
+A facade call takes one `dict` that becomes the target tool's named arguments, and accepts a `headers=` kwarg for header propagation. Each view method expands into an ordinary dependency edge appended **after** the tool's explicit `dependencies` — name-sorted within a view, in parameter order across multiple views — so a view over N capabilities shows as **N dependencies** in `meshctl list`. Capability names are dot-namespaced (see the naming rules in `meshctl man capabilities`).
+
+- Every method must be `async def` with `@mesh.selector`; a **sync** stub or a selector-less public method **boot-fails** (make helpers private with a leading underscore).
+- A `required=True` method joins the tool's pre-invoke guard: an unresolved required edge makes the tool return the structured `dependency_unavailable` refusal before the handler runs (direct and claim paths). An unresolved **optional** method raises `ToolError` (`fastmcp.exceptions.ToolError`) carrying that same `dependency_unavailable` payload on its own call only — catch it to degrade gracefully.
+- `@mesh.service(min_available=N)` adds a consumer-local floor: below `N` resolved methods every facade call raises `mesh.MeshServiceUnavailableError` (settle-aware). Default `0` = no floor.
+- **Testing:** passing your own facade object for the view parameter skips the pre-invoke refusal and settle wait for that view — mock the facade directly in unit tests.
+- Views are a **tool-parameter** surface only: a view in `@mesh.route` boot-fails, and an undecorated subclass of a view is not a view (decorate the class directly).
+
+### Publishing a service (producer side)
+
+Give `@mesh.service` a **prefix** and the class becomes a producer: each public method (a real `async` implementation) publishes as an ordinary tool with capability `prefix.<method>`.
+
+```python
+@mesh.service("media")              # publishes media.caption, media.thumbnail
+class MediaTools:
+    async def caption(self, args: dict) -> dict:
+        return {"caption": f"a scene: {args['text']}"}
+    async def thumbnail(self, args: dict) -> dict:
+        return {"uri": f"thumb://{args['asset_id']}"}
+```
+
+- Methods publish **name-sorted** under dotted tool names; underscore-prefixed methods are skipped.
+- A method carrying its own `@mesh.tool` **wins** (keeps its declared capability/tags/version).
+- The class must be **zero-arg constructible** (instantiated once at decoration time to publish bound methods); the `prefix` is segment-validated against the dotted-capability grammar. A `@mesh.selector` inside a prefixed class is a **mixed-roles boot-fail**, and `min_available` is consumer-only.
+
 ## Proxy Configuration
 
 Per-dependency proxy options (timeout, retry, streaming, session affinity, auth, custom headers, etc.) are configured via `dependency_kwargs`. See `meshctl man proxies` for the full options table.

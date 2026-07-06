@@ -167,6 +167,7 @@ def _make_stream_wrapper(
     log: logging.Logger,
     settle_keys: Optional[list] = None,
     settle_params: Optional[list] = None,
+    view_slots: Optional[list] = None,
 ) -> Callable:
     """Build a wrapper that drives an async-iterator tool over MCP progress.
 
@@ -216,6 +217,7 @@ def _make_stream_wrapper(
             stream_wrapper._mesh_injected_deps,
             get_dependency_fn,
             log,
+            view_slots=view_slots,
         )
 
         original = func._mesh_original_func
@@ -293,6 +295,7 @@ def _build_clean_signature(func: Any) -> inspect.Signature | None:
         _get_original_func,
         analyze_mesh_job_signature,
         get_mesh_agent_parameter_names,
+        get_service_view_parameter_names,
     )
 
     # Respect explicit ``__signature__`` overrides. Decorators (e.g.
@@ -323,6 +326,13 @@ def _build_clean_signature(func: Any) -> inspect.Signature | None:
     mj = analyze_mesh_job_signature(original)
     if mj.mesh_job_param_name:
         injectable_names.add(mj.mesh_job_param_name)
+
+    # RFC #1280: a @mesh.service consumer-view parameter is framework-injected
+    # (a facade), so hide it from FastMCP's tools/list schema too.
+    try:
+        injectable_names.update(get_service_view_parameter_names(original))
+    except Exception:  # noqa: BLE001 - never block clean-signature on view introspection
+        pass
 
     if not injectable_names:
         return None
@@ -541,6 +551,20 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
         # propagate per the resolver contract.
         pass
 
+    # RFC #1280: @mesh.service consumer-view parameters are a NEW type-detected
+    # slot kind (a facade), NOT positional McpMeshTool targets. Exclude them so
+    # the untyped single-parameter heuristic never mistakes a lone view param
+    # for an injection target and so the "no McpMeshTool params" diagnostics
+    # aren't skewed. Injection into view slots is handled separately in the
+    # facade block of ``_prepare_injection_kwargs``.
+    view_positions: set[int] = set()
+    try:
+        from .signature_analyzer import get_service_view_positions
+
+        view_positions = set(get_service_view_positions(func))
+    except Exception:  # noqa: BLE001
+        pass
+
     # Strict-mode decoration-time promotion of the "eligible slots will
     # remain None" diagnostic, checked UP FRONT so every branch below —
     # including the early returns for single-MeshJob-param and
@@ -586,8 +610,10 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
 
     # Single parameter rule: inject regardless of typing. Only applies when
     # no params are hidden — a hidden single param is framework-bound by the
-    # hiding decorator itself, never an injection target.
-    if param_count == 1 and not has_hidden_params:
+    # hiding decorator itself, never an injection target — and when the lone
+    # param is not a @mesh.service view (RFC #1280: views are facade slots,
+    # never untyped single-parameter injection targets).
+    if param_count == 1 and not has_hidden_params and not view_positions:
         if not mesh_positions:
             if has_mesh_job_param:
                 # The single parameter is a MeshJob — the unified injection
@@ -688,6 +714,7 @@ def _prepare_injection_kwargs(
     injected_deps_array: list,
     get_dependency_fn: Callable[[str], Any | None],
     log: logging.Logger,
+    view_slots: Optional[list] = None,
 ) -> tuple[dict, int]:
     """Prepare kwargs with injected dependencies and LLM agent.
 
@@ -949,6 +976,34 @@ def _prepare_injection_kwargs(
             llm_agent = getattr(func, "_mesh_llm_agent", None)
             final_kwargs[llm_param] = llm_agent
             log.debug(f"{tp}🤖 LLM_INJECTION: Injected {llm_param}={llm_agent}")
+
+    # RFC #1280: inject a facade for each @mesh.service consumer-view parameter.
+    # Additive slot kind — the view-method deps live in ``injected_deps_array``
+    # at the appended indices recorded on each view slot, read by the facade at
+    # CALL time so rebinding via update_dependency is picked up transparently.
+    # A caller-supplied non-None value (mock contract) is left untouched.
+    if view_slots:
+        func_id = f"{func.__module__}.{func.__qualname__}"
+        for v in view_slots:
+            pname = v["param_name"]
+            if pname in final_kwargs and final_kwargs.get(pname) is not None:
+                continue
+            from .service_view import MeshServiceFacade
+
+            final_kwargs[pname] = MeshServiceFacade(
+                view_name=v["view_name"],
+                min_available=v["min_available"],
+                methods=v["methods"],
+                func_id=func_id,
+                injected_deps_array=injected_deps_array,
+                get_dependency_fn=get_dependency_fn,
+            )
+            injected_count += 1
+            log.debug(
+                f"{tp}🧩 VIEW_INJECTION: Injected facade for view "
+                f"{v['view_name']!r} into param {pname!r} "
+                f"({len(v['methods'])} method edge(s))"
+            )
 
     return final_kwargs, injected_count
 
@@ -1286,6 +1341,7 @@ class DependencyInjector:
         dependencies: list[str],
         route_required_caps: Optional[list[Optional[str]]] = None,
         tool_required_caps: Optional[list[Optional[str]]] = None,
+        view_slots: Optional[list] = None,
     ) -> Callable:
         """
         Create in-place dependency injection by modifying the original function.
@@ -1331,8 +1387,24 @@ class DependencyInjector:
         # every call (mirrors the claim dispatcher's mesh_job_dep_index skip).
         _tool_required_caps: list[Optional[str]] = list(tool_required_caps or [])
 
-        # Use new smart injection strategy
-        mesh_positions = analyze_injection_strategy(func, dependencies)
+        # RFC #1280: ``dependencies`` is the FULL edge list — explicit deps
+        # first, then each @mesh.service view's method edges (name-sorted)
+        # appended AFTER. The positional McpMeshTool/MeshJob pairing concerns
+        # ONLY the explicit prefix; view-method edges have no parameter of
+        # their own (a facade fans them out). Everything else keyed by
+        # dep_index (``_mesh_injected_deps`` sizing, the dependency mapping,
+        # settle keys, update_dependency, the required-refusal caps) spans the
+        # full list unchanged — so this is purely additive: a function with no
+        # view slots computes exactly as before.
+        _view_slots: list = list(view_slots or [])
+        _n_view_methods = sum(len(v["methods"]) for v in _view_slots)
+        _n_explicit = len(dependencies) - _n_view_methods
+
+        # Use new smart injection strategy — over the EXPLICIT prefix only, so
+        # the McpMeshTool positional pairing + diagnostics stay identical to
+        # the pre-view behaviour (view edges never pair with a McpMeshTool
+        # parameter).
+        mesh_positions = analyze_injection_strategy(func, dependencies[:_n_explicit])
 
         # Track which dependencies this function needs (using composite keys)
         for dep_index, dep in enumerate(dependencies):
@@ -1406,6 +1478,18 @@ class DependencyInjector:
                 settle_keys[_i] = f"{func_id}:dep_{_i}"
                 if _pos < len(_settle_param_names):
                     settle_params[_i] = _settle_param_names[_pos]
+        # RFC #1280: view-method edges are settle-covered too (item 2 + the
+        # floor's settle-aware wait). Map each edge's settle_params entry to the
+        # view's PARAMETER NAME so the documented mock contract works: a caller
+        # that supplies a fake facade for the view param skips both the settle
+        # wait and the required-edge pre-invoke refusal for ALL that view's
+        # edges (mirrors the McpMeshTool per-slot mock skip).
+        for _v in _view_slots:
+            for _m in _v["methods"]:
+                _di = _m["dep_index"]
+                if 0 <= _di < len(dependencies):
+                    settle_keys[_di] = f"{func_id}:dep_{_di}"
+                    settle_params[_di] = _v["param_name"]
         _settle_state = get_settle_state()
         for _key in settle_keys:
             if _key is not None:
@@ -1423,10 +1507,11 @@ class DependencyInjector:
                 _tool_required_caps[_mj_dep_index] = None
         _has_tool_required = any(c is not None for c in _tool_required_caps)
 
-        # If no mesh positions to inject AND no MeshJob slot, fall back to
-        # the minimal tracking wrapper. With a MeshJob slot we route to the
-        # full path so the auto-injection block at line ~439 can fire.
-        if not mesh_positions and not has_mesh_job_param:
+        # If no mesh positions to inject AND no MeshJob slot AND no service-view
+        # slot, fall back to the minimal tracking wrapper. With a MeshJob slot
+        # or a @mesh.service view we route to the full path so the auto-injection
+        # / facade blocks in ``_prepare_injection_kwargs`` can fire.
+        if not mesh_positions and not has_mesh_job_param and not _view_slots:
             logger.debug(
                 f"🔧 No injection positions for {func.__name__}, creating minimal wrapper for tracking"
             )
@@ -1648,6 +1733,7 @@ class DependencyInjector:
                 wrapper_logger,
                 settle_keys=settle_keys,
                 settle_params=settle_params,
+                view_slots=_view_slots,
             )
         elif need_async_wrapper:
 
@@ -1678,6 +1764,7 @@ class DependencyInjector:
                     dependency_wrapper._mesh_injected_deps,
                     self.get_dependency,
                     wrapper_logger,
+                    view_slots=_view_slots,
                 )
 
                 # Issue #1249 perimeter (shared helper; runs after settle).
@@ -1748,6 +1835,7 @@ class DependencyInjector:
                     dependency_wrapper._mesh_injected_deps,
                     self.get_dependency,
                     wrapper_logger,
+                    view_slots=_view_slots,
                 )
 
                 # Issue #1249 perimeter (shared helper; sync route variant).
