@@ -76,6 +76,7 @@ meshctl list                   # List healthy agents
 meshctl list --all             # Include unhealthy
 meshctl list --tools           # List all tools
 meshctl list --tools=add       # Show tool schema
+meshctl list --services        # Dot-namespaced capabilities grouped as services
 meshctl status                 # Show wiring details
 meshctl status my-agent        # Specific agent
 ```

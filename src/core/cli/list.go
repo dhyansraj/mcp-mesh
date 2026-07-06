@@ -67,6 +67,12 @@ Tools listing:
   meshctl list --tools=get_current_time           # Show tool call spec and input schema
   meshctl list --tools=system-agent:get_time      # Show tool details for specific agent
 
+Service grouping (RFC #1280 — derived from dot-namespaced capabilities):
+  meshctl list --services                         # Mesh-wide capabilities grouped by service
+                                                  #   (service = capability segments before the last dot;
+                                                  #    e.g. media.caption → service "media", method "caption")
+  meshctl list --services --json                  # Structured grouped JSON (services → methods → providers)
+
 Schema registry (issue #547):
   meshctl list --schemas                          # Most recent 100 canonical schemas
   meshctl list --schemas --limit 20               # Most recent 20
@@ -88,7 +94,12 @@ Schema registry (issue #547):
 	// Tools listing - use --tools to list all, --tools=<name> for specific tool details
 	cmd.Flags().StringP("tools", "t", "", "List tools: use --tools or -t to list all, --tools=<tool> for details")
 	cmd.Flags().Lookup("tools").NoOptDefVal = "all" // "all" means list all tools
-	cmd.Flags().Bool("show-framework", false, "Include framework-internal tools (__mesh_job_*) in --tools output")
+	cmd.Flags().Bool("show-framework", false, "Include framework-internal tools (__mesh_* synthetics) in --tools / --services output")
+
+	// RFC #1280 phase 4: mesh-wide service-grouped view. Grouping is DERIVED
+	// from dot-namespaced capability names (group = segments before the last
+	// dot); undotted capabilities are ungrouped and summarized as a count.
+	cmd.Flags().Bool("services", false, "Group capabilities into services derived from dotted capability names (e.g. media.caption → service 'media'); combines with --all, --json, --show-framework")
 
 	// Schema registry listing (issue #547). When set, --schemas short-circuits
 	// the agent listing and queries GET /schemas instead.
@@ -284,6 +295,13 @@ func runListCommand(cmd *cobra.Command, args []string) error {
 	if toolsFlagChanged {
 		showFramework, _ := cmd.Flags().GetBool("show-framework")
 		return runToolsListCommand(finalRegistryURL, toolsFlag, jsonOutput, !showAll, showFramework)
+	}
+
+	// RFC #1280 phase 4: mesh-wide service-grouped view (derived from dotted
+	// capability names). Short-circuits the agent listing like --tools/--schemas.
+	if servicesFlag, _ := cmd.Flags().GetBool("services"); servicesFlag {
+		showFramework, _ := cmd.Flags().GetBool("show-framework")
+		return runServicesListCommand(finalRegistryURL, jsonOutput, !showAll, showFramework)
 	}
 
 	// Collect all information
@@ -1581,22 +1599,88 @@ func printVerboseDetails(agents []EnhancedAgent) {
 
 		if len(agent.Tools) > 0 {
 			fmt.Printf("  Tools:\n")
-			for _, tool := range agent.Tools {
-				if tool.Available != nil && !*tool.Available {
-					reason := tool.UnavailableReason
-					if reason == "" {
-						reason = "required dependency unavailable"
+			// RFC #1280 phase 4: dotted capabilities render under a service
+			// header; undotted ones keep the flat "- <name> (<capability>)" form.
+			for _, group := range groupCapabilitiesByService(agent.Tools) {
+				if group.Service != "" {
+					fmt.Printf("    %s/ (%d %s)\n", group.Service, len(group.Tools), pluralMethods(len(group.Tools)))
+					for _, tool := range group.Tools {
+						fmt.Printf("    %s\n", formatVerboseToolLine(tool, "  "))
 					}
-					fmt.Printf("    - %s (%s) %s[unavailable: %s]%s\n",
-						tool.Name, tool.Capability, colorRed, reason, colorReset)
 				} else {
-					fmt.Printf("    - %s (%s)\n", tool.Name, tool.Capability)
+					for _, tool := range group.Tools {
+						fmt.Printf("    %s\n", formatVerboseToolLine(tool, ""))
+					}
+				}
+			}
+		}
+
+		// RFC #1280 phase 4: dependency resolutions are the consumer-side, per-
+		// method multi-agent binding view — group dotted deps by service, each
+		// row keeping its resolved provider agent id + status.
+		if len(agent.DependencyResolutions) > 0 {
+			fmt.Printf("  Dependencies:\n")
+			for _, group := range groupResolutionsByService(agent.DependencyResolutions) {
+				if group.Service != "" {
+					fmt.Printf("    %s/ (%d %s)\n", group.Service, len(group.Resolutions), pluralMethods(len(group.Resolutions)))
+					for _, res := range group.Resolutions {
+						fmt.Printf("    %s\n", formatVerboseResolutionLine(res, "  "))
+					}
+				} else {
+					for _, res := range group.Resolutions {
+						fmt.Printf("    %s\n", formatVerboseResolutionLine(res, ""))
+					}
 				}
 			}
 		}
 
 		fmt.Println()
 	}
+}
+
+// formatVerboseToolLine renders one "- <name> (<capability>)" tool line with the
+// existing red unavailable suffix. indent is extra leading whitespace applied
+// under a service header.
+func formatVerboseToolLine(tool ToolInfo, indent string) string {
+	if tool.Available != nil && !*tool.Available {
+		reason := tool.UnavailableReason
+		if reason == "" {
+			reason = "required dependency unavailable"
+		}
+		return fmt.Sprintf("%s- %s (%s) %s[unavailable: %s]%s",
+			indent, tool.Name, tool.Capability, colorRed, reason, colorReset)
+	}
+	return fmt.Sprintf("%s- %s (%s)", indent, tool.Name, tool.Capability)
+}
+
+// formatVerboseResolutionLine renders one dependency-resolution line
+// "- <capability> → <provider> [<status>]", keeping the provider agent id so a
+// service's methods can show their (possibly different) bound providers.
+func formatVerboseResolutionLine(res DependencyResolution, indent string) string {
+	provider := res.ProviderAgentID
+	if provider == "" {
+		provider = "(unresolved)"
+	}
+	status := res.Status
+	if status == "" {
+		status = "unknown"
+	}
+	statusColor := colorReset
+	switch strings.ToLower(res.Status) {
+	case "available", "resolved":
+		statusColor = colorGreen
+	case "unavailable", "unresolved", "":
+		statusColor = colorRed
+	}
+	return fmt.Sprintf("%s- %s → %s %s[%s]%s",
+		indent, res.Capability, provider, statusColor, status, colorReset)
+}
+
+func pluralMethods(n int) string {
+	if n == 1 {
+		return "method"
+	}
+	return "methods"
 }
 
 func formatDuration(d time.Duration) string {
@@ -2364,10 +2448,324 @@ func formatToolUnavailableMarker(tool ToolListItem) string {
 	return ""
 }
 
+// =============================================================================
+// RFC #1280 phase 4 — display-only service grouping DERIVED from dotted
+// capability names. group = segments before the LAST dot; undotted names are
+// ungrouped. Zero wire/registry changes.
+// =============================================================================
+
+// splitServiceCapability splits a dotted capability into its service prefix and
+// method by the LAST dot: "media.v2.caption" → ("media.v2", "caption"). An
+// undotted name (or a degenerate leading/trailing-dot name the registry would
+// have rejected) is ungrouped: "greeting" → ("", "greeting").
+func splitServiceCapability(name string) (service, method string) {
+	idx := strings.LastIndex(name, ".")
+	if idx <= 0 || idx == len(name)-1 {
+		return "", name
+	}
+	return name[:idx], name[idx+1:]
+}
+
+// serviceGroup is a service prefix and its capabilities (already method-sorted).
+type serviceGroup struct {
+	Service string // "" for the ungrouped bucket
+	Tools   []ToolInfo
+}
+
+// groupCapabilitiesByService groups tools by their derived service prefix.
+// Ordering is deterministic: services sorted alphabetically FIRST, then the
+// ungrouped ("") bucket LAST; within each group, tools are sorted by capability.
+func groupCapabilitiesByService(tools []ToolInfo) []serviceGroup {
+	byService := map[string][]ToolInfo{}
+	for _, t := range tools {
+		svc, _ := splitServiceCapability(t.Capability)
+		byService[svc] = append(byService[svc], t)
+	}
+	services := make([]string, 0, len(byService))
+	for s := range byService {
+		if s != "" {
+			services = append(services, s)
+		}
+	}
+	sort.Strings(services)
+	if _, ok := byService[""]; ok {
+		services = append(services, "") // ungrouped last
+	}
+	out := make([]serviceGroup, 0, len(services))
+	for _, s := range services {
+		ts := byService[s]
+		sort.Slice(ts, func(i, j int) bool { return ts[i].Capability < ts[j].Capability })
+		out = append(out, serviceGroup{Service: s, Tools: ts})
+	}
+	return out
+}
+
+// resolutionGroup is the dependency-resolution analogue of serviceGroup.
+type resolutionGroup struct {
+	Service     string
+	Resolutions []DependencyResolution
+}
+
+// groupResolutionsByService groups dependency resolutions by their derived
+// service prefix, same ordering contract as groupCapabilitiesByService (services
+// sorted first, ungrouped last; sorted by capability within a group).
+func groupResolutionsByService(res []DependencyResolution) []resolutionGroup {
+	byService := map[string][]DependencyResolution{}
+	for _, r := range res {
+		svc, _ := splitServiceCapability(r.Capability)
+		byService[svc] = append(byService[svc], r)
+	}
+	services := make([]string, 0, len(byService))
+	for s := range byService {
+		if s != "" {
+			services = append(services, s)
+		}
+	}
+	sort.Strings(services)
+	if _, ok := byService[""]; ok {
+		services = append(services, "")
+	}
+	out := make([]resolutionGroup, 0, len(services))
+	for _, s := range services {
+		rs := byService[s]
+		sort.Slice(rs, func(i, j int) bool { return rs[i].Capability < rs[j].Capability })
+		out = append(out, resolutionGroup{Service: s, Resolutions: rs})
+	}
+	return out
+}
+
+// --- mesh-wide service view (--services) ------------------------------------
+
+// svcProvider is one agent that provides a service method.
+type svcProvider struct {
+	AgentID           string `json:"agent_id"`
+	AgentName         string `json:"agent_name"`
+	Available         *bool  `json:"available,omitempty"`
+	UnavailableReason string `json:"unavailable_reason,omitempty"`
+}
+
+// svcMethod is one capability (method) and every agent providing it.
+type svcMethod struct {
+	Method     string        `json:"method"`
+	Capability string        `json:"capability"`
+	Providers  []svcProvider `json:"providers"`
+}
+
+// svcEntry is one service prefix and its methods.
+type svcEntry struct {
+	Service string      `json:"service"`
+	Methods []svcMethod `json:"methods"`
+}
+
+// serviceGroupView is the assembled mesh-wide grouped view (--services). The
+// JSON shape is {services:[{service,methods:[{method,capability,providers:[...]}]}],
+// ungrouped:[{method,capability,providers}]}. Both top-level fields are ALWAYS
+// arrays (never null/omitted) so consumers can iterate unconditionally.
+type serviceGroupView struct {
+	Services  []svcEntry  `json:"services"`
+	Ungrouped []svcMethod `json:"ungrouped"`
+}
+
+// ungroupedCount is the number of distinct undotted capabilities (each is a
+// `--tools` row hidden from the grouped view).
+func (v serviceGroupView) ungroupedCount() int { return len(v.Ungrouped) }
+
+// buildServiceGroupView assembles the mesh-wide grouped view across every
+// agent's capabilities. One provider entry per (capability, agent). Ordering is
+// deterministic: services then methods (by capability) then providers (by
+// agent id); the ungrouped bucket is capability-sorted. When showFramework is
+// false, framework-internal __mesh_* synthetics are excluded (same predicate/key
+// as `--tools`); when true they group by their names as ordinary entries.
+func buildServiceGroupView(agents []EnhancedAgent, showFramework bool) serviceGroupView {
+	// service -> capability -> method accumulator
+	type acc struct {
+		method    string
+		providers []svcProvider
+		seenAgent map[string]bool
+	}
+	grouped := map[string]map[string]*acc{}
+	ungrouped := map[string]*acc{}
+
+	addProvider := func(bucket map[string]*acc, capability, method string, p svcProvider) {
+		a := bucket[capability]
+		if a == nil {
+			a = &acc{method: method, seenAgent: map[string]bool{}}
+			bucket[capability] = a
+		}
+		// Dedupe by agent id: an agent registering the same capability via two
+		// functions yields identical provider rows (the entry carries no
+		// function name), so keep the first.
+		if a.seenAgent[p.AgentID] {
+			return
+		}
+		a.seenAgent[p.AgentID] = true
+		a.providers = append(a.providers, p)
+	}
+
+	for _, agent := range agents {
+		for _, tool := range agent.Tools {
+			// Exclude framework-internal __mesh_* synthetics unless --show-framework
+			// — the SAME predicate (on the same function-name key) `--tools` uses,
+			// so the ungrouped count reconciles with `--tools` (RFC #1280 phase 4).
+			funcName := tool.FunctionName
+			if funcName == "" {
+				funcName = tool.Name
+			}
+			if !showFramework && isFrameworkInternalTool(funcName) {
+				continue
+			}
+			svc, method := splitServiceCapability(tool.Capability)
+			p := svcProvider{
+				AgentID:           agent.ID,
+				AgentName:         agent.Name,
+				Available:         tool.Available,
+				UnavailableReason: tool.UnavailableReason,
+			}
+			if svc == "" {
+				addProvider(ungrouped, tool.Capability, method, p)
+				continue
+			}
+			if grouped[svc] == nil {
+				grouped[svc] = map[string]*acc{}
+			}
+			addProvider(grouped[svc], tool.Capability, method, p)
+		}
+	}
+
+	sortProviders := func(ps []svcProvider) {
+		sort.Slice(ps, func(i, j int) bool { return ps[i].AgentID < ps[j].AgentID })
+	}
+	buildMethods := func(bucket map[string]*acc) []svcMethod {
+		caps := make([]string, 0, len(bucket))
+		for c := range bucket {
+			caps = append(caps, c)
+		}
+		sort.Strings(caps)
+		methods := make([]svcMethod, 0, len(caps))
+		for _, c := range caps {
+			a := bucket[c]
+			sortProviders(a.providers)
+			methods = append(methods, svcMethod{Method: a.method, Capability: c, Providers: a.providers})
+		}
+		return methods
+	}
+
+	services := make([]string, 0, len(grouped))
+	for s := range grouped {
+		services = append(services, s)
+	}
+	sort.Strings(services)
+
+	// Always non-nil slices so --json emits [] (never null) when empty.
+	view := serviceGroupView{Services: []svcEntry{}}
+	for _, s := range services {
+		view.Services = append(view.Services, svcEntry{Service: s, Methods: buildMethods(grouped[s])})
+	}
+	view.Ungrouped = buildMethods(ungrouped)
+	return view
+}
+
+// runServicesListCommand renders the mesh-wide, service-grouped capability view
+// derived from dot-namespaced capability names (RFC #1280 phase 4).
+func runServicesListCommand(registryURL string, jsonOutput, healthyOnly, showFramework bool) error {
+	agents, err := getEnhancedAgents(registryURL)
+	if err != nil {
+		return fmt.Errorf("failed to get agents from registry: %w", err)
+	}
+	if healthyOnly {
+		agents = filterHealthyAgents(agents)
+	}
+
+	view := buildServiceGroupView(agents, showFramework)
+
+	if jsonOutput {
+		data, err := json.MarshalIndent(view, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal JSON: %w", err)
+		}
+		fmt.Println(string(data))
+		return nil
+	}
+
+	return outputServiceGroupView(view)
+}
+
+// serviceProviderStatus renders the STATUS cell for a provider row.
+func serviceProviderStatus(p svcProvider) string {
+	if p.Available != nil && !*p.Available {
+		reason := p.UnavailableReason
+		if reason == "" {
+			reason = "required dependency unavailable"
+		}
+		return fmt.Sprintf("%sunavailable (%s)%s", colorRed, reason, colorReset)
+	}
+	return "available"
+}
+
+func outputServiceGroupView(view serviceGroupView) error {
+	if len(view.Services) == 0 {
+		fmt.Println("No dot-namespaced services found")
+		if n := view.ungroupedCount(); n > 0 {
+			fmt.Printf("\n(%d ungrouped %s not shown — use --tools)\n", n, pluralCapabilities(n))
+		}
+		return nil
+	}
+
+	// Column widths. Providers are shown by agent name (falling back to id).
+	svcWidth, methodWidth, agentWidth := len("SERVICE"), len("METHOD"), len("AGENT")
+	agentLabel := func(p svcProvider) string {
+		if p.AgentName != "" {
+			return p.AgentName
+		}
+		return p.AgentID
+	}
+	for _, e := range view.Services {
+		if len(e.Service) > svcWidth {
+			svcWidth = len(e.Service)
+		}
+		for _, m := range e.Methods {
+			if len(m.Method) > methodWidth {
+				methodWidth = len(m.Method)
+			}
+			for _, p := range m.Providers {
+				if l := len(agentLabel(p)); l > agentWidth {
+					agentWidth = l
+				}
+			}
+		}
+	}
+
+	fmt.Printf("%-*s  %-*s  %-*s  %s\n", svcWidth, "SERVICE", methodWidth, "METHOD", agentWidth, "AGENT", "STATUS")
+	fmt.Println(strings.Repeat("-", svcWidth+methodWidth+agentWidth+30))
+	for _, e := range view.Services {
+		for _, m := range e.Methods {
+			for _, p := range m.Providers {
+				// Service repeated per row (matches the other list tables).
+				fmt.Printf("%-*s  %-*s  %-*s  %s\n",
+					svcWidth, e.Service, methodWidth, m.Method,
+					agentWidth, agentLabel(p), serviceProviderStatus(p))
+			}
+		}
+	}
+
+	if n := view.ungroupedCount(); n > 0 {
+		fmt.Printf("\n(%d ungrouped %s not shown — use --tools)\n", n, pluralCapabilities(n))
+	}
+	return nil
+}
+
+func pluralCapabilities(n int) string {
+	if n == 1 {
+		return "capability"
+	}
+	return "capabilities"
+}
+
 // runToolsListCommand handles the --tools flag. When showFramework is false
-// (default), framework-internal tools whose function name starts with
-// "__mesh_job_" are filtered out of both the list view and the per-tool
-// lookup so end users see only application capabilities (issue #956 #15).
+// (default), framework-internal tools whose function name starts with the
+// reserved "__mesh_" prefix are filtered out of both the list view and the
+// per-tool lookup so end users see only application capabilities (issue #956
+// #15, RFC #1280).
 func runToolsListCommand(registryURL, toolSpec string, jsonOutput, healthyOnly, showFramework bool) error {
 	// Get enhanced agents from registry
 	enhancedAgents, err := getEnhancedAgents(registryURL)
@@ -2499,11 +2897,26 @@ type toolCollisionRow struct {
 }
 
 // isFrameworkInternalTool reports whether a tool function name is a
-// framework-internal capability (e.g. __mesh_job_status, __mesh_job_result)
-// that the runtime registers automatically on every MeshJob-capable agent.
-// These flood `meshctl list --tools` with noise and are hidden by default.
-// Pass --show-framework to surface them. See issue #956 item #15.
+// framework-internal, wire-level synthetic that the runtime registers
+// automatically — the MeshJob helpers (__mesh_job_status/result/cancel) and the
+// synthetic dependency-carrier tools (__mesh_service_deps, __mesh_route_deps,
+// __mesh_a2a_deps, __mesh_depends_on_deps). All share the reserved "__mesh_"
+// prefix, none is a user-callable capability, and they flood `meshctl list
+// --tools` / the --services grouping with noise, so they are hidden by default.
+// Pass --show-framework to surface them. See issue #956 item #15, RFC #1280.
 func isFrameworkInternalTool(funcName string) bool {
+	return strings.HasPrefix(funcName, "__mesh_")
+}
+
+// isSharedStateJobHelper reports whether a tool function name is a MeshJob
+// helper (__mesh_job_status/result/cancel). These auto-register on EVERY
+// MeshJob-capable agent and read/write the SAME registry-backed job state, so a
+// bare multi-agent match can pick any healthy one deterministically-enough
+// (issue #956 #14). This is DELIBERATELY narrower than isFrameworkInternalTool:
+// the synthetic dependency-carrier tools (__mesh_*_deps) are PER-AGENT wire
+// artifacts with no shared state, so they must NOT get the collision bypass —
+// only the "hide from listing" treatment.
+func isSharedStateJobHelper(funcName string) bool {
 	return strings.HasPrefix(funcName, "__mesh_job_")
 }
 
@@ -2554,9 +2967,16 @@ func outputToolsList(tools []ToolListItem, jsonOutput bool) error {
 		return nil
 	}
 
-	// Sort by tool name
+	// Sort by capability so dot-namespaced service members cluster together
+	// (RFC #1280 phase 4). Tie-break by tool name then agent id for determinism.
 	sort.Slice(tools, func(i, j int) bool {
-		return tools[i].ToolName < tools[j].ToolName
+		if tools[i].Capability != tools[j].Capability {
+			return tools[i].Capability < tools[j].Capability
+		}
+		if tools[i].ToolName != tools[j].ToolName {
+			return tools[i].ToolName < tools[j].ToolName
+		}
+		return tools[i].AgentID < tools[j].AgentID
 	})
 
 	// Calculate column widths

@@ -42,9 +42,9 @@ type MCPError struct {
 
 // MCPCallResult holds the result and trace information from an MCP call
 type MCPCallResult struct {
-	Result   json.RawMessage
-	TraceID  string // X-Trace-Id header
-	SpanID   string // X-Span-Id header
+	Result  json.RawMessage
+	TraceID string // X-Trace-Id header
+	SpanID  string // X-Span-Id header
 }
 
 // TraceContext holds trace IDs for distributed tracing
@@ -496,11 +496,13 @@ func findAgentWithTool(client *http.Client, registryURL, agentName, toolName str
 	}
 
 	if len(matches) > 1 {
-		// Framework-internal helpers (__mesh_job_*) auto-register on every
-		// MeshJob-capable agent and read/write the same registry-backed state.
-		// Picking any healthy match is semantically correct. Only apply the
-		// ambiguity UX (issue #956 item #14) to capability tools.
-		if agentName == "" && isFrameworkInternalTool(toolName) {
+		// MeshJob helpers (__mesh_job_*) auto-register on every MeshJob-capable
+		// agent and read/write the same registry-backed job state, so picking any
+		// healthy match is semantically correct. This bypass is scoped to the
+		// shared-state helpers ONLY — other __mesh_* synthetics (e.g. the
+		// per-agent __mesh_*_deps carriers) still get the ambiguity UX (issue
+		// #956 item #14) since matches[0] would route nondeterministically.
+		if agentName == "" && isSharedStateJobHelper(toolName) {
 			return matches[0].endpoint, matches[0].functionName, nil
 		}
 		rows := make([]toolCollisionRow, len(matches))
@@ -617,11 +619,12 @@ func findAgentWithToolIngress(client *http.Client, ingressURL, ingressDomain, ag
 	}
 
 	if len(matches) > 1 {
-		// Framework-internal helpers (__mesh_job_*) auto-register on every
-		// MeshJob-capable agent and read/write the same registry-backed state.
-		// Picking any healthy match is semantically correct. Only apply the
-		// ambiguity UX (issue #956 item #14) to capability tools.
-		if agentName == "" && isFrameworkInternalTool(toolName) {
+		// MeshJob helpers (__mesh_job_*) auto-register on every MeshJob-capable
+		// agent and read/write the same registry-backed job state, so picking any
+		// healthy match is semantically correct. Scoped to the shared-state
+		// helpers ONLY — other __mesh_* synthetics (e.g. per-agent __mesh_*_deps
+		// carriers) still get the ambiguity UX (issue #956 item #14).
+		if agentName == "" && isSharedStateJobHelper(toolName) {
 			m := matches[0]
 			if m.agent.Endpoint == "" {
 				return "", "", "", fmt.Errorf("agent '%s' has tool '%s' but no endpoint", m.agent.ID, m.functionName)

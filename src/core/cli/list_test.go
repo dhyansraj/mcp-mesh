@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -625,4 +626,244 @@ func TestProcessAgentData_ParsesAvailability(t *testing.T) {
 
 	// And the derived aggregate the row marker uses.
 	assert.Equal(t, 1, countUnavailableCapabilities(agent))
+}
+
+// --- RFC #1280 phase 4: service grouping (display-only) ---------------------
+
+func TestSplitServiceCapability(t *testing.T) {
+	cases := []struct {
+		name, wantService, wantMethod string
+	}{
+		{"media.caption", "media", "caption"},       // single-segment prefix
+		{"media.v2.caption", "media.v2", "caption"}, // multi-segment prefix
+		{"greeting", "", "greeting"},                // undotted → ungrouped
+		{"a.b.c.d", "a.b.c", "d"},                   // deep nesting
+		{".leading", "", ".leading"},                // degenerate → ungrouped
+		{"trailing.", "", "trailing."},              // degenerate → ungrouped
+	}
+	for _, c := range cases {
+		svc, method := splitServiceCapability(c.name)
+		assert.Equal(t, c.wantService, svc, "service for %q", c.name)
+		assert.Equal(t, c.wantMethod, method, "method for %q", c.name)
+	}
+}
+
+func TestGroupCapabilitiesByService(t *testing.T) {
+	tools := []ToolInfo{
+		{Name: "zeta", Capability: "media.zeta"},
+		{Name: "caption", Capability: "media.caption"},
+		{Name: "greeting", Capability: "greeting"}, // ungrouped
+		{Name: "encode", Capability: "audio.encode"},
+		{Name: "solo", Capability: "solo.only"}, // single tool in a group
+	}
+	groups := groupCapabilitiesByService(tools)
+
+	// Services sorted alphabetically, ungrouped LAST.
+	require.Len(t, groups, 4)
+	assert.Equal(t, "audio", groups[0].Service)
+	assert.Equal(t, "media", groups[1].Service)
+	assert.Equal(t, "solo", groups[2].Service)
+	assert.Equal(t, "", groups[3].Service) // ungrouped last
+
+	// Methods sorted by capability within a group.
+	require.Len(t, groups[1].Tools, 2)
+	assert.Equal(t, "media.caption", groups[1].Tools[0].Capability)
+	assert.Equal(t, "media.zeta", groups[1].Tools[1].Capability)
+
+	// Single tool in a group.
+	require.Len(t, groups[2].Tools, 1)
+	assert.Equal(t, "solo.only", groups[2].Tools[0].Capability)
+
+	// Ungrouped bucket.
+	require.Len(t, groups[3].Tools, 1)
+	assert.Equal(t, "greeting", groups[3].Tools[0].Capability)
+}
+
+func TestGroupCapabilitiesByService_NoDots(t *testing.T) {
+	groups := groupCapabilitiesByService([]ToolInfo{
+		{Capability: "b"}, {Capability: "a"},
+	})
+	require.Len(t, groups, 1)
+	assert.Equal(t, "", groups[0].Service)
+	assert.Equal(t, "a", groups[0].Tools[0].Capability)
+	assert.Equal(t, "b", groups[0].Tools[1].Capability)
+}
+
+func TestBuildServiceGroupView_MultiAgentAndUngrouped(t *testing.T) {
+	base := time.Now()
+	capA := testAgent("caption-provider-abc", "caption-provider", "healthy", base, nil)
+	capA.Tools = []ToolInfo{{Name: "caption", Capability: "media.caption", Available: boolPtr(true)}}
+
+	// Same capability from a second agent → one provider row per (cap, agent).
+	capB := testAgent("caption-backup-def", "caption-backup", "healthy", base, nil)
+	capB.Tools = []ToolInfo{{Name: "caption", Capability: "media.caption", Available: boolPtr(true)}}
+
+	thumb := testAgent("thumb-xyz", "thumb-provider", "healthy", base, nil)
+	thumb.Tools = []ToolInfo{
+		{Name: "thumbnail", Capability: "media.thumbnail", Available: boolPtr(false), UnavailableReason: "dep down"},
+		{Name: "greet", Capability: "greeting"}, // ungrouped
+		// Framework-internal synthetics must be excluded entirely — they must
+		// not appear in any group NOR inflate the ungrouped count (the note
+		// sends users to --tools, which filters these identically).
+		{Name: "__mesh_service_deps", FunctionName: "__mesh_service_deps", Capability: "__mesh_service_deps"},
+		{Name: "__mesh_job_status", FunctionName: "__mesh_job_status", Capability: "__mesh_job_status"},
+	}
+
+	view := buildServiceGroupView([]EnhancedAgent{thumb, capB, capA}, false)
+
+	// One service ("media"), methods sorted by capability.
+	require.Len(t, view.Services, 1)
+	assert.Equal(t, "media", view.Services[0].Service)
+	methods := view.Services[0].Methods
+	require.Len(t, methods, 2)
+	assert.Equal(t, "media.caption", methods[0].Capability)
+	assert.Equal(t, "caption", methods[0].Method)
+	assert.Equal(t, "media.thumbnail", methods[1].Capability)
+
+	// media.caption has two providers, sorted by agent id.
+	require.Len(t, methods[0].Providers, 2)
+	assert.Equal(t, "caption-backup-def", methods[0].Providers[0].AgentID)
+	assert.Equal(t, "caption-provider-abc", methods[0].Providers[1].AgentID)
+
+	// Ungrouped capability tracked + counted — framework synthetics excluded,
+	// so only "greeting" remains and N is 1 (reconciles with --tools).
+	require.Len(t, view.Ungrouped, 1)
+	assert.Equal(t, "greeting", view.Ungrouped[0].Capability)
+	assert.Equal(t, 1, view.ungroupedCount())
+
+	// No __mesh_* synthetic leaks anywhere in the view.
+	for _, e := range view.Services {
+		for _, m := range e.Methods {
+			assert.NotContains(t, m.Capability, "__mesh_", "framework synthetic must not appear in a service group")
+		}
+	}
+	for _, m := range view.Ungrouped {
+		assert.NotContains(t, m.Capability, "__mesh_", "framework synthetic must not appear in the ungrouped bucket")
+	}
+}
+
+func TestServiceProviderStatus(t *testing.T) {
+	assert.Equal(t, "available", serviceProviderStatus(svcProvider{Available: boolPtr(true)}))
+	assert.Equal(t, "available", serviceProviderStatus(svcProvider{})) // nil = available
+	un := serviceProviderStatus(svcProvider{Available: boolPtr(false), UnavailableReason: "dep down"})
+	assert.Contains(t, un, "unavailable")
+	assert.Contains(t, un, "dep down")
+	assert.Contains(t, un, colorRed)
+}
+
+func TestGroupResolutionsByService(t *testing.T) {
+	res := []DependencyResolution{
+		{Capability: "media.thumbnail", ProviderAgentID: "t1", Status: "available"},
+		{Capability: "media.caption", ProviderAgentID: "c1", Status: "available"},
+		{Capability: "date_service", ProviderAgentID: "d1", Status: "unresolved"}, // ungrouped
+	}
+	groups := groupResolutionsByService(res)
+	require.Len(t, groups, 2)
+	assert.Equal(t, "media", groups[0].Service)
+	require.Len(t, groups[0].Resolutions, 2)
+	assert.Equal(t, "media.caption", groups[0].Resolutions[0].Capability) // sorted
+	assert.Equal(t, "media.thumbnail", groups[0].Resolutions[1].Capability)
+	assert.Equal(t, "", groups[1].Service) // ungrouped last
+	assert.Equal(t, "date_service", groups[1].Resolutions[0].Capability)
+}
+
+// TestServiceGroupView_EmptyMarshalsArrays guards the HIGH-1 fix: an empty
+// --services --json view must emit {"services":[],"ungrouped":[]} (arrays, never
+// null/omitted) so consumers iterate unconditionally.
+func TestServiceGroupView_EmptyMarshalsArrays(t *testing.T) {
+	view := buildServiceGroupView(nil, false)
+	require.NotNil(t, view.Services)
+	require.NotNil(t, view.Ungrouped)
+
+	data, err := json.Marshal(view)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"services":[],"ungrouped":[]}`, string(data))
+}
+
+// TestBuildServiceGroupView_ShowFramework verifies MED-2: with showFramework the
+// __mesh_* synthetics group by their names as ordinary entries.
+func TestBuildServiceGroupView_ShowFramework(t *testing.T) {
+	base := time.Now()
+	agent := testAgent("a-1", "a", "healthy", base, nil)
+	agent.Tools = []ToolInfo{
+		{Name: "caption", Capability: "media.caption"},
+		{Name: "__mesh_service_deps", FunctionName: "__mesh_service_deps", Capability: "__mesh_service_deps"},
+		{Name: "__mesh_job_status", FunctionName: "__mesh_job_status", Capability: "__mesh_job_status"},
+	}
+
+	// Default: synthetics excluded.
+	hidden := buildServiceGroupView([]EnhancedAgent{agent}, false)
+	require.Len(t, hidden.Services, 1)
+	assert.Equal(t, "media", hidden.Services[0].Service)
+	assert.Empty(t, hidden.Ungrouped)
+
+	// --show-framework: synthetics appear as ordinary entries (undotted →
+	// ungrouped by their names).
+	shown := buildServiceGroupView([]EnhancedAgent{agent}, true)
+	caps := map[string]bool{}
+	for _, m := range shown.Ungrouped {
+		caps[m.Capability] = true
+	}
+	assert.True(t, caps["__mesh_service_deps"], "framework synthetic must appear with --show-framework")
+	assert.True(t, caps["__mesh_job_status"], "framework synthetic must appear with --show-framework")
+}
+
+// TestOutputServiceGroupView_TableAndNote covers the table rendering + the
+// ungrouped-note path (both flagged as untested).
+func TestOutputServiceGroupView_TableAndNote(t *testing.T) {
+	base := time.Now()
+	a := testAgent("cap-1", "caption-provider", "healthy", base, nil)
+	a.Tools = []ToolInfo{
+		{Name: "caption", Capability: "media.caption", Available: boolPtr(true)},
+		{Name: "thumbnail", Capability: "media.thumbnail", Available: boolPtr(false), UnavailableReason: "dep down"},
+		{Name: "greet", Capability: "greeting"}, // ungrouped → note
+	}
+	view := buildServiceGroupView([]EnhancedAgent{a}, false)
+
+	out := captureStdout(t, func() {
+		require.NoError(t, outputServiceGroupView(view))
+	})
+	assert.Contains(t, out, "SERVICE")
+	assert.Contains(t, out, "METHOD")
+	assert.Contains(t, out, "media")
+	assert.Contains(t, out, "caption")
+	assert.Contains(t, out, "caption-provider")
+	assert.Contains(t, out, "available")
+	assert.Contains(t, out, "unavailable (dep down)")
+	// One ungrouped capability -> singular note pointing at --tools.
+	assert.Contains(t, out, "(1 ungrouped capability not shown — use --tools)")
+}
+
+// TestOutputServiceGroupView_EmptyWithUngroupedNote covers the no-services path.
+func TestOutputServiceGroupView_EmptyWithUngroupedNote(t *testing.T) {
+	base := time.Now()
+	a := testAgent("u-1", "u", "healthy", base, nil)
+	a.Tools = []ToolInfo{{Name: "greet", Capability: "greeting"}, {Name: "farewell", Capability: "farewell"}}
+	view := buildServiceGroupView([]EnhancedAgent{a}, false)
+
+	out := captureStdout(t, func() {
+		require.NoError(t, outputServiceGroupView(view))
+	})
+	assert.Contains(t, out, "No dot-namespaced services found")
+	assert.Contains(t, out, "(2 ungrouped capabilities not shown — use --tools)")
+}
+
+// TestBuildServiceGroupView_DedupeProviderByAgent verifies one provider row per
+// (capability, agent): an agent registering the same capability via two
+// functions produces indistinguishable provider entries, so they collapse.
+func TestBuildServiceGroupView_DedupeProviderByAgent(t *testing.T) {
+	base := time.Now()
+	a := testAgent("dup-1", "dup-provider", "healthy", base, nil)
+	a.Tools = []ToolInfo{
+		{Name: "caption_a", FunctionName: "caption_a", Capability: "media.caption", Available: boolPtr(true)},
+		{Name: "caption_b", FunctionName: "caption_b", Capability: "media.caption", Available: boolPtr(true)},
+	}
+
+	view := buildServiceGroupView([]EnhancedAgent{a}, false)
+	require.Len(t, view.Services, 1)
+	require.Len(t, view.Services[0].Methods, 1)
+	assert.Equal(t, "media.caption", view.Services[0].Methods[0].Capability)
+	require.Len(t, view.Services[0].Methods[0].Providers, 1,
+		"one provider row per (capability, agent) despite two registering functions")
+	assert.Equal(t, "dup-1", view.Services[0].Methods[0].Providers[0].AgentID)
 }

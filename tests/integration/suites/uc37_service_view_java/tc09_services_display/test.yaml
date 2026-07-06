@@ -1,0 +1,200 @@
+# tc09_services_display — RFC #1280 PHASE 4: `meshctl list --services`, the
+# mesh-wide SERVICE/METHOD/AGENT/STATUS view derived from dot-namespaced
+# capability names (group = segments before the last dot; undotted
+# capabilities fall into an "ungrouped" bucket surfaced only as a trailing
+# "use --tools" note in table form).
+#
+# Topology: java-view-producer (dotted svc.alpha/svc.bravo via the phase-3
+# sugar) + provider-alpha (undotted view-cap-alpha/tp-cap-alpha) — the
+# undotted agent gives the ungrouped bucket something user-visible to carry.
+#
+# Design guarantees under test (the --json output is THE contract; the table
+# check is secondary and deliberately tolerant):
+#   1. Grouping: service "svc" exists with exactly the methods alpha+bravo,
+#      each carrying capability svc.<method> and ONE provider whose
+#      agent_name is java-view-producer with available==true.
+#   2. Ungrouped bucket: the undotted view-cap-alpha lands in .ungrouped —
+#      MEMBERSHIP only, never an exact bucket count. The grouped view DOES
+#      exclude framework-internal __mesh_* synthetics by default (same
+#      predicate as --tools; --show-framework opts them back in for both
+#      views), so the bucket carries only user capabilities — but its size
+#      is still topology-dependent: any other agent in the test container's
+#      mesh may contribute its own undotted capabilities, so pinning N would
+#      couple this TC to unrelated fixtures.
+#   3. Table form renders the header, the producer row, and the trailing
+#      ungrouped note ("use --tools").
+#   4. Healthy-only default: after `meshctl stop java-view-producer` the
+#      default --services view drops every svc row (graceful stop removes
+#      the agent from the healthy set), while the ungrouped view-cap-alpha
+#      entry SURVIVES — the drop is producer-scoped, not view-wide. Kept
+#      deliberately light: this is a display TC, lifecycle is tc02/tc03/tc06.
+#
+# Timing: registration wait is liveness-only (issue #1193); no dependency
+# edges are exercised, so no settle interaction. TC timeout = cold-cache
+# step-budget sum (tc08 lesson), from the ACTUAL step timeouts below: copy
+# 120 + pip 120 + maven 600 + starts 2x120 + registration 260 + gate poll
+# 140 + captures 2x120 + stop 120 + drop poll 140 + post-stop capture 120
+# = 2100, rounded up with slack to 2400.
+
+name: "Service views phase 4: meshctl list --services groups dotted capabilities (Java)"
+description: "java-view-producer's svc.alpha/svc.bravo render as service 'svc' in --services --json with available providers; undotted caps land in ungrouped; stopping the producer drops the svc rows from the healthy-only default"
+tags:
+  - integration
+  - java
+  - python
+  - registry
+  - service-view
+  - rfc-1280
+  - meshctl
+  - slow
+timeout: 2400
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/provider-alpha /workspace/
+      cp -rL /uc-artifacts/java-view-producer /workspace/
+
+  - name: "Install provider-alpha deps"
+    handler: pip-install
+    path: /workspace/provider-alpha
+
+  - name: "Install producer Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-view-producer
+    timeout: 600
+
+  - name: "Start provider-alpha (port 9101)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start provider-alpha/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  - name: "Start java-view-producer (port 9202)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start /workspace/java-view-producer --env MCP_MESH_HTTP_PORT=9202 -d
+
+  # Liveness only (issue #1193): 240s deadline covers the cold JVM start.
+  - routine: global.wait_for_agents_registered
+    params:
+      agents: "provider-alpha java-view-producer"
+
+  # Gate: poll the grouped JSON until the svc service carries both methods
+  # (the producer's tools may land a beat after its registration row).
+  # Equality inside the jq filter, as everywhere in this suite.
+  - name: "Wait for service 'svc' with both methods"
+    handler: shell
+    workdir: /workspace
+    command: |
+      OK=""
+      for i in $(seq 1 60); do
+        OK=$(meshctl list --services --json 2>/dev/null | jq -r '(.services[] | select(.service == "svc") | [.methods[] | select(.capability == "svc.alpha" or .capability == "svc.bravo")] | length == 2)' 2>/dev/null || echo "")
+        if [ "$OK" = "true" ]; then
+          echo "SVC_GROUP_VISIBLE=1 after ~$((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: --services never showed service 'svc' with both methods within 120s (last=$OK)"
+      meshctl list --services --json 2>/dev/null || true
+      exit 1
+    capture: wait_svc_group
+    timeout: 140
+
+  # Pure-JSON capture: THE contract surface for the assertions below.
+  - name: "Capture --services --json"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list --services --json
+    capture: services_json
+
+  # Secondary, deliberately tolerant table capture.
+  - name: "Capture --services table"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list --services 2>&1
+    capture: services_table
+
+  - name: "Stop java-view-producer"
+    handler: shell
+    workdir: /workspace
+    command: meshctl stop java-view-producer
+    capture: stop_producer
+
+  # Guarantee 4: the healthy-only default drops the producer's svc rows.
+  # Graceful stop removes the agent immediately; poll covers a slower path.
+  - name: "Wait for svc rows to drop from the default view"
+    handler: shell
+    workdir: /workspace
+    command: |
+      N=""
+      for i in $(seq 1 60); do
+        N=$(meshctl list --services --json 2>/dev/null | jq -r '[.services[] | select(.service == "svc")] | length' 2>/dev/null || echo "")
+        if [ "$N" = "0" ]; then
+          echo "SVC_GROUP_DROPPED=1 after ~$((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: service 'svc' still listed 120s after stopping the producer (last count=$N)"
+      meshctl list --services --json 2>/dev/null || true
+      exit 1
+    capture: wait_svc_dropped
+    timeout: 140
+
+  # Pure-JSON capture after the stop (state stable: producer gone).
+  - name: "Capture --services --json after stop"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list --services --json
+    capture: services_json_after_stop
+
+assertions:
+  # IDIOM: equality lives INSIDE the jq filter so the interpolation yields a
+  # bare true/false; no '}' in interpolation bodies.
+
+  - expr: "${captured.wait_svc_group} contains 'SVC_GROUP_VISIBLE=1'"
+    message: "the grouped view must show service 'svc' with both methods once the producer registers"
+
+  # Guarantee 1: the grouped JSON contract
+  - expr: "${jq:captured.services_json:([.services[] | select(.service == \"svc\")] | length == 1)} == 'true'"
+    message: "exactly one service entry 'svc' must be derived from the dotted capabilities"
+  - expr: "${jq:captured.services_json:(.services[] | select(.service == \"svc\") | [.methods[] | select((.method == \"alpha\" and .capability == \"svc.alpha\") or (.method == \"bravo\" and .capability == \"svc.bravo\"))] | length == 2)} == 'true'"
+    message: "service 'svc' must carry exactly the methods alpha (svc.alpha) and bravo (svc.bravo) — method name = the segment after the last dot"
+  - expr: "${jq:captured.services_json:(.services[] | select(.service == \"svc\") | .methods[] | select(.capability == \"svc.alpha\") | [.providers[] | select(.agent_name == \"java-view-producer\" and .available == true)] | length == 1)} == 'true'"
+    message: "svc.alpha must have exactly one provider: java-view-producer, available==true"
+  - expr: "${jq:captured.services_json:(.services[] | select(.service == \"svc\") | .methods[] | select(.capability == \"svc.bravo\") | [.providers[] | select(.agent_name == \"java-view-producer\" and .available == true)] | length == 1)} == 'true'"
+    message: "svc.bravo must have exactly one provider: java-view-producer, available==true"
+
+  # Guarantee 2: the ungrouped bucket (membership only — see header)
+  - expr: "${jq:captured.services_json:([.ungrouped[] | select(.capability == \"view-cap-alpha\")] | length == 1)} == 'true'"
+    message: "the undotted view-cap-alpha must land in the ungrouped bucket, never inside a service group"
+
+  # Guarantee 3: the secondary table form (tolerant, structural)
+  - expr: "${captured.services_table} contains 'SERVICE'"
+    message: "the table form must render the SERVICE/METHOD/AGENT/STATUS header"
+  - expr: "${captured.services_table} contains 'java-view-producer'"
+    message: "the table form must render the producer's agent row"
+  - expr: "${captured.services_table} contains 'use --tools'"
+    message: "the table form must carry the trailing ungrouped-capabilities note pointing at --tools"
+
+  # Guarantee 4: healthy-only default drops the stopped producer's rows...
+  - expr: "${captured.wait_svc_dropped} contains 'SVC_GROUP_DROPPED=1'"
+    message: "stopping the producer must drop every svc row from the healthy-only default view"
+  - expr: "${jq:captured.services_json_after_stop:([.services[] | select(.service == \"svc\")] | length == 0)} == 'true'"
+    message: "no 'svc' service entry may remain after the producer is stopped"
+
+  # ...while the ungrouped bucket (backed by the still-running provider-alpha)
+  # survives — the drop is producer-scoped, not view-wide
+  - expr: "${jq:captured.services_json_after_stop:([.ungrouped[] | select(.capability == \"view-cap-alpha\")] | length == 1)} == 'true'"
+    message: "view-cap-alpha must still be in the ungrouped bucket after the producer stop — provider-alpha is untouched"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace
