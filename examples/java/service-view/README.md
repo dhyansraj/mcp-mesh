@@ -177,6 +177,22 @@ Expected output — one interface, three different serving agents:
 meshctl list   # media-gateway's process_media_strict shows media.caption, media.thumbnail, media.transcribe
 ```
 
+The three producer capabilities also render as one grouped service — the
+per-method view: one `media` service, three methods, three different provider
+agents:
+
+```bash
+meshctl list --services
+```
+
+```
+SERVICE  METHOD      AGENT                STATUS
+------------------------------------------------------------------
+media    caption     caption-provider     available
+media    thumbnail   thumbnail-provider   available
+media    transcribe  transcribe-provider  available
+```
+
 You can also call any producer capability directly by its dotted name —
 `meshctl call` matches the capability name as-is:
 
@@ -240,7 +256,8 @@ meshctl call process_media '{"assetId": "asset-1", "text": "a cat on a sofa"}'
 ```
 
 Only the tool-parameter form (`process_media_strict`) turns a missing REQUIRED
-view method into a clean, structured pre-invoke refusal — the phase-2 payoff.
+view method into a clean, structured pre-invoke refusal — the guarantee the
+tool-parameter form adds.
 Restart `caption-provider` (and `transcribe-provider`) to return to the healthy
 output above.
 

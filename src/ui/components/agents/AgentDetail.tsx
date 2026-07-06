@@ -1,7 +1,8 @@
-import { Agent, Capability } from "@/lib/types";
+import { Agent, Capability, DependencyResolution } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getAgentTypeLabel, getDepStatusColor, extractAgentName } from "@/lib/api";
+import { groupByService, splitServiceCapability } from "@/lib/service-group";
 import { useMesh } from "@/lib/mesh-context";
 import { AgentTraces } from "./AgentTraces";
 import { AgentBadges } from "./AgentBadges";
@@ -33,17 +34,40 @@ function EmptyState({ message }: { message: string }) {
   );
 }
 
+// RFC #1280: header for a dot-namespaced service group (Capabilities +
+// Dependencies tabs). Mirrors the LLM tab's section-header styling with a
+// method-count badge alongside.
+function ServiceHeader({ name, count }: { name: string; count: number }) {
+  return (
+    <div className="flex items-center gap-2">
+      <h4 className="text-xs font-medium uppercase tracking-wider text-muted-foreground font-mono">
+        {name}
+      </h4>
+      <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-muted-foreground border-muted-foreground/30">
+        {count} {count === 1 ? "method" : "methods"}
+      </Badge>
+    </div>
+  );
+}
+
 // Issue #970: shared row renderer so the visible + framework capability lists
 // can share styling. The `framework` flag adds a muted badge so users can tell
 // __mesh_job_* tools apart at a glance when they're shown.
-function renderCapabilityRow(cap: Capability, key: string, framework: boolean) {
+// RFC #1280: when `method` is set (row lives inside a service group) it is
+// shown prominently; the full dotted name stays visible in the name badge.
+function renderCapabilityRow(cap: Capability, key: string, framework: boolean, method?: string) {
   return (
     <div
       key={key}
       className="rounded-lg border border-border/50 px-4 py-3"
     >
       <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-sm font-medium text-foreground font-mono">
+        {method && (
+          <span className="text-sm font-semibold text-foreground font-mono">
+            {method}
+          </span>
+        )}
+        <span className={`text-sm font-medium font-mono ${method ? "text-muted-foreground" : "text-foreground"}`}>
           {cap.function_name}
         </span>
         <Badge variant="outline" className="text-xs">
@@ -100,18 +124,62 @@ function renderCapabilityRow(cap: Capability, key: string, framework: boolean) {
   );
 }
 
+// Dependency resolution row. Extracted so grouped (service) and ungrouped
+// dependencies share one renderer (RFC #1280). Rows are unchanged from the
+// prior inline markup — Provider / StatusBadge / mcp_tool / endpoint intact.
+function renderDependencyRow(dep: DependencyResolution, key: string) {
+  return (
+    <div
+      key={key}
+      className="rounded-lg border border-border/50 px-4 py-3"
+    >
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm font-medium text-foreground font-mono">
+            {dep.function_name}
+          </span>
+          <Badge variant="outline" className="text-xs">
+            {dep.capability}
+          </Badge>
+          {dep.tags?.map((tag) => (
+            <Badge key={tag} variant="secondary" className="text-[10px] px-1.5 py-0">
+              {tag}
+            </Badge>
+          ))}
+        </div>
+        <StatusBadge status={dep.status} />
+      </div>
+      <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        {dep.provider_agent_id && (
+          <span>
+            Provider: <span className={getDepStatusColor(dep.status)}>{dep.provider_agent_id}</span>
+          </span>
+        )}
+        {dep.mcp_tool && <span>MCP Tool: {dep.mcp_tool}</span>}
+        {dep.endpoint && (
+          <span className="font-mono truncate max-w-xs">
+            {dep.endpoint}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function AgentDetail({ agent }: AgentDetailProps) {
   const hasLLM =
     (agent.llm_tool_resolutions && agent.llm_tool_resolutions.length > 0) ||
     (agent.llm_provider_resolutions && agent.llm_provider_resolutions.length > 0);
 
   const capabilities = agent.capabilities ?? [];
-  // Issue #970: framework-internal MeshJob tools (__mesh_job_*) are noise in
-  // the UI by default — partition them out and show user-visible capabilities,
-  // with a toggle to reveal the framework set. Mirrors the CLI's --tools view
-  // which hides them unless --show-framework is passed (cli/list.go:85).
-  const fw = capabilities.filter((c) => c.function_name?.startsWith("__mesh_job_"));
-  const visible = capabilities.filter((c) => !c.function_name?.startsWith("__mesh_job_"));
+  // Issue #970: framework-internal tools (__mesh_* — MeshJob producers,
+  // service-deps, etc.) are noise in the UI by default — partition them out
+  // and show user-visible capabilities, with a toggle to reveal the framework
+  // set. Mirrors the CLI's --tools view which hides them unless
+  // --show-framework is passed (cli/list.go isFrameworkInternalTool, keyed on
+  // the whole __mesh_ prefix).
+  const fw = capabilities.filter((c) => c.function_name?.startsWith("__mesh_"));
+  const visible = capabilities.filter((c) => !c.function_name?.startsWith("__mesh_"));
   const [showFw, setShowFw] = useState(false);
   const agentName = extractAgentName(agent.id);
   const { traceActivity } = useMesh();
@@ -172,7 +240,31 @@ export function AgentDetail({ agent }: AgentDetailProps) {
                   Only framework-internal capabilities are registered.
                 </p>
               )}
-              {visible.map((cap, idx) => renderCapabilityRow(cap, `visible-${idx}`, false))}
+              {(() => {
+                // RFC #1280: group dot-namespaced capabilities under a service
+                // header; undotted capabilities render flat below the groups.
+                const { services, ungrouped } = groupByService(visible, (c) => c.name);
+                return (
+                  <>
+                    {services.map((svc) => (
+                      <div key={`cap-svc-${svc.name}`} className="space-y-2">
+                        <ServiceHeader name={svc.name} count={svc.items.length} />
+                        <div className="space-y-2 border-l border-border/50 pl-3">
+                          {svc.items.map((cap) =>
+                            renderCapabilityRow(
+                              cap,
+                              `cap-${cap.function_name}-${cap.name}`,
+                              false,
+                              splitServiceCapability(cap.name).method,
+                            ),
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    {ungrouped.map((cap) => renderCapabilityRow(cap, `cap-${cap.function_name}-${cap.name}`, false))}
+                  </>
+                );
+              })()}
               {showFw && fw.map((cap, idx) => renderCapabilityRow(cap, `fw-${idx}`, true))}
               {fw.length > 0 && (
                 <button
@@ -193,42 +285,32 @@ export function AgentDetail({ agent }: AgentDetailProps) {
             <EmptyState message="No dependencies" />
           ) : (
             <div className="space-y-2">
-              {agent.dependency_resolutions.map((dep, idx) => (
-                <div
-                  key={`${dep.function_name}-${idx}`}
-                  className="rounded-lg border border-border/50 px-4 py-3"
-                >
-                  <div className="flex items-center justify-between flex-wrap gap-2">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-sm font-medium text-foreground font-mono">
-                        {dep.function_name}
-                      </span>
-                      <Badge variant="outline" className="text-xs">
-                        {dep.capability}
-                      </Badge>
-                      {dep.tags?.map((tag) => (
-                        <Badge key={tag} variant="secondary" className="text-[10px] px-1.5 py-0">
-                          {tag}
-                        </Badge>
-                      ))}
-                    </div>
-                    <StatusBadge status={dep.status} />
-                  </div>
-                  <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                    {dep.provider_agent_id && (
-                      <span>
-                        Provider: <span className={getDepStatusColor(dep.status)}>{dep.provider_agent_id}</span>
-                      </span>
+              {(() => {
+                // RFC #1280: group dot-namespaced dependencies by their
+                // capability's service. One service group can have methods
+                // bound to DIFFERENT provider_agent_id values.
+                const { services, ungrouped } = groupByService(
+                  agent.dependency_resolutions,
+                  (d) => d.capability,
+                );
+                return (
+                  <>
+                    {services.map((svc) => (
+                      <div key={`dep-svc-${svc.name}`} className="space-y-2">
+                        <ServiceHeader name={svc.name} count={svc.items.length} />
+                        <div className="space-y-2 border-l border-border/50 pl-3">
+                          {svc.items.map((dep) =>
+                            renderDependencyRow(dep, `dep-${dep.function_name}-${dep.capability}`),
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    {ungrouped.map((dep) =>
+                      renderDependencyRow(dep, `dep-${dep.function_name}-${dep.capability}`),
                     )}
-                    {dep.mcp_tool && <span>MCP Tool: {dep.mcp_tool}</span>}
-                    {dep.endpoint && (
-                      <span className="font-mono truncate max-w-xs">
-                        {dep.endpoint}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))}
+                  </>
+                );
+              })()}
             </div>
           )}
         </TabsContent>

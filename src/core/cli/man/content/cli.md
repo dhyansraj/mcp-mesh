@@ -157,10 +157,15 @@ meshctl list --filter hello        # Substring match on agent ID
 meshctl list --since 1h            # Active in the last hour
 
 # Tools
-meshctl list --tools               # All tools across all agents
+meshctl list --tools               # All tools across all agents (sorted by capability)
 meshctl list -t                    # Short form
 meshctl list --tools=get_weather   # Show input schema for one tool
 meshctl list --tools=system-agent:get_time   # Tool details on a specific agent
+
+# Service view — dot-namespaced capabilities grouped by name (RFC #1280)
+meshctl list --services            # Mesh-wide SERVICE / METHOD / AGENT / STATUS table
+meshctl list --services --all      # Include unhealthy providers
+meshctl list --services --json     # Structured services → methods → providers
 
 # Schemas (issue #547)
 meshctl list --schemas             # Most recent 100 canonical schemas
@@ -176,6 +181,33 @@ tool with its reason (`[unavailable: required dep '…' unresolved]`); the
 `--tools=<name>` prints an `Availability:` line naming the broken edge. The
 markers appear only on healthy agents — an unhealthy agent's capabilities are
 all unavailable by definition, so the row status already says so.
+
+**Grouped service views (`--services`).** `meshctl list --services` renders one
+row per (capability, agent), with the SERVICE column derived from the
+dot-namespaced capability name — the group is every segment before the last
+dot, so `media.caption` and `media.thumbnail` group under `media`, and
+`media.v2.caption` groups under `media.v2`:
+
+```
+SERVICE  METHOD      AGENT             STATUS
+---------------------------------------------------------------
+media    caption     caption-provider  available
+media    thumbnail   thumb-provider    unavailable (dep down)
+media    transcribe  transcribe-prov   available
+```
+
+Undotted capabilities are not services and are excluded, with a trailing note
+`(N ungrouped capabilities not shown — use --tools)`. `--services` combines with
+`--all` (include unhealthy providers), `--json` (structured
+`services → methods → providers`), and `--show-framework` (include the `__mesh_*`
+synthetics); `--filter`, `--since`, and `--verbose` do not apply to this view.
+Grouping is display-only, derived entirely from the capability name —
+nothing group-shaped is registered. The same grouping also surfaces elsewhere:
+the standalone `meshctl list --verbose` (agent view) folds dotted capabilities
+into its Tools section under `service/ (N methods)` headers and adds a
+Dependencies section listing per-method provider bindings
+(`media.caption → caption-provider-abc [available]`), and `--tools` sorts by
+capability so members of a service cluster together.
 
 ### `meshctl call`
 

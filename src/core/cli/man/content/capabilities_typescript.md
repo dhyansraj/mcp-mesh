@@ -204,7 +204,7 @@ agent.addTool({
 | `domain_action` | `auth_validate` | Domain-specific  |
 | `service`       | `llm`           | Generic services |
 
-A capability name is one or more **dot-separated segments**, each matching `^[a-zA-Z][a-zA-Z0-9_-]*$` — a leading letter followed by letters, digits, underscores, or hyphens, with no leading, trailing, or consecutive dots. Single-segment names like `weather_data` are the common case; **dot-namespacing** (`media.caption`, `billing.v2.invoice`) is the convention for grouping related capabilities under a service prefix.
+A capability name is one or more **dot-separated segments**, each matching `^[a-zA-Z][a-zA-Z0-9_-]*$` — a leading letter followed by letters, digits, underscores, or hyphens, with no leading, trailing, or consecutive dots. Single-segment names like `weather_data` are the common case; **dot-namespacing** (`media.caption`, `billing.v2.invoice`) is the convention for grouping related capabilities under a service prefix. `meshctl list --services` and the meshui agent-detail view render dotted capabilities as grouped services — display-only, derived entirely from the name.
 
 The TypeScript SDK performs no local capability-name validation — it forwards capability strings to the registry as-is, so a malformed name is rejected at registration time by the registry, not by the TS runtime. The segment-wise format above is the contract the registry enforces.
 

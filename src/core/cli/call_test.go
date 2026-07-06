@@ -168,8 +168,11 @@ func TestIsFrameworkInternalTool(t *testing.T) {
 		{"job_status framework", "__mesh_job_status", true},
 		{"job_result framework", "__mesh_job_result", true},
 		{"job_cancel framework", "__mesh_job_cancel", true},
+		{"service_deps synthetic", "__mesh_service_deps", true},
+		{"route_deps synthetic", "__mesh_route_deps", true},
+		{"depends_on_deps synthetic", "__mesh_depends_on_deps", true},
 		{"normal tool", "get_weather", false},
-		{"dunder but not mesh_job", "__init__", false},
+		{"dunder but not mesh", "__init__", false},
 		{"empty", "", false},
 	}
 	for _, c := range cases {
@@ -896,5 +899,48 @@ func TestAuditShortIsHelpful(t *testing.T) {
 	low := strings.ToLower(cmd.Short)
 	if !strings.Contains(low, "rout") {
 		t.Errorf("audit Short does not convey routing context: %q", cmd.Short)
+	}
+}
+
+// TestIsSharedStateJobHelper covers MED-3's split predicate: the collision
+// bypass is scoped to the shared-state MeshJob helpers, NOT the per-agent
+// __mesh_*_deps carriers (which stay ambiguous).
+func TestIsSharedStateJobHelper(t *testing.T) {
+	cases := map[string]bool{
+		"__mesh_job_status":      true,
+		"__mesh_job_result":      true,
+		"__mesh_service_deps":    false,
+		"__mesh_route_deps":      false,
+		"__mesh_depends_on_deps": false,
+		"get_weather":            false,
+		"":                       false,
+	}
+	for in, want := range cases {
+		if got := isSharedStateJobHelper(in); got != want {
+			t.Errorf("isSharedStateJobHelper(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+// TestFindAgentWithTool_DepsCarrierStillDisambiguates verifies MED-3: a
+// per-agent __mesh_*_deps carrier registered by multiple agents must NOT get the
+// job-helper collision bypass — it errors with the disambiguation UX.
+func TestFindAgentWithTool_DepsCarrierStillDisambiguates(t *testing.T) {
+	agents := []AgentWithCapabilities{
+		{
+			ID: "agent-a-aaa", Name: "agent-a", Endpoint: "http://agent-a:8080", Status: "healthy",
+			Capabilities: []ToolInfo{{Name: "__mesh_service_deps", FunctionName: "__mesh_service_deps"}},
+		},
+		{
+			ID: "agent-b-bbb", Name: "agent-b", Endpoint: "http://agent-b:8080", Status: "healthy",
+			Capabilities: []ToolInfo{{Name: "__mesh_service_deps", FunctionName: "__mesh_service_deps"}},
+		},
+	}
+	srv := mockRegistryWithAgents(t, agents)
+	defer srv.Close()
+
+	_, _, err := findAgentWithTool(http.DefaultClient, srv.URL, "", "__mesh_service_deps")
+	if err == nil {
+		t.Fatalf("expected a disambiguation error for a multi-agent __mesh_service_deps carrier, got nil")
 	}
 }
