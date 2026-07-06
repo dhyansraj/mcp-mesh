@@ -55,6 +55,39 @@ const _STOP_DRAIN_TIMEOUT_MS = 30_000;
 const _STOP_BUDGET_GRACE_MS = 10_000;
 
 /**
+ * Issue #1277: validate + normalize a claim response's `recv_cursor` into a
+ * `Record<string, number>` suitable for seeding a reclaimed `JobController`.
+ *
+ * The claim response is read untyped, so `recv_cursor` may be absent, null, a
+ * non-object, or an object with junk values. This coerces it to a clean map of
+ * `{ <filter-key>: <seq> }` where every seq is a non-negative integer, and
+ * returns `undefined` when there is nothing usable to resume from. Callers pass
+ * the result straight to `makeJobController` — `undefined` ⇒ replay-from-0.
+ *
+ * Fail-safe by contract: never throws. A malformed/empty cursor is treated as
+ * absent (replay), matching the "opting in never breaks a job that has no
+ * persisted cursor" guarantee.
+ */
+export function normalizeRecvCursor(
+  raw: unknown,
+): Record<string, number> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const out: Record<string, number> = {};
+  let count = 0;
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (
+      typeof value === "number" &&
+      Number.isInteger(value) &&
+      value >= 0
+    ) {
+      out[key] = value;
+      count += 1;
+    }
+  }
+  return count > 0 ? out : undefined;
+}
+
+/**
  * Handler signature: the user's `task=true` execute function as
  * registered via `agent.addTool({ task: true, execute: ... })`. The
  * dispatcher invokes it with the claimed payload as args + the
@@ -98,6 +131,15 @@ export class ClaimDispatcher {
    * `undefined` (no required deps) disables the gate entirely.
    */
   private readonly requiredProbe?: () => string | null;
+  /**
+   * Issue #1277: durable-cursor resume opt-in for this capability's tool.
+   * When true AND the claim response carries a non-empty `recv_cursor` map,
+   * `_dispatch` seeds the reclaimed `JobController` from that map so a
+   * handler blocked in `recvEvent` resumes at the next unconsumed seq instead
+   * of replaying the event log from 0. Default false ⇒ replay-from-0 (the
+   * Wave 1/2a posture — resume gated OFF for TS).
+   */
+  private readonly resumeCursor: boolean;
   /**
    * Transition-edge state for the required-dep gate (issue #1268): the
    * capability we're currently gated on, or `null` when the gate is open.
@@ -152,6 +194,7 @@ export class ClaimDispatcher {
     handler: ClaimHandler,
     retryOn?: ReadonlyArray<new (...args: unknown[]) => Error>,
     requiredProbe?: () => string | null,
+    resumeCursor?: boolean,
   ) {
     this.capability = capability;
     this.instanceId = instanceId;
@@ -159,6 +202,7 @@ export class ClaimDispatcher {
     this.handler = handler;
     this.retryOn = retryOn;
     this.requiredProbe = requiredProbe;
+    this.resumeCursor = resumeCursor === true;
   }
 
   /** Spawn the polling loop. Idempotent. */
@@ -425,6 +469,17 @@ export class ClaimDispatcher {
         ? rawEpoch
         : null;
 
+    // Issue #1277: durable-cursor resume gate. Seed the reclaimed controller
+    // from the claim's persisted per-filter `recv_cursor` ONLY when this tool
+    // opted in (`resumeCursor: true`) AND the registry returned a usable,
+    // non-empty cursor map. Otherwise pass `undefined` ⇒ replay-from-0 (the
+    // default, and the only path when resume is off / cursor absent / cursor
+    // malformed). Fail-safe: never throw here — a bad cursor degrades to
+    // replay, it does not fail the dispatch.
+    const initialCursors = this.resumeCursor
+      ? normalizeRecvCursor(claimed.recv_cursor)
+      : undefined;
+
     let controller: JobController;
     try {
       controller = makeJobController(
@@ -432,6 +487,7 @@ export class ClaimDispatcher {
         this.instanceId,
         this.registryUrl,
         claimEpoch,
+        initialCursors,
       );
     } catch (err) {
       console.warn(

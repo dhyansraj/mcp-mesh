@@ -777,6 +777,35 @@ int32_t mesh_job_controller_new_with_epoch(const char *job_id,
                                            int64_t claim_epoch,
                                            struct JobControllerHandle **out_handle);
 
+// Construct a [`JobController`] that resumes from a persisted per-filter
+// receive cursor (issue #1277). Mirrors
+// [`mesh_job_controller_new_with_epoch`] but additionally seeds the
+// controller's `recv_event` cursors from `recv_cursor_json` so a reclaimed
+// job resumes instead of replaying its event log from seq 0. Used by the
+// Java SDK's claim dispatch path only when the tool opted into resume
+// (`@MeshTool(resumeCursor = true)`); the default replay-from-0 path stays
+// on [`mesh_job_controller_new_with_epoch`].
+//
+// The C ABI has no map type, so the cursor map rides as a JSON string:
+// `recv_cursor_json` must encode a JSON object `{"<filter-key>": <seq:int>,
+// ...}` (parsed into `HashMap<String, i64>`). A NULL or empty/blank
+// `recv_cursor_json` ⇒ no seed (identical to
+// [`mesh_job_controller_new_with_epoch`]). Malformed JSON, a non-object
+// shape, or a non-integer value returns -1 with the last-error slot set.
+//
+// Additive: a separate entry point rather than a new parameter on the
+// existing constructors, so current C/Java callers keep their signatures.
+//
+// # Safety
+// Same contract as [`mesh_job_controller_new`]. `recv_cursor_json` may be
+// NULL; when non-NULL it must be valid null-terminated UTF-8.
+int32_t mesh_job_controller_new_with_resume(const char *job_id,
+                                            const char *instance_id,
+                                            const char *registry_url,
+                                            int64_t claim_epoch,
+                                            const char *recv_cursor_json,
+                                            struct JobControllerHandle **out_handle);
+
 // Enqueue a progress update. Coalesces with any prior pending progress
 // for this job — only the latest survives the next batch flush.
 //

@@ -124,6 +124,127 @@ public final class JobController implements MeshJob, AutoCloseable {
         return new JobController(core, handle, jobId);
     }
 
+    /**
+     * Open a controller that RESUMES its {@link #recvEvent} cursor from a
+     * persisted per-filter cursor map (issue #1277), rather than replaying
+     * the event log from seq 0. Used by the claim dispatch path when the
+     * producing tool opted in via {@code @MeshTool(resumeCursor = true)} and
+     * the registry supplied a {@code recv_cursor} for the claim.
+     *
+     * <p>The cursor map is serialized to the FFI's JSON-object string shape
+     * ({@code {"<filter-key>": <seq:int>, ...}}) via the SDK's shared Jackson
+     * mapper and passed to the native
+     * {@code mesh_job_controller_new_with_resume} entry point. A {@code null},
+     * empty, or non-integer-valued cursor serializes to {@code null} ⇒ the
+     * native side seeds nothing ⇒ replay-from-0 (never throws for a bad
+     * cursor — the resume is a best-effort optimization).
+     *
+     * @param jobId       Server-assigned job UUID
+     * @param instanceId  This agent's instance ID
+     * @param registryUrl Registry base URL
+     * @param claimEpoch  Claim generation from {@code /jobs/claim}, or
+     *                    {@code null} for legacy owner-only fencing
+     * @param recvCursor  Per-filter receive cursor to seed from (the claim's
+     *                    {@code recv_cursor}); may be {@code null}/empty
+     * @return A new controller seeded from {@code recvCursor}; caller MUST
+     *         {@link #close} when done
+     * @throws MeshException if the native handle cannot be allocated
+     * @see #open(String, String, String, Long)
+     */
+    public static JobController openWithResume(String jobId, String instanceId, String registryUrl,
+                                               Long claimEpoch, Map<String, ?> recvCursor) {
+        if (jobId == null || jobId.isEmpty()) {
+            throw new IllegalArgumentException("jobId is required");
+        }
+        if (instanceId == null || instanceId.isEmpty()) {
+            throw new IllegalArgumentException("instanceId is required");
+        }
+        if (registryUrl == null || registryUrl.isEmpty()) {
+            throw new IllegalArgumentException("registryUrl is required");
+        }
+        // Serialize the cursor to the FFI JSON-object shape. A bad/empty
+        // cursor yields null (no seed) — a resume cursor is a best-effort
+        // optimization, never a reason to fail the job.
+        String recvCursorJson = serializeRecvCursor(recvCursor);
+        // The C ABI has no null int; a negative epoch means "no epoch".
+        long epoch = claimEpoch != null ? claimEpoch : -1L;
+        MeshCore core = MeshCore.load();
+        PointerByReference out = new PointerByReference();
+        int rc = core.mesh_job_controller_new_with_resume(
+            jobId, instanceId, registryUrl, epoch, recvCursorJson, out);
+        if (rc != 0) {
+            throw new MeshException("mesh_job_controller_new_with_resume failed: " + lastError(core));
+        }
+        Pointer handle = out.getValue();
+        if (handle == null) {
+            throw new MeshException("mesh_job_controller_new_with_resume returned null handle");
+        }
+        return new JobController(core, handle, jobId);
+    }
+
+    /**
+     * Serialize a per-filter receive cursor map to the FFI's JSON-object
+     * string ({@code {"key": seq, ...}}).
+     *
+     * <p>Value contract (identical across the Python/TS/Java runtimes): keep
+     * only entries whose value is a <em>non-negative integer</em>; drop every
+     * other key. Integral boxes (Integer/Long/Short/Byte) with value {@code >=
+     * 0} survive; fractional {@code Double}/{@code Float} are REJECTED (never
+     * {@code longValue()}-truncated), and negatives are dropped. Returns
+     * {@code null} for a null/empty cursor, a cursor with no surviving entry,
+     * or any serialization failure — the caller passes that {@code null}
+     * straight through to the native "no seed" path (resume is a best-effort
+     * optimization; a bad cursor degrades to replay-from-0, never throws).
+     */
+    static String serializeRecvCursor(Map<String, ?> recvCursor) {
+        if (recvCursor == null || recvCursor.isEmpty()) {
+            return null;
+        }
+        try {
+            java.util.Map<String, Long> normalized = new java.util.LinkedHashMap<>();
+            for (Map.Entry<String, ?> e : recvCursor.entrySet()) {
+                if (e.getKey() == null) {
+                    continue;
+                }
+                Long seq = nonNegativeInteger(e.getValue());
+                if (seq != null) {
+                    normalized.put(e.getKey(), seq);
+                }
+            }
+            if (normalized.isEmpty()) {
+                return null;
+            }
+            return MAPPER.writeValueAsString(normalized);
+        } catch (Exception e) {
+            log.warn("Failed to serialize recv_cursor for job resume; replaying from seq 0: {}",
+                e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Coerce a cursor value to a non-negative {@code Long}, or {@code null} if
+     * it is not a non-negative integer. Accepts only integral boxed types
+     * ({@code Integer}/{@code Long}/{@code Short}/{@code Byte}); rejects
+     * fractional {@code Double}/{@code Float} (no truncation) and any negative.
+     */
+    private static Long nonNegativeInteger(Object value) {
+        long seq;
+        if (value instanceof Long l) {
+            seq = l;
+        } else if (value instanceof Integer i) {
+            seq = i;
+        } else if (value instanceof Short s) {
+            seq = s;
+        } else if (value instanceof Byte b) {
+            seq = b;
+        } else {
+            // Double / Float / BigDecimal / String / anything else → reject.
+            return null;
+        }
+        return seq >= 0 ? seq : null;
+    }
+
     /** The job ID this controller is bound to. */
     public String jobId() {
         return jobId;

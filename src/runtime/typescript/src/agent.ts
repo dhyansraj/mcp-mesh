@@ -291,6 +291,13 @@ export class MeshAgent {
       handler: ClaimHandler;
       retryOn?: ReadonlyArray<new (...args: unknown[]) => Error>;
       requiredProbe?: () => string | null;
+      /**
+       * Issue #1277: opt-in durable-cursor resume. When true, the
+       * ClaimDispatcher seeds the reclaimed controller from the claim
+       * response's `recv_cursor` so `recvEvent` resumes instead of
+       * replaying from seq 0. Default false/undefined (replay-from-0).
+       */
+      resumeCursor?: boolean;
     }
   > = new Map();
   /**
@@ -535,6 +542,18 @@ export class MeshAgent {
       }
     }
 
+    // Issue #1277: validate resumeCursor at registration so misuse fails loud
+    // before the agent talks to the registry. Mirrors the retryOn check:
+    // resumeCursor requires task: true — only job-bound handlers have a
+    // controller (and a per-filter recvEvent cursor) to resume, so the flag
+    // is meaningless for synchronous tools.
+    if (def.resumeCursor === true && def.task !== true) {
+      throw new Error(
+        `addTool({ resumeCursor }) for tool '${toolName}': resumeCursor is ` +
+          `only valid with task: true; remove resumeCursor or set task: true.`,
+      );
+    }
+
     // Issue #917: validate a2aConfig at registration time so misuse fails
     // loud BEFORE the agent talks to the registry. Match the Python
     // `mesh.a2a_consumer` and Java `@A2AConsumer` startup-time checks.
@@ -671,6 +690,10 @@ export class MeshAgent {
     // registered in this.taskHandlers). Captured here so the closure
     // sees a stable reference even if def is mutated post-registration.
     const retryOn = def.retryOn;
+    // Issue #1277: per-tool durable-cursor resume opt-in. Captured here so
+    // the ClaimHandler registration below carries it into the dispatcher
+    // (which seeds the reclaimed controller from the claim's recv_cursor).
+    const resumeCursor = def.resumeCursor === true;
 
     // Phase 1 MeshJob substrate: when a job-bound tool exists AND the
     // user explicitly opted into worker isolation via env, log a single
@@ -1196,7 +1219,12 @@ export class MeshAgent {
               return null;
             }
           : undefined;
-      this._taskHandlers.set(capability, { handler, retryOn, requiredProbe });
+      this._taskHandlers.set(capability, {
+        handler,
+        retryOn,
+        requiredProbe,
+        resumeCursor,
+      });
     }
 
     // Store mesh metadata with JSON Schema for LLM tool resolution
@@ -1913,6 +1941,7 @@ export class MeshAgent {
         entry.handler,
         entry.retryOn,
         entry.requiredProbe,
+        entry.resumeCursor,
       );
       dispatcher.start();
       this._claimDispatchers.push(dispatcher);

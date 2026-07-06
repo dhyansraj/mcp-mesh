@@ -32,6 +32,7 @@ can call into it without re-implementing the contract.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from typing import Any, Awaitable, Callable, Optional
@@ -58,33 +59,40 @@ _HDR_TIMEOUT = "x-mesh-timeout"
 # Claim generation minted by the registry on POST /jobs/claim (issue #1252).
 # Seeded by the claim dispatcher; absent on the push-mode inbound path.
 _HDR_CLAIM_EPOCH = "x-mesh-claim-epoch"
+# Persisted per-filter receive cursor (issue #1277). Seeded by the claim
+# dispatcher as a JSON-serialized ``dict[str, int]``; absent on the push-mode
+# inbound path and whenever the reclaimed row had no prior consumption.
+_HDR_RECV_CURSOR = "x-mesh-recv-cursor"
 
 
-def _read_job_headers() -> tuple[Optional[str], Optional[float], Optional[int]]:
-    """Pull ``X-Mesh-Job-Id`` / ``X-Mesh-Timeout`` / ``X-Mesh-Claim-Epoch``
-    from the propagated-headers contextvar populated by the MCP session
-    middleware (or seeded by the claim dispatcher).
+def _read_job_headers() -> (
+    tuple[Optional[str], Optional[float], Optional[int], Optional[dict]]
+):
+    """Pull ``X-Mesh-Job-Id`` / ``X-Mesh-Timeout`` / ``X-Mesh-Claim-Epoch`` /
+    ``X-Mesh-Recv-Cursor`` from the propagated-headers contextvar populated by
+    the MCP session middleware (or seeded by the claim dispatcher).
 
-    Returns ``(job_id, deadline_secs_remaining, claim_epoch)`` — any may be
-    ``None``. ``claim_epoch`` is present only on the claim path; a push-mode
-    inbound job leaves it ``None`` (legacy owner-only fencing).
+    Returns ``(job_id, deadline_secs_remaining, claim_epoch, recv_cursor)`` —
+    any may be ``None``. ``claim_epoch`` and ``recv_cursor`` are present only
+    on the claim path; a push-mode inbound job leaves them ``None`` (legacy
+    owner-only fencing, replay-from-0).
 
     Defensive: never raises. If the trace-context module is somehow not
-    importable (test harness with stubs), returns ``(None, None, None)``.
+    importable (test harness with stubs), returns ``(None, None, None, None)``.
     """
     try:
         from ..tracing.context import TraceContext
     except Exception:
-        return None, None, None
+        return None, None, None, None
 
     headers = TraceContext.get_propagated_headers() or {}
     if not headers:
-        return None, None, None
+        return None, None, None, None
 
     # Header dict is lowercased by the middleware before storing.
     job_id = headers.get(_HDR_JOB_ID)
     if not job_id:
-        return None, None, None
+        return None, None, None, None
 
     timeout_raw = headers.get(_HDR_TIMEOUT)
     deadline_secs: Optional[float] = None
@@ -117,7 +125,54 @@ def _read_job_headers() -> tuple[Optional[str], Optional[float], Optional[int]]:
                 claim_epoch_raw,
             )
             claim_epoch = None
-    return job_id, deadline_secs, claim_epoch
+
+    # The recv cursor rides as a JSON string (it is a MAP, unlike the scalar
+    # headers above). Absent / blank ⇒ None (replay-from-0). Malformed or a
+    # non-object shape ⇒ None + a warning; never crash the handler over a bad
+    # cursor — the worst case is a replay, which is already the default.
+    #
+    # Value contract (identical across the Python/TS/Java runtimes): keep only
+    # entries whose value is a NON-NEGATIVE INTEGER; drop every other key.
+    # This is a hard requirement here, not just hygiene: the surviving map is
+    # handed to PyO3's ``Option[HashMap[str, i64]]`` extraction at controller
+    # construction, which THROWS on a str / float value — and that throw would
+    # drop us to a plain call with NO controller (strictly worse than a clean
+    # replay-from-0 with a working controller). Filtering to clean ints here
+    # guarantees construction never throws on a bad registry cursor. A Python
+    # ``bool`` is an ``int`` subclass but a seq is never a bool, so exclude it.
+    recv_cursor_raw = headers.get(_HDR_RECV_CURSOR)
+    recv_cursor: Optional[dict] = None
+    if recv_cursor_raw is not None and recv_cursor_raw.strip() != "":
+        try:
+            parsed_cursor = json.loads(recv_cursor_raw)
+            if isinstance(parsed_cursor, dict):
+                filtered = {
+                    k: v
+                    for k, v in parsed_cursor.items()
+                    if isinstance(v, int)
+                    and not isinstance(v, bool)
+                    and v >= 0
+                }
+                # Empty after filtering (nothing survived) ⇒ None ⇒ replay-from-0
+                # with a working controller, never a lost controller.
+                recv_cursor = filtered or None
+            else:
+                logger.warning(
+                    "job_dispatch: ignoring %s header — expected a JSON "
+                    "object, got %r",
+                    _HDR_RECV_CURSOR,
+                    parsed_cursor,
+                )
+        except (TypeError, ValueError) as e:
+            logger.warning(
+                "job_dispatch: ignoring malformed %s header value %r (%s)",
+                _HDR_RECV_CURSOR,
+                recv_cursor_raw,
+                e,
+            )
+            recv_cursor = None
+
+    return job_id, deadline_secs, claim_epoch, recv_cursor
 
 
 def _resolve_runtime_identity() -> tuple[Optional[str], Optional[str]]:
@@ -219,6 +274,20 @@ def get_retry_on(func: Any) -> tuple:
     return ()
 
 
+def get_resume_cursor(func: Any) -> bool:
+    """Return the ``resume_cursor`` opt-in flag stamped by
+    ``@mesh.tool(resume_cursor=True)`` (issue #1277).
+
+    Defaults to ``False`` when the metadata is missing or the kwarg was not
+    set — preserving the default replay-from-0 behaviour for tools that don't
+    opt into resume.
+    """
+    meta = _read_tool_metadata(func)
+    if meta is None:
+        return False
+    return bool(meta.get("resume_cursor"))
+
+
 def get_mesh_job_param_name(func: Any) -> Optional[str]:
     """Return the function's ``MeshJob`` parameter name, or ``None`` if
     the function does not declare one.
@@ -271,7 +340,7 @@ async def maybe_dispatch_as_job(
     if not is_task_tool(func):
         return await invoke(final_kwargs)
 
-    job_id, deadline_secs, claim_epoch = _read_job_headers()
+    job_id, deadline_secs, claim_epoch, recv_cursor = _read_job_headers()
     mesh_job_param = get_mesh_job_param_name(func)
 
     # Ensure the MeshJob param defaults to ``None`` — this is what the
@@ -320,7 +389,24 @@ async def maybe_dispatch_as_job(
     try:
         # Pass the claim generation (when present) so the controller fences
         # its deltas + executor reads; None ⇒ legacy owner-only (issue #1252).
-        controller = PyJobController(job_id, instance_id, registry_url, claim_epoch)
+        #
+        # Resume gating (issue #1277): seed the controller from the persisted
+        # per-filter recv_cursor ONLY when the tool opted in
+        # (`@mesh.tool(resume_cursor=True)`) AND a cursor actually rode the
+        # header. Otherwise construct with no seed (replay-from-0, unchanged) —
+        # this is the single Python gate for resume.
+        if get_resume_cursor(func) and recv_cursor:
+            controller = PyJobController(
+                job_id,
+                instance_id,
+                registry_url,
+                claim_epoch,
+                initial_cursors=recv_cursor,
+            )
+        else:
+            controller = PyJobController(
+                job_id, instance_id, registry_url, claim_epoch
+            )
     except Exception as e:
         logger.warning(
             "job_dispatch: failed to construct JobController for job=%s "

@@ -897,6 +897,7 @@ def tool(
     output_schema_strict: bool = True,
     task: bool = False,
     retry_on: tuple[type[BaseException], ...] | None = None,
+    resume_cursor: bool = False,
     **kwargs: Any,
 ) -> Callable[[T], T]:
     """
@@ -971,6 +972,16 @@ def tool(
             row instead of honouring the cancel. Stick to ``Exception``
             subclasses representing transient I/O / availability faults
             (``OSError``, ``ConnectionError``, custom transient types).
+        resume_cursor: When True, a reclaimed run of this tool resumes its
+            per-filter event consumption from the persisted ``recv_cursor``
+            (issue #1277) instead of replaying its event log from seq 0.
+            Opt-in: default ``False`` preserves replay-from-0 (byte-identical
+            to prior behaviour). Only opt in when the handler's ``recv_event``
+            consumption is strictly sequential-per-filter — a prefetching or
+            concurrent consumer must NOT set this, or it will skip events on
+            resume. Only meaningful for ``task=True`` tools; a ``True`` value
+            on a non-task tool raises at decoration time (there is no job
+            controller to seed).
         **kwargs: Additional metadata
 
     Returns:
@@ -1034,6 +1045,18 @@ def tool(
             raise ValueError(
                 "retry_on is only valid with task=True; remove retry_on or "
                 "set task=True"
+            )
+
+        # Validate resume_cursor (issue #1277): opt-in resume-from-persisted-
+        # cursor. Must be a bool and, like retry_on, is only meaningful for
+        # task=True tools — a non-task tool has no job controller to seed.
+        # Fail loud at decoration time rather than silently ignore the kwarg.
+        if not isinstance(resume_cursor, bool):
+            raise ValueError("resume_cursor must be a boolean")
+        if resume_cursor and not task:
+            raise ValueError(
+                "resume_cursor is only valid with task=True; remove "
+                "resume_cursor or set task=True"
             )
 
         # Validate optional parameters
@@ -1271,6 +1294,11 @@ def tool(
             # resets owner_instance_id and a peer replica re-claims within
             # ~5s. Empty tuple = previous behaviour (every raise → fail).
             "retry_on": validated_retry_on,
+            # Issue #1277: opt-in resume-from-persisted-cursor. When True, the
+            # claim dispatch path seeds the reclaimed JobController from the
+            # persisted per-filter recv_cursor so recv_event resumes instead of
+            # replaying from seq 0. Default False = replay-from-0.
+            "resume_cursor": resume_cursor,
             **kwargs,
         }
 

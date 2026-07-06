@@ -156,6 +156,15 @@ public class MeshToolBeanPostProcessor implements BeanPostProcessor, Ordered {
                     "remove retryOn or set task = true.");
             }
 
+            // Issue #1277: resumeCursor requires task=true (no controller
+            // without it, so a resume cursor has no meaning).
+            if (annotation.resumeCursor() && !annotation.task()) {
+                throw new IllegalStateException(
+                    "@MeshTool(resumeCursor = true) on '" + targetClass.getName() +
+                    "#" + method.getName() + "' requires task = true; " +
+                    "remove resumeCursor or set task = true.");
+            }
+
             // RFC #1280 phase 2 (item 7b): analyze @McpMeshService view params
             // ONCE and hand the result to both the registry and the wrapper.
             List<McpMeshServiceToolSupport.ViewParamInfo> viewParams =

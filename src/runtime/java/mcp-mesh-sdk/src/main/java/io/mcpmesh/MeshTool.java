@@ -180,6 +180,37 @@ public @interface MeshTool {
     boolean task() default false;
 
     /**
+     * Issue #1277: opt in to <b>cursor resume</b> for a reclaimed job.
+     *
+     * <p>By default a job that is reclaimed by a peer replica (owner change,
+     * lease expiry, drain) gets a fresh {@link JobController} whose
+     * {@link JobController#recvEvent(java.util.List, java.time.Duration)}
+     * cursor starts at seq 0 — the handler <em>replays</em> the whole event
+     * log from the beginning. When {@code resumeCursor = true}, the dispatcher
+     * seeds the reclaimed controller from the {@code recv_cursor} the registry
+     * persisted for the claim, so {@code recvEvent} resumes from the last
+     * consumed sequence instead of replaying.
+     *
+     * <p>Constraints (validated at registration via
+     * {@link io.mcpmesh.spring.MeshToolBeanPostProcessor}):
+     * <ul>
+     *   <li>requires {@code task = true} — non-task tools have no controller,
+     *       so a resume cursor has no meaning;
+     *   <li>the handler MUST consume events strictly sequentially per filter.
+     *       A handler that prefetches (reads ahead of the work it has actually
+     *       committed) MUST NOT enable this — on resume it would skip the
+     *       prefetched-but-unprocessed events. Replay-from-0 (the default) is
+     *       the safe choice for such handlers.
+     * </ul>
+     *
+     * <p>Default {@code false} preserves the replay-from-0 semantics.
+     *
+     * @return {@code true} to resume {@code recvEvent} from the persisted
+     *         cursor on reclaim; {@code false} (default) to replay from seq 0.
+     */
+    boolean resumeCursor() default false;
+
+    /**
      * Issue #895: per-tool retry-eligible exception whitelist.
      *
      * <p>When a {@code task = true} handler raises a {@link Throwable} whose

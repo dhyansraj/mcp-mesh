@@ -27,6 +27,7 @@
 
 #![cfg(feature = "typescript")]
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -160,21 +161,25 @@ impl JsJobController {
         instance_id: String,
         registry_url: String,
         claim_epoch: Option<i64>,
+        initial_cursors: Option<HashMap<String, i64>>,
     ) -> Result<Self> {
         let backend = backend_from_url(&registry_url)?;
         let queue = new_coalescing_queue();
         // `claim_epoch=None` (push-mode inbound job / old registry) ⇒ legacy
         // owner-only behavior; on the claim path the SDK passes the epoch
         // from the `/jobs/claim` response so this execution is fenced (#1252).
+        //
+        // `initial_cursors=None` (default) ⇒ replay-from-0. When the SDK opts
+        // into resume (`mesh.tool({ resumeCursor: true })`) it passes the
+        // persisted per-filter `recv_cursor` map from the claim response so the
+        // reclaimed controller resumes instead of replaying (issue #1277).
         let inner = JobController::new_with_epoch(
             job_id,
             instance_id.clone(),
             claim_epoch,
             backend.clone(),
             queue.clone(),
-            // No seeded resume cursor at this binding surface (issue #1277
-            // runtime resume gating is a later wave).
-            None,
+            initial_cursors,
         );
         // Spawn the batching tick inside napi-rs's shared Tokio runtime so
         // mid-flight progress deltas actually reach the registry. The

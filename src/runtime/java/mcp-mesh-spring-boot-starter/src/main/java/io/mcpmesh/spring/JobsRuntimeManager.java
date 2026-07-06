@@ -178,6 +178,9 @@ public final class JobsRuntimeManager implements SmartLifecycle {
             // queued registry-side with no attempt burn and self-heals on a
             // later poll — the pre-invoke guard in invokeForClaim is the
             // safety net for the narrow window the two clocks leave open.
+            // Issue #1277: thread the @MeshTool(resumeCursor=...) opt-in so a
+            // reclaimed job seeds its recvEvent cursor from the persisted
+            // recv_cursor instead of replaying from seq 0.
             ClaimDispatcher dispatcher = new ClaimDispatcher(
                 meta.capability(),
                 instanceId,
@@ -185,12 +188,13 @@ public final class JobsRuntimeManager implements SmartLifecycle {
                 (payload, controller) -> wrapper.invokeForClaim(
                     payload, controller, deadlineFromJobContext()),
                 meta.retryOn(),
-                wrapper::firstUnresolvedRequiredDependency
+                wrapper::firstUnresolvedRequiredDependency,
+                meta.resumeCursor()
             );
             dispatcher.start();
             dispatchers.put(meta.capability(), dispatcher);
-            log.info("MeshJob producer wired: capability={} (wrapper={}, dispatcher started, retryOn={})",
-                meta.capability(), wrapper.getFuncId(), meta.retryOn().length);
+            log.info("MeshJob producer wired: capability={} (wrapper={}, dispatcher started, retryOn={}, resumeCursor={})",
+                meta.capability(), wrapper.getFuncId(), meta.retryOn().length, meta.resumeCursor());
         }
     }
 

@@ -34,6 +34,7 @@
 
 #![cfg(feature = "ffi")]
 
+use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};
 use std::ptr;
@@ -250,7 +251,7 @@ pub unsafe extern "C" fn mesh_job_controller_new(
 ) -> i32 {
     // Legacy owner-only path (no claim epoch). See
     // `mesh_job_controller_new_with_epoch` for the fenced claim path.
-    mesh_job_controller_new_impl(job_id, instance_id, registry_url, None, out_handle)
+    mesh_job_controller_new_impl(job_id, instance_id, registry_url, None, None, out_handle)
 }
 
 /// Construct a [`JobController`] carrying the claim generation the registry
@@ -274,10 +275,74 @@ pub unsafe extern "C" fn mesh_job_controller_new_with_epoch(
     out_handle: *mut *mut JobControllerHandle,
 ) -> i32 {
     let epoch = if claim_epoch < 0 { None } else { Some(claim_epoch) };
-    mesh_job_controller_new_impl(job_id, instance_id, registry_url, epoch, out_handle)
+    mesh_job_controller_new_impl(job_id, instance_id, registry_url, epoch, None, out_handle)
 }
 
-/// Shared body for the two `mesh_job_controller_new*` entry points.
+/// Construct a [`JobController`] that resumes from a persisted per-filter
+/// receive cursor (issue #1277). Mirrors
+/// [`mesh_job_controller_new_with_epoch`] but additionally seeds the
+/// controller's `recv_event` cursors from `recv_cursor_json` so a reclaimed
+/// job resumes instead of replaying its event log from seq 0. Used by the
+/// Java SDK's claim dispatch path only when the tool opted into resume
+/// (`@MeshTool(resumeCursor = true)`); the default replay-from-0 path stays
+/// on [`mesh_job_controller_new_with_epoch`].
+///
+/// The C ABI has no map type, so the cursor map rides as a JSON string:
+/// `recv_cursor_json` must encode a JSON object `{"<filter-key>": <seq:int>,
+/// ...}` (parsed into `HashMap<String, i64>`). A NULL or empty/blank
+/// `recv_cursor_json` ⇒ no seed (identical to
+/// [`mesh_job_controller_new_with_epoch`]). Malformed JSON, a non-object
+/// shape, or a non-integer value returns -1 with the last-error slot set.
+///
+/// Additive: a separate entry point rather than a new parameter on the
+/// existing constructors, so current C/Java callers keep their signatures.
+///
+/// # Safety
+/// Same contract as [`mesh_job_controller_new`]. `recv_cursor_json` may be
+/// NULL; when non-NULL it must be valid null-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn mesh_job_controller_new_with_resume(
+    job_id: *const c_char,
+    instance_id: *const c_char,
+    registry_url: *const c_char,
+    claim_epoch: i64,
+    recv_cursor_json: *const c_char,
+    out_handle: *mut *mut JobControllerHandle,
+) -> i32 {
+    let epoch = if claim_epoch < 0 { None } else { Some(claim_epoch) };
+    // NULL / blank ⇒ no seed (replay-from-0). Otherwise parse the JSON object
+    // into the cursor map; surface parse failures as -1 rather than silently
+    // dropping the seed so a caller bug is visible.
+    let initial_cursors: Option<HashMap<String, i64>> =
+        match opt_cstr(recv_cursor_json, "recv_cursor_json") {
+            Ok(None) => None,
+            Ok(Some(s)) if s.trim().is_empty() => None,
+            Ok(Some(s)) => match serde_json::from_str::<HashMap<String, i64>>(s) {
+                Ok(map) => {
+                    if map.is_empty() {
+                        None
+                    } else {
+                        Some(map)
+                    }
+                }
+                Err(e) => {
+                    set_last_error(format!("invalid recv_cursor_json: {}", e));
+                    return -1;
+                }
+            },
+            Err(()) => return -1,
+        };
+    mesh_job_controller_new_impl(
+        job_id,
+        instance_id,
+        registry_url,
+        epoch,
+        initial_cursors,
+        out_handle,
+    )
+}
+
+/// Shared body for the `mesh_job_controller_new*` entry points.
 ///
 /// # Safety
 /// See [`mesh_job_controller_new`].
@@ -286,6 +351,7 @@ unsafe fn mesh_job_controller_new_impl(
     instance_id: *const c_char,
     registry_url: *const c_char,
     claim_epoch: Option<i64>,
+    initial_cursors: Option<HashMap<String, i64>>,
     out_handle: *mut *mut JobControllerHandle,
 ) -> i32 {
     take_last_error();
@@ -311,15 +377,16 @@ unsafe fn mesh_job_controller_new_impl(
     };
 
     let queue = new_coalescing_queue();
+    // `initial_cursors=None` (default) ⇒ replay-from-0. Seeded via
+    // `mesh_job_controller_new_with_resume` when the Java SDK opts into resume
+    // (issue #1277).
     let inner = JobController::new_with_epoch(
         job_id,
         instance_id.clone(),
         claim_epoch,
         backend.clone(),
         queue.clone(),
-        // No seeded resume cursor at this binding surface (issue #1277 runtime
-        // resume gating is a later wave).
-        None,
+        initial_cursors,
     );
 
     // Spawn the batching tick inside the FFI tokio runtime so mid-flight

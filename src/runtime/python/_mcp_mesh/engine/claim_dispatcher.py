@@ -336,6 +336,25 @@ class PythonClaimDispatcher:
             claim_epoch = _valid_claim_epoch(claimed.get("claim_epoch"))
             if claim_epoch is not None:
                 merged["x-mesh-claim-epoch"] = str(claim_epoch)
+            # Seed the persisted per-filter receive cursor (issue #1277) so a
+            # tool that opted into resume (`@mesh.tool(resume_cursor=True)`)
+            # resumes its recv_event consumption instead of replaying from
+            # seq 0. Unlike the scalar headers above, recv_cursor is a MAP —
+            # it rides the same contextvar channel as a JSON string. Absent /
+            # empty ⇒ no header (replay-from-0, unchanged). The gate that
+            # decides whether to actually seed the controller lives in
+            # job_dispatch (keyed on the tool's resume_cursor opt-in).
+            recv_cursor = claimed.get("recv_cursor")
+            if isinstance(recv_cursor, dict) and recv_cursor:
+                try:
+                    merged["x-mesh-recv-cursor"] = json.dumps(recv_cursor)
+                except (TypeError, ValueError) as e:
+                    logger.debug(
+                        "claim_dispatcher: could not serialize recv_cursor "
+                        "%r (%s); dispatching without resume cursor",
+                        recv_cursor,
+                        e,
+                    )
             TraceContext.set_propagated_headers(merged)
         except Exception as e:
             logger.debug(

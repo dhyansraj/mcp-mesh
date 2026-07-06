@@ -96,6 +96,12 @@ pub struct ClaimWorkerConfig {
     /// Backoff ceiling. Doubles up from `backoff_min` on consecutive
     /// empty / errored claim cycles, capped at this value.
     pub backoff_max: Duration,
+    /// Whether reclaimed jobs resume from their persisted per-filter
+    /// `recv_cursor` (issue #1277) instead of replaying the event log from
+    /// seq 0. Default `false` ⇒ replay-from-0 (byte-identical to prior
+    /// behavior). This is the Rust-native gate; the per-language SDKs gate
+    /// resume in their own dispatchers via the binding constructors.
+    pub resume_cursor: bool,
 }
 
 impl ClaimWorkerConfig {
@@ -108,6 +114,7 @@ impl ClaimWorkerConfig {
             max_concurrent: 4,
             backoff_min: Duration::from_millis(200),
             backoff_max: Duration::from_secs(5),
+            resume_cursor: false,
         }
     }
 }
@@ -254,17 +261,24 @@ async fn run_loop(
                     // claim so the controller fences its deltas + executor
                     // reads (issue #1252). `None` (old registry) degrades to
                     // legacy owner-only behavior.
-                    // `None` initial_cursors: this wave does NOT resume from the
-                    // persisted recv_cursor — the controller replays from seq 0
-                    // as before. Runtime resume gating (passing
-                    // `claimed.recv_cursor`) is a later wave (issue #1277).
+                    //
+                    // Resume gating (issue #1277): seed the controller from the
+                    // persisted per-filter `recv_cursor` ONLY when this worker
+                    // opted into resume (`cfg.resume_cursor`). Default `false`
+                    // ⇒ `None` ⇒ replay-from-0, byte-identical to prior
+                    // behavior.
+                    let initial_cursors = if cfg.resume_cursor {
+                        claimed.recv_cursor.clone()
+                    } else {
+                        None
+                    };
                     let controller = JobController::new_with_epoch(
                         claimed.id.clone(),
                         cfg.instance_id.clone(),
                         claimed.claim_epoch,
                         backend.clone(),
                         queue.clone(),
-                        None,
+                        initial_cursors,
                     );
                     let dispatcher_clone = dispatcher.clone();
                     let job_id_for_log = claimed.id.clone();

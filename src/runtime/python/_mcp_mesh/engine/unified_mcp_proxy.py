@@ -682,6 +682,16 @@ class UnifiedMCPProxy:
         current_trace = TraceContext.get_current()
         merged_headers: dict[str, str] = dict(TraceContext.get_propagated_headers())
 
+        # Issue #1277: the persisted recv-cursor is CLAIM-LOCAL — it is read
+        # once by job_dispatch (from the contextvar, before this outbound call)
+        # to seed the handler's controller, and is meaningless (and wasteful —
+        # it's a serialized map) downstream. Unlike x-mesh-job-id /
+        # x-mesh-claim-epoch (which propagate intentionally for calling-job
+        # identity, #1263), scrub ONLY this key from the outbound base. The
+        # inbound claim→handler seed is unaffected — that read already happened
+        # against the contextvar, not this outbound copy.
+        merged_headers.pop("x-mesh-recv-cursor", None)
+
         if self.custom_headers:
             for k, v in self.custom_headers.items():
                 if matches_propagate_header(k):

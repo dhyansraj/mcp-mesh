@@ -509,6 +509,30 @@ export interface MeshToolDef<T extends z.ZodType = z.ZodType> {
    */
   retryOn?: Array<new (...args: unknown[]) => Error>;
   /**
+   * Issue #1277: opt into durable `recvEvent` cursor resume on re-claim.
+   *
+   * By default a re-claimed `task: true` job builds a fresh `JobController`
+   * that replays this job's event log from seq 0 — a handler blocked in
+   * `job.recvEvent(...)` would re-observe events it already consumed before
+   * the previous owner crashed. When `true`, the claim dispatcher seeds the
+   * reclaimed controller from the persisted per-filter `recv_cursor` map the
+   * registry returns on the `/jobs/claim` response, so `recvEvent` resumes at
+   * the next unconsumed seq instead of replaying.
+   *
+   * Constraints (validated at `addTool` time):
+   *
+   *   - requires `task: true` (only job-bound handlers have a controller /
+   *     an event cursor to resume; the flag is meaningless for synchronous
+   *     tools).
+   *
+   * Fail-safe: if the claim response carries no `recv_cursor` (old registry,
+   * first claim) the controller still replays from 0 — opting in never breaks
+   * a job that has no persisted cursor.
+   *
+   * Default: `false`/`undefined` (replay-from-0, existing behaviour).
+   */
+  resumeCursor?: boolean;
+  /**
    * Dependencies required by this tool.
    * Injected positionally as McpMeshTool params after args.
    *
