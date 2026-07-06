@@ -1588,10 +1588,20 @@ export class MeshAgent {
         !settleState.isSettled() &&
         settleState.remainingMs() > 0
       ) {
+        // Only edges that can still fire a settle WAKE are worth waiting on: a
+        // key already in the settle ratchet (resolved at least once) will never
+        // re-fire its waiter, so if such an edge has since flapped to a null
+        // proxy `waitForAny` would filter it out and return immediately — a hot
+        // busy-loop until the window expires. Excluding ratchet-resolved keys
+        // here means `pending` empties and we break to the final recount/throw
+        // the instant no wakeable edge remains (no spin).
         const pending: PendingSettleDep[] = [];
         for (const m of slot.methods) {
           const key = `${toolName}:dep_${m.edgeIndex}`;
-          if ((this.resolvedDeps.get(key) ?? null) === null) {
+          if (
+            (this.resolvedDeps.get(key) ?? null) === null &&
+            !settleState.isResolved(key)
+          ) {
             pending.push({ depKey: key, capability: edges[m.edgeIndex].capability });
           }
         }

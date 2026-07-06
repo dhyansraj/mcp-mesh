@@ -549,11 +549,84 @@ describe("minAvailable floor", () => {
     // A bounded wait actually occurred (never a fixed sleep once settled).
     expect(settle.waitCount).toBeGreaterThan(before);
   });
+
+  it("flapped (ratchet-resolved then unavailable) edges do NOT busy-spin below floor", async () => {
+    // Regression: an edge resolved once (settle ratchet) then flapped to a null
+    // proxy can never re-fire its waiter. If every pending edge is in that
+    // state, waitForAny returns immediately — the old enforceFloor loop would
+    // spin hot until the window expired. The fix breaks to the final throw the
+    // instant no WAKEABLE edge remains.
+    const fastmcp = makeFastMCPStub();
+    const agent = newAgent(fastmcp);
+    process.env.MCP_MESH_SETTLE_TIMEOUT = "30";
+    resetSettleStateForTests();
+    const View = serviceView({
+      methods: { a: "svc.a", b: "svc.b" },
+      minAvailable: 1,
+    });
+    const { edges, slots } = (
+      await import("../service-view.js")
+    ).expandDependencies([View], "flap_tool");
+    const settle = getSettleState();
+    settle.registerDeclared("flap_tool:dep_0");
+    settle.registerDeclared("flap_tool:dep_1");
+    // A third, never-resolving declared key keeps the agent UNSETTLED so the
+    // enforceFloor loop's `!isSettled()` guard stays true (the spin precondition).
+    settle.registerDeclared("other_tool:dep_0");
+
+    // Ratchet BOTH view edges (resolved-at-least-once) then flap them to null.
+    for (const e of [0, 1]) {
+      injectEdge(agent, "flap_tool", e, async () => "x");
+      settle.markResolved(`flap_tool:dep_${e}`);
+      removeEdge(agent, "flap_tool", e);
+    }
+    expect(settle.isResolved("flap_tool:dep_0")).toBe(true);
+    expect(settle.isResolved("flap_tool:dep_1")).toBe(true);
+    expect(settle.isSettled()).toBe(false); // window still open
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const depsArray = (agent as any)._buildDepSlots(
+      "flap_tool",
+      slots,
+      edges,
+      undefined,
+      settle,
+    );
+    const facade = depsArray[0] as Record<string, () => Promise<unknown>>;
+
+    const waitAnySpy = vi.spyOn(settle, "waitForAny");
+    let err: unknown;
+    try {
+      await facade.a();
+    } catch (e) {
+      err = e;
+    }
+    // Threw promptly with the floor error — no wakeable edge, so waitForAny was
+    // never entered and the window is still open (proof it did NOT spin to
+    // expiry; a spin would have latched isSettled() true).
+    expect(err).toBeInstanceOf(MeshServiceUnavailableError);
+    expect((err as MeshServiceUnavailableError).available).toBe(0);
+    expect((err as MeshServiceUnavailableError).total).toBe(2);
+    expect((err as MeshServiceUnavailableError).floor).toBe(1);
+    expect(waitAnySpy).not.toHaveBeenCalled();
+    expect(settle.isSettled()).toBe(false);
+    waitAnySpy.mockRestore();
+  });
 });
 
 describe("serviceView validation (throws at construction)", () => {
   it("empty methods map", () => {
     expect(() => serviceView({ methods: {} })).toThrow(/at least one method/);
+  });
+  it("methods array (numeric keys) is rejected as a non-object map", () => {
+    expect(() =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      serviceView({ methods: [] as any }),
+    ).toThrow(/must be an object mapping method names/);
+    expect(() =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      serviceView({ methods: ["svc.a"] as any }),
+    ).toThrow(/must be an object mapping method names/);
   });
   it("blank capability", () => {
     expect(() => serviceView({ methods: { a: "" } })).toThrow(/blank capability/);

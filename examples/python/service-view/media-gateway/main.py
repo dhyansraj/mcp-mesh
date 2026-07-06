@@ -20,6 +20,7 @@ Python, and TypeScript examples, so this gateway can consume the providers from
 ANY runtime (e.g. a Python gateway over the Java providers) and vice versa.
 """
 
+import json
 import os
 
 import mesh
@@ -27,6 +28,22 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 
 app = FastMCP("Media Gateway Service")
+
+
+def _is_dependency_unavailable(err: ToolError) -> bool:
+    """True only for the structured ``dependency_unavailable`` refusal.
+
+    An unresolved OPTIONAL view edge raises ``ToolError`` whose message is the
+    JSON ``{"error": "dependency_unavailable", "capability": "..."}``. Inspect
+    the payload so we degrade ONLY on that shape — any other ToolError (a real
+    provider bug, a bad request) must propagate rather than be masked as
+    "provider offline".
+    """
+    try:
+        payload = json.loads(str(err))
+    except (ValueError, TypeError):
+        return False
+    return isinstance(payload, dict) and payload.get("error") == "dependency_unavailable"
 
 
 @mesh.service
@@ -60,20 +77,24 @@ async def _combine(media: MediaService, asset_id: str, text: str) -> dict:
     caption = await media.caption({"assetId": asset_id, "text": text})
     result["caption"] = _entry(caption["caption"], caption["provider"])
 
-    # OPTIONAL edge — degrade gracefully if no thumbnail provider is present.
+    # OPTIONAL edge — degrade gracefully ONLY on dependency_unavailable.
     try:
         thumb = await media.thumbnail({"assetId": asset_id, "width": 320})
         result["thumbnail"] = _entry(f"{thumb['uri']} ({thumb['size']})", thumb["provider"])
-    except ToolError:
+    except ToolError as e:
+        if not _is_dependency_unavailable(e):
+            raise
         result["thumbnail"] = _entry("(no thumbnail — provider offline)", "unavailable")
 
-    # OPTIONAL edge — degrade gracefully if no transcribe provider is present.
+    # OPTIONAL edge — degrade gracefully ONLY on dependency_unavailable.
     try:
         tx = await media.transcribe({"assetId": asset_id, "text": text})
         result["transcript"] = _entry(
             f"{tx['transcript']} [{tx['wordCount']} words]", tx["provider"]
         )
-    except ToolError:
+    except ToolError as e:
+        if not _is_dependency_unavailable(e):
+            raise
         result["transcript"] = _entry("(no transcript — provider offline)", "unavailable")
 
     return result

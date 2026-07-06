@@ -17,6 +17,7 @@
  */
 
 import { mesh, FastMCP } from "@mcpmesh/sdk";
+import { z } from "zod";
 
 const server = new FastMCP({
   name: "Caption Provider Service",
@@ -30,11 +31,23 @@ const agent = mesh(server, {
 });
 
 agent.addService("media", {
-  caption: async (args: { assetId: string; text: string }) => ({
-    assetId: args.assetId,
-    caption: `A scene showing ${args.text.trim().toLowerCase()}.`,
-    provider: "caption-provider",
-  }),
+  // Object form: a Zod schema documents + validates the tool's inputs at
+  // runtime (addService forwards `parameters` to the underlying addTool). The
+  // object-form execute types its args as `unknown`, so narrow after validation.
+  caption: {
+    parameters: z.object({
+      assetId: z.string().describe("Media asset identifier"),
+      text: z.string().describe("Source description text"),
+    }),
+    execute: async (args) => {
+      const { assetId, text } = args as { assetId: string; text: string };
+      return {
+        assetId,
+        caption: `A scene showing ${text.trim().toLowerCase()}.`,
+        provider: "caption-provider",
+      };
+    },
+  },
 });
 
 // The SDK auto-starts after module loading completes.

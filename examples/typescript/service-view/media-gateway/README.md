@@ -34,29 +34,30 @@ throw when unresolved, which the handler catches for graceful degradation.
 
 ## Setup
 
+From the repo root, install this agent's dependencies:
+
 ```bash
-cd examples/typescript/service-view/media-gateway
-npm install
+npm --prefix examples/typescript/service-view/media-gateway install
 ```
 
 ## Build (type-check)
 
 ```bash
-npm run build      # tsc
+npm --prefix examples/typescript/service-view/media-gateway run build   # tsc
 ```
 
 ## Run
 
-```bash
-npx tsx index.ts
-# then, with the three providers running:
-meshctl call process_media '{"assetId": "asset-1", "text": "a cat on a sofa"}'
-```
-
-Or with meshctl (starts a local registry automatically if none is running):
+Start with meshctl (starts a local registry automatically if none is running):
 
 ```bash
 meshctl start examples/typescript/service-view/media-gateway/index.ts
+```
+
+Then, with the three providers running:
+
+```bash
+meshctl call process_media '{"assetId": "asset-1", "text": "a cat on a sofa"}'
 ```
 
 The agent listens on port 8133.

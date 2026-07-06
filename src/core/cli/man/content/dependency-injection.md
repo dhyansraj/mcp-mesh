@@ -282,7 +282,10 @@ async def process_media(
     caption = await media.caption({"text": req["text"]})   # dict → the target tool's named args
     try:
         thumb = await media.thumbnail({"asset_id": req["id"]})
-    except ToolError:                                       # optional method unresolved
+    except ToolError as e:
+        # swallow ONLY the unresolved-optional refusal, not provider-side errors
+        if "dependency_unavailable" not in str(e):
+            raise
         thumb = None
     return {"caption": caption, "thumbnail": thumb}
 ```

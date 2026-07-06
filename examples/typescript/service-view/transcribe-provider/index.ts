@@ -16,6 +16,7 @@
  */
 
 import { mesh, FastMCP } from "@mcpmesh/sdk";
+import { z } from "zod";
 
 const server = new FastMCP({
   name: "Transcribe Provider Service",
@@ -29,15 +30,25 @@ const agent = mesh(server, {
 });
 
 agent.addService("media", {
-  transcribe: async (args: { assetId: string; text: string }) => {
-    const stripped = args.text.trim();
-    const wordCount = stripped ? stripped.split(/\s+/).length : 0;
-    return {
-      assetId: args.assetId,
-      transcript: `[${args.assetId}] ${stripped.toUpperCase()}`,
-      wordCount,
-      provider: "transcribe-provider",
-    };
+  // Object form: a Zod schema documents + validates the tool's inputs at
+  // runtime (addService forwards `parameters` to the underlying addTool). The
+  // object-form execute types its args as `unknown`, so narrow after validation.
+  transcribe: {
+    parameters: z.object({
+      assetId: z.string().describe("Media asset identifier"),
+      text: z.string().describe("Source audio text"),
+    }),
+    execute: async (args) => {
+      const { assetId, text } = args as { assetId: string; text: string };
+      const stripped = text.trim();
+      const wordCount = stripped ? stripped.split(/\s+/).length : 0;
+      return {
+        assetId,
+        transcript: `[${assetId}] ${stripped.toUpperCase()}`,
+        wordCount,
+        provider: "transcribe-provider",
+      };
+    },
   },
 });
 

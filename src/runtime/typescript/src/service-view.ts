@@ -218,7 +218,8 @@ export function serviceView<S extends ServiceViewSpec>(spec: S): ServiceView<S> 
     spec == null ||
     typeof spec !== "object" ||
     typeof spec.methods !== "object" ||
-    spec.methods === null
+    spec.methods === null ||
+    Array.isArray(spec.methods)
   ) {
     throw new Error(
       "mesh.serviceView: `methods` must be an object mapping method names to " +

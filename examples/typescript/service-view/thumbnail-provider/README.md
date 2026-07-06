@@ -13,24 +13,21 @@ exactly, so gateways in ANY runtime are interchangeable.
 
 ## Setup
 
+From the repo root, install this agent's dependencies:
+
 ```bash
-cd examples/typescript/service-view/thumbnail-provider
-npm install
+npm --prefix examples/typescript/service-view/thumbnail-provider install
 ```
 
 ## Build (type-check)
 
 ```bash
-npm run build      # tsc
+npm --prefix examples/typescript/service-view/thumbnail-provider run build   # tsc
 ```
 
 ## Run
 
-```bash
-npx tsx index.ts
-```
-
-Or with meshctl (starts a local registry automatically if none is running):
+Start with meshctl (starts a local registry automatically if none is running):
 
 ```bash
 meshctl start examples/typescript/service-view/thumbnail-provider/index.ts

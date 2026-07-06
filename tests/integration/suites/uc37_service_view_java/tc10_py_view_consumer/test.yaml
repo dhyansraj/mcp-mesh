@@ -117,8 +117,13 @@ test:
 
   # Guarantee 2: the structured pre-invoke refusal from the PYTHON tool.
   # Poll until the guard fires (the consumer's heartbeat must first drop the
-  # slot; the interim window may surface a handler-level bravo_error report —
-  # only the structured body counts as the verdict).
+  # slot; the interim window may surface a handler-level bravo_error report).
+  # The loop exit REQUIRES the structural refusal shape — isError==true (a
+  # handler-level report is a SUCCESS result carrying the error text, so
+  # tokens alone could exit on a transient) — plus the body: parsed
+  # `.error == "dependency_unavailable" and .capability == "svc.bravo"` when
+  # content[0].text is pure JSON, with raw-token matching as the fallback for
+  # a FastMCP-wrapped ToolError text.
   - name: "Wait for the structured dependency_unavailable refusal"
     handler: shell
     workdir: /workspace
@@ -126,11 +131,16 @@ test:
       RESP=""
       for i in $(seq 1 60); do
         RESP=$(meshctl call py_view_report '{}' --raw 2>&1 || true)
-        if echo "$RESP" | grep -q 'dependency_unavailable' && echo "$RESP" | grep -q 'svc.bravo'; then
-          echo "PY_REFUSAL_STRUCTURED=1 after ~$((i*2))s"
-          [ "$(echo "$RESP" | jq -r '.isError == true' 2>/dev/null)" = "true" ] && echo "PY_REFUSAL_ISERROR=1"
-          echo "$RESP"
-          exit 0
+        ISERR=$(echo "$RESP" | jq -r '.isError == true' 2>/dev/null || echo "")
+        BODY=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .error == "dependency_unavailable" and .capability == "svc.bravo"' 2>/dev/null || echo "")
+        if [ "$ISERR" = "true" ]; then
+          if [ "$BODY" = "true" ] || { echo "$RESP" | grep -q 'dependency_unavailable' && echo "$RESP" | grep -q 'svc.bravo'; }; then
+            echo "PY_REFUSAL_STRUCTURED=1 after ~$((i*2))s"
+            echo "PY_REFUSAL_ISERROR=1"
+            [ "$BODY" = "true" ] && echo "PY_REFUSAL_BODY_PARSED=1"
+            echo "$RESP"
+            exit 0
+          fi
         fi
         sleep 2
       done
