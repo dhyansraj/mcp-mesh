@@ -84,3 +84,47 @@ func TestValidateAgentDescription(t *testing.T) {
 		}
 	})
 }
+
+// TestValidateCapabilityName covers the RFC #1280 v3 dot-namespacing widening:
+// a capability name is one or more dot-separated segments, each following the
+// existing flat rule (letter-led, alnum/underscore/hyphen). Strictly widens the
+// old single-segment pattern; leading/trailing/consecutive dots are rejected.
+func TestValidateCapabilityName(t *testing.T) {
+	v := NewAgentRegistrationValidator()
+
+	valid := []string{
+		"greeting",       // existing flat name still valid
+		"smart_greet",    // underscore
+		"weather-report", // hyphen
+		"a",              // single letter
+		"media.caption",  // two segments
+		"a.b",            // minimal dotted
+		"a.b.c",          // three segments
+		"llm.chat",       // phase-1/2 dotted dependency style
+		"a1.b2_c-3",      // digits/underscore/hyphen within segments
+	}
+	for _, name := range valid {
+		if err := v.validateCapabilityName(name); err != nil {
+			t.Errorf("expected %q to be valid, got error: %v", name, err)
+		}
+	}
+
+	invalid := []string{
+		"",       // empty
+		".a",     // leading dot
+		"a.",     // trailing dot
+		"a..b",   // consecutive dots
+		"a.-b",   // segment must start with a letter
+		"1a.b",   // must start with a letter
+		"a.1b",   // second segment must start with a letter
+		".",      // just a dot
+		"a.b.",   // trailing dot after multiple segments
+		"a b",    // space
+		"a.b\n",  // trailing newline (anchored $ = end of text, not before newline)
+	}
+	for _, name := range invalid {
+		if err := v.validateCapabilityName(name); err == nil {
+			t.Errorf("expected %q to be rejected, but it passed", name)
+		}
+	}
+}

@@ -1,0 +1,175 @@
+# tc08_producer_sugar_dotted — RFC #1280 PHASE 3 end-to-end: producer sugar
+# (@McpMeshService("svc") on a bean class publishes each public method as
+# capability "svc.<method>") AND the first DOTTED capability names ever to
+# traverse a real cluster registration (the Go registry validator was widened
+# to dot-separated segments — src/core/registry/validation.go — but no dotted
+# name had crossed the wire before this TC).
+#
+# Topology: java-view-producer (publishes svc.alpha + svc.bravo via the
+# sugar) + java-view-consumer (DottedService view binds both, surfaced by the
+# view_dotted tool). No Python providers — both agents are Java, and the
+# consumer's other views (view-cap-*, tp-cap-*) stay deliberately unresolved:
+# they are OPTIONAL or belong to other carriers and must not interfere.
+#
+# Design guarantees under test:
+#   1. VALIDATOR WIDENING E2E: the registry ACCEPTS the dotted registration —
+#      java-view-producer registers healthy and its capabilities list carries
+#      svc.alpha and svc.bravo (a validator rejection would 4xx the
+#      registration and the agent would never appear).
+#   2. Dotted names through the CLI call path: `meshctl call svc.alpha` (the
+#      capability-name fallback resolution) reaches the sugar-published tool
+#      and returns the self-identifying payload.
+#   3. Dotted names through dependency resolution + the view facade:
+#      view_dotted reports BOTH methods served by java-view-producer with the
+#      correct dotted capability payloads (svc.alpha / svc.bravo).
+#   4. Dependency accounting grew accordingly: the consumer registers
+#      total_dependencies == 8 (the DottedService edges landed on the
+#      __mesh_service_deps synthetic — same arithmetic tc04/tc07 pin).
+#
+# Timing: NO dependency-resolution waits (issue #1193) — registration waits
+# are liveness-only; the first view_dotted call rides the settle window. Two
+# cold JVMs, so the 240s registration deadline and long baseline polls apply.
+#
+# TC timeout = cold-cache worst case, summed from the step budgets: TWO
+# maven-install steps (600 each — this TC cannot rely on an earlier TC having
+# warmed the shared maven repo) + registration wait (260) + two call polls
+# (200 each) + copy/start/capture defaults (4 x 120) = 2340, rounded up with
+# slack to 2400. Heavier than the uc23 two-install convention (300-600) on
+# purpose: those rely on warm caches; the checklist flagged that reliance.
+
+name: "Service views phase 3: producer sugar publishes dotted svc.* capabilities end-to-end (Java)"
+description: "java-view-producer registers dotted svc.alpha/svc.bravo (widened validator e2e), meshctl call svc.alpha answers, view_dotted reports both methods served by the producer, consumer total_dependencies=8"
+tags:
+  - integration
+  - java
+  - registry
+  - service-view
+  - rfc-1280
+  - slow
+timeout: 2400
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/java-view-producer /workspace/
+      cp -rL /uc-artifacts/java-view-consumer /workspace/
+
+  - name: "Install producer Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-view-producer
+    timeout: 600
+
+  - name: "Install consumer Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-view-consumer
+    timeout: 600
+
+  - name: "Start java-view-producer (port 9202)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start /workspace/java-view-producer --env MCP_MESH_HTTP_PORT=9202 -d
+
+  - name: "Start java-view-consumer (port 9201)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start /workspace/java-view-consumer --env MCP_MESH_HTTP_PORT=9201 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  # Liveness only (issue #1193): 240s deadline covers two cold JVM starts.
+  # The producer APPEARING here is already half of guarantee 1 — a validator
+  # rejection would keep it out of meshctl list entirely.
+  - routine: global.wait_for_agents_registered
+    params:
+      agents: "java-view-producer java-view-consumer"
+
+  # Pure-JSON snapshot for the registration assertions (guarantees 1 + 4).
+  - name: "Capture /agents snapshot"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:8000/agents
+    capture: agents_snapshot
+
+  # Guarantee 2: the dotted name through the CLI call path (capability-name
+  # resolution). ENVELOPE: Java tools carry the payload ONLY as an escaped
+  # JSON string in content[0].text (no structuredContent) — parse via
+  # `.content[0].text | fromjson` (suite idiom), equality inside the jq
+  # filter. Poll: cold-JVM producer may still be warming its MCP endpoint.
+  - name: "Wait for direct dotted call (meshctl call svc.alpha)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESP=""
+      for i in $(seq 1 90); do
+        RESP=$(meshctl call svc.alpha '{}' --raw 2>&1 || true)
+        OK=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .agent == "java-view-producer" and .cap == "svc.alpha"' 2>/dev/null || echo "")
+        if [ "$OK" = "true" ]; then
+          echo "DOTTED_DIRECT_CALL_OK=1 after ~$((i*2))s"
+          echo "$RESP"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: meshctl call svc.alpha never answered with the producer payload within 180s"
+      echo "last response: $RESP"
+      meshctl logs java-view-producer 2>/dev/null | tail -40 || true
+      exit 1
+    capture: direct_dotted_call
+    timeout: 200
+
+  # Guarantee 3: dotted names through dependency resolution + the view
+  # facade. Anchored key:value pairing (agent AND dotted cap judged in one
+  # filter per method) so a wrong-capability wiring cannot pass.
+  - name: "Wait for view_dotted report"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESP=""
+      for i in $(seq 1 90); do
+        RESP=$(meshctl call view_dotted '{}' --raw 2>&1 || true)
+        A=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .alpha_agent == "java-view-producer" and .alpha_cap == "svc.alpha"' 2>/dev/null || echo "")
+        B=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .bravo_agent == "java-view-producer" and .bravo_cap == "svc.bravo"' 2>/dev/null || echo "")
+        if [ "$A" = "true" ] && [ "$B" = "true" ]; then
+          echo "DOTTED_VIEW_BOUND=1 after ~$((i*2))s"
+          echo "$RESP"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: view_dotted never reported both svc.* methods served by java-view-producer within 180s"
+      echo "last response: $RESP"
+      meshctl logs java-view-consumer 2>/dev/null | tail -40 || true
+      exit 1
+    capture: dotted_view_report
+    timeout: 200
+
+assertions:
+  # IDIOM: equality lives INSIDE the jq filter so the interpolation yields a
+  # bare true/false; no '}' in interpolation bodies.
+
+  # Guarantee 1: the widened validator accepted the dotted registration
+  - expr: "${jq:captured.agents_snapshot:([.agents[] | select(.name == \"java-view-producer\")] | length == 1)} == 'true'"
+    message: "java-view-producer must be REGISTERED — a validator rejection of the dotted capabilities would keep the whole registration out"
+  - expr: "${jq:captured.agents_snapshot:(.agents[] | select(.name == \"java-view-producer\") | .status == \"healthy\")} == 'true'"
+    message: "java-view-producer must register HEALTHY with its dotted capabilities"
+  - expr: "${jq:captured.agents_snapshot:([.agents[] | select(.name == \"java-view-producer\") | .capabilities[] | select(.name == \"svc.alpha\" or .name == \"svc.bravo\")] | length == 2)} == 'true'"
+    message: "the producer's capability list must carry BOTH dotted names (svc.alpha, svc.bravo) — the e2e proof of the widened capability-name contract"
+
+  # Guarantee 2: the dotted name resolves through the CLI call path
+  - expr: "${captured.direct_dotted_call} contains 'DOTTED_DIRECT_CALL_OK=1'"
+    message: "meshctl call svc.alpha must reach the sugar-published tool and return the producer's self-identifying payload"
+
+  # Guarantee 3: the dotted names resolve through the view facade
+  - expr: "${captured.dotted_view_report} contains 'DOTTED_VIEW_BOUND=1'"
+    message: "view_dotted must report both methods served by java-view-producer with the correct dotted capability payloads (svc.alpha / svc.bravo)"
+
+  # Guarantee 4: dependency accounting grew with the dotted view edges
+  - expr: "${jq:captured.agents_snapshot:(.agents[] | select(.name == \"java-view-consumer\") | .total_dependencies == 8)} == 'true'"
+    message: "the consumer must register total_dependencies=8 — DottedService's two svc.* edges landed on the __mesh_service_deps synthetic (5 bean-path + 3 tool-param)"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

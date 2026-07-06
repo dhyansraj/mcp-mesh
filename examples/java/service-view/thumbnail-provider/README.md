@@ -1,7 +1,7 @@
 # thumbnail-provider
 
 Provider B in the [`@McpMeshService` service-view example](../README.md). Publishes
-the `media_thumbnail` capability, bound by the OPTIONAL
+the `media.thumbnail` capability, bound by the OPTIONAL
 `MediaService.thumbnail(...)` view method in the `media-gateway` consumer — stop
 this agent to see the gateway degrade gracefully.
 
@@ -9,6 +9,11 @@ this agent to see the gateway degrade gracefully.
 
 A Java/Spring Boot MCP Mesh agent. Turns an asset id + width into a deterministic
 thumbnail descriptor.
+
+The capability is published with producer sugar: `MediaThumbnailService` is a
+`@Component` annotated `@McpMeshService("media")`, so its public `thumbnail(...)`
+method is exposed as the dotted capability `media.thumbnail` — no per-method
+`@MeshTool` required.
 
 ## Getting Started
 
@@ -40,7 +45,8 @@ thumbnail-provider/
 ├── Dockerfile
 ├── helm-values.yaml
 └── src/main/java/com/example/thumbnailprovider/
-    └── ThumbnailProviderApplication.java
+    ├── ThumbnailProviderApplication.java  # agent bootstrap
+    └── MediaThumbnailService.java         # @McpMeshService("media") producer bean
 ```
 
 ## Docker

@@ -1,13 +1,18 @@
 # transcribe-provider
 
 Provider C in the [`@McpMeshService` service-view example](../README.md). Publishes
-the `media_transcribe` capability, bound by the OPTIONAL
+the `media.transcribe` capability, bound by the OPTIONAL
 `MediaService.transcribe(...)` view method in the `media-gateway` consumer.
 
 ## Overview
 
 A Java/Spring Boot MCP Mesh agent. Turns an asset id + source text into a
 deterministic transcript.
+
+The capability is published with producer sugar: `MediaTranscribeService` is a
+`@Component` annotated `@McpMeshService("media")`, so its public `transcribe(...)`
+method is exposed as the dotted capability `media.transcribe` — no per-method
+`@MeshTool` required.
 
 ## Getting Started
 
@@ -39,7 +44,8 @@ transcribe-provider/
 ├── Dockerfile
 ├── helm-values.yaml
 └── src/main/java/com/example/transcribeprovider/
-    └── TranscribeProviderApplication.java
+    ├── TranscribeProviderApplication.java  # agent bootstrap
+    └── MediaTranscribeService.java         # @McpMeshService("media") producer bean
 ```
 
 ## Docker

@@ -96,6 +96,15 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
     private final List<ServiceViewMetadata> discovered = new CopyOnWriteArrayList<>();
 
     /**
+     * Directly-annotated {@code @McpMeshService} CLASS names found by the SAME
+     * scan pass that discovers view interfaces (RFC #1280 phase-3 review, item
+     * 3): producer candidates. A late {@link org.springframework.beans.factory.SmartInitializingSingleton}
+     * WARNs for any of these the {@link MeshToolBeanPostProcessor} did NOT
+     * actually see as a bean — ground-truth comparison, no false positives.
+     */
+    private final List<String> annotatedProducerClasses = new CopyOnWriteArrayList<>();
+
+    /**
      * The validated views discovered in this context, sorted by interface name
      * for a deterministic dependency-expansion order.
      */
@@ -103,6 +112,11 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
         List<ServiceViewMetadata> copy = new ArrayList<>(discovered);
         copy.sort(Comparator.comparing(v -> v.iface().getName()));
         return copy;
+    }
+
+    /** Directly-annotated @McpMeshService class names found during scanning. */
+    public List<String> discoveredProducerClasses() {
+        return List.copyOf(annotatedProducerClasses);
     }
 
     @Override
@@ -133,13 +147,20 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
         // route / @MeshDependsOn is idempotent.
         MeshSettleState settleState = MeshSettleState.getInstance();
 
-        // MED-4: match ONLY interfaces directly annotated with @McpMeshService.
-        // - useDefaultFilters=false + a non-meta AnnotationTypeFilter so composed
-        //   annotations are out of scope.
-        // - isCandidateComponent accepts non-interface candidates too, so a
-        //   @McpMeshService on a class is DISCOVERED (and boot-fails below with a
-        //   clear message) rather than silently ignored; annotation types are
-        //   excluded.
+        // ONE scan pass handles both roles (RFC #1280 phase-3 review, item 3):
+        // directly-annotated INTERFACES become bean views here; directly-annotated
+        // CLASSES are collected as producer candidates for the late non-bean WARN.
+        //
+        // Scanned bean views require @McpMeshService DIRECTLY on the interface.
+        // Deliberate rule: a sub-interface that only INHERITS the annotation is
+        // NOT co-discovered — co-discovery would always pull in the annotated
+        // parent too (duplicate facades, parent-type injection ambiguity,
+        // generic-narrowing type clashes). Sub-interface inheritance IS supported
+        // for tool-parameter views ({@code isServiceView} uses findAnnotation),
+        // where the user explicitly names the type so there is no ambiguity.
+        // - useDefaultFilters=false + AnnotationTypeFilter(considerMeta=false,
+        //   considerInterfaces=false): direct annotation only; composed/meta
+        //   annotations and inherited-from-super-interface stay out of scope.
         ClassPathScanningCandidateComponentProvider scanner =
             new ClassPathScanningCandidateComponentProvider(false) {
                 @Override
@@ -172,16 +193,17 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
                         className, t.getMessage());
                     continue;
                 }
-                McpMeshService annotation = AnnotationUtils.findAnnotation(type, McpMeshService.class);
+                // DIRECT annotation only (getAnnotation, not findAnnotation): a
+                // sub-interface inheriting @McpMeshService is not a scanned view.
+                McpMeshService annotation = type.getAnnotation(McpMeshService.class);
                 if (annotation == null) {
                     continue;
                 }
-                // MED-4: @McpMeshService is only meaningful on an interface.
                 if (!type.isInterface()) {
-                    throw new IllegalStateException(String.format(
-                        "@McpMeshService must be on an interface: %s is a %s. Service views are "
-                            + "consumer-owned typed interfaces with no implementation.",
-                        type.getName(), type.isEnum() ? "enum" : "class"));
+                    // Producer CLASS candidate — record for the late non-bean
+                    // WARN (item 3); publication itself is the post-processor's job.
+                    annotatedProducerClasses.add(className);
+                    continue;
                 }
 
                 // Validation is boot-fail: an invalid view surfaces immediately
@@ -296,22 +318,30 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
                 ? override
                 : (modeRequested ? returnBinding.rawType() : null);
 
-            // Cross-view conflicting-type policy (reuse of MeshCapabilityBeanRegistrar
-            // conflicting-expectedType semantics): the same capability bound by
-            // two methods must resolve to the same raw type.
+            // Cross-view conflicting-type policy: the same capability bound by
+            // two methods must resolve to the same raw type — EXCEPT Object,
+            // which is the dynamic/untyped marker in the proxy machinery
+            // (collapses to "<dynamic>" in the type-keyed cache). Object coexists
+            // with any concrete type; a conflict fires only between two DIFFERENT
+            // concrete types. A concrete type wins the shared proxy typing (an
+            // Object binding then reads dynamically — existing untyped-dep
+            // semantics), so an annotated generic parent (T→Object) and a
+            // narrowed sub both binding the capability boot and work.
+            Class<?> incoming = returnBinding.rawType();
             CapabilityBinding prior = capabilityTypes.get(capability);
-            if (prior != null && prior.rawType() != returnBinding.rawType()) {
+            if (prior == null || (prior.rawType() == Object.class && incoming != Object.class)) {
+                // First binding, or upgrade Object → concrete.
+                capabilityTypes.put(capability, new CapabilityBinding(
+                    incoming, iface.getName(), method.getName()));
+            } else if (incoming != Object.class && prior.rawType() != Object.class
+                    && prior.rawType() != incoming) {
                 throw new IllegalStateException(String.format(
                     "Capability '%s' is bound by @McpMeshService methods with conflicting resolved "
                         + "types: %s (%s.%s) vs %s (%s.%s). Align the return types or split into "
                         + "separate capabilities.",
                     capability,
                     prior.rawType().getName(), prior.viewName(), prior.methodName(),
-                    returnBinding.rawType().getName(), iface.getName(), method.getName()));
-            }
-            if (prior == null) {
-                capabilityTypes.put(capability, new CapabilityBinding(
-                    returnBinding.rawType(), iface.getName(), method.getName()));
+                    incoming.getName(), iface.getName(), method.getName()));
             }
 
             bindings.add(new ServiceMethodBinding(

@@ -11,10 +11,14 @@ import io.mcpmesh.Selector;
  * changes.
  *
  * <ul>
- *   <li>{@link #caption} → {@code media_caption} (caption-provider), REQUIRED</li>
- *   <li>{@link #thumbnail} → {@code media_thumbnail} (thumbnail-provider), optional</li>
- *   <li>{@link #transcribe} → {@code media_transcribe} (transcribe-provider), optional</li>
+ *   <li>{@link #caption} → {@code media.caption} (caption-provider), REQUIRED</li>
+ *   <li>{@link #thumbnail} → {@code media.thumbnail} (thumbnail-provider), optional</li>
+ *   <li>{@link #transcribe} → {@code media.transcribe} (transcribe-provider), optional</li>
  * </ul>
+ *
+ * <p>The capabilities use dotted names ({@code media.*}) — first-class across
+ * the stack — matching the shared namespace the three producer-sugar agents
+ * publish into.
  *
  * <p>Spring auto-discovers this interface on the classpath and registers a
  * facade bean named {@code mediaService}; the {@code media-gateway} agent
@@ -25,13 +29,13 @@ import io.mcpmesh.Selector;
 @McpMeshService
 public interface MediaService {
 
-    @Selector(capability = "media_caption", required = true)
+    @Selector(capability = "media.caption", required = true)
     CaptionResult caption(CaptionRequest req);
 
-    @Selector(capability = "media_thumbnail")
+    @Selector(capability = "media.thumbnail")
     ThumbnailResult thumbnail(ThumbnailRequest req);
 
-    @Selector(capability = "media_transcribe")
+    @Selector(capability = "media.transcribe")
     TranscriptResult transcribe(TranscribeRequest req);
 
     // ---- Single-POJO request records (one unannotated param per method) -------

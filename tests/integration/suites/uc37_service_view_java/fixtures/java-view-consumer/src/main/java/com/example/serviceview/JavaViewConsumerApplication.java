@@ -17,7 +17,7 @@ import java.util.Map;
  * uc37 fixture — Java consumer proving RFC #1280 {@code @McpMeshService}
  * service views end-to-end.
  *
- * <p>Three views are discovered from this package:
+ * <p>Four views are discovered from this package:
  * <ul>
  *   <li>{@link ReportService} — alpha/bravo (optional) + charlie (required),
  *       three view-cap-* capabilities backed by three DIFFERENT Python
@@ -26,14 +26,16 @@ import java.util.Map;
  *   <li>{@link ToolParamService} — three tp-cap-* capabilities (charlie
  *       required), consumed as a {@code @MeshTool} METHOD PARAMETER
  *       (RFC #1280 phase 2) by {@code view_tool_param}.</li>
+ *   <li>{@link DottedService} — two OPTIONAL DOTTED svc.* capabilities
+ *       published by java-view-producer's phase-3 producer sugar (tc08).</li>
  * </ul>
  *
  * <p>Registration carries TWO dependency surfaces: the bean-path views expand
- * to exactly THREE view-cap-* edges under the synthetic
- * {@code __mesh_service_deps} tool (FlooredService dedupes onto ReportService),
- * and the tool-param view expands to THREE tp-cap-* edges on the
+ * to FIVE edges under the synthetic {@code __mesh_service_deps} tool (three
+ * view-cap-* — FlooredService dedupes onto ReportService — plus DottedService's
+ * two svc.*), and the tool-param view expands to THREE tp-cap-* edges on the
  * {@code view_tool_param} tool's OWN dependency list — so the registry reports
- * {@code total_dependencies == 6} (tc04/tc07).
+ * {@code total_dependencies == 8} (tc04/tc07/tc08).
  *
  * <p>The {@code @MeshTool} surfaces below are the observation points the TCs
  * call via {@code meshctl call}:
@@ -76,6 +78,9 @@ import java.util.Map;
  *       {@code {"error":"dependency_unavailable","capability":"tp-cap-charlie"}}
  *       refusal BEFORE this body runs (tc06) — the exact envelope the
  *       class-level {@code view_critical} path above does NOT get (tc03).</li>
+ *   <li>{@code view_dotted} — RFC #1280 PHASE 3: reports the DOTTED svc.*
+ *       capabilities served by java-view-producer's producer sugar through
+ *       the {@link DottedService} bean-path view (tc08).</li>
  * </ul>
  */
 @MeshAgent(
@@ -99,6 +104,7 @@ public class JavaViewConsumerApplication {
 
         private final ReportService reportService;
         private final FlooredService flooredService;
+        private final DottedService dottedService;
 
         /**
          * Constructor injection of the auto-registered facade beans — the
@@ -106,9 +112,11 @@ public class JavaViewConsumerApplication {
          * as a BeanDefinitionRegistryPostProcessor). A boot failure here means
          * discovery/registration broke.
          */
-        ViewTools(ReportService reportService, FlooredService flooredService) {
+        ViewTools(ReportService reportService, FlooredService flooredService,
+                  DottedService dottedService) {
             this.reportService = reportService;
             this.flooredService = flooredService;
+            this.dottedService = dottedService;
         }
 
         @MeshTool(
@@ -154,6 +162,23 @@ public class JavaViewConsumerApplication {
                 out.put("floor_total", e.getMethodsTotal());
                 out.put("floor_min", e.getMinAvailable());
             }
+            return out;
+        }
+
+        /**
+         * RFC #1280 phase 3 entry point (tc08): reports the DOTTED svc.*
+         * capabilities published by java-view-producer's
+         * {@code @McpMeshService("svc")} producer sugar, consumed through the
+         * bean-path {@link DottedService} view. Same flat report shape as
+         * {@code view_report}.
+         */
+        @MeshTool(
+            capability = "view_dotted",
+            description = "Call both DottedService view methods (svc.* producer-sugar capabilities) and report which agent served each")
+        public Map<String, Object> dottedReport() {
+            Map<String, Object> out = new LinkedHashMap<>();
+            reportOne(out, "alpha", dottedService::alpha);
+            reportOne(out, "bravo", dottedService::bravo);
             return out;
         }
 
