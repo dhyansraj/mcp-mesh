@@ -58,10 +58,11 @@ export function assertNoServiceViewDeps(
  * Segment-wise dotted capability-name grammar. Kept in lockstep with the Go
  * registry validator's `capabilityNamePattern`
  * (src/core/registry/validation.go: `^[a-zA-Z][a-zA-Z0-9_-]*(\.[a-zA-Z][a-zA-Z0-9_-]*)*$`)
- * and the Python/Java runtimes. Applied ONLY to the derived capability names
- * `agent.addService` synthesizes — the SDK deliberately does NOT add a general
- * capability-validation layer elsewhere (the registry remains the single
- * authority for hand-written capability names).
+ * and the Python/Java runtimes. Applied to the PRODUCED capability names of
+ * `agent.addService` (the derived `prefix.method`) and `agent.addTool`
+ * (`capability ?? name`, #1293 item 6) — both validate before the name reaches
+ * the registry. Dependency capability names are deliberately left unvalidated
+ * (the registry remains their single authority).
  */
 export const CAPABILITY_NAME_PATTERN =
   /^[a-zA-Z][a-zA-Z0-9_-]*(\.[a-zA-Z][a-zA-Z0-9_-]*)*$/;

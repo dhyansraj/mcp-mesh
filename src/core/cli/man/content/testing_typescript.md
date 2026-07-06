@@ -19,8 +19,7 @@ The TypeScript SDK works well with Vitest for unit testing:
 ```typescript
 // src/index.test.ts
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { FastMCP } from "fastmcp";
-import { mesh } from "@mcpmesh/sdk";
+import { FastMCP, mesh } from "@mcpmesh/sdk";
 import { z } from "zod";
 
 describe("Calculator Agent", () => {

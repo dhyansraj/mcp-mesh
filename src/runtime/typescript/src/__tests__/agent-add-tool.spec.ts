@@ -157,6 +157,84 @@ describe("addTool — meshJobParamIndex validation", () => {
   });
 });
 
+// =============================================================================
+// #1293 item 6 — produced-capability name validation parity at addTool.
+// The Go registry (src/core/registry/validation.go) and Python
+// (support_types.py validate_capability_name) validate a PRODUCED capability
+// against the segment-wise dotted grammar. addTool now validates the same
+// value (capability ?? name) locally, so a bad hand-written capability throws
+// at registration instead of failing remotely as a registry 400.
+// =============================================================================
+
+describe("addTool — produced capability name validation (#1293 item 6)", () => {
+  function newAgent(): MeshAgent {
+    return new MeshAgent(makeFastMCPStub(), {
+      name: "test-agent-capname",
+      httpPort: 0,
+    });
+  }
+
+  it("rejects an explicit capability with a space", () => {
+    const agent = newAgent();
+    expect(() =>
+      agent.addTool({
+        name: "bad-cap",
+        capability: "Bad Name",
+        parameters: z.object({}),
+        execute: async () => "x",
+      }),
+    ).toThrow(/'Bad Name' is not a valid capability name/);
+  });
+
+  it("rejects a tool name used as capability that starts with a digit", () => {
+    const agent = newAgent();
+    expect(() =>
+      agent.addTool({
+        name: "1bad",
+        parameters: z.object({}),
+        execute: async () => "x",
+      }),
+    ).toThrow(/'1bad' is not a valid capability name/);
+  });
+
+  it("accepts a valid dotted capability (media.caption)", () => {
+    const agent = newAgent();
+    expect(() =>
+      agent.addTool({
+        name: "caption",
+        capability: "media.caption",
+        parameters: z.object({}),
+        execute: async () => "x",
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts an existing flat name/capability (greet-lucky)", () => {
+    const agent = newAgent();
+    expect(() =>
+      agent.addTool({
+        name: "greet_with_lucky_number",
+        capability: "greet-lucky",
+        parameters: z.object({}),
+        execute: async () => "x",
+      }),
+    ).not.toThrow();
+  });
+
+  it("does NOT reject an unusual DEPENDENCY capability (dependency validation unchanged)", () => {
+    const agent = newAgent();
+    expect(() =>
+      agent.addTool({
+        name: "consumer",
+        capability: "consumer",
+        parameters: z.object({}),
+        dependencies: [{ capability: "weird cap$name" }],
+        execute: async () => "x",
+      }),
+    ).not.toThrow();
+  });
+});
+
 describe("addTool — meshJobDepIndex validation", () => {
   function newAgent(): MeshAgent {
     return new MeshAgent(makeFastMCPStub(), {

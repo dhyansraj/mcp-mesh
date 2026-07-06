@@ -177,8 +177,7 @@ agent.addTool({
 ## Complete Example
 
 ```typescript
-import { FastMCP } from "fastmcp";
-import { mesh } from "@mcpmesh/sdk";
+import { FastMCP, mesh } from "@mcpmesh/sdk";
 import { z } from "zod";
 
 const server = new FastMCP({ name: "Weather Consumer", version: "1.0.0" });
