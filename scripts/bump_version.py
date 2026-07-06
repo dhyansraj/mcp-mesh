@@ -708,10 +708,12 @@ def bump_test_documentation(old: str, new: str, dry_run: bool) -> list[str]:
 # ---------------------------------------------------------------------------
 
 # Files whose stale version strings are intentional history or fixtures, not
-# live pins. test_bump_version.py holds old/new literals to exercise the guard
-# regexes themselves, so it always carries the previous version by design.
+# live pins. Both bump_version.py and test_bump_version.py carry version-shaped
+# example literals by design: the bump script's guard docstrings/examples embed
+# illustrative tags (e.g. ``tag: "2.8"``), and the test holds old/new literals to
+# exercise the guard regexes themselves, so it always carries the previous version.
 _GUARD_ALLOWLIST_FILES = re.compile(
-    r"(?:^|/)(?:RELEASE_NOTES\.md|CHANGELOG[^/]*|test_bump_version\.py)$"
+    r"(?:^|/)(?:RELEASE_NOTES\.md|CHANGELOG[^/]*|(?:test_)?bump_version\.py)$"
 )
 
 # Lines mentioning these third-party projects legitimately carry their OWN

@@ -1,5 +1,5 @@
 # Dockerfile for gemini-provider-py MCP Mesh LLM provider
-FROM mcpmesh/python-runtime:2.8.2
+FROM mcpmesh/python-runtime:3.0.0
 
 WORKDIR /app
 
