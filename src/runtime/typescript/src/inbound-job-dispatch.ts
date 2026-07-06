@@ -331,15 +331,23 @@ export function makeJobController(
   instanceId: string,
   registryUrl: string,
   claimEpoch?: number | null,
+  initialCursors?: Record<string, number> | null,
 ): JobController {
   // `claimEpoch` undefined/null (push-mode inbound job / old registry) ⇒
   // legacy owner-only fencing; on the claim path the dispatcher passes the
   // epoch from the /jobs/claim response so this execution is fenced (#1252).
+  //
+  // `initialCursors` undefined/null (default; push-mode inbound job, or a
+  // claim without resumeCursor opt-in) ⇒ replay-from-0. When the claim
+  // dispatcher opts in (issue #1277) it forwards the claim's per-filter
+  // `recv_cursor` map so the reclaimed controller resumes `recvEvent` at the
+  // next unconsumed seq instead of replaying the event log.
   return new JobController(
     jobId,
     instanceId,
     registryUrl,
     claimEpoch ?? undefined,
+    initialCursors ?? undefined,
   );
 }
 

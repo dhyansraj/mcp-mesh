@@ -16,6 +16,7 @@
 
 #![cfg(feature = "python")]
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -163,12 +164,13 @@ impl PyJobController {
     /// configured cadence (default 2s); the tick is torn down with a final
     /// flush when the controller is dropped.
     #[new]
-    #[pyo3(signature = (job_id, instance_id, registry_url, claim_epoch=None))]
+    #[pyo3(signature = (job_id, instance_id, registry_url, claim_epoch=None, initial_cursors=None))]
     fn new(
         job_id: String,
         instance_id: String,
         registry_url: &str,
         claim_epoch: Option<i64>,
+        initial_cursors: Option<HashMap<String, i64>>,
     ) -> PyResult<Self> {
         let backend = backend_from_url(registry_url)?;
         let queue = new_coalescing_queue();
@@ -176,15 +178,18 @@ impl PyJobController {
         // predates epochs) ⇒ legacy owner-only behavior. On the claim path
         // the SDK passes the epoch from the `/jobs/claim` response so this
         // execution is fenced (issue #1252).
+        //
+        // `initial_cursors=None` (default) ⇒ replay-from-0. When the SDK opts
+        // into resume (`@mesh.tool(resume_cursor=True)`) it passes the
+        // persisted per-filter `recv_cursor` map from the claim response so the
+        // reclaimed controller resumes instead of replaying (issue #1277).
         let inner = JobController::new_with_epoch(
             job_id,
             instance_id.clone(),
             claim_epoch,
             backend.clone(),
             queue.clone(),
-            // No seeded resume cursor at this binding surface (issue #1277
-            // runtime resume gating is a later wave).
-            None,
+            initial_cursors,
         );
         // Spawn the batching tick on the shared PyO3 Tokio runtime so
         // mid-flight progress deltas actually reach the registry. We

@@ -83,6 +83,10 @@ public class MeshToolRegistry {
             // task=true` before this call, so we only need to capture it
             // here for downstream dispatch wiring.
             annotation.retryOn(),
+            // Issue #1277: cursor-resume opt-in. Validated (requires
+            // task=true) in the bean post-processor before this call;
+            // captured here to thread into the ClaimDispatcher.
+            annotation.resumeCursor(),
             bean,
             method
         );
@@ -575,6 +579,11 @@ public class MeshToolRegistry {
      * per-tool exception whitelist that triggers release-and-retry instead of
      * fail() when a {@code task=true} handler raises. Always non-null (defaults
      * to a zero-length array).
+     *
+     * <p>{@code resumeCursor} mirrors {@link MeshTool#resumeCursor()} (issue
+     * #1277) — when true, a reclaimed job's controller resumes its
+     * {@code recvEvent} cursor from the persisted {@code recv_cursor} instead
+     * of replaying from seq 0. Defaults to false.
      */
     public record ToolMetadata(
         String capability,
@@ -587,6 +596,7 @@ public class MeshToolRegistry {
         boolean outputSchemaStrict,
         boolean task,
         Class<? extends Throwable>[] retryOn,
+        boolean resumeCursor,
         Object bean,
         Method method
     ) {
@@ -604,7 +614,7 @@ public class MeshToolRegistry {
                 Object bean,
                 Method method) {
             this(capability, description, version, tags, dependencies, inputSchema,
-                outputType, outputSchemaStrict, false, EMPTY_RETRY_ON, bean, method);
+                outputType, outputSchemaStrict, false, EMPTY_RETRY_ON, false, bean, method);
         }
 
         // Backward-compatible 11-arg constructor for callers that adopted
@@ -622,7 +632,26 @@ public class MeshToolRegistry {
                 Object bean,
                 Method method) {
             this(capability, description, version, tags, dependencies, inputSchema,
-                outputType, outputSchemaStrict, task, EMPTY_RETRY_ON, bean, method);
+                outputType, outputSchemaStrict, task, EMPTY_RETRY_ON, false, bean, method);
+        }
+
+        // Backward-compatible 12-arg constructor for callers that adopted the
+        // issue #895 retryOn field but predate the issue #1277 resumeCursor flag.
+        public ToolMetadata(
+                String capability,
+                String description,
+                String version,
+                List<String> tags,
+                List<DependencyInfo> dependencies,
+                Map<String, Object> inputSchema,
+                Class<?> outputType,
+                boolean outputSchemaStrict,
+                boolean task,
+                Class<? extends Throwable>[] retryOn,
+                Object bean,
+                Method method) {
+            this(capability, description, version, tags, dependencies, inputSchema,
+                outputType, outputSchemaStrict, task, retryOn, false, bean, method);
         }
 
         @SuppressWarnings("unchecked")

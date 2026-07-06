@@ -506,6 +506,39 @@ public interface MeshCore {
                                            long claimEpoch, PointerByReference outHandle);
 
     /**
+     * Construct a JobController that resumes from a persisted per-filter
+     * receive cursor (issue #1277). Mirrors
+     * {@link #mesh_job_controller_new_with_epoch} but additionally seeds the
+     * controller's {@code recv_event} cursors from {@code recvCursorJson} so a
+     * reclaimed job resumes instead of replaying its event log from seq 0.
+     * Used by the Java SDK's claim dispatch path only when the tool opted into
+     * resume ({@code @MeshTool(resumeCursor = true)}).
+     *
+     * <p>The C ABI has no map type, so the cursor map rides as a JSON string:
+     * {@code recvCursorJson} must encode a JSON object
+     * {@code {"<filter-key>": <seq:int>, ...}}. A {@code null} or blank /
+     * empty-object {@code recvCursorJson} ⇒ no seed (identical to
+     * {@link #mesh_job_controller_new_with_epoch}). A {@code claimEpoch < 0}
+     * is treated as "no epoch". Malformed JSON, a non-object shape, or a
+     * non-integer value returns -1 with the last-error slot set.
+     *
+     * <p>Additive: a separate entry point rather than a new parameter on the
+     * existing constructors, so current callers keep their signatures.
+     *
+     * @param jobId          Job UUID this controller is bound to
+     * @param instanceId     Instance ID submitting deltas to the registry
+     * @param registryUrl    Registry base URL
+     * @param claimEpoch     Claim generation ({@code < 0} ⇒ no epoch)
+     * @param recvCursorJson JSON object of per-filter seqs, or {@code null} /
+     *                       blank / empty-object for "no seed"
+     * @param outHandle      Out-param: receives the opaque handle on success
+     * @return 0 on success, -1 on error (see mesh_last_error)
+     */
+    int mesh_job_controller_new_with_resume(String jobId, String instanceId, String registryUrl,
+                                            long claimEpoch, String recvCursorJson,
+                                            PointerByReference outHandle);
+
+    /**
      * Enqueue a progress update. Coalesces with any prior pending progress
      * for this job — only the latest survives the next batch flush.
      *

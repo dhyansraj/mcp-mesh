@@ -1,17 +1,27 @@
 package io.mcpmesh.spring;
 
+import io.mcpmesh.JobController;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedStatic;
 
 import java.io.IOException;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
 
 /**
  * Unit tests for {@link ClaimDispatcher}. Spins up a {@link MockWebServer}
@@ -209,6 +219,92 @@ class ClaimDispatcherTest {
         d.stop(0);
         assertNotNull(req, "dispatcher must poll /jobs/claim once the gate opens");
         assertEquals("/jobs/claim", req.getPath());
+    }
+
+    // ---- Issue #1277: cursor-resume gate -----------------------------------
+    //
+    // The gate decision (which JobController.open* to call) is unit-tested at
+    // the JobController static boundary via Mockito mockStatic, so no live
+    // native handle / registry is needed — the real resume round-trip is the
+    // Wave-3 integration UC. `openController(...)` is the package-private seam
+    // dispatch() delegates to.
+
+    private static ClaimDispatcher dispatcher(boolean resumeCursor) {
+        return new ClaimDispatcher(
+            "test_cap", "instance-1", "http://registry:8000",
+            (payload, controller) -> null,
+            null, null, resumeCursor);
+    }
+
+    @Test
+    void openController_resumeOn_withCursor_opensWithResume() {
+        ClaimDispatcher d = dispatcher(true);
+        Map<String, Object> recvCursor = Map.of("answer", 3);
+        try (MockedStatic<JobController> mocked = mockStatic(JobController.class)) {
+            JobController stub = mock(JobController.class);
+            mocked.when(() -> JobController.openWithResume(
+                    eq("job-1"), eq("instance-1"), anyString(), eq(7L), any()))
+                .thenReturn(stub);
+
+            JobController result = d.openController("job-1", 7L, recvCursor);
+
+            assertSame(stub, result);
+            // Resume-open called with the claim's recv_cursor map...
+            mocked.verify(() -> JobController.openWithResume(
+                eq("job-1"), eq("instance-1"), anyString(), eq(7L),
+                argThat(m -> m != null
+                    && ((Number) ((Map<?, ?>) m).get("answer")).intValue() == 3)));
+            // ...and the plain replay-from-0 path NOT called. The exact JSON
+            // cursor shape ({"answer":3}) handed to the native layer is
+            // asserted at the SDK serialization seam
+            // (JobControllerResumeCursorTest).
+            mocked.verify(() -> JobController.open(
+                anyString(), anyString(), anyString(), any()), never());
+        }
+        d.stop(0);
+    }
+
+    @Test
+    void openController_resumeOff_withCursor_opensPlain() {
+        ClaimDispatcher d = dispatcher(false);
+        Map<String, Object> recvCursor = Map.of("answer", 3);
+        try (MockedStatic<JobController> mocked = mockStatic(JobController.class)) {
+            JobController stub = mock(JobController.class);
+            mocked.when(() -> JobController.open(
+                    eq("job-1"), eq("instance-1"), anyString(), eq(7L)))
+                .thenReturn(stub);
+
+            JobController result = d.openController("job-1", 7L, recvCursor);
+
+            assertSame(stub, result);
+            // Default (resumeCursor=false) → plain open even though a cursor
+            // is present; resume-open must NOT be called.
+            mocked.verify(() -> JobController.open(
+                eq("job-1"), eq("instance-1"), anyString(), eq(7L)));
+            mocked.verify(() -> JobController.openWithResume(
+                anyString(), anyString(), anyString(), any(), any()), never());
+        }
+        d.stop(0);
+    }
+
+    @Test
+    void openController_resumeOn_noCursor_opensPlain() {
+        ClaimDispatcher d = dispatcher(true);
+        try (MockedStatic<JobController> mocked = mockStatic(JobController.class)) {
+            JobController stub = mock(JobController.class);
+            mocked.when(() -> JobController.open(
+                    eq("job-1"), eq("instance-1"), anyString(), eq(7L)))
+                .thenReturn(stub);
+
+            // null cursor → plain open.
+            assertSame(stub, d.openController("job-1", 7L, null));
+            // empty-map cursor → plain open.
+            assertSame(stub, d.openController("job-1", 7L, Map.of()));
+
+            mocked.verify(() -> JobController.openWithResume(
+                anyString(), anyString(), anyString(), any(), any()), never());
+        }
+        d.stop(0);
     }
 
     @Test

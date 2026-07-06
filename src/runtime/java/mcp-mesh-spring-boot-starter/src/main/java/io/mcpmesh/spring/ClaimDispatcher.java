@@ -108,6 +108,17 @@ public final class ClaimDispatcher implements AutoCloseable {
     private final Class<? extends Throwable>[] retryOn;
 
     /**
+     * Issue #1277: cursor-resume opt-in read from the producer's
+     * {@code @MeshTool(resumeCursor=...)}. When true AND the claim carries a
+     * non-empty {@code recv_cursor}, the dispatcher opens the controller via
+     * {@link JobController#openWithResume} so {@code recvEvent} resumes from
+     * the persisted per-filter cursor instead of replaying from seq 0. When
+     * false (default) or the claim has no cursor, the plain replay-from-0
+     * {@link JobController#open} path is used.
+     */
+    private final boolean resumeCursor;
+
+    /**
      * Issue #1268 pre-claim gate: returns the capability of a currently
      * unresolved {@code required} dependency (naming the reason a claim is
      * skipped), or {@code null} when the tool is clear to claim. Consulted
@@ -154,22 +165,34 @@ public final class ClaimDispatcher implements AutoCloseable {
         this(capability, instanceId, registryUrl, handler, retryOn, null);
     }
 
+    public ClaimDispatcher(String capability, String instanceId, String registryUrl,
+                           ClaimHandler handler, Class<? extends Throwable>[] retryOn,
+                           java.util.function.Supplier<String> claimBlockedReason) {
+        this(capability, instanceId, registryUrl, handler, retryOn, claimBlockedReason, false);
+    }
+
     /**
-     * Construct a dispatcher with an explicit {@code retryOn} whitelist AND a
-     * pre-claim gate (issue #1268). Before each {@code /jobs/claim} poll the
-     * loop consults {@code claimBlockedReason}; a non-null result names an
-     * unresolved {@code required} dependency and the poll is skipped (the job
-     * stays queued registry-side with no attempt burn) until the dep resolves.
+     * Construct a dispatcher with an explicit {@code retryOn} whitelist, a
+     * pre-claim gate (issue #1268), and the cursor-resume opt-in (issue
+     * #1277). Before each {@code /jobs/claim} poll the loop consults
+     * {@code claimBlockedReason}; a non-null result names an unresolved
+     * {@code required} dependency and the poll is skipped (the job stays
+     * queued registry-side with no attempt burn) until the dep resolves.
      *
      * @param retryOn            Per-tool retry-eligible exception classes (may
      *                           be null/empty for "no retry-eligible exceptions").
      * @param claimBlockedReason Supplier returning the capability of an
      *                           unresolved required dependency, or {@code null}
      *                           when clear to claim. Null ⇒ "always ready".
+     * @param resumeCursor       When true, a claim carrying a non-empty
+     *                           {@code recv_cursor} opens the controller in
+     *                           resume mode ({@code recvEvent} continues from
+     *                           the persisted cursor); false ⇒ replay-from-0.
      */
     public ClaimDispatcher(String capability, String instanceId, String registryUrl,
                            ClaimHandler handler, Class<? extends Throwable>[] retryOn,
-                           java.util.function.Supplier<String> claimBlockedReason) {
+                           java.util.function.Supplier<String> claimBlockedReason,
+                           boolean resumeCursor) {
         if (capability == null || capability.isEmpty()) {
             throw new IllegalArgumentException("capability is required");
         }
@@ -188,6 +211,7 @@ public final class ClaimDispatcher implements AutoCloseable {
         this.handler = handler;
         this.retryOn = retryOn != null ? retryOn : EMPTY_RETRY_ON;
         this.claimBlockedReason = claimBlockedReason != null ? claimBlockedReason : () -> null;
+        this.resumeCursor = resumeCursor;
         this.loopExecutor = Executors.newSingleThreadExecutor(named("mesh-claim-loop-" + capability));
         this.dispatchExecutor = Executors.newFixedThreadPool(MAX_CONCURRENT_DISPATCHES,
             named("mesh-claim-dispatch-" + capability));
@@ -497,7 +521,10 @@ public final class ClaimDispatcher implements AutoCloseable {
 
         JobController controller;
         try {
-            controller = JobController.open(jobId, instanceId, registryUrl, claimEpoch);
+            // Issue #1277: resume the recvEvent cursor from the claim's
+            // persisted recv_cursor when the tool opted in AND the registry
+            // supplied a non-empty cursor; else replay-from-0 (the default).
+            controller = openController(jobId, claimEpoch, claimed.get("recv_cursor"));
         } catch (Exception e) {
             log.warn("[mesh-claim] failed to construct controller for job={}: {}", jobId, e.getMessage());
             // Best-effort: tell the registry we failed so the row doesn't
@@ -558,6 +585,29 @@ public final class ClaimDispatcher implements AutoCloseable {
         } finally {
             controller.close();
         }
+    }
+
+    /**
+     * Issue #1277 gate: choose the controller-open path for a claimed job.
+     * When this dispatcher's tool opted into {@code resumeCursor} AND the
+     * claim carried a non-empty {@code recv_cursor} map, open in resume mode
+     * so {@code recvEvent} continues from the persisted per-filter cursor;
+     * otherwise the plain replay-from-0 path. A malformed / empty / absent
+     * cursor degrades to plain open — resume is a best-effort optimization
+     * and never fails the dispatch. Package-private so the gate logic is
+     * unit-testable at the {@link JobController} boundary without a live
+     * native.
+     *
+     * @param recvCursorRaw the claim's {@code recv_cursor} value (a
+     *                      {@code Map<String, Number>} or null)
+     */
+    JobController openController(String jobId, Long claimEpoch, Object recvCursorRaw) {
+        if (resumeCursor && recvCursorRaw instanceof Map<?, ?> cursor && !cursor.isEmpty()) {
+            @SuppressWarnings("unchecked")
+            Map<String, ?> typed = (Map<String, ?>) cursor;
+            return JobController.openWithResume(jobId, instanceId, registryUrl, claimEpoch, typed);
+        }
+        return JobController.open(jobId, instanceId, registryUrl, claimEpoch);
     }
 
     private void runHandler(Map<String, Object> payload, JobController controller) {

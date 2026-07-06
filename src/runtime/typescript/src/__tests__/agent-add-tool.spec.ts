@@ -643,3 +643,61 @@ describe("addTool — #925 wrappedExecute return shape (no structuredContent)", 
     });
   });
 });
+
+describe("addTool — resumeCursor validation (issue #1277)", () => {
+  function newAgent(): MeshAgent {
+    return new MeshAgent(makeFastMCPStub(), {
+      name: "test-agent",
+      httpPort: 0,
+    });
+  }
+
+  it("rejects resumeCursor: true without task: true", () => {
+    const agent = newAgent();
+    expect(() =>
+      agent.addTool({
+        name: "resume-no-task",
+        parameters: z.object({}),
+        resumeCursor: true,
+        execute: async () => "x",
+      }),
+    ).toThrow(/resumeCursor is only valid with task: true/);
+  });
+
+  it("accepts resumeCursor: true with task: true", () => {
+    const agent = newAgent();
+    expect(() =>
+      agent.addTool({
+        name: "resume-with-task",
+        task: true,
+        parameters: z.object({}),
+        resumeCursor: true,
+        execute: async () => "x",
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts resumeCursor: false with a synchronous tool (default posture)", () => {
+    const agent = newAgent();
+    expect(() =>
+      agent.addTool({
+        name: "resume-false-sync",
+        parameters: z.object({}),
+        resumeCursor: false,
+        execute: async () => "x",
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts task: true tools that omit resumeCursor (no change to default)", () => {
+    const agent = newAgent();
+    expect(() =>
+      agent.addTool({
+        name: "task-no-resume",
+        task: true,
+        parameters: z.object({}),
+        execute: async () => "x",
+      }),
+    ).not.toThrow();
+  });
+});
