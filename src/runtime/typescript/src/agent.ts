@@ -384,6 +384,25 @@ export class MeshAgent {
     const toolName = def.name;
     const execute = def.execute;
 
+    // Issue #1293 item 6: validate the PRODUCED capability name — the value
+    // published to the registry (def.capability ?? toolName) — against the
+    // segment-wise dotted grammar, closing the parity gap with the Go registry
+    // (src/core/registry/validation.go) and the Python runtime
+    // (support_types.py validate_capability_name). Only the produced capability
+    // is checked; dependency capability names are deliberately left unvalidated
+    // (they are unvalidated in the Go registry and every runtime), so checking
+    // them here would be stricter than the contract, not parity. Reuses the
+    // same CAPABILITY_NAME_PATTERN that addService applies to synthesized names.
+    const producedCapability = def.capability ?? toolName;
+    if (!CAPABILITY_NAME_PATTERN.test(producedCapability)) {
+      throw new Error(
+        `addTool: capability '${producedCapability}' is not a valid capability ` +
+          `name — each dot-separated segment must start with a letter and ` +
+          `contain only letters, digits, underscores, and hyphens ` +
+          `(cross-ref src/core/registry/validation.go).`,
+      );
+    }
+
     // Phase 1 MeshJob substrate: validate `task: true` requires an
     // async function. Long-running tools need a Promise-based control
     // flow so the dispatch wrapper (Phase B) can await
@@ -1256,9 +1275,10 @@ export class MeshAgent {
    *
    * The prefix AND every derived capability are validated against the segment-
    * wise dotted grammar (kept in lockstep with the Go registry validator —
-   * src/core/registry/validation.go). This is the ONLY place the SDK validates a
-   * capability name (it validates only the names it SYNTHESIZES); hand-written
-   * capabilities remain the registry's authority.
+   * src/core/registry/validation.go). addTool applies the same grammar to its
+   * produced capability (#1293 item 6), so both surfaces validate a PRODUCED
+   * capability name before it reaches the registry; dependency capability names
+   * remain the registry's authority.
    *
    * @example
    * ```typescript

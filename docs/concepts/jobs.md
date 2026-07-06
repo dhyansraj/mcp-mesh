@@ -97,8 +97,7 @@ and [`examples/jobs-java/`](https://github.com/dhyansraj/mcp-mesh/tree/main/exam
 === "TypeScript"
 
     ```typescript
-    import { FastMCP } from "fastmcp";
-    import { mesh, type MeshJob } from "@mcpmesh/sdk";
+    import { FastMCP, mesh, type MeshJob } from "@mcpmesh/sdk";
     import { z } from "zod";
 
     const server = new FastMCP({ name: "Long Task Provider (TS)", version: "1.0.0" });

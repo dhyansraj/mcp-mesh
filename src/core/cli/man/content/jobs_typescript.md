@@ -39,8 +39,7 @@ no behavior change for non-job tools.
 ## Producer: `task: true`
 
 ```typescript
-import { FastMCP } from "fastmcp";
-import { mesh, type MeshJob } from "@mcpmesh/sdk";
+import { FastMCP, mesh, type MeshJob } from "@mcpmesh/sdk";
 import { z } from "zod";
 
 const server = new FastMCP({
@@ -112,8 +111,7 @@ agent.addTool({
 ## Consumer: `MeshJob`-typed dependency
 
 ```typescript
-import { FastMCP } from "fastmcp";
-import { mesh, type MeshJob } from "@mcpmesh/sdk";
+import { FastMCP, mesh, type MeshJob } from "@mcpmesh/sdk";
 import { z } from "zod";
 
 const server = new FastMCP({

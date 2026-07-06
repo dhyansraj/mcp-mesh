@@ -6,8 +6,7 @@
  *
  * @example
  * ```typescript
- * import { FastMCP } from "fastmcp";
- * import { mesh } from "@mcpmesh/sdk";
+ * import { FastMCP, mesh } from "@mcpmesh/sdk";
  *
  * const server = new FastMCP({ name: "Claude Provider", version: "1.0.0" });
  *
@@ -514,8 +513,7 @@ type MeshLlmRequestInput = z.infer<typeof MeshLlmRequestSchema>;
  *
  * @example
  * ```typescript
- * import { FastMCP } from "fastmcp";
- * import { mesh } from "@mcpmesh/sdk";
+ * import { FastMCP, mesh } from "@mcpmesh/sdk";
  *
  * const server = new FastMCP({ name: "Claude Provider", version: "1.0.0" });
  *

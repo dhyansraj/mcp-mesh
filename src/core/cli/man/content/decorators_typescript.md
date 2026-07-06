@@ -20,8 +20,7 @@ MCP Mesh provides core functions that transform regular TypeScript functions int
 Creates a MeshAgent that wraps a FastMCP server with mesh capabilities.
 
 ```typescript
-import { FastMCP } from "fastmcp";
-import { mesh } from "@mcpmesh/sdk";
+import { FastMCP, mesh } from "@mcpmesh/sdk";
 
 const server = new FastMCP({
   name: "My Service",
@@ -38,6 +37,8 @@ const agent = mesh(server, {
   heartbeatInterval: 30,        // Heartbeat interval in seconds
 });
 ```
+
+> **Import `FastMCP` from `@mcpmesh/sdk`**, which re-exports it — not directly from `"fastmcp"`. A direct `"fastmcp"` import can trigger duplicate class-identity type errors under `tsc` against the SDK's own bundled copy.
 
 ## agent.addTool()
 
@@ -308,8 +309,7 @@ export MCP_MESH_REGISTRY_URL=http://registry:8000
 ## Complete Example
 
 ```typescript
-import { FastMCP } from "fastmcp";
-import { mesh } from "@mcpmesh/sdk";
+import { FastMCP, mesh } from "@mcpmesh/sdk";
 import { z } from "zod";
 
 const server = new FastMCP({
