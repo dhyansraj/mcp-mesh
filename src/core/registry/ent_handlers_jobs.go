@@ -975,7 +975,10 @@ func jobToAPI(j *ent.Job) generated.Job {
 	// gate — can read it via GET /jobs/{id}. Present-when-non-empty: a job that
 	// never flushed a cursor omits the field rather than emitting a spurious {}.
 	if len(j.RecvCursor) > 0 {
-		rc := j.RecvCursor
+		rc := make(map[string]int64, len(j.RecvCursor))
+		for k, v := range j.RecvCursor {
+			rc[k] = v
+		}
 		api.RecvCursor = &rc
 	}
 	return api

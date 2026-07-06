@@ -148,13 +148,16 @@ routines:
   # reclaim is provably the ONLY actor that can evict the owner inside the test
   # window — exactly the uc36 rationale. A fast sweep with short retention could
   # orphan the parked attempt independently and muddy the resume-vs-replay
-  # signal, so this routine deliberately keeps every timing knob at its default.
+  # signal, so this routine deliberately EXPLICITLY unsets every fast-sweep /
+  # lease timing knob before starting the registry — admin reclaim stays the
+  # only owner-eviction actor even if those knobs leak into the environment.
   start_registry:
     description: "Start the mesh registry with default knobs (admin reclaim must be the only lease actor)"
     steps:
       - handler: shell
         workdir: /workspace
         command: |
+          unset MCP_MESH_SWEEP_INTERVAL MCP_MESH_RETENTION MCP_MESH_HEALTH_CHECK_INTERVAL DEFAULT_TIMEOUT_THRESHOLD MCP_MESH_JOB_STALE_TIMEOUT
           meshctl start --registry-only -d
           for i in $(seq 1 20); do
             if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
