@@ -32,8 +32,12 @@ func NewAgentRegistrationValidator() *AgentRegistrationValidator {
 	return &AgentRegistrationValidator{
 		// Kubernetes-style name validation (matches Python)
 		agentNamePattern: regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`),
-		// Capability name validation (matches Python)
-		capabilityNamePattern: regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]*$`),
+		// Capability name validation (matches Python). RFC #1280 v3: dot-separated
+		// segments, each following the flat rule (letter-led, alnum/_/-). Strictly
+		// widens the old single-segment pattern — every previously-valid flat name
+		// still matches — and forbids leading/trailing/consecutive dots so phase-4
+		// display grouping has well-defined segmentation.
+		capabilityNamePattern: regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]*(\.[a-zA-Z][a-zA-Z0-9_-]*)*$`),
 		// Semantic version validation (matches Python)
 		semanticVersionPattern: regexp.MustCompile(`^\d+\.\d+\.\d+(-[a-zA-Z0-9-]+)?$`),
 	}
@@ -322,7 +326,7 @@ func (v *AgentRegistrationValidator) validateCapabilityName(name string) error {
 	}
 
 	if !v.capabilityNamePattern.MatchString(name) {
-		return fmt.Errorf("capability name must start with a letter and contain only letters, numbers, underscores, and hyphens")
+		return fmt.Errorf("capability name must be one or more dot-separated segments, each starting with a letter and containing only letters, numbers, underscores, and hyphens")
 	}
 
 	return nil

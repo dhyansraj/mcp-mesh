@@ -86,7 +86,7 @@ public class MediaGatewayApplication {
      * <p>The {@code MediaService} parameter (NOT {@code @Param}-annotated) expands
      * into three dependency edges on THIS tool. Because {@code caption} is
      * {@code required=true}, the mesh runtime returns the structured
-     * {@code {"error":"dependency_unavailable","capability":"media_caption"}}
+     * {@code {"error":"dependency_unavailable","capability":"media.caption"}}
      * refusal BEFORE this method body runs whenever the caption edge is
      * unresolved — so here {@code caption} is guaranteed present, while the
      * optional edges still degrade gracefully.

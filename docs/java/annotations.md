@@ -133,28 +133,49 @@ Specifies capability and tag selection for dependencies, LLM providers, and filt
 
 ## @McpMeshService
 
-Marks an interface as a consumer-owned **service view**: one typed facade that aggregates several capability dependencies. Each abstract method binds one capability via a method-level `@Selector`, and each method delegates to its own resolved proxy — so different methods can resolve to different provider agents. Spring auto-discovers the interface and injects a facade bean you `@Autowired`.
+Aggregates several capabilities behind one typed **service view**, and — on a class — publishes a bean's methods as capabilities. Where you put it decides the role:
+
+| Placement | Role |
+| --------- | ---- |
+| On an **interface** (`@McpMeshService`) | Consumer **service view** — each abstract method binds one capability via a method-level `@Selector`; consumed as an `@Autowired` facade bean or a `@MeshTool` parameter |
+| On a **Spring bean class** (`@McpMeshService("prefix")`) | Producer sugar — publishes each eligible public method as capability `prefix.<methodName>` |
+
+**As a consumer view (interface):**
 
 ```java
 @McpMeshService
 public interface MediaService {
-    @Selector(capability = "media_caption", required = true) CaptionResult    caption(CaptionRequest req);
-    @Selector(capability = "media_thumbnail")                ThumbnailResult  thumbnail(ThumbnailRequest req);
-    @Selector(capability = "media_transcribe")               TranscriptResult transcribe(TranscribeRequest req);
+    @Selector(capability = "media.caption", required = true) CaptionResult    caption(CaptionRequest req);
+    @Selector(capability = "media.thumbnail")                ThumbnailResult  thumbnail(ThumbnailRequest req);
+    @Selector(capability = "media.transcribe")               TranscriptResult transcribe(TranscribeRequest req);
 }
 ```
 
-| Attribute      | Required | Description                                                                 |
-| -------------- | -------- | -------------------------------------------------------------------------- |
-| `minAvailable` | No       | Availability floor; below it every facade call fails with `MeshServiceUnavailableException` — synchronous methods throw, `CompletableFuture` methods return a failed future (default `0` = no floor) |
-
-Each method expands into an ordinary dependency edge, so a view over N capabilities shows as N dependencies in `meshctl list`. A view is consumed two ways: `@Autowired` as a facade bean, or passed as a `@MeshTool` **parameter** — where its methods become dependency edges on that tool and any `required` view method joins the tool's pre-invoke `dependency_unavailable` guard:
+Each method expands into an ordinary dependency edge, so a view over N capabilities shows as N dependencies in `meshctl list`. It is consumed two ways: `@Autowired` as a facade bean, or passed as a `@MeshTool` **parameter** — where its methods become dependency edges on that tool and any `required` view method joins the tool's pre-invoke `dependency_unavailable` guard:
 
 ```java
 public Result process(@Param("id") String id, MediaService media) { ... }  // view param → per-method edges
 ```
 
-For the full semantics — param-mapping rules, return types, `required`/optional behavior, the availability floor, and both consumption styles — see the [Dependency Injection](dependency-injection.md#service-views-with-mcpmeshservice) guide.
+**As a producer (class):**
+
+```java
+@Component
+@McpMeshService("media")
+public class MediaProvider {
+    public CaptionResult   caption(CaptionRequest req)     { ... }  // → capability "media.caption"
+    public ThumbnailResult thumbnail(ThumbnailRequest req) { ... }  // → capability "media.thumbnail"
+}
+```
+
+Public instance methods declared on the class are published name-sorted; a method carrying its own `@MeshTool` wins (use it for a custom capability/tags/version). Overloads boot-fail.
+
+| Attribute      | Required   | Description                                                                 |
+| -------------- | ---------- | -------------------------------------------------------------------------- |
+| `value`        | On a class | Capability prefix for producer publishing (segment-validated); omit on a consumer interface |
+| `minAvailable` | No         | Consumer-view availability floor; below it every facade call fails with `MeshServiceUnavailableException` — synchronous methods throw, `CompletableFuture` methods return a failed future (default `0`). Ignored (WARN) on a producer class |
+
+For the full semantics — param-mapping rules, return types, `required`/optional behavior, the availability floor, both consumption styles, and producer publishing — see the [Dependency Injection](dependency-injection.md#service-views-with-mcpmeshservice) guide.
 
 ## @MeshLlm
 

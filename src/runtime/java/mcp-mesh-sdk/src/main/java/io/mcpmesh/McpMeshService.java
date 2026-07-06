@@ -7,8 +7,10 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Marks an interface as a consumer-owned <b>service view</b>: a typed
- * aggregation of ordinary capability dependencies (RFC #1280).
+ * Two related roles depending on the annotated type (RFC #1280):
+ *
+ * <h2>On an INTERFACE — consumer-owned service view</h2>
+ * A typed aggregation of ordinary capability dependencies.
  *
  * <p>Each abstract method of the interface binds exactly one capability via a
  * method-level {@link Selector}, and calling that method delegates to the
@@ -33,6 +35,16 @@ import java.lang.annotation.Target;
  * directly. A Spring bean (named by the decapitalized simple interface name) is
  * registered automatically.
  *
+ * <p><b>Scanning rule:</b> a scanned bean view requires {@code @McpMeshService}
+ * <i>directly</i> on the interface. An interface that only INHERITS the
+ * annotation from a super-interface is NOT auto-discovered as a bean view
+ * (co-discovering it would always pull in the annotated parent too — duplicate
+ * facades and parent-type injection ambiguity). Inherited-annotation interfaces
+ * ARE usable as tool-parameter views (there the user names the type explicitly,
+ * so there is no discovery ambiguity). When a view inherits from multiple
+ * annotated parents, {@code minAvailable} is read from an arbitrary one of them;
+ * declare it on the leaf interface if it matters.
+ *
  * <h2>Method rules</h2>
  * <ul>
  *   <li>Every abstract method must carry {@link Selector} with a non-empty
@@ -51,11 +63,46 @@ import java.lang.annotation.Target;
  * There is no group versioning and no interface-level availability summary —
  * any scalar "is the view up?" would lie about partial availability, since each
  * method resolves independently.
+ *
+ * <h2>On a CLASS — producer sugar (phase 3)</h2>
+ * <p>A {@code @Component} class annotated {@code @McpMeshService("prefix")}
+ * publishes each eligible public instance method as an ordinary mesh tool with
+ * capability {@code "prefix.<methodName>"}. Pure sugar over N {@code @MeshTool}
+ * declarations — each method becomes a normal tool through the existing
+ * {@code @MeshTool} machinery (same {@code @Param} rules, injectable slots, and
+ * schema generation); there are no wire or registry changes.
+ *
+ * <pre>{@code
+ * @McpMeshService("media")   // prefix is user-chosen; nothing hard-coded in mesh
+ * @Component
+ * public class MediaTools {
+ *     public CaptionResult caption(@Param("text") String text) { ... }   // → "media.caption"
+ *     public ThumbResult   thumbnail(@Param("assetId") String id) { ... } // → "media.thumbnail"
+ * }
+ * }</pre>
+ *
+ * <p>A method carrying its own {@link MeshTool} wins: it publishes only under
+ * that declaration (no auto-publish, no double). Non-public methods, static
+ * methods, and {@link Object} overrides are ignored. Per-class tag/version
+ * defaults are NOT provided — a method needing tags/version/description uses an
+ * explicit {@code @MeshTool} instead.
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
 @Documented
 public @interface McpMeshService {
+
+    /**
+     * The capability-name prefix.
+     *
+     * <p><b>On a producer CLASS:</b> REQUIRED (blank → boot-fail) — each
+     * published method's capability is {@code value + "." + methodName}.
+     *
+     * <p><b>On a consumer INTERFACE (service view):</b> optional and currently
+     * inert — reserved for phase-4 display grouping. Method capabilities on a
+     * view come from each method's own {@link Selector}, not this prefix.
+     */
+    String value() default "";
 
     /**
      * Opt-in availability floor. When fewer than {@code minAvailable} of the
@@ -66,6 +113,9 @@ public @interface McpMeshService {
      * <p>Default {@code 0} means "no floor": each method independently soft-
      * or hard-fails per its own {@link Selector#required()} flag, exactly like
      * a directly-injected {@code McpMeshTool}.
+     *
+     * <p><b>Meaningful only on an interface (view).</b> On a producer class it
+     * is ignored with a WARN (a consumer-only attribute).
      */
     int minAvailable() default 0;
 }

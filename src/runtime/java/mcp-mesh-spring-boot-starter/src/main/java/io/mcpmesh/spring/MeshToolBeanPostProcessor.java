@@ -1,6 +1,7 @@
 package io.mcpmesh.spring;
 
 import tools.jackson.databind.ObjectMapper;
+import io.mcpmesh.McpMeshService;
 import io.mcpmesh.MeshTool;
 import io.mcpmesh.Selector;
 import org.slf4j.Logger;
@@ -11,11 +12,15 @@ import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.core.MethodIntrospector;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.AnnotationUtils;
+import org.springframework.util.ClassUtils;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * Bean post-processor that scans beans for {@code @MeshTool} annotations.
@@ -34,6 +39,40 @@ import java.util.Map;
 public class MeshToolBeanPostProcessor implements BeanPostProcessor, Ordered {
 
     private static final Logger log = LoggerFactory.getLogger(MeshToolBeanPostProcessor.class);
+
+    /**
+     * RFC #1280 phase 3: a capability name (and a producer prefix) is one or more
+     * dot-separated segments, each following the flat rule. MUST stay in lock-step
+     * with the registry's segment-wise capability pattern
+     * (src/core/registry/validation.go, support_types.py).
+     */
+    private static final Pattern CAPABILITY_NAME_PATTERN =
+        Pattern.compile("^[a-zA-Z][a-zA-Z0-9_-]*(\\.[a-zA-Z][a-zA-Z0-9_-]*)*$");
+
+    /**
+     * Whether {@code name} is a valid mesh capability name (segment-wise).
+     * Package-private + static so the producer capability derivation can be unit
+     * tested without a real {@link Method} — Java method names may legally
+     * contain {@code $} or Unicode letters that the capability grammar rejects.
+     */
+    static boolean isValidCapabilityName(String name) {
+        return name != null && CAPABILITY_NAME_PATTERN.matcher(name).matches();
+    }
+
+    /**
+     * Producer classes the post-processor actually SAW as beans (RFC #1280
+     * phase-3 review, item 2): the ground-truth set the late non-bean WARN
+     * compares the registrar's scanned producer classes against, so a producer
+     * registered via a @Bean factory method (declared return type = an
+     * interface/supertype) is never falsely flagged.
+     */
+    private final java.util.Set<String> seenProducerClassNames =
+        java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** Producer class names this post-processor saw as beans (ground truth). */
+    public java.util.Set<String> seenProducerClassNames() {
+        return java.util.Collections.unmodifiableSet(seenProducerClassNames);
+    }
 
     private final MeshToolRegistry registry;
     private final MeshToolWrapperRegistry wrapperRegistry;
@@ -117,14 +156,173 @@ public class MeshToolBeanPostProcessor implements BeanPostProcessor, Ordered {
                     "remove retryOn or set task = true.");
             }
 
+            // RFC #1280 phase 2 (item 7b): analyze @McpMeshService view params
+            // ONCE and hand the result to both the registry and the wrapper.
+            List<McpMeshServiceToolSupport.ViewParamInfo> viewParams =
+                McpMeshServiceToolSupport.analyzeViewParams(method);
+
             // Register with legacy registry (for agent spec generation)
-            registry.registerTool(bean, method, annotation);
+            registry.registerTool(bean, method, annotation, viewParams);
 
             // Create wrapper for MCP SDK integration
-            createAndRegisterWrapper(bean, targetClass, method, annotation);
+            createAndRegisterWrapper(bean, targetClass, method, annotation, viewParams);
         });
 
+        // RFC #1280 phase 3: producer sugar — a class annotated @McpMeshService
+        // publishes each eligible method as a tool under "<prefix>.<methodName>".
+        // Resolve the USER class first (ClassUtils.getUserClass strips a CGLIB
+        // $$-enhanced subclass regardless of TargetClassAware; a no-op for JDK
+        // proxy classes). Use the DIRECT class annotation (getAnnotation), NOT
+        // findAnnotation: a phase-1 facade bean is a JDK proxy whose CLASS
+        // implements a @McpMeshService INTERFACE — findAnnotation would see that
+        // inherited annotation and mis-classify the consumer facade as a
+        // producer. A genuine producer carries @McpMeshService directly on its
+        // @Component class (proxy classes carry no declared annotations).
+        Class<?> userClass = ClassUtils.getUserClass(targetClass);
+        McpMeshService service = userClass.getAnnotation(McpMeshService.class);
+        if (service != null && !userClass.isInterface()) {
+            // Ground truth for the late non-bean WARN: this annotated class WAS
+            // seen as a bean (item 2), regardless of how many methods it publishes.
+            seenProducerClassNames.add(userClass.getName());
+            publishServiceMethods(bean, userClass, service);
+        }
+
         return bean;
+    }
+
+    /**
+     * RFC #1280 phase 3: publish each eligible method of a producer class
+     * annotated {@code @McpMeshService("prefix")} as an ordinary mesh tool with
+     * capability {@code "prefix.<methodName>"}. Pure sugar: each method is routed
+     * through the SAME {@code registerTool} + {@code createAndRegisterWrapper}
+     * path a hand-written {@code @MeshTool} takes (schemas, duplicate-capability
+     * boot-fail, injectable slots, {@code @McpMeshService} view params — all fall
+     * out unchanged). A method carrying its own {@code @MeshTool} wins.
+     */
+    private void publishServiceMethods(Object bean, Class<?> targetClass, McpMeshService service) {
+        String prefix = service.value();
+        if (prefix == null || prefix.isBlank()) {
+            throw new IllegalStateException("@McpMeshService on producer class "
+                + targetClass.getName() + " needs a name prefix: @McpMeshService(\"<prefix>\"). "
+                + "The blank default is only valid on a consumer interface (service view).");
+        }
+        validatePrefix(prefix, targetClass);
+        if (service.minAvailable() != 0) {
+            log.warn("@McpMeshService on producer class {} sets minAvailable={} — ignored "
+                + "(minAvailable is a consumer-view attribute, not a producer one).",
+                targetClass.getName(), service.minAvailable());
+        }
+
+        // Sort by method name (then erased signature) for deterministic
+        // publication order — same determinism rule as the view analyzer.
+        List<Method> eligible = new ArrayList<>();
+        for (Method method : targetClass.getDeclaredMethods()) {
+            if (isEligibleProducerMethod(method)
+                    // Explicit @MeshTool wins — that method already published
+                    // under its own declaration above; no auto-publish, no double.
+                    && AnnotationUtils.findAnnotation(method, MeshTool.class) == null) {
+                eligible.add(method);
+            }
+        }
+        eligible.sort(java.util.Comparator.comparing(Method::getName)
+            .thenComparing(m -> java.util.Arrays.toString(m.getParameterTypes())));
+
+        int published = 0;
+        Map<String, Method> byName = new HashMap<>();
+        for (Method method : eligible) {
+            // Overloaded public methods collide on prefix.<name> — fail fast
+            // with an explicit message (clearer than the generic
+            // duplicate-capability error the synthesized tools would trip).
+            Method clash = byName.putIfAbsent(method.getName(), method);
+            if (clash != null) {
+                throw new IllegalStateException(String.format(
+                    "@McpMeshService producer '%s' on %s: overloaded public methods '%s' both map to "
+                        + "capability '%s.%s' — a producer capability name is prefix + method name, so "
+                        + "overloads collide. Rename one, make one non-public, or give one an explicit "
+                        + "@MeshTool(capability=...).",
+                    prefix, targetClass.getName(), method.getName(), prefix, method.getName()));
+            }
+            String capability = prefix + "." + method.getName();
+            // Validate the FULL derived capability, not just the prefix: Java
+            // method names may legally contain '$' (generated/interop code) or
+            // Unicode letters that the capability grammar rejects — catch it at
+            // BOOT with the declaration site, not as a remote registry 4xx later.
+            if (!isValidCapabilityName(capability)) {
+                throw new IllegalStateException(String.format(
+                    "@McpMeshService producer '%s' on %s: method '%s' derives capability '%s', which "
+                        + "is not a valid capability name (each dot-separated segment must start with "
+                        + "a letter and contain only letters, numbers, underscores, and hyphens). "
+                        + "Rename the method or give it an explicit @MeshTool(capability=...).",
+                    prefix, targetClass.getName(), method.getName(), capability));
+            }
+            MeshTool synth = synthesizeMeshTool(capability, method);
+            List<McpMeshServiceToolSupport.ViewParamInfo> viewParams =
+                McpMeshServiceToolSupport.analyzeViewParams(method);
+            registry.registerTool(bean, method, synth, viewParams);
+            createAndRegisterWrapper(bean, targetClass, method, synth, viewParams);
+            log.debug("@McpMeshService producer: published {}.{} as capability '{}'",
+                targetClass.getSimpleName(), method.getName(), capability);
+            published++;
+        }
+        log.info("@McpMeshService producer '{}' on {}: published {} method(s)",
+            prefix, targetClass.getName(), published);
+    }
+
+    /**
+     * Validate the producer prefix against the same segment-wise capability rule
+     * the registry enforces (each dot-separated segment {@code ^[a-zA-Z][a-zA-Z0-9_-]*$}).
+     * This is an early, prefix-specific error; the FULL derived capability
+     * (prefix + "." + methodName) is validated per method in
+     * {@link #publishServiceMethods} because a method name is NOT guaranteed to
+     * be a valid segment (it may contain {@code $} or Unicode letters).
+     */
+    private static void validatePrefix(String prefix, Class<?> targetClass) {
+        if (!CAPABILITY_NAME_PATTERN.matcher(prefix).matches()) {
+            throw new IllegalStateException(String.format(
+                "@McpMeshService prefix '%s' on producer class %s is invalid — it must be one or more "
+                    + "dot-separated segments, each starting with a letter and containing only letters, "
+                    + "numbers, underscores, and hyphens (e.g. \"media\" or \"media.v2\").",
+                prefix, targetClass.getName()));
+        }
+    }
+
+    /**
+     * Eligible producer method: public, instance (non-static), declared on the
+     * class itself, and not a compiler bridge/synthetic or an {@link Object}
+     * override (equals/hashCode/toString). Non-public methods are ignored
+     * silently (normal Java visibility semantics).
+     */
+    private static boolean isEligibleProducerMethod(Method method) {
+        int mods = method.getModifiers();
+        return Modifier.isPublic(mods)
+            && !Modifier.isStatic(mods)
+            && !method.isBridge()
+            && !method.isSynthetic()
+            && !isObjectMethod(method);
+    }
+
+    /** Whether {@code method} overrides a public {@link Object} method. */
+    private static boolean isObjectMethod(Method method) {
+        String name = method.getName();
+        Class<?>[] p = method.getParameterTypes();
+        return switch (name) {
+            case "toString", "hashCode" -> p.length == 0;
+            case "equals" -> p.length == 1 && p[0] == Object.class;
+            default -> false;
+        };
+    }
+
+    /**
+     * Synthesize a {@link MeshTool} with the derived capability; all other
+     * attributes take their annotation defaults (description="", version="1.0.0",
+     * empty tags/dependencies/retryOn, no outputType, task=false). Producer sugar
+     * is intentionally minimal — a method needing tags/version/description uses
+     * an explicit {@code @MeshTool}.
+     */
+    private static MeshTool synthesizeMeshTool(String capability, Method method) {
+        Map<String, Object> attributes = new HashMap<>();
+        attributes.put("capability", capability);
+        return AnnotationUtils.synthesizeAnnotation(attributes, MeshTool.class, method);
     }
 
     /**
@@ -274,7 +472,8 @@ public class MeshToolBeanPostProcessor implements BeanPostProcessor, Ordered {
             Object bean,
             Class<?> targetClass,
             Method method,
-            MeshTool annotation) {
+            MeshTool annotation,
+            List<McpMeshServiceToolSupport.ViewParamInfo> viewParams) {
 
         // Generate funcId: "com.example.ClassName.methodName"
         String funcId = targetClass.getName() + "." + method.getName();
@@ -282,12 +481,11 @@ public class MeshToolBeanPostProcessor implements BeanPostProcessor, Ordered {
         // Extract dependency names from @MeshTool(dependencies=...)
         List<String> dependencyNames = extractDependencyNames(annotation);
 
-        // RFC #1280 phase 2: detect @McpMeshService view parameters (+ validate
-        // + boot-fail on @Param). Their method edges are appended to the tool's
-        // declared dependency list by the wrapper, in the SAME order the wire
-        // spec (MeshToolRegistry.extractAllDependencies) uses.
-        List<McpMeshServiceToolSupport.ViewParamInfo> viewParams =
-            McpMeshServiceToolSupport.analyzeViewParams(method);
+        // RFC #1280 phase 2 (item 7b): view params are pre-computed ONCE by the
+        // caller (postProcessAfterInitialization) and shared with MeshToolRegistry.
+        // Their method edges are appended to the tool's declared dependency list
+        // by the wrapper, in the SAME order the wire spec
+        // (MeshToolRegistry.extractAllDependencies) uses.
 
         // Create wrapper. Phase B MeshJob substrate: the `task` flag controls
         // whether inbound calls bearing X-Mesh-Job-Id dispatch through the

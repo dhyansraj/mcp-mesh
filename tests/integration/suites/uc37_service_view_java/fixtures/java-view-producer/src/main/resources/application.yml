@@ -1,0 +1,23 @@
+# uc37 java-view-producer configuration (RFC #1280 phase-3 producer sugar)
+
+spring:
+  application:
+    name: java-view-producer
+  main:
+    banner-mode: "off"
+
+server:
+  port: ${MCP_MESH_HTTP_PORT:9202}
+
+mesh:
+  registry:
+    url: ${MCP_MESH_REGISTRY_URL:http://localhost:8000}
+  agent:
+    name: ${MCP_MESH_AGENT_NAME:java-view-producer}
+    namespace: ${MCP_MESH_NAMESPACE:default}
+
+logging:
+  level:
+    root: INFO
+    io.mcpmesh: DEBUG
+    com.example: DEBUG

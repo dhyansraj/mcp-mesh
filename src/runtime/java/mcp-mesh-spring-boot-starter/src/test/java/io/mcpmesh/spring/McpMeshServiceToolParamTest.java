@@ -365,22 +365,146 @@ class McpMeshServiceToolParamTest {
     }
 
     @Test
-    void nearMiss_classAnnotatedAsView_dedicatedBootFail() throws Exception {
+    void nearMiss_classAnnotatedAsView_rewordedBootFail() throws Exception {
+        // A CLASS annotated @McpMeshService is the producer path, NOT a valid
+        // view param — the reworded message points that out.
         Method m = ClassParamBean.class.getMethod("run", String.class, AnnotatedClassView.class);
         IllegalStateException ex = assertThrows(IllegalStateException.class,
             () -> wrapperFor(new ClassParamBean(), "ClassParamBean.run", "cp_tool", m, List.of()));
-        assertTrue(ex.getMessage().contains("must be a directly-annotated interface"), ex.getMessage());
-        assertTrue(ex.getMessage().contains("class annotated @McpMeshService"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("view parameters must be @McpMeshService interfaces"),
+            ex.getMessage());
+        assertTrue(ex.getMessage().contains("publishes methods as tools (producer side)"), ex.getMessage());
         assertTrue(ex.getMessage().contains(ClassParamBean.class.getName()), ex.getMessage());
     }
 
     @Test
-    void nearMiss_subInterfaceInheritsAnnotation_dedicatedBootFail() throws Exception {
+    void subInterfaceInheritsAnnotation_isAValidViewParam() throws Exception {
+        // Phase-2 cleanup 7a: a sub-interface that INHERITS @McpMeshService is a
+        // valid view param — its inherited method edge is published on the tool.
+        SubIfaceParamBean bean = new SubIfaceParamBean();
         Method m = SubIfaceParamBean.class.getMethod("run", String.class, SubView.class);
+        MeshToolWrapper w = wrapperFor(bean, "SubIfaceParamBean.run", "si_tool", m, List.of());
+        assertEquals(List.of("base.x"), w.getDependencyNames());
+        assertEquals(String.class, w.getDependencyReturnType(0));
+    }
+
+    // ---- HIGH-1b + item-9: generic narrowing / grandparent / diamond params --
+
+    public record GItem(String id) {
+    }
+
+    @McpMeshService
+    public interface GenBase<T> {
+        @Selector(capability = "gen.item")
+        T get(@Param("id") String id);
+    }
+
+    public interface ItemSub extends GenBase<GItem> {
+    }
+
+    public static class GenParamBean {
+        @MeshTool(capability = "gen_tool")
+        public String run(@Param("x") String x, ItemSub view) {
+            return x;
+        }
+    }
+
+    @Test
+    void genericParentNarrowedSubAsParam_getsConcreteTyping() throws Exception {
+        // A generic annotated parent (T) narrowed by a sub used as a view param
+        // resolves to the CONCRETE type (Item), not Object — the concrete wins
+        // the proxy typing (HIGH-1b: Object is non-conflicting/dynamic).
+        Method m = GenParamBean.class.getMethod("run", String.class, ItemSub.class);
+        MeshToolWrapper w = wrapperFor(new GenParamBean(), "GenParamBean.run", "gen_tool", m, List.of());
+        assertEquals(List.of("gen.item"), w.getDependencyNames());
+        assertEquals(GItem.class, w.getDependencyReturnType(0));
+    }
+
+    public record CX(String x) {
+    }
+
+    public record CY(int y) {
+    }
+
+    @McpMeshService
+    public interface TwoConcreteView {
+        @Selector(capability = "cc")
+        CX a(@Param("id") String id);
+
+        @Selector(capability = "cc")
+        CY b(@Param("id") String id);
+    }
+
+    public static class TwoConcreteBean {
+        @MeshTool(capability = "cc_tool")
+        public String run(@Param("x") String x, TwoConcreteView view) {
+            return x;
+        }
+    }
+
+    @Test
+    void twoDifferentConcreteTypesForSameCapability_bootFails() throws Exception {
+        Method m = TwoConcreteBean.class.getMethod("run", String.class, TwoConcreteView.class);
         IllegalStateException ex = assertThrows(IllegalStateException.class,
-            () -> wrapperFor(new SubIfaceParamBean(), "SubIfaceParamBean.run", "si_tool", m, List.of()));
-        assertTrue(ex.getMessage().contains("must be a directly-annotated interface"), ex.getMessage());
-        assertTrue(ex.getMessage().contains("only inherits @McpMeshService"), ex.getMessage());
+            () -> McpMeshServiceToolSupport.analyzeViewParams(m));
+        assertTrue(ex.getMessage().contains("conflicting resolved"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("cc"), ex.getMessage());
+    }
+
+    @McpMeshService
+    public interface GrandP {
+        @Selector(capability = "gp.x")
+        String x(@Param("id") String id);
+    }
+
+    public interface Par extends GrandP {
+    }
+
+    public interface Chi extends Par {
+    }
+
+    public static class GrandParamBean {
+        @MeshTool(capability = "gp_tool")
+        public String run(@Param("x") String x, Chi view) {
+            return x;
+        }
+    }
+
+    @Test
+    void transitiveGrandparentInheritance_isValidViewParam() throws Exception {
+        Method m = GrandParamBean.class.getMethod("run", String.class, Chi.class);
+        MeshToolWrapper w = wrapperFor(new GrandParamBean(), "GrandParamBean.run", "gp_tool", m, List.of());
+        assertEquals(List.of("gp.x"), w.getDependencyNames());
+    }
+
+    @McpMeshService
+    public interface D1 {
+        @Selector(capability = "d.x")
+        String x(@Param("id") String id);
+    }
+
+    @McpMeshService
+    public interface D2 {
+        @Selector(capability = "d.y")
+        String y(@Param("id") String id);
+    }
+
+    public interface Dia extends D1, D2 {
+    }
+
+    public static class DiaParamBean {
+        @MeshTool(capability = "dia_tool")
+        public String run(@Param("x") String x, Dia view) {
+            return x;
+        }
+    }
+
+    @Test
+    void diamondTwoAnnotatedParents_isValidViewParam() throws Exception {
+        Method m = DiaParamBean.class.getMethod("run", String.class, Dia.class);
+        MeshToolWrapper w = wrapperFor(new DiaParamBean(), "DiaParamBean.run", "dia_tool", m, List.of());
+        // Both parents' methods become edges, name-sorted (x < y → d.x, d.y).
+        assertEquals(List.of("d.x", "d.y"), w.getDependencyNames());
     }
 
     // ---- MED-2: claim-path refusal for an unresolved required VIEW edge ------

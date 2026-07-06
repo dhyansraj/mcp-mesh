@@ -20,9 +20,9 @@ view:
 ```java
 @McpMeshService
 public interface MediaService {
-    @Selector(capability = "media_caption", required = true) CaptionResult    caption(CaptionRequest req);
-    @Selector(capability = "media_thumbnail")                ThumbnailResult  thumbnail(ThumbnailRequest req);
-    @Selector(capability = "media_transcribe")               TranscriptResult transcribe(TranscribeRequest req);
+    @Selector(capability = "media.caption", required = true) CaptionResult    caption(CaptionRequest req);
+    @Selector(capability = "media.thumbnail")                ThumbnailResult  thumbnail(ThumbnailRequest req);
+    @Selector(capability = "media.transcribe")               TranscriptResult transcribe(TranscribeRequest req);
 }
 ```
 

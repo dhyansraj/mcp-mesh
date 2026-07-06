@@ -97,12 +97,23 @@ class AgentCapability(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_capability_name(cls, v):
-        """Validate capability name format."""
+        """Validate capability name format.
+
+        RFC #1280 v3: dot-separated segments, each following the flat rule
+        (letter-led, alnum/underscore/hyphen). Strictly widens the old
+        single-segment pattern — every previously-valid flat name still matches
+        — and forbids leading/trailing/consecutive dots so phase-4 display
+        grouping has well-defined segmentation. MUST match the Go registry's
+        capabilityNamePattern (src/core/registry/validation.go) exactly.
+        """
         import re
 
-        if not re.match(r"^[a-zA-Z][a-zA-Z0-9_-]*$", v):
+        # fullmatch (not match) so a trailing newline "a.b\n" is rejected like
+        # Go's MatchString on an anchored pattern.
+        if not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]*(\.[a-zA-Z][a-zA-Z0-9_-]*)*", v):
             raise ValueError(
-                "Capability name must start with letter and contain only letters, numbers, underscore, hyphen"
+                "Capability name must be one or more dot-separated segments, each starting with "
+                "a letter and containing only letters, numbers, underscore, hyphen"
             )
         return v
 

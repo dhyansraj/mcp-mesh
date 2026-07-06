@@ -488,23 +488,21 @@ public class MeshToolWrapper implements McpToolHandler {
                 // LLM agent - will be injected
                 llmAgentPositions.add(i);
             } else {
-                // RFC #1280 phase 2: near-miss view param — annotated with
-                // @McpMeshService but NOT a directly-annotated interface (a
-                // class, or a sub-interface that only inherits the annotation).
-                // isServiceView requires interface + DIRECT annotation, so these
-                // fall through here; give a dedicated message rather than the
-                // generic "must have @Param" one. Sub-interface support is
-                // deliberately deferred — the annotation must be direct.
-                if (AnnotationUtils.findAnnotation(type, McpMeshService.class) != null) {
+                // RFC #1280 phase 2/3: near-miss view param. A @McpMeshService
+                // INTERFACE param (direct or inherited) is a valid view and was
+                // already skipped into viewParamPositions above; only a
+                // @McpMeshService-annotated CLASS reaches here — a class cannot
+                // be a view param (a class-level @McpMeshService publishes methods
+                // as tools on the producer side, it is not an injectable view).
+                if (!type.isInterface()
+                        && AnnotationUtils.findAnnotation(type, McpMeshService.class) != null) {
                     throw new IllegalStateException(
-                        "@McpMeshService view used as a tool parameter must be a directly-annotated "
-                            + "interface: parameter at position " + i + " (type " + type.getName()
+                        "view parameters must be @McpMeshService interfaces; a class-level "
+                            + "@McpMeshService publishes methods as tools (producer side). "
+                            + "Parameter at position " + i + " (type " + type.getName()
                             + ") in method " + method.getName() + " of "
-                            + method.getDeclaringClass().getName() + " is "
-                            + (type.isInterface()
-                                ? "a sub-interface that only inherits @McpMeshService (annotate it directly)"
-                                : "a class annotated @McpMeshService (service views must be interfaces)")
-                            + ".");
+                            + method.getDeclaringClass().getName()
+                            + " is a class annotated @McpMeshService.");
                 }
                 // Regular MCP parameter - must have @Param
                 Param paramAnn = param.getAnnotation(Param.class);

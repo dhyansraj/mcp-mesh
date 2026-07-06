@@ -13,19 +13,47 @@ changes. The group is a typed view; the capability remains the atom.
 
 | Agent                 | Port | Capability         | Role                                   |
 |-----------------------|------|--------------------|----------------------------------------|
-| `caption-provider`    | 8110 | `media_caption`    | Provider A — captions an asset         |
-| `thumbnail-provider`  | 8111 | `media_thumbnail`  | Provider B — thumbnails an asset       |
-| `transcribe-provider` | 8112 | `media_transcribe` | Provider C — transcribes an asset      |
+| `caption-provider`    | 8110 | `media.caption`    | Provider A — captions an asset         |
+| `thumbnail-provider`  | 8111 | `media.thumbnail`  | Provider B — thumbnails an asset       |
+| `transcribe-provider` | 8112 | `media.transcribe` | Provider C — transcribes an asset      |
 | `media-gateway`       | 8113 | `process_media`, `process_media_strict` | Consumer — one `MediaService` view, consumed two ways |
+
+Each provider publishes ONE slice of the shared, dotted `media.*` namespace, and
+the consumer aggregates all three behind one typed interface.
+
+## Producer side: publish a service, not N tools
+
+Each provider is a producer-sugar bean: a class annotated
+`@McpMeshService("media")` publishes each of its public methods as a mesh tool
+under the capability `media.<methodName>` — no per-method `@MeshTool` needed.
+
+```java
+@Component
+@McpMeshService("media")            // prefix is entirely user-chosen; nothing is hard-coded in the mesh
+public class MediaCaptionService {
+    public CaptionResult caption(@Param("assetId") String assetId,   // → capability "media.caption"
+                                 @Param("text") String text) { ... }
+}
+```
+
+- **Dotted capability names are first-class** across the stack — registry,
+  Python, and Java validators all accept segment-wise names like `media.caption`.
+  The published capability is simply `prefix + "." + methodName`.
+- **The prefix is yours.** `"media"` carries no special meaning; pick any
+  segment-wise name (e.g. `"media.v2"`). The three agents here all use `"media"`,
+  so together they populate one namespace from three independent processes.
+- **Methods are published name-sorted**, and an explicit `@MeshTool` on a method
+  still WINS — reach for it only when a method needs custom `tags`, `version`, or
+  `description`; the sugar intentionally uses annotation defaults otherwise.
 
 The consumer declares one interface aggregating all three capabilities:
 
 ```java
 @McpMeshService
 public interface MediaService {
-    @Selector(capability = "media_caption", required = true) CaptionResult    caption(CaptionRequest req);
-    @Selector(capability = "media_thumbnail")                ThumbnailResult  thumbnail(ThumbnailRequest req);
-    @Selector(capability = "media_transcribe")               TranscriptResult transcribe(TranscribeRequest req);
+    @Selector(capability = "media.caption", required = true) CaptionResult    caption(CaptionRequest req);
+    @Selector(capability = "media.thumbnail")                ThumbnailResult  thumbnail(ThumbnailRequest req);
+    @Selector(capability = "media.transcribe")               TranscriptResult transcribe(TranscribeRequest req);
 }
 ```
 
@@ -33,6 +61,10 @@ Spring auto-discovers the interface (classpath scan under the app's package) and
 registers a facade bean named `mediaService`. The gateway `@Autowired`s it and
 calls the methods directly — no manual proxy wiring. `caption` is `required`;
 `thumbnail` and `transcribe` are optional.
+
+> Note the symmetry: the same `@McpMeshService` annotation marks a producer
+> (on a `@Component` CLASS, with a prefix) and a consumer view (on an INTERFACE,
+> no prefix). A blank prefix is valid only on the interface form.
 
 ## What it demonstrates
 
@@ -142,7 +174,15 @@ Expected output — one interface, three different serving agents:
 `process_media_strict` also lists the three view edges as its own dependencies:
 
 ```bash
-meshctl list   # media-gateway's process_media_strict shows media_caption, media_thumbnail, media_transcribe
+meshctl list   # media-gateway's process_media_strict shows media.caption, media.thumbnail, media.transcribe
+```
+
+You can also call any producer capability directly by its dotted name —
+`meshctl call` matches the capability name as-is:
+
+```bash
+meshctl call media.caption '{"assetId": "asset-1", "text": "a cat on a sofa"}'
+# -> {"assetId":"asset-1","caption":"A scene showing a cat on a sofa.","provider":"caption-provider"}
 ```
 
 ### See graceful degradation (optional edge)
@@ -187,7 +227,7 @@ refusal as JSON escaped inside `content[0].text`:
 ```json
 {
   "content": [
-    { "type": "text", "text": "{\"error\": \"dependency_unavailable\", \"capability\": \"media_caption\"}" }
+    { "type": "text", "text": "{\"error\": \"dependency_unavailable\", \"capability\": \"media.caption\"}" }
   ],
   "isError": true
 }

@@ -163,9 +163,9 @@ The differentiator: **each method delegates to its own per-capability resolved p
 ```java
 @McpMeshService
 public interface MediaService {
-    @Selector(capability = "media_caption", required = true) CaptionResult    caption(CaptionRequest req);
-    @Selector(capability = "media_thumbnail")                ThumbnailResult  thumbnail(ThumbnailRequest req);
-    @Selector(capability = "media_transcribe")               TranscriptResult transcribe(TranscribeRequest req);
+    @Selector(capability = "media.caption", required = true) CaptionResult    caption(CaptionRequest req);
+    @Selector(capability = "media.thumbnail")                ThumbnailResult  thumbnail(ThumbnailRequest req);
+    @Selector(capability = "media.transcribe")               TranscriptResult transcribe(TranscribeRequest req);
 
     record CaptionRequest(String assetId, String text) {}
     record ThumbnailRequest(String assetId, int width) {}
@@ -225,7 +225,7 @@ A view can also be consumed as a `@MeshTool` method **parameter** instead of an 
 public Result processMedia(
         @Param(value = "assetId", description = "Asset id") String assetId,
         McpMeshTool<String> auditLog,
-        MediaService media) {   // view param → media_caption + media_thumbnail + media_transcribe edges
+        MediaService media) {   // view param → media.caption + media.thumbnail + media.transcribe edges
     ...
 }
 ```
@@ -242,6 +242,31 @@ The same interface can be used both ways at once — autowired as a bean **and**
 The optional `@McpMeshService(minAvailable = N)` adds a consumer-local availability floor: when fewer than `N` of the view's methods currently resolve, **every** facade call fails with `MeshServiceUnavailableException` — synchronous methods throw, `CompletableFuture` methods return a failed future (settle-grace-aware). The default `0` means no floor — each method soft- or hard-fails per its own `required` flag.
 
 A service view is **consumer-local**, not a shared contract: two consumers may aggregate the same capabilities differently, and there is no group versioning or interface-level availability summary. Each method resolves independently.
+
+### Publishing a service (producer side)
+
+The same annotation works on the **provider** side too. Put class-level `@McpMeshService("prefix")` on a Spring bean and each eligible public method is published as an ordinary mesh tool under the capability `prefix.<methodName>` — pure sugar over writing one `@MeshTool` per method.
+
+```java
+@Component
+@McpMeshService("media")
+public class MediaProvider {
+    public CaptionResult   caption(CaptionRequest req)     { ... }   // → capability "media.caption"
+    public ThumbnailResult thumbnail(ThumbnailRequest req) { ... }   // → capability "media.thumbnail"
+
+    @MeshTool(capability = "transcribe_gpu", tags = {"gpu"})          // custom name — @MeshTool overrides the prefix.<method> derivation
+    public TranscriptResult transcribe(TranscribeRequest req) { ... }
+}
+```
+
+- The `prefix` is entirely yours, segment-validated at boot (each dot-separated segment `^[a-zA-Z][a-zA-Z0-9_-]*$`, e.g. `media` or `media.v2`). The blank default `@McpMeshService` marks a consumer view and boot-fails on a producer class.
+- Methods publish in **name-sorted** order. Only **public, instance** methods **declared on the class itself** are published — non-public, `static`, `Object`, and inherited-from-superclass methods are skipped.
+- An **explicit `@MeshTool`** on a method wins — use it whenever a method needs a custom capability, tags, version, or description; producer sugar synthesizes none of those.
+- **Overloaded** public methods collide on `prefix.<name>` and boot-fail: rename one, make one non-public, or give one an explicit `@MeshTool`.
+- `minAvailable` is a consumer-view attribute; on a producer class it logs a WARN and is ignored. A `@McpMeshService` class that Spring doesn't manage as a bean WARNs at scan time and publishes nothing.
+
+!!! note "Discovery caveat"
+    An auto-registered facade **bean** requires `@McpMeshService` directly on the interface. An interface that only *inherits* `@McpMeshService` from a super-interface is still usable as a `@MeshTool` view parameter, but is not auto-discovered as a bean.
 
 ## `McpMeshTool<T>` API Reference
 

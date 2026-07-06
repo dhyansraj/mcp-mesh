@@ -647,11 +647,22 @@ class McpMeshServiceIntegrationTest {
     @Test
     @DisplayName("MED-4: @McpMeshService on a class boot-fails")
     void meshServiceOnClassBootFail() {
-        runnerFor("io.mcpmesh.spring.svbad.onclass", PlainAgentConfig.class).run(context -> {
+        // Phase 3: a producer class annotated @McpMeshService with a BLANK prefix
+        // boot-fails (needs a name prefix).
+        runnerFor("io.mcpmesh.spring.svbad.onclass", BlankPrefixConfig.class).run(context -> {
             assertThat(context).hasFailed();
             assertThat(collectMessages(context.getStartupFailure()))
-                .contains("@McpMeshService must be on an interface");
+                .contains("needs a name prefix");
         });
+    }
+
+    @Configuration
+    @MeshAgent(name = "blank-prefix-agent")
+    static class BlankPrefixConfig {
+        @Bean
+        public io.mcpmesh.spring.svbad.onclass.OnClass.BlankPrefixProducer blankPrefixProducer() {
+            return new io.mcpmesh.spring.svbad.onclass.OnClass.BlankPrefixProducer();
+        }
     }
 
     @Test
@@ -975,6 +986,113 @@ class McpMeshServiceIntegrationTest {
 
     @Configuration
     static class EmptyConfig {
+    }
+
+    @Test
+    @DisplayName("HIGH-1a: a sub-interface inheriting @McpMeshService is NOT auto-discovered as a bean view")
+    void subInterfaceInheritedAnnotationNotScanned() {
+        runnerFor("io.mcpmesh.spring.svscan", PlainAgentConfig.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            // Directly-annotated parent → facade bean registered.
+            assertThat(context.containsBean("scanParent"))
+                .as("directly-annotated view interface is a scanned bean").isTrue();
+            // Sub-interface that only inherits the annotation → NOT scanned.
+            assertThat(context.containsBean("scanChild"))
+                .as("inherited-annotation sub-interface must NOT be auto-discovered").isFalse();
+        });
+    }
+
+    @Configuration
+    @MeshAgent(name = "factory-producer-agent")
+    static class FactoryProducerConfig {
+        // Declared return type is the interface (supertype) — a bean-def scan
+        // would not see the impl class; the ground-truth WARN must not fire.
+        @Bean
+        public io.mcpmesh.spring.svfactory.FactoryFixtures.MediaApi mediaApi() {
+            return new io.mcpmesh.spring.svfactory.FactoryFixtures.MediaImpl();
+        }
+    }
+
+    @Test
+    @DisplayName("item 2: a producer registered via @Bean (interface return) publishes and does NOT false-WARN")
+    void producerViaBeanFactoryInterfaceReturn_publishesNoFalseWarn() {
+        LogCapture capture = LogCapture.attach(MeshAutoConfiguration.class);
+        try {
+            runnerFor("io.mcpmesh.spring.svfactory", FactoryProducerConfig.class).run(context -> {
+                assertThat(context).hasNotFailed();
+                AgentSpec spec = context.getBean(MeshRuntime.class).getAgentSpec();
+                assertThat(spec.getTools().stream().map(AgentSpec.ToolSpec::getCapability))
+                    .as("the @Bean-registered producer's method is published")
+                    .contains("fmedia.go");
+            });
+            assertThat(capture.events)
+                .as("no false 'not a Spring bean' WARN for a @Bean-registered producer")
+                .noneMatch(e -> "WARN".equals(e.level)
+                    && e.message.contains("is not a Spring bean")
+                    && e.message.contains("MediaImpl"));
+        } finally {
+            capture.detach();
+        }
+    }
+
+    @Test
+    @DisplayName("MED-3: a @McpMeshService producer class that is not a Spring bean WARNs")
+    void annotatedNonBeanClassWarns() {
+        // The WARN is emitted by the late SmartInitializingSingleton in
+        // MeshAutoConfiguration (ground-truth comparison), not the registrar.
+        LogCapture capture = LogCapture.attach(MeshAutoConfiguration.class);
+        try {
+            runnerFor("io.mcpmesh.spring.svnonbean", PlainAgentConfig.class).run(context -> {
+                assertThat(context).hasNotFailed();
+            });
+            assertThat(capture.events)
+                .anyMatch(e -> "WARN".equals(e.level)
+                    && e.message.contains("is not a Spring bean")
+                    && e.message.contains("NonBeanProducer")
+                    && e.message.contains("@Component"));
+        } finally {
+            capture.detach();
+        }
+    }
+
+    @Configuration
+    @MeshAgent(name = "producer-consumer-agent")
+    static class ProducerConsumerConfig {
+        @Bean
+        public io.mcpmesh.spring.svprod.ProdFixtures.MediaProducer mediaProducer() {
+            return new io.mcpmesh.spring.svprod.ProdFixtures.MediaProducer();
+        }
+    }
+
+    @Test
+    @DisplayName("Phase 3 end-to-end: a producer class + a consumer view bind media.caption within one agent")
+    void producerAndConsumerViewWireWithinAgent() {
+        runnerFor("io.mcpmesh.spring.svprod", ProducerConsumerConfig.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            AgentSpec spec = context.getBean(MeshRuntime.class).getAgentSpec();
+
+            // Producer side: both sugar tools are published with dotted names.
+            List<String> producedCaps = spec.getTools().stream()
+                .map(AgentSpec.ToolSpec::getCapability)
+                .filter(c -> c != null && c.startsWith("media."))
+                .toList();
+            assertThat(producedCaps).contains("media.caption", "media.thumbnail");
+
+            // Consumer side: the view facade bean is registered + injectable.
+            assertThat(context.getBean(io.mcpmesh.spring.svprod.ProdFixtures.MediaConsumerView.class))
+                .as("consumer view facade bean must exist").isNotNull();
+
+            // Within-agent binding: media.caption is produced locally, so the
+            // consumer view edge is self-produced (phase-1 dedup) rather than a
+            // registry dependency — it must NOT appear on __mesh_service_deps.
+            boolean onServiceDeps = spec.getTools().stream()
+                .filter(t -> "__mesh_service_deps".equals(t.getCapability()))
+                .flatMap(t -> t.getDependencies().stream())
+                .anyMatch(d -> "media.caption".equals(d.getCapability()));
+            assertThat(onServiceDeps)
+                .as("a self-produced view edge must be deduped off __mesh_service_deps")
+                .isFalse();
+        });
     }
 
     // RFC #1280 phase 2: a view used as BOTH a phase-1 bean and a @MeshTool param.

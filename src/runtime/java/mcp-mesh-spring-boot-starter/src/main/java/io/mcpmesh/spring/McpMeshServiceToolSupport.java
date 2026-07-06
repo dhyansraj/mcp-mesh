@@ -4,6 +4,7 @@ import io.mcpmesh.McpMeshService;
 import io.mcpmesh.Param;
 import io.mcpmesh.types.McpMeshTool;
 import io.mcpmesh.types.MeshToolUnavailableException;
+import org.springframework.core.annotation.AnnotationUtils;
 import tools.jackson.databind.ObjectMapper;
 
 import java.lang.reflect.Method;
@@ -37,9 +38,14 @@ final class McpMeshServiceToolSupport {
     record ViewParamInfo(int position, McpMeshServiceRegistrar.ServiceViewMetadata view) {
     }
 
-    /** Whether {@code type} is an interface annotated {@link McpMeshService}. */
+    /**
+     * Whether {@code type} is an interface carrying {@link McpMeshService} —
+     * directly OR inherited from a super-interface (RFC #1280 phase-2 cleanup
+     * 7a: sub-interface views). Classes are the producer path, never a view.
+     */
     static boolean isServiceView(Class<?> type) {
-        return type.isInterface() && type.isAnnotationPresent(McpMeshService.class);
+        return type.isInterface()
+            && AnnotationUtils.findAnnotation(type, McpMeshService.class) != null;
     }
 
     /**

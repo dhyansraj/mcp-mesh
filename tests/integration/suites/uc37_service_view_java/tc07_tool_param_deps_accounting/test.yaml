@@ -10,10 +10,11 @@
 # (CapabilityInfo carries name/available/unavailable_reason only), so "the
 # edges hang on THAT tool" is proven through the per-capability #1249
 # derivation, which IS keyed by the declaring tool:
-#   1. total_dependencies == 6: 3 tp-cap-* edges on view_tool_param + the 3
-#      deduped view-cap-* edges on __mesh_service_deps. (If the tool-param
-#      edges had been folded into the synthetic — or vice versa — the total
-#      and the per-capability reasons below could not BOTH hold.)
+#   1. total_dependencies == 8: 3 tp-cap-* edges on view_tool_param + the 5
+#      deduped bean-path edges (3 view-cap-* + 2 dotted svc.*, phase 3) on
+#      __mesh_service_deps. (If the tool-param edges had been folded into
+#      the synthetic — or vice versa — the total and the per-capability
+#      reasons below could not BOTH hold.)
 #   2. With no providers up, capability view_tool_param derives
 #      available=false with unavailable_reason naming tp-cap-charlie — its
 #      OWN required edge, unresolved. A dep-less tool cannot derive
@@ -24,8 +25,8 @@
 #      tp-cap-* vs view-cap-* namespaces are disjoint by design, see
 #      ToolParamService.java).
 #   4. The consumer's dep-less tool capabilities (view_report,
-#      view_critical, view_floored) stay available=true — the edges are NOT
-#      smeared agent-wide — and the consumer registers healthy.
+#      view_critical, view_floored, view_dotted) stay available=true — the
+#      edges are NOT smeared agent-wide — and the consumer registers healthy.
 #
 # Timing: registration wait is liveness-only (issue #1193); the availability
 # polls below wait for the registry's initial DERIVATION of already-declared
@@ -33,7 +34,7 @@
 # no providers there is nothing to resolve.
 
 name: "Service views phase 2: tool-param edges are the tool's own deps, alongside the bean-path synthetic (Java)"
-description: "Consumer-only start: total_dependencies=6; view_tool_param derives unavailable naming its OWN required tp-cap-charlie edge while __mesh_service_deps independently names view-cap-charlie; dep-less tools stay available"
+description: "Consumer-only start: total_dependencies=8; view_tool_param derives unavailable naming its OWN required tp-cap-charlie edge while __mesh_service_deps independently names view-cap-charlie; dep-less tools stay available"
 tags:
   - integration
   - java
@@ -108,8 +109,8 @@ assertions:
     message: "both dependency carriers (view_tool_param and __mesh_service_deps) must derive available=false with no providers up"
 
   # Guarantee 1: the combined dependency total across both carriers
-  - expr: "${jq:captured.agents_snapshot:(.agents[] | select(.name == \"java-view-consumer\") | .total_dependencies == 6)} == 'true'"
-    message: "total_dependencies must be 6: the 3 tp-cap-* edges on the view_tool_param tool PLUS the 3 deduped view-cap-* edges on __mesh_service_deps"
+  - expr: "${jq:captured.agents_snapshot:(.agents[] | select(.name == \"java-view-consumer\") | .total_dependencies == 8)} == 'true'"
+    message: "total_dependencies must be 8: the 3 tp-cap-* edges on the view_tool_param tool PLUS the 5 deduped bean-path edges (3 view-cap-* + 2 dotted svc.*) on __mesh_service_deps"
 
   # Guarantee 2: the tool-param edges hang on the TOOL itself
   - expr: "${jq:captured.agents_snapshot:(.agents[] | select(.name == \"java-view-consumer\") | .capabilities[] | select(.name == \"view_tool_param\") | .unavailable_reason // \"\" | contains(\"tp-cap-charlie\"))} == 'true'"
@@ -122,7 +123,7 @@ assertions:
     message: "__mesh_service_deps' unavailable_reason must name view-cap-charlie — the bean-path carrier keeps its own distinct required edge"
 
   # Guarantee 4: edges are per-tool, not agent-wide
-  - expr: "${jq:captured.agents_snapshot:([.agents[] | select(.name == \"java-view-consumer\") | .capabilities[] | select(.name == \"view_report\" or .name == \"view_critical\" or .name == \"view_floored\") | select(.available == true)] | length == 3)} == 'true'"
+  - expr: "${jq:captured.agents_snapshot:([.agents[] | select(.name == \"java-view-consumer\") | .capabilities[] | select(.name == \"view_report\" or .name == \"view_critical\" or .name == \"view_floored\" or .name == \"view_dotted\") | select(.available == true)] | length == 4)} == 'true'"
     message: "the dep-less tool capabilities must all stay available=true — view edges belong to their declaring carrier, never the whole agent"
   - expr: "${jq:captured.agents_snapshot:(.agents[] | select(.name == \"java-view-consumer\") | .status == \"healthy\")} == 'true'"
     message: "the consumer must register HEALTHY with zero providers up — required view edges gate availability, never startup"

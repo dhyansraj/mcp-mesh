@@ -24,7 +24,9 @@ import java.util.Map;
  * reusing view-cap-* here would dedupe the {@code __mesh_service_deps}
  * synthetic away entirely and break tc03/tc04's registry surface. Distinct
  * names keep BOTH dependency carriers observable: 3 edges on the
- * {@code view_tool_param} tool + 3 on the synthetic (tc07 asserts both).
+ * {@code view_tool_param} tool + the bean-path edges on the synthetic
+ * (tc07 asserts both; see JavaViewConsumerApplication's javadoc for the
+ * current dependency arithmetic).
  */
 @McpMeshService
 public interface ToolParamService {
