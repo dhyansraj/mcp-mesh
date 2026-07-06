@@ -15,7 +15,7 @@ image:
   repository: mcpmesh/registry
   pullPolicy: IfNotPresent
   # Minor version tag tracks latest patch (0.8 → 0.8.x)
-  tag: "2.8"
+  tag: "3.0"
 
 # Image for the wait-for-db init container (rendered for non-sqlite databases;
 # disable the init container via registry.database.waitForDatabase: false).
