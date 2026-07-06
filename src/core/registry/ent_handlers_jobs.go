@@ -970,6 +970,17 @@ func jobToAPI(j *ent.Job) generated.Job {
 		v := int(j.LastHeartbeatAt.Unix())
 		api.LastHeartbeatAt = &v
 	}
+	// Durable per-filter recvEvent cursor (issue #1277). Expose the persisted
+	// resume position on the status read so operators — and the reclaim-resume
+	// gate — can read it via GET /jobs/{id}. Present-when-non-empty: a job that
+	// never flushed a cursor omits the field rather than emitting a spurious {}.
+	if len(j.RecvCursor) > 0 {
+		rc := make(map[string]int64, len(j.RecvCursor))
+		for k, v := range j.RecvCursor {
+			rc[k] = v
+		}
+		api.RecvCursor = &rc
+	}
 	return api
 }
 

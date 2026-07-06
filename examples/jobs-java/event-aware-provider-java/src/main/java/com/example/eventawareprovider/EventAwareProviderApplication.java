@@ -99,4 +99,75 @@ public class EventAwareProviderApplication {
                     + " (seq=" + event.get("seq") + ")");
         }
     }
+
+    /**
+     * Durable variant of {@link #eventAwareLongTask}. Accumulates each
+     * {@code work} event's amount and exits cleanly on {@code stop}.
+     *
+     * <p>{@code resumeCursor = true} (issue #1277): if this job is re-claimed
+     * after a crash or reclaim, the handler resumes {@code recvEvent} from the
+     * persisted per-filter cursor — it does NOT replay the event log from
+     * seq 0, so the non-idempotent {@code total += amount} accumulation below
+     * is not re-applied for events already consumed on the prior claim.
+     *
+     * <p>Resume contract:
+     * <ul>
+     *   <li>At-least-once still holds: a bounded tail of already-processed
+     *       events may replay on resume, so keep per-event effects tolerant of
+     *       a rare repeat (or fence on {@code event.get("seq")}).</li>
+     *   <li>Consumption MUST stay strictly sequential-per-filter: process each
+     *       event fully before the next {@code recvEvent}. Do NOT prefetch a
+     *       batch or fan events out to concurrent workers — the persisted
+     *       cursor only advances correctly for in-order, one-at-a-time
+     *       draining.</li>
+     * </ul>
+     */
+    @MeshTool(
+        capability = "resumable_event_task",
+        task = true,
+        resumeCursor = true,
+        description =
+            "Durable variant of event_aware_long_task. Opts into resumeCursor "
+            + "so a re-claimed run resumes after the last processed event "
+            + "instead of replaying its event log from seq 0."
+    )
+    public Map<String, Object> resumableEventTask(MeshJob job) {
+        JobController controller = job instanceof JobController c ? c : null;
+        if (controller == null) {
+            return Map.of("error", "no job controller injected");
+        }
+
+        long total = 0;
+        int processed = 0;
+        while (true) {
+            Map<String, Object> event = controller.recvEvent(
+                List.of("work", "stop"), Duration.ofSeconds(30));
+            if (event == null) {
+                continue;
+            }
+
+            if ("stop".equals(event.get("type"))) {
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("processed", processed);
+                payload.put("total", total);
+                payload.put("status", "stopped");
+                controller.complete(payload);
+                return payload;
+            }
+
+            // Sequential-per-filter: this non-idempotent accumulation runs
+            // once per event, in order, before we request the next one.
+            long amount = 1;
+            if (event.get("payload") instanceof Map<?, ?> p
+                    && p.get("amount") instanceof Number n) {
+                amount = n.longValue();
+            }
+            total += amount;
+            processed += 1;
+            controller.updateProgress(
+                Math.min(processed / 10.0, 0.99),
+                "applied work item " + processed
+                    + " (seq=" + event.get("seq") + ", total=" + total + ")");
+        }
+    }
 }

@@ -581,6 +581,47 @@ async def commission_awaits_input(
     return {"job_id": getattr(proxy, "job_id", None)}
 
 
+# ---------------------------------------------------------------------------
+# Durable recv_event cursor resume submitters (tc31 / tc32, issue #1277)
+# ---------------------------------------------------------------------------
+#
+# Both submit-only: return the job_id and let the TC driver post the ``work``
+# events + force the reclaim via meshctl and raw registry HTTP. max_retries=1
+# budgets exactly the one forced reclaim (attempt 2). max_duration=60 sizes a
+# lease window that poll-liveness (each recv_event round) keeps renewed, so the
+# ONLY eviction actor is the admin reclaim — no natural lease lapse confounds.
+
+
+@app.tool()
+@mesh.tool(
+    capability="commission_resume",
+    dependencies=["resume_task"],
+    description="Submit resume_task (resume_cursor ON) and return the job_id; driver posts events + reclaims.",
+)
+async def commission_resume(
+    resume_task: MeshJob = None,
+) -> dict:
+    if resume_task is None:
+        return {"error": "resume_task submitter not injected"}
+    proxy = await resume_task.submit(ctx={}, max_duration=60, max_retries=1)
+    return {"job_id": getattr(proxy, "job_id", None)}
+
+
+@app.tool()
+@mesh.tool(
+    capability="commission_replay",
+    dependencies=["replay_task"],
+    description="Submit replay_task (resume_cursor OFF — control) and return the job_id; driver posts events + reclaims.",
+)
+async def commission_replay(
+    replay_task: MeshJob = None,
+) -> dict:
+    if replay_task is None:
+        return {"error": "replay_task submitter not injected"}
+    proxy = await replay_task.submit(ctx={}, max_duration=60, max_retries=1)
+    return {"job_id": getattr(proxy, "job_id", None)}
+
+
 import os  # noqa: E402  (kept here for clarity that env-port is the only env hook)
 
 

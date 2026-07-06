@@ -1,0 +1,245 @@
+# tc32_resume_cursor_off_replays_from_zero — CONTROL for tc31 (issue #1277).
+#
+# Same fixture, same forced-reclaim mechanism, same event log — the ONLY
+# difference is the tool's opt-in: ``replay_task`` is declared WITHOUT
+# ``resume_cursor`` (defaults False). This TC proves the opt-in is what changes
+# behaviour: with resume OFF, the re-claimed controller is NOT seeded from the
+# persisted recv_cursor and ``recv_event`` REPLAYS from seq 0 — every pre-reclaim
+# event is consumed a SECOND time.
+#
+# The registry still persists + RETAINS the recv_cursor across the reclaim (that
+# is registry behaviour, independent of the tool flag), and the claim response
+# still carries it and the claim dispatcher still sets x-mesh-recv-cursor — but
+# the dispatch gate does NOT seed the controller because the tool did not opt in.
+# So seq=1 / seq=2 appear TWICE here vs ONCE in tc31. That single-bit contrast is
+# the whole point: opt-in ⇒ resume, default ⇒ replay-from-0.
+#
+# RECLAIM MECHANISM / TIMEOUT BUDGET: identical to tc31 (see its header).
+
+name: "MeshJob: resume_cursor OFF (control) REPLAYS recv_event from seq 0 on reclaim"
+description: "replay_task (no resume_cursor) re-claimed via meshctl job reclaim replays from seq 0 — every pre-reclaim event is consumed twice; proves the tc31 resume is the opt-in, not the reclaim"
+tags:
+  - meshjob
+  - python
+  - issue-1277
+  - events
+  - resume-cursor
+  - reclaim
+  - control
+  - slow
+timeout: 240
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/long-task-consumer /workspace/
+
+  - name: "Install provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install consumer deps"
+    handler: pip-install
+    path: /workspace/long-task-consumer
+
+  # DEFAULT knobs — the forced reclaim must be the ONLY lease actor.
+  - routine: start_registry
+
+  - name: "Start provider (port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Start consumer (port 9101)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer/main.py --env MCP_MESH_HTTP_PORT=9101 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  - name: "Wait for both agents to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for both agents to register..."
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "long-task-provider" && echo "$AGENTS" | grep -q "long-task-consumer"; then
+          echo "Both agents registered after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: agents did not register within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_registration
+    timeout: 90
+
+  - name: "Submit replay_task (resume_cursor OFF — control)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_replay '{}'
+    capture: submit_resp
+    timeout: 30
+
+  - name: "Capture job_id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      # Portable job_id extraction across all three runtimes (#1282): the
+      # job_id lives as escaped JSON inside content[0].text on EVERY runtime,
+      # whereas structuredContent.job_id exists only on Python. fromjson?
+      # guards absent/non-JSON text → empty (no crash) so a bad response
+      # surfaces as an empty JOB_ID the gate step fails loudly on.
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson? | .job_id // empty' 2>/dev/null)
+      echo "JOB_ID=${JOB_ID}"
+    capture: job_id_extract
+
+  - name: "Post work events e1..e5 (non-final)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      echo "JOB_ID=${JOB_ID}"
+      for n in 1 2 3 4 5; do
+        SEQ=$(curl -s -X POST "http://localhost:8000/jobs/${JOB_ID}/events" \
+          -H 'Content-Type: application/json' \
+          -d "{\"type\":\"work\",\"payload\":{\"i\":${n}}}" | jq -r '.seq')
+        echo "posted work i=${n} seq=${SEQ}"
+      done
+    capture: post_events
+    timeout: 30
+
+  # Same gate as tc31: the registry persists recv_cursor regardless of the tool
+  # flag, so the durable cursor reaches >= 2 here too. Gating on it keeps the
+  # reclaim boundary identical to tc31 — the ONLY variable across the two TCs is
+  # the tool's opt-in.
+  - name: "Gate: durable recv_cursor.work flushed >= 2"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      for i in $(seq 1 40); do
+        RC=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.recv_cursor.work // 0')
+        echo "poll ${i}: recv_cursor.work=${RC}"
+        if [ "${RC}" -ge 2 ] 2>/dev/null; then
+          echo "CURSOR_FLUSHED=1 recv_cursor.work=${RC}"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: recv_cursor.work never reached 2 within 40s"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status, recv_cursor, attempt_count, claim_epoch}'
+      exit 1
+    capture: flush_gate
+    timeout: 50
+
+  - name: "Force-reclaim the job via meshctl"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      meshctl job reclaim "${JOB_ID}"
+    capture: reclaim_out
+    timeout: 30
+
+  - name: "Wait for the re-claim (epoch 2, attempt 2)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      for i in $(seq 1 40); do
+        ROW=$(curl -s "http://localhost:8000/jobs/${JOB_ID}")
+        OK=$(echo "$ROW" | jq '(.claim_epoch == 2) and (.attempt_count == 2)')
+        if [ "$OK" = "true" ]; then
+          echo "RECLAIMED_E2=1 after ~${i}s"
+          echo "$ROW" | jq -c '{status, owner_instance_id, claim_epoch, attempt_count, recv_cursor}'
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: job was not re-claimed at epoch 2 within 40s"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '.'
+      exit 1
+    capture: reclaim2_wait
+    timeout: 50
+
+  # With replay-from-0, attempt 2 re-consumes e1..e5 and then this terminator
+  # (seq=6) and completes.
+  - name: "Post the final terminator and wait for completion"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      SEQ=$(curl -s -X POST "http://localhost:8000/jobs/${JOB_ID}/events" \
+        -H 'Content-Type: application/json' \
+        -d '{"type":"work","payload":{"i":6,"final":true}}' | jq -r '.seq')
+      echo "posted terminator seq=${SEQ}"
+      for i in $(seq 1 30); do
+        ST=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.status')
+        echo "poll ${i}: status=${ST}"
+        if [ "$ST" = "completed" ]; then
+          echo "COMPLETED=1 after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: job did not complete within 30s of the terminator"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status, error, recv_cursor}'
+      exit 1
+    capture: completion_wait
+    timeout: 45
+
+  - name: "Compute processed-seq counts from the sink"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      SINK="/tmp/uc21-resume-processed-${JOB_ID}"
+      echo "SINK=${SINK}"
+      # grep -c prints 0 AND exits 1 on a zero count, so a bare `|| echo 0`
+      # would emit a doubled `0`. Capture then default-to-0 so exactly one
+      # value is emitted per seq (single-0 on zero/absent).
+      S1=$(grep -c '^seq=1$' "${SINK}" 2>/dev/null || true); echo "SEQ1_COUNT=${S1:-0}"
+      S2=$(grep -c '^seq=2$' "${SINK}" 2>/dev/null || true); echo "SEQ2_COUNT=${S2:-0}"
+      S6=$(grep -c '^seq=6$' "${SINK}" 2>/dev/null || true); echo "SEQ6_COUNT=${S6:-0}"
+      echo "--- full sink ---"
+      cat "${SINK}" 2>/dev/null || echo "(sink missing)"
+    capture: sink_counts
+
+assertions:
+  # Scenario markers — identical boundary to tc31.
+  - expr: "${captured.wait_registration} contains 'registered'"
+    message: "both agents must register before the job is submitted"
+  - expr: "${captured.flush_gate} contains 'CURSOR_FLUSHED=1'"
+    message: "the durable recv_cursor for 'work' must reach >= 2 before the reclaim (the registry persists it regardless of the tool flag)"
+  - expr: "${captured.reclaim_out} contains 'reclaimed'"
+    message: "meshctl job reclaim must report success"
+  - expr: "${captured.reclaim_out} not contains '(none'"
+    message: "an actual owner must have been evicted — the parked attempt 1 was claimed when reclaimed"
+  - expr: "${captured.reclaim2_wait} contains 'RECLAIMED_E2=1'"
+    message: "the reclaimed job must be re-claimed at epoch 2 / attempt 2"
+  - expr: "${captured.completion_wait} contains 'COMPLETED=1'"
+    message: "attempt 2 must drive the job to completed via the terminator"
+
+  # THE CONTROL — replay-from-0. With resume_cursor OFF the re-claimed
+  # controller is NOT seeded, so it replays from seq 0 and re-consumes every
+  # pre-reclaim event. seq=1 and seq=2 are therefore processed TWICE (vs ONCE
+  # in tc31). This is the same-fixture proof that the tc31 resume is caused by
+  # the opt-in, not by the reclaim mechanism.
+  - expr: "${captured.sink_counts} contains 'SEQ1_COUNT=2'"
+    message: "CONTROL: with resume_cursor OFF, seq=1 must be processed TWICE (attempt 2 replays from seq 0). A value of 1 would mean the default wrongly resumed."
+  - expr: "${captured.sink_counts} contains 'SEQ2_COUNT=2'"
+    message: "CONTROL: seq=2 must be processed TWICE under replay-from-0"
+  - expr: "${captured.sink_counts} not contains 'SEQ1_COUNT=1'"
+    message: "the default (no opt-in) must NOT resume — seq=1 processed once would mean resume leaked into the control"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

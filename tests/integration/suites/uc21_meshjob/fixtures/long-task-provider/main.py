@@ -530,6 +530,125 @@ async def awaits_input_forever(
     return {"status": "never_answered"}
 
 
+# ---------------------------------------------------------------------------
+# Durable recv_event cursor resume (tc31 / tc32 — issue #1277)
+# ---------------------------------------------------------------------------
+#
+# Two capabilities with the SAME body but opposite ``resume_cursor`` opt-in.
+# Both loop on ``recv_event(types=["work"])``, record every processed seq to a
+# job-id-keyed sink under /tmp, and emit an ``update_progress`` delta AFTER each
+# event. The progress delta is what FLUSHES the lagging durable recvEvent cursor
+# to the registry (issue #1277: the cursor rides the delta, trailing receipt by
+# one so a re-claim replays only the last in-flight event — at-least-once).
+#
+# The observable contract the integration TCs assert:
+#
+#   * ``resume_task``   (``resume_cursor=True``)  — on a re-claim the seeded
+#     controller RESUMES after the persisted cursor. Early events consumed +
+#     durably flushed before the reclaim are NEVER re-processed: each such seq
+#     is recorded EXACTLY ONCE across both claims.
+#   * ``replay_task``   (``resume_cursor=False``) — the control. On a re-claim
+#     the fresh controller replays from seq 0, so EVERY pre-reclaim event is
+#     recorded a SECOND time (seq 1 appears twice).
+#
+# The ONLY difference between the two handlers is the decorator flag, so any
+# behavioural divergence the TCs observe is attributable to the opt-in alone —
+# the registry persistence, the forced reclaim and the event log are identical.
+
+# recv_event filter used by both handlers. The Rust per-filter cursor key for
+# a single-type filter ["work"] canonicalises to the bare type name "work"
+# (jobs.rs::filter_key), which is the key the persisted recv_cursor map carries
+# on the registry side — the integration gate reads .recv_cursor.work.
+_RESUME_FILTER = ["work"]
+
+
+def _resume_sink_path(job_id: str) -> str:
+    """Job-id-keyed processed-seq sink. Unique per submission (job_id is a
+    fresh UUID) so a re-run never reads a stale file, and the resume vs replay
+    jobs never collide even though they share this helper.
+
+    SINGLE-REPLICA ASSUMPTION: this /tmp sink assumes the SAME provider process
+    re-claims the job after the reclaim (the suite runs one provider = sole
+    claimant, so attempt 1 and attempt 2 share a filesystem). If this fixture is
+    ever scaled to 2+ replicas the sink must move to a tool-call / registry read
+    (e.g. job progress or the event log), since a reclaim could land on a
+    different node whose /tmp the driver cannot see."""
+    return f"/tmp/uc21-resume-processed-{job_id}"
+
+
+def _record_processed_seq(job_id: str, seq: int) -> None:
+    """Append one processed-seq line. The driver counts occurrences of a given
+    seq across BOTH claims: exactly-once ⇒ resume, twice ⇒ replay-from-0."""
+    with open(_resume_sink_path(job_id), "a") as f:
+        f.write(f"seq={seq}\n")
+
+
+async def _consume_work_loop(job: MeshJob) -> dict[str, Any]:
+    """Shared body: consume ``work`` events, recording + flushing each, until a
+    ``{"final": true}`` terminator arrives. A superseded attempt's next
+    ``recv_event`` is rejected ``claim_superseded`` — the Rust core fires this
+    execution's cancel token and ``recv_event`` raises (RuntimeError "cancelled"
+    or CancelledError). We let that propagate: the epoch-1 terminal fail the
+    dispatcher then reports is fenced by the registry (epoch mismatch), so it
+    can never corrupt the epoch-2 winner. NOTHING is recorded on that path
+    (recv_event RAISES rather than returning an event), so a superseded attempt
+    contributes no spurious seqs."""
+    processed: list[int] = []
+    # Bounded loop (safety net). 60 rounds * 3s = 180s park ceiling — longer
+    # than the reclaim window, shorter than the TC timeout so a wedged run
+    # fails loudly rather than hanging.
+    for _ in range(60):
+        event = await job.recv_event(types=_RESUME_FILTER, timeout_secs=3.0)
+        if event is None:
+            # No work yet — keep parking across the reclaim boundary.
+            continue
+        seq = event["seq"]
+        _record_processed_seq(job.job_id, seq)
+        processed.append(seq)
+        # Flush the lagging durable cursor by emitting a progress delta AFTER
+        # processing. This is the persistence step under test: the cursor rides
+        # this delta to the registry, so a subsequent re-claim can resume from it.
+        await job.update_progress(min(seq / 10.0, 0.99), f"processed seq={seq}")
+        payload = event.get("payload") or {}
+        if isinstance(payload, dict) and payload.get("final"):
+            result = {"status": "done", "processed": processed}
+            await job.complete(result)
+            return result
+    return {"status": "loop_exhausted", "processed": processed}
+
+
+@app.tool()
+@mesh.tool(
+    capability="resume_task",
+    task=True,
+    resume_cursor=True,
+    description="Consume 'work' events; on re-claim RESUMES after the persisted recv_event cursor (issue #1277 opt-in ON).",
+)
+async def resume_task(
+    ctx: dict | None = None,
+    job: MeshJob = None,
+) -> dict[str, Any]:
+    if job is None:
+        return {"status": "no_job_ctx"}
+    return await _consume_work_loop(job)
+
+
+@app.tool()
+@mesh.tool(
+    capability="replay_task",
+    task=True,
+    # resume_cursor defaults False — the control: a re-claim replays from seq 0.
+    description="Consume 'work' events; on re-claim REPLAYS from seq 0 (issue #1277 opt-in OFF — control).",
+)
+async def replay_task(
+    ctx: dict | None = None,
+    job: MeshJob = None,
+) -> dict[str, Any]:
+    if job is None:
+        return {"status": "no_job_ctx"}
+    return await _consume_work_loop(job)
+
+
 @mesh.agent(
     name="long-task-provider",
     version="1.0.0",

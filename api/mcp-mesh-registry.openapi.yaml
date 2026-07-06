@@ -2994,6 +2994,20 @@ components:
             "did this job get re-claimed mid-run?" from a single status read
             rather than agent-pod log archaeology. Reclaim itself never bumps
             it; the next claim does. See MESHJOB_DESIGN.org > Fencing & liveness.
+        recv_cursor:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+          nullable: true
+          description: |
+            The persisted durable per-filter recvEvent cursor (issue #1277):
+            filter key → highest event `seq` the handler has PROVABLY processed
+            for that filter. Present when a `resume_cursor` handler has flushed a
+            cursor, else absent/empty. Observable here (same family as
+            `claim_epoch` / `owner_instance_id` / `lease_expires_at`) so an
+            operator — or a reclaim-resume gate — can read a job's durable resume
+            position from a single status read.
         status:
           $ref: "#/components/schemas/JobStatus"
         progress:

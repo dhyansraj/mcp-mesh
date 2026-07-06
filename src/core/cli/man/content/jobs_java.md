@@ -360,11 +360,43 @@ own cursor, so interleaving `recvEvent(List.of("A"), ...)` and
 `recvEvent(List.of("B"), ...)` never lets one filter's consumption skip
 the other's earlier events. Delivery is **exactly-once within a filter
 stream** and **at-least-once across different filters** (an event matching
-two filters can surface once per stream). The cursor is per-handler and
-starts at the beginning of the log on every (re-)claim — a re-claimed
-handler replays from the start. Handlers doing **non-idempotent** work per
-event should checkpoint (e.g. persist their own event cursor) or design
-idempotent phases.
+two filters can surface once per stream).
+
+By default the per-filter cursor starts at the beginning of the log on every
+(re-)claim — a re-claimed handler **replays from `seq=0`**. That is the safe
+default for idempotent or cheap-to-recompute handlers.
+
+**`resumeCursor = true` — durable resume.** A `task = true` tool can opt into
+a durable cursor so a re-claimed handler resumes **after** the last processed
+event instead of replaying from the start:
+
+```java
+@MeshTool(capability = "run_workflow", task = true, resumeCursor = true)
+public Map<String, Object> runWorkflow(MeshJob job) throws Exception {
+  JobController controller = (JobController) job;
+  while (true) {
+    Map<String, Object> event = controller.recvEvent(
+        List.of("user_input"), Duration.ofSeconds(10));
+    if (event == null) continue;
+    // ...process event sequentially, then loop to request the next one...
+  }
+}
+```
+
+The framework persists each per-filter cursor on the job row via the normal
+epoch-fenced delta flush; on re-claim the new controller resumes past the
+persisted seqs. It stays **at-least-once**: a crash replays only the
+un-flushed tail — a small, bounded replay of the most recent events — never
+the whole log. Design for at-least-once, not exactly-once.
+
+**Contract — durable resume requires sequential per-filter consumption.** The
+cursor advances when the handler requests the *next* event of a filter; that
+`recvEvent` call is treated as proof the prior event finished
+(commit-on-poll, Kafka-style). A handler that **prefetches** or processes a
+filter's events **concurrently** (recv → spawn async → recv again before the
+first finished) must **not** set `resumeCursor = true` — resume would skip the
+still-in-flight event. If you pipeline a filter, stay on the replay-from-`0`
+default (or checkpoint yourself).
 
 **Outside the handler, with a `jobId` in scope — fire an event:**
 

@@ -1,0 +1,291 @@
+# tc31_resume_cursor_resumes_after_reclaim — durable recvEvent cursor RESUME
+# on re-claim, end-to-end through the real Rust core (issue #1277, Python).
+#
+# THE PROOF (first e2e exercise of the pyo3 native resume; Waves 1+2 unit
+# tests all bound to MOCKED controllers):
+#
+#   A ``resume_task`` handler (``@mesh.tool(resume_cursor=True, task=True)``)
+#   consumes ``work`` events one at a time, recording every processed seq to a
+#   job-id-keyed sink and emitting an ``update_progress`` delta after each. The
+#   delta FLUSHES the lagging durable recv_cursor to the registry (the cursor
+#   rides the delta, trailing receipt by one — at-least-once). When the owner is
+#   force-reclaimed and the job is re-claimed, the claim response carries the
+#   persisted recv_cursor; the claim dispatcher serialises it onto
+#   ``x-mesh-recv-cursor`` and — because the tool opted in — the dispatch gate
+#   seeds the NEW JobController's cursors from it. ``recv_event`` then resumes
+#   AFTER the persisted position instead of replaying from seq 0.
+#
+# Flow (driver):
+#   1. commission_resume submits (max_duration=60, max_retries=1) → job_id.
+#   2. Post work e1..e5 (non-final) into the event log.
+#   3. GATE: poll GET /jobs/{id} until recv_cursor.work >= 2 — proves the early
+#      events are DURABLY flushed before we reclaim (don't race the flush).
+#   4. Force reclaim via ``meshctl job reclaim`` — the deterministic evictor.
+#      The parked attempt-1 recv_event is superseded (cancelled); the row is
+#      normalised claimable with recv_cursor RETAINED.
+#   5. Wait for the re-claim: claim_epoch==2, attempt_count==2 (attempt 2).
+#   6. Post the final terminator e6 (work, {final:true}).
+#   7. Wait for completion.
+#
+# RECLAIM MECHANISM — ``meshctl job reclaim`` force-supersede (uc36 tc01
+# pattern), NOT lease-expiry timing (uc33). Under DEFAULT registry knobs a
+# recv_event round renews the lease every <=3s (poll-liveness, #1252 Phase 2),
+# so with a 60s lease and the default 5min sweep tick a NATURAL reclaim is
+# impossible inside the window — the admin command is provably the sole evictor,
+# giving a clean, non-flaky reclaim boundary. Go unit
+# TestForceReclaimJob_RetainsRecvCursor proves the forced reclaim retains the
+# persisted cursor, which is exactly what the resumed claim reads back.
+#
+# ASSERTION SHAPE (resume vs replay-from-0):
+#   The sink records every processed seq across BOTH claims. A seq that was
+#   consumed AND durably flushed before the reclaim is recorded EXACTLY ONCE
+#   when resume works (attempt 2 starts after the cursor) — so seq=1 and seq=2
+#   each appear ONCE. If resume were broken and attempt 2 replayed from 0, they
+#   would appear TWICE (that is exactly the tc32 control's expectation). The
+#   at-least-once tail — events consumed by attempt 1 but past the persisted
+#   cursor (seq 3..5) — MAY be re-processed; that is CORRECT and not asserted
+#   against. The completion terminator seq=6 proves the resumed attempt drove
+#   the job to done.
+#
+# TIMEOUT BUDGET (warm-cache convention, tests/integration/README):
+#   2x pip-install warm (~10s each) + registration (~20s) + submit/post (~5s) +
+#   flush gate (batching tick 2s + poll, ~10s) + reclaim + re-claim poll (claim
+#   idle backoff caps at 5s, ~15s) + completion poll (~10s) + slack. 240s.
+
+name: "MeshJob: resume_cursor RESUMES recv_event after a forced reclaim (no replay-from-0)"
+description: "resume_cursor=True task, re-claimed via meshctl job reclaim, resumes after the persisted recv_cursor — early durably-flushed events are consumed exactly once, never replayed from seq 0"
+tags:
+  - meshjob
+  - python
+  - issue-1277
+  - events
+  - resume-cursor
+  - reclaim
+  - slow
+timeout: 240
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/long-task-consumer /workspace/
+
+  - name: "Install provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install consumer deps"
+    handler: pip-install
+    path: /workspace/long-task-consumer
+
+  # DEFAULT knobs — the forced reclaim must be the ONLY lease actor.
+  - routine: start_registry
+
+  - name: "Start provider (port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Start consumer (port 9101)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer/main.py --env MCP_MESH_HTTP_PORT=9101 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  # Liveness only: wait for both agents to REGISTER. Dependency resolution is
+  # covered by the settle window — no fixed dep-resolution sleep.
+  - name: "Wait for both agents to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for both agents to register..."
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "long-task-provider" && echo "$AGENTS" | grep -q "long-task-consumer"; then
+          echo "Both agents registered after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: agents did not register within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_registration
+    timeout: 90
+
+  - name: "Submit resume_task (resume_cursor ON)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_resume '{}'
+    capture: submit_resp
+    timeout: 30
+
+  - name: "Capture job_id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      # Portable job_id extraction across all three runtimes (#1282): the
+      # job_id lives as escaped JSON inside content[0].text on EVERY runtime,
+      # whereas structuredContent.job_id exists only on Python. fromjson?
+      # guards absent/non-JSON text → empty (no crash) so a bad response
+      # surfaces as an empty JOB_ID the gate step fails loudly on.
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson? | .job_id // empty' 2>/dev/null)
+      echo "JOB_ID=${JOB_ID}"
+    capture: job_id_extract
+
+  # Post 5 non-final 'work' events up front (seq 1..5). They sit in the durable
+  # event log; the resumed controller re-reads whatever is past its cursor.
+  - name: "Post work events e1..e5 (non-final)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      echo "JOB_ID=${JOB_ID}"
+      for n in 1 2 3 4 5; do
+        SEQ=$(curl -s -X POST "http://localhost:8000/jobs/${JOB_ID}/events" \
+          -H 'Content-Type: application/json' \
+          -d "{\"type\":\"work\",\"payload\":{\"i\":${n}}}" | jq -r '.seq')
+        echo "posted work i=${n} seq=${SEQ}"
+      done
+    capture: post_events
+    timeout: 30
+
+  # GATE (don't race the flush): wait until the persisted durable cursor for
+  # the 'work' filter is >= 2 — proves e1 AND e2 were consumed AND flushed, so
+  # a resuming re-claim MUST skip them. recv_cursor is keyed by the Rust
+  # per-filter key, which for ["work"] is the bare "work".
+  - name: "Gate: durable recv_cursor.work flushed >= 2"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      for i in $(seq 1 40); do
+        RC=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.recv_cursor.work // 0')
+        echo "poll ${i}: recv_cursor.work=${RC}"
+        if [ "${RC}" -ge 2 ] 2>/dev/null; then
+          echo "CURSOR_FLUSHED=1 recv_cursor.work=${RC}"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: recv_cursor.work never reached 2 within 40s"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status, recv_cursor, attempt_count, claim_epoch}'
+      exit 1
+    capture: flush_gate
+    timeout: 50
+
+  # Force-reclaim: the deterministic evictor. Owner cleared, row claimable,
+  # recv_cursor RETAINED, epoch unchanged (next claim mints epoch 2).
+  - name: "Force-reclaim the job via meshctl"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      meshctl job reclaim "${JOB_ID}"
+    capture: reclaim_out
+    timeout: 30
+
+  - name: "Wait for the re-claim (epoch 2, attempt 2)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      for i in $(seq 1 40); do
+        ROW=$(curl -s "http://localhost:8000/jobs/${JOB_ID}")
+        OK=$(echo "$ROW" | jq '(.claim_epoch == 2) and (.attempt_count == 2)')
+        if [ "$OK" = "true" ]; then
+          echo "RECLAIMED_E2=1 after ~${i}s"
+          echo "$ROW" | jq -c '{status, owner_instance_id, claim_epoch, attempt_count, recv_cursor}'
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: job was not re-claimed at epoch 2 within 40s"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '.'
+      exit 1
+    capture: reclaim2_wait
+    timeout: 50
+
+  # Terminator: the resumed attempt consumes remaining events then this final
+  # 'work' event ({final:true}) and completes.
+  - name: "Post the final terminator and wait for completion"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      SEQ=$(curl -s -X POST "http://localhost:8000/jobs/${JOB_ID}/events" \
+        -H 'Content-Type: application/json' \
+        -d '{"type":"work","payload":{"i":6,"final":true}}' | jq -r '.seq')
+      echo "posted terminator seq=${SEQ}"
+      for i in $(seq 1 30); do
+        ST=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.status')
+        echo "poll ${i}: status=${ST}"
+        if [ "$ST" = "completed" ]; then
+          echo "COMPLETED=1 after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: job did not complete within 30s of the terminator"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status, error, recv_cursor}'
+      exit 1
+    capture: completion_wait
+    timeout: 45
+
+  # Read the processed-seq sink and compute per-seq occurrence counts. The
+  # distinguishing signal: seq=1 / seq=2 consumed EXACTLY ONCE ⇒ resume worked.
+  - name: "Compute processed-seq counts from the sink"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      SINK="/tmp/uc21-resume-processed-${JOB_ID}"
+      echo "SINK=${SINK}"
+      # grep -c prints 0 AND exits 1 on a zero count, so a bare `|| echo 0`
+      # would emit a doubled `0`. Capture then default-to-0 so exactly one
+      # value is emitted per seq (single-0 on zero/absent).
+      S1=$(grep -c '^seq=1$' "${SINK}" 2>/dev/null || true); echo "SEQ1_COUNT=${S1:-0}"
+      S2=$(grep -c '^seq=2$' "${SINK}" 2>/dev/null || true); echo "SEQ2_COUNT=${S2:-0}"
+      S6=$(grep -c '^seq=6$' "${SINK}" 2>/dev/null || true); echo "SEQ6_COUNT=${S6:-0}"
+      echo "--- full sink ---"
+      cat "${SINK}" 2>/dev/null || echo "(sink missing)"
+    capture: sink_counts
+
+assertions:
+  # Scenario markers.
+  - expr: "${captured.wait_registration} contains 'registered'"
+    message: "both agents must register before the job is submitted"
+  - expr: "${captured.flush_gate} contains 'CURSOR_FLUSHED=1'"
+    message: "the durable recv_cursor for 'work' must reach >= 2 before the reclaim — the early events must be flushed, not raced"
+  - expr: "${captured.reclaim_out} contains 'reclaimed'"
+    message: "meshctl job reclaim must report success"
+  - expr: "${captured.reclaim_out} not contains '(none'"
+    message: "an actual owner must have been evicted — the parked attempt 1 was claimed when reclaimed"
+  - expr: "${captured.reclaim2_wait} contains 'RECLAIMED_E2=1'"
+    message: "the reclaimed job must be re-claimed at epoch 2 / attempt 2 (the resumed execution)"
+  - expr: "${captured.completion_wait} contains 'COMPLETED=1'"
+    message: "the resumed attempt must drive the job to completed via the final terminator"
+
+  # THE DISTINGUISHING PROOF — resume, NOT replay-from-0.
+  # Early events durably flushed before the reclaim are consumed EXACTLY ONCE
+  # (the resumed controller started after the persisted cursor). Replay-from-0
+  # would make each of these 2 (the tc32 control's expectation).
+  - expr: "${captured.sink_counts} contains 'SEQ1_COUNT=1'"
+    message: "RESUME PROOF: seq=1 must be processed exactly ONCE across both claims — a value of 2 means attempt 2 replayed from seq 0 (feature broken)"
+  - expr: "${captured.sink_counts} contains 'SEQ2_COUNT=1'"
+    message: "RESUME PROOF: seq=2 must be processed exactly ONCE — a value of 2 means replay-from-0"
+  - expr: "${captured.sink_counts} not contains 'SEQ1_COUNT=2'"
+    message: "seq=1 must NOT be reprocessed by the resumed attempt (that is full replay, the failure mode this TC exists to catch)"
+
+  # The resumed attempt reached completion (processed the terminator once).
+  - expr: "${captured.sink_counts} contains 'SEQ6_COUNT=1'"
+    message: "the resumed attempt must process the final terminator (seq=6) exactly once and complete"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

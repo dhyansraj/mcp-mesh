@@ -172,6 +172,54 @@ func TestApplyJobDeltas_RecvCursor_PerKeyMaxMerge(t *testing.T) {
 		"per-key max merge: lower kept, higher advanced, absent preserved, new added")
 }
 
+func TestGetJob_HTTPResponseIncludesRecvCursor(t *testing.T) {
+	// Wave 3 (#1277): the persisted recv_cursor is exposed on the status read
+	// so operators / the reclaim-resume gate can `curl .../jobs/{id} | jq
+	// .recv_cursor.work`.
+	srv, service, cleanup := newJobsEndpointTestEnvWithService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	seed := seedJob(t, service, "job-rc-getstatus", "render", nil)
+	claimed := claimVia(t, service, "render", "replica-a") // epoch 1
+	epoch := claimed.ClaimEpoch
+
+	cursor := map[string]int64{"work": 8}
+	_, _, err := service.ApplyJobDeltas(ctx, "replica-a", []JobDeltaInput{
+		{ID: seed.ID, ClaimEpoch: &epoch, RecvCursor: cursor},
+	})
+	require.NoError(t, err)
+
+	resp, err := http.Get(srv.URL + "/jobs/" + seed.ID)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var j generated.Job
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&j))
+	require.NotNil(t, j.RecvCursor, "status read must expose recv_cursor")
+	assert.Equal(t, cursor, *j.RecvCursor)
+	assert.Equal(t, int64(8), (*j.RecvCursor)["work"],
+		"the reclaim-resume gate reads .recv_cursor.work")
+}
+
+func TestGetJob_HTTPResponseOmitsRecvCursorWhenAbsent(t *testing.T) {
+	srv, service, cleanup := newJobsEndpointTestEnvWithService(t)
+	defer cleanup()
+
+	// A freshly seeded job that never flushed a cursor.
+	seed := seedJob(t, service, "job-rc-nostatus", "render", nil)
+
+	resp, err := http.Get(srv.URL + "/jobs/" + seed.ID)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var j generated.Job
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&j))
+	assert.Nil(t, j.RecvCursor, "a job with no cursor omits recv_cursor (no spurious {})")
+}
+
 func TestReclaimExpiredLease_RetainsRecvCursor(t *testing.T) {
 	_, service, cleanup := newJobsEndpointTestEnvWithService(t)
 	defer cleanup()
