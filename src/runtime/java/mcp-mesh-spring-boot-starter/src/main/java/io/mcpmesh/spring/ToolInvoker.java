@@ -2,6 +2,7 @@ package io.mcpmesh.spring;
 
 import io.mcpmesh.types.McpMeshTool;
 import io.mcpmesh.types.MeshLlmAgent.ToolInfo;
+import io.mcpmesh.types.MeshSupersededException;
 import io.mcpmesh.types.MeshToolCallException;
 import io.mcpmesh.types.MeshToolUnavailableException;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
@@ -185,6 +186,17 @@ public class ToolInvoker {
                 if (result instanceof CallToolResult ctr
                         && Boolean.TRUE.equals(ctr.isError())) {
                     String errorText = firstTextContent(ctr);
+                    // Issue #1278: a self/local/LLM dependency can also emit the
+                    // reserved {"error":"claim_superseded"} envelope — recognize
+                    // it and re-throw the typed signal (mirrors McpHttpClient).
+                    // A generic isError (or dependency_unavailable) still throws
+                    // MeshToolCallException below.
+                    MeshSupersededException superseded =
+                        MeshSupersededException.fromEnvelope(errorText);
+                    if (superseded != null) {
+                        span.withError(superseded);
+                        throw superseded;
+                    }
                     MeshToolCallException ex = new MeshToolCallException(
                         capability, handler.getMethodName(), errorText);
                     span.withError(ex);
@@ -195,6 +207,11 @@ public class ToolInvoker {
             } catch (MeshToolCallException e) {
                 // Already the caller-facing type (isError translation above) —
                 // don't double-wrap.
+                throw e;
+            } catch (MeshSupersededException e) {
+                // Issue #1278: the reserved supersession signal must reach the
+                // calling handler untouched — never re-wrap into
+                // MeshToolCallException.
                 throw e;
             } catch (Exception e) {
                 span.withError(e);

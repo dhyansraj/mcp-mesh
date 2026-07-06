@@ -21,6 +21,7 @@
 import { parentPort, workerData, isMainThread } from "node:worker_threads";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
+import { serializeError } from "./worker-error-serde.js";
 
 if (isMainThread) {
   throw new Error("tool-worker-entry.js must be loaded inside a worker thread");
@@ -107,25 +108,6 @@ async function bootstrap(): Promise<void> {
   });
 
   parentPort!.postMessage({ kind: "ready" });
-}
-
-interface SerializedError {
-  name: string;
-  message: string;
-  stack?: string;
-  code?: string | number;
-  cause?: SerializedError;
-}
-
-function serializeError(err: unknown): SerializedError {
-  if (!(err instanceof Error)) {
-    return { name: "Error", message: String(err) };
-  }
-  const out: SerializedError = { name: err.name, message: err.message, stack: err.stack };
-  const errAny = err as Error & { code?: string | number; cause?: unknown };
-  if (errAny.code !== undefined) out.code = errAny.code;
-  if (errAny.cause !== undefined) out.cause = serializeError(errAny.cause);
-  return out;
 }
 
 interface CallMessage {

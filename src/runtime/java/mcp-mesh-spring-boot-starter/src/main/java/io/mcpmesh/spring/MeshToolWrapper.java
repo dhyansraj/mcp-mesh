@@ -16,6 +16,7 @@ import io.mcpmesh.spring.tracing.TraceContext;
 import io.mcpmesh.spring.tracing.TraceInfo;
 import io.mcpmesh.types.McpMeshTool;
 import io.mcpmesh.types.MeshLlmAgent;
+import io.mcpmesh.types.MeshSupersededException;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import io.modelcontextprotocol.spec.McpSchema.TextContent;
 import org.slf4j.Logger;
@@ -718,6 +719,33 @@ public class MeshToolWrapper implements McpToolHandler {
     }
 
     /**
+     * Build the reserved {@code claim_superseded} tool result (issue #1278) for
+     * a provider handler that threw {@link MeshSupersededException} to reject a
+     * superseded caller. Same carrier as {@link #dependencyUnavailableResult}:
+     * an {@code isError=true} {@link CallToolResult} whose single
+     * {@link TextContent} carries {@code {"error":"claim_superseded"}} (plus a
+     * {@code "detail"} key when supplied — OMITTED, not null, when absent), so
+     * the calling side's proxy classifies it by contract and re-throws the
+     * typed signal rather than treating it as a generic app failure.
+     */
+    private CallToolResult supersededResult(String detail) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("error", MeshSupersededException.CLAIM_SUPERSEDED_MARKER);
+        if (detail != null) {
+            body.put("detail", detail);
+        }
+        String json;
+        try {
+            json = objectMapper.writeValueAsString(body);
+        } catch (Exception e) {
+            // Trivial map — serialization never realistically fails; fall back
+            // to the no-detail envelope so the reserved contract stays valid.
+            json = "{\"error\":\"claim_superseded\"}";
+        }
+        return new CallToolResult(List.of(new TextContent(json)), true, null, null);
+    }
+
+    /**
      * Best-effort lease release for the inbound job-dispatch required-dependency
      * guard (issue #1273). Opens the controller via {@code opener}, releases the
      * lease, and closes it — swallowing ANY failure (from {@code open()} OR
@@ -1097,6 +1125,16 @@ public class MeshToolWrapper implements McpToolHandler {
         } catch (InvocationTargetException e) {
             // Unwrap to get the actual exception
             Throwable cause = e.getCause();
+            // Issue #1278: a provider handler rejects a superseded caller by
+            // throwing MeshSupersededException. Convert it — BEFORE the generic
+            // exception rethrow — into the reserved {"error":"claim_superseded"}
+            // isError result (same carrier as dependency_unavailable) so the
+            // calling side classifies it by contract and re-throws the typed
+            // signal. App-driven: the handler decided supersession via
+            // MeshCallContext.callingJob(); the framework never auto-detects.
+            if (cause instanceof MeshSupersededException mse) {
+                return supersededResult(mse.getDetail());
+            }
             log.error("Tool execution failed for {}: {}", funcId, cause.getMessage(), cause);
             if (cause instanceof Exception) {
                 throw (Exception) cause;
@@ -1109,7 +1147,14 @@ public class MeshToolWrapper implements McpToolHandler {
 
         // Handle async results (CompletableFuture) — bounded by the inbound
         // X-Mesh-Timeout budget when present (issue #1164 MED-5).
-        result = awaitIfFuture(result, deadlineSecs);
+        try {
+            result = awaitIfFuture(result, deadlineSecs);
+        } catch (MeshSupersededException mse) {
+            // Async handler: the returned future completed exceptionally with
+            // the supersession signal (awaitIfFuture unwrapped the
+            // ExecutionException). Same reserved-envelope conversion (#1278).
+            return supersededResult(mse.getDetail());
+        }
 
         return result;
     }
@@ -1641,12 +1686,25 @@ public class MeshToolWrapper implements McpToolHandler {
             result = method.invoke(bean, fullArgs);
         } catch (InvocationTargetException e) {
             Throwable cause = e.getCause();
+            // Issue #1278: a superseded-caller rejection must emit the reserved
+            // {"error":"claim_superseded"} envelope on the job-dispatch path too
+            // (task providers are the primary supersession scenario). Python/TS
+            // convert at the transport-independent fastmcp layer; Java converts
+            // at the wrapper, so mirror the non-job branch here.
+            if (cause instanceof MeshSupersededException mse) {
+                return supersededResult(mse.getDetail());
+            }
             if (cause instanceof Exception ex) throw ex;
             throw new RuntimeException(cause);
         } catch (IllegalAccessException e) {
             throw new RuntimeException("Method access denied: " + e.getMessage(), e);
         }
-        result = awaitIfFuture(result, deadlineSecs);
+        try {
+            result = awaitIfFuture(result, deadlineSecs);
+        } catch (MeshSupersededException mse) {
+            // Async handler completed exceptionally with the supersession signal.
+            return supersededResult(mse.getDetail());
+        }
         return result;
     }
 
@@ -1656,6 +1714,15 @@ public class MeshToolWrapper implements McpToolHandler {
             result = method.invoke(bean, fullArgs);
         } catch (InvocationTargetException e) {
             Throwable cause = e.getCause();
+            // Issue #1278: a superseded-caller rejection emits the reserved
+            // {"error":"claim_superseded"} envelope regardless of dispatch path.
+            // Return it BEFORE the retryOn/fail handling and WITHOUT
+            // auto-completing — mirrors Python, where SupersededError propagates
+            // past _run_and_autocomplete (no complete()/fail()) and the fastmcp
+            // layer converts it; the registry sweep is the row's backstop.
+            if (cause instanceof MeshSupersededException mse) {
+                return supersededResult(mse.getDetail());
+            }
             // Issue #895: retryOn-aware exception handling. Mirrors Python
             // `_run_and_autocomplete` (job_dispatch.py:336-386) and TS
             // `runWithJobContext` (inbound-job-dispatch.ts:160-225):
@@ -1706,6 +1773,11 @@ public class MeshToolWrapper implements McpToolHandler {
                 // release the lease.
                 Throwable cause = e.getCause();
                 if (cause == null) cause = e;
+                // Issue #1278: async supersession signal — same reserved-envelope
+                // conversion, before the retryOn/fail handling (no auto-complete).
+                if (cause instanceof MeshSupersededException mse) {
+                    return supersededResult(mse.getDetail());
+                }
                 if (handleRetryOrFail(controller, cause)) {
                     return null;
                 }

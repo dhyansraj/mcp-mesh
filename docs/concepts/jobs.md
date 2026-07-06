@@ -556,6 +556,84 @@ a caller on an older SDK, and — critically — inside a handler that was
 not here); the epoch is `null` for a push-mode inbound job. Reading them is
 purely additive and read-only.
 
+**Typed supersession signal.** Stamping the caller's epoch lets a provider
+*dedupe* a superseded write after the fact. When the provider is a **state
+authority** that must *reject* the stale write outright, it compares the
+caller's epoch against its own live/expected epoch and raises a typed error.
+The framework does **not** auto-detect supersession — the app owns the "is
+this caller stale?" decision (it holds the authoritative epoch); the
+framework only carries the typed signal end to end. The provider raises
+`mesh.SupersededError` (Python), throws `MeshSupersededError` (TypeScript,
+package root), or throws `MeshSupersededException` (Java, `io.mcpmesh.types`):
+
+<!-- markdownlint-disable MD046 -->
+=== "Python"
+
+    ```python
+    import mesh
+
+    @app.tool()
+    @mesh.tool(capability="record_charge")
+    async def record_charge(order_id: str, amount: float) -> dict:
+        caller = mesh.calling_job()          # CallingJob(job_id, claim_epoch) | None
+        live = await ledger.live_epoch(order_id)   # the app's authoritative epoch
+        if caller and caller.claim_epoch is not None and caller.claim_epoch < live:
+            raise mesh.SupersededError(f"stale epoch {caller.claim_epoch}")
+        await ledger.upsert(key=order_id, amount=amount)
+        return {"order_id": order_id}
+    ```
+
+=== "TypeScript"
+
+    ```typescript
+    import { callingJob, MeshSupersededError } from "@mcpmesh/sdk";
+
+    // inside agent.addTool({ ..., execute: async ({ order_id, amount }) => {
+    const caller = callingJob();          // { jobId, claimEpoch } | null
+    const live = await ledger.liveEpoch(order_id);
+    if (caller && caller.claimEpoch != null && caller.claimEpoch < live) {
+      throw new MeshSupersededError(`stale epoch ${caller.claimEpoch}`);
+    }
+    await ledger.upsert({ key: order_id, amount });
+    return { order_id };
+    ```
+
+=== "Java"
+
+    ```java
+    import io.mcpmesh.spring.MeshCallContext;
+    import io.mcpmesh.spring.MeshCallContext.CallingJob;
+    import io.mcpmesh.types.MeshSupersededException;
+
+    @MeshTool(capability = "record_charge")
+    public Map<String, Object> recordCharge(
+        @Param("order_id") String orderId,
+        @Param("amount") double amount) {
+      CallingJob caller = MeshCallContext.callingJob();   // never null; fields nullable
+      long live = ledger.liveEpoch(orderId);
+      if (caller.isPresent() && caller.claimEpoch() != null && caller.claimEpoch() < live) {
+        throw new MeshSupersededException("stale epoch " + caller.claimEpoch());
+      }
+      ledger.upsert(orderId, amount);
+      return Map.of("order_id", orderId);
+    }
+    ```
+<!-- markdownlint-enable MD046 -->
+
+The signal crosses the wire as a reserved `{"error":"claim_superseded"}` app
+envelope — the same `claim_superseded` vocabulary the registry uses to fence
+job writes. On the **calling** side the injected mesh proxy recognizes that
+envelope and re-raises the same typed error, so a superseded executor unwinds
+with **one** catch (`except mesh.SupersededError` / `if (e instanceof
+MeshSupersededError)` / `catch (MeshSupersededException e)`) instead of
+string-matching an error marker after every mutating call. It is distinct
+from a generic tool failure and from the `dependency_unavailable` refusal (an
+unresolved required dep) — it means specifically *you are running under a
+superseded claim*. It does **not** change delivery: jobs remain
+**at-least-once** and a fenced re-execution still runs under the new claim;
+the typed signal only lets the stale attempt bow out on its first rejected
+write rather than every downstream provider re-checking a string marker.
+
 The **agent runtime** is a thin client. On the producer side, it
 maintains a claim queue per `task=true` capability (`UPDATE jobs SET
 owner_instance_id = $self WHERE capability = $cap AND status =

@@ -617,6 +617,56 @@ additive and read-only — reading it has no effect on the call. This is the
 provider-side dual of `current_job()`: `current_job()` answers "what job am I
 executing *as*", `calling_job()` answers "what job *invoked* me".
 
+## Typed supersession signal
+
+Stamping the caller's epoch (above) lets a provider *dedupe* a superseded
+write after the fact. When the provider is a **state authority** that must
+*reject* the stale write outright, it compares the caller's epoch against
+its own live/expected epoch and raises a typed error. The framework does
+**not** auto-detect supersession — the app owns the "is this caller stale?"
+decision (it holds the authoritative epoch); the framework only carries the
+typed signal end to end.
+
+The provider raises `mesh.SupersededError`:
+
+```python
+import mesh
+
+@app.tool()
+@mesh.tool(capability="record_charge")
+async def record_charge(order_id: str, amount: float) -> dict:
+    caller = mesh.calling_job()          # CallingJob(job_id, claim_epoch) | None
+    live = await ledger.live_epoch(order_id)   # the app's authoritative epoch
+    if caller and caller.claim_epoch is not None and caller.claim_epoch < live:
+        # Stale executor — reject instead of applying the write.
+        raise mesh.SupersededError(f"stale epoch {caller.claim_epoch}")
+    await ledger.upsert(key=order_id, amount=amount)
+    return {"order_id": order_id}
+```
+
+The signal crosses the wire as a reserved `{"error":"claim_superseded"}`
+app envelope — the same `claim_superseded` vocabulary the registry uses to
+fence job writes. On the **calling** side, the injected mesh proxy
+recognizes that envelope and re-raises the same typed error, so a superseded
+executor unwinds with **one** catch instead of string-matching an error
+marker after every mutating call:
+
+```python
+try:
+    await record_charge(order_id=oid, amount=42.0)   # injected mesh dependency
+    await settle_ledger(order_id=oid)
+except mesh.SupersededError:
+    return                                            # superseded — unwind cleanly
+```
+
+`SupersededError` is distinct from a generic tool failure and from the
+`dependency_unavailable` refusal (an unresolved required dep, `meshctl man
+dependency-injection`) — it means specifically *you are running under a
+superseded claim*. It does **not** change delivery: jobs remain
+**at-least-once** and a fenced re-execution still runs under the new claim;
+the typed signal only lets the stale attempt bow out on its first rejected
+write rather than every downstream provider re-checking a string marker.
+
 ## Out-of-band inspection
 
 Three SDK-managed helper tools are auto-registered on every mesh

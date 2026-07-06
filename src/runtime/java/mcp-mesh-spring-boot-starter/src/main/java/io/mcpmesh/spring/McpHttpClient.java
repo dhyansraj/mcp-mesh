@@ -9,6 +9,7 @@ import io.mcpmesh.core.MeshCoreBridge;
 import io.mcpmesh.core.MeshObjectMappers;
 import io.mcpmesh.spring.tracing.TraceContext;
 import io.mcpmesh.spring.tracing.TraceInfo;
+import io.mcpmesh.types.MeshSupersededException;
 import io.mcpmesh.types.MeshToolCallException;
 import okhttp3.*;
 import org.slf4j.Logger;
@@ -675,6 +676,17 @@ public class McpHttpClient {
                     // Check if the tool call returned an error
                     if (result.has("isError") && result.get("isError").asBoolean()) {
                         String errorText = textContent != null ? textContent : "Unknown tool error";
+                        // Issue #1278: recognize the reserved
+                        // {"error":"claim_superseded"} envelope and re-throw the
+                        // typed signal so a superseded caller unwinds with one
+                        // catch. Only the exact reserved marker is reclassified —
+                        // a generic isError (or dependency_unavailable) still
+                        // throws MeshToolCallException below.
+                        MeshSupersededException superseded =
+                            MeshSupersededException.fromEnvelope(errorText);
+                        if (superseded != null) {
+                            throw superseded;
+                        }
                         throw new MeshToolCallException(functionName, functionName, errorText);
                     }
 
@@ -704,6 +716,12 @@ public class McpHttpClient {
                 return null;
             }
         } catch (MeshToolCallException e) {
+            throw e;
+        } catch (MeshSupersededException e) {
+            // Issue #1278: the reserved supersession signal must reach the
+            // calling handler untouched — the generic catch below would
+            // otherwise re-wrap it into MeshToolCallException and defeat the
+            // one-catch unwind.
             throw e;
         } catch (IOException e) {
             throw new MeshToolCallException(functionName, functionName, e);
@@ -1265,6 +1283,18 @@ public class McpHttpClient {
                         ? errorNode.get("message").asText()
                         : errorNode.toString();
                     upstreamError = new MeshToolCallException(functionName, functionName, em);
+                } else {
+                    // Issue #1278: a stream ending with the reserved tool-level
+                    // {"error":"claim_superseded"} envelope must surface the typed
+                    // signal (via subscriber.onError) rather than be swallowed as a
+                    // clean end-of-stream. Narrowly scoped to the reserved marker —
+                    // surfacing GENERIC tool-level isError on streams is a separate
+                    // pre-existing gap and intentionally left unchanged here.
+                    MeshSupersededException superseded =
+                        supersededFromStreamResult(msg.get("result"));
+                    if (superseded != null) {
+                        upstreamError = superseded;
+                    }
                 }
                 // Final result content is intentionally NOT delivered — matches the
                 // documented contract for streaming consumers.
@@ -1273,6 +1303,29 @@ public class McpHttpClient {
 
             return false;
         }
+    }
+
+    /**
+     * Return a {@link MeshSupersededException} if a stream's final tool result
+     * carries the reserved {@code {"error":"claim_superseded"}} envelope
+     * (issue #1278), else {@code null}. Defensive: a missing/false
+     * {@code isError}, an empty/non-text content block, or any non-reserved
+     * envelope all return {@code null} so the stream ends normally.
+     */
+    private static MeshSupersededException supersededFromStreamResult(JsonNode result) {
+        if (result == null || !result.has("isError") || !result.get("isError").asBoolean()) {
+            return null;
+        }
+        JsonNode content = result.get("content");
+        if (content == null || !content.isArray() || content.size() == 0) {
+            return null;
+        }
+        JsonNode first = content.get(0);
+        JsonNode textNode = first != null ? first.get("text") : null;
+        if (textNode == null || !textNode.isTextual()) {
+            return null;
+        }
+        return MeshSupersededException.fromEnvelope(textNode.asText());
     }
 
     /**

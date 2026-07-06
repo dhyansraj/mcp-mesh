@@ -174,6 +174,47 @@ double-applied. Two rules the handler must honor to opt in safely:
 Drive it exactly like the base task, targeting the `resumable_event_task`
 capability instead.
 
+## Typed supersession signal (`MeshSupersededError`, issue #1278)
+
+`superseded-provider-ts/` + `superseded-consumer-ts/` port the calling-job
+fencing pattern to TypeScript. A `task: true` writer job makes mutating
+downstream calls; when it is superseded, the provider fences its writes and the
+consumer unwinds with ONE `instanceof MeshSupersededError`.
+
+Three moving parts:
+
+1. **Calling-job identity is the decision input (#1263).** A `task: true`
+   handler runs *as* a job, so every outbound mesh call carries its identity on
+   the `x-mesh-calling-*` headers. The provider reads it with `callingJob()` →
+   `CallingJob { jobId, claimEpoch }`.
+2. **The app decides supersession; the framework does not.** `apply_write`
+   remembers the highest `claimEpoch` accepted per `jobId` and rejects any call
+   whose epoch is lower.
+3. **The typed error is the one-catch unwind (#1278).** The provider rejects
+   with `throw new MeshSupersededError(detail)` — on the wire the reserved
+   `{"error":"claim_superseded","detail":...}` envelope. The caller's injected
+   proxy re-throws `MeshSupersededError`, so the consumer wraps its whole write
+   batch in ONE `catch (e) { if (e instanceof MeshSupersededError) ... }`
+   instead of string-matching the marker after every call.
+
+Distinct from `dependency_unavailable` (#1273): that means "capability
+unreachable"; supersession means "you personally are stale". Both are typed
+`UserError` subclasses so the contract, not the string, drives classification.
+
+```bash
+# Terminal 2 — provider (port 9114)
+cd examples/jobs-ts/superseded-provider-ts && npm install
+MCP_MESH_REGISTRY_URL=http://localhost:8000 npx tsx src/index.ts
+
+# Terminal 3 — consumer (port 9115)
+cd examples/jobs-ts/superseded-consumer-ts && npm install
+MCP_MESH_REGISTRY_URL=http://localhost:8000 npx tsx src/index.ts
+```
+
+Then `meshctl call superseded-consumer-ts run_writer '{"count": 3}'`. See the
+Python tree's README (`../jobs/README.md#typed-supersession-signal-supersedederror-issue-1278`)
+for the full conceptual treatment.
+
 ## What's NOT in v2.2 yet
 
 - Idempotency keys for retries (future).

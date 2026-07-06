@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { deserializeError } from "./worker-error-serde.js";
 
 export interface DepConfig {
   endpoint: string;
@@ -51,26 +52,6 @@ let _initialized = false;
 let _nextIdx = 0;
 let _msgId = 0;
 let _shutdownRegistered = false;
-
-interface SerializedError {
-  name?: string;
-  message?: string;
-  stack?: string;
-  code?: string | number;
-  cause?: SerializedError;
-}
-
-function deserializeError(serialized: SerializedError | undefined | null): Error {
-  const err = new Error(serialized?.message ?? "worker error") as Error & {
-    code?: string | number;
-    cause?: Error;
-  };
-  if (serialized?.name) err.name = serialized.name;
-  if (serialized?.stack) err.stack = serialized.stack;
-  if (serialized?.code !== undefined) err.code = serialized.code;
-  if (serialized?.cause !== undefined) err.cause = deserializeError(serialized.cause);
-  return err;
-}
 
 function _resolvePoolSize(): number {
   const envVal = process.env.MCP_MESH_TOOL_WORKERS;

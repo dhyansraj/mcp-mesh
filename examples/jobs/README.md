@@ -168,6 +168,91 @@ not double-applied. Two rules the handler must honor to opt in safely:
 Drive it exactly like the base task, targeting the `resumable_event_task`
 capability instead.
 
+## Typed supersession signal (`SupersededError`, issue #1278)
+
+`superseded-provider/` + `superseded-consumer/` demonstrate how a job
+executor's mutating downstream writes are fenced when the executor has been
+superseded — and how the caller unwinds cleanly with ONE `except`.
+
+### The problem
+
+When a job is re-claimed (crash, reclaim, drain), a NEWER executor runs under a
+HIGHER `claim_epoch`. The OLD executor may still be mid-flight and try to write.
+Those stale writes must be rejected so the newer executor owns the outcome.
+
+### The pattern (three moving parts)
+
+1. **Calling-job identity is the decision input (#1263).** A `task=True`
+   handler runs *as* a job, so every outbound mesh call it makes carries its
+   identity on dedicated headers (`x-mesh-calling-job-id` /
+   `x-mesh-calling-claim-epoch`). The provider reads it back with
+   `mesh.calling_job()` → `CallingJob(job_id, claim_epoch)` — no need to thread
+   identity through each payload.
+
+2. **The app decides supersession; the framework does not.** The provider owns
+   the "is this caller stale?" rule. In `apply_write` the authority remembers
+   the highest `claim_epoch` it has accepted per `job_id` and rejects any call
+   whose epoch is lower — a deterministic "an older executor is writing after a
+   newer one already has" test. A real authority might consult the registry, a
+   lease table, or a monotonic version column instead.
+
+3. **The typed error is the one-catch unwind (#1278).** The provider rejects
+   with `raise mesh.SupersededError(detail)`. On the wire that is the reserved
+   app envelope `{"error":"claim_superseded","detail":...}`. The caller's
+   injected proxy recognizes that envelope and re-raises `mesh.SupersededError`
+   on the calling side — so the consumer wraps its whole write batch in ONE
+   `except mesh.SupersededError` instead of string-matching the marker after
+   every call:
+
+   ```python
+   try:
+       for entry in entries:
+           await apply_write(entry=entry)   # any call may be fenced
+   except mesh.SupersededError as e:
+       return {"status": "superseded", "detail": e.detail}   # one unwind
+   ```
+
+   The OLD pattern this replaces re-checked `result.get("error") ==
+   "claim_superseded"` at every call site — brittle and easy to forget.
+
+### Distinct from `dependency_unavailable` (#1273)
+
+`dependency_unavailable` means "the capability isn't reachable"; supersession
+means "you personally are stale — a newer you is authoritative". Both are typed
+so the CONTRACT (the reserved envelope), not the error string, drives
+classification; both raise a `ToolError` subclass, so `except ToolError` still
+catches either.
+
+### Quick start
+
+```bash
+# Terminal 1 — registry
+./bin/mcp-mesh-registry > /tmp/registry.log 2>&1 &
+
+# Terminal 2 — provider (port 9104)
+MCP_MESH_REGISTRY_URL=http://localhost:8000 \
+  python3 examples/jobs/superseded-provider/main.py
+
+# Terminal 3 — consumer (port 9105)
+MCP_MESH_REGISTRY_URL=http://localhost:8000 \
+  python3 examples/jobs/superseded-consumer/main.py
+```
+
+Kick off a writer job:
+
+```bash
+meshctl call superseded-consumer run_writer '{"count": 3}'
+```
+
+A single, uncontested run returns `{"status": "completed", ...}` — the
+authority sees a monotonic epoch and accepts every write. The fence fires when
+a LOWER-epoch executor writes after a higher one has been recorded for the same
+`job_id` (the reclaim scenario): the provider raises `SupersededError`, the
+consumer catches it once, and returns `{"status": "superseded", ...}`.
+
+The TypeScript (`../jobs-ts/`) and Java (`../jobs-java/`) trees carry the same
+pair with `MeshSupersededError` / `MeshSupersededException`.
+
 ## What's NOT in v2.2 yet
 
 - Idempotency keys for retries (future).

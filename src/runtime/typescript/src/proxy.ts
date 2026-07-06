@@ -20,6 +20,10 @@ import { getDispatcher } from "./http-pool.js";
 import { currentJob } from "./job-context.js";
 import { awaitJobCancel } from "@mcpmesh/core";
 import { createDebug } from "./debug.js";
+import {
+  MeshSupersededError,
+  parseSupersededEnvelope,
+} from "./superseded.js";
 
 const debugProxy = createDebug("proxy");
 
@@ -580,6 +584,17 @@ export async function callMcpTool(
       // re-wrap it instead of returning the error text as a successful result.
       const toolErrMsg = toolErrorMessage(result.result);
       if (toolErrMsg !== null) {
+        // Typed supersession signal (issue #1278): a provider that rejected
+        // this call as coming from a superseded executor emits the reserved
+        // `{"error":"claim_superseded"}` envelope. Re-throw it as the typed
+        // MeshSupersededError so the caller unwinds with one
+        // `instanceof MeshSupersededError`. Defensive parse — a
+        // non-superseded isError (e.g. dependency_unavailable) falls through
+        // to the generic error below.
+        const superseded = parseSupersededEnvelope(toolErrMsg);
+        if (superseded !== null) {
+          throw superseded;
+        }
         throw new Error(`MCP tool error: ${toolErrMsg}`);
       }
 
@@ -590,6 +605,17 @@ export async function callMcpTool(
       return content;
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
+
+      // Typed supersession signal (issue #1278): a MeshSupersededError is a
+      // deliberate provider rejection, not a transient failure — re-throw it
+      // untouched (like ProxyTimeoutError below) so it (a) is NOT retried and
+      // (b) reaches the caller as the typed error rather than being swept into
+      // the post-loop generic `throw lastError`. Guards the retry loop from
+      // swallowing/re-wrapping the classified error.
+      if (lastError instanceof MeshSupersededError) {
+        publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, lastError.message, "error", requestBytes, lastResponseBytes, attempt + 1);
+        throw lastError;
+      }
 
       // Don't retry on abort (timeout)
       if (isTimeoutError(lastError)) {
@@ -786,6 +812,13 @@ export async function* streamMcpTool(
         // and must not look like a clean end-of-stream.
         const streamToolErrMsg = toolErrorMessage(msg.result);
         if (streamToolErrMsg !== null) {
+          // Typed supersession signal (issue #1278): mirror callMcpTool's
+          // JSON path — a producer that rejected a superseded caller ends the
+          // stream with the reserved envelope; re-throw the typed error.
+          const superseded = parseSupersededEnvelope(streamToolErrMsg);
+          if (superseded !== null) {
+            throw superseded;
+          }
           throw new Error(`MCP tool error: ${streamToolErrMsg}`);
         }
         // result arrived — done; do NOT yield the buffered final result
@@ -1051,6 +1084,14 @@ async function readSSEResponseToContent(response: Response): Promise<unknown> {
     if (event && typeof event === "object" && "result" in event) {
       const toolErrMsg = toolErrorMessage(jsonRpcEvent.result);
       if (toolErrMsg !== null) {
+        // Typed supersession signal (issue #1278): mirror the JSON path so
+        // the SSE transport can't classify a superseded rejection differently.
+        // The throw propagates out through callMcpTool's retry loop, whose
+        // MeshSupersededError guard re-throws it untouched (no retry).
+        const superseded = parseSupersededEnvelope(toolErrMsg);
+        if (superseded !== null) {
+          throw superseded;
+        }
         throw new Error(`MCP tool error: ${toolErrMsg}`);
       }
       sawResult = true;

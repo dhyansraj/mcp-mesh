@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  uc38 java-signal-provider — emits the typed supersession signal (issue #1278).
+
+  Skeleton cloned from uc23_meshjob_java/fixtures/long-task-provider-java, then
+  stripped to the minimal superseded scenario. Java's emit is DIFFERENT from the
+  Python/TS fastmcp auto-serialize path: a thrown MeshSupersededException is
+  caught by the MeshToolWrapper and turned into the reserved
+  {"error":"claim_superseded"} isError envelope. This fixture drives that
+  wrapper-catch emit over the REAL JNI/HTTP transport (not a mocked boundary).
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>java-signal-provider</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>uc38 Signal Provider (Java)</name>
+    <description>uc38 provider that emits the typed supersession signal (issue #1278).</description>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.0.6</version>
+        <relativePath/>
+    </parent>
+
+    <properties>
+        <java.version>17</java.version>
+        <mcp-mesh.version>2.8.2</mcp-mesh.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.mcp-mesh</groupId>
+            <artifactId>mcp-mesh-spring-boot-starter</artifactId>
+            <version>${mcp-mesh.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>com.example.signalprovider.SignalProviderApplication</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
