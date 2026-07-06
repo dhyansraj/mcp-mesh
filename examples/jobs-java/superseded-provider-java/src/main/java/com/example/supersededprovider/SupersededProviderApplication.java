@@ -101,7 +101,7 @@ public class SupersededProviderApplication {
             row.put("entry", entry);
             row.put("byEpoch", null);
             ledger.add(row);
-            return result(false, null);
+            return result(null);
         }
 
         long callerEpoch = cj.claimEpoch();
@@ -124,14 +124,13 @@ public class SupersededProviderApplication {
         row.put("entry", entry);
         row.put("byEpoch", callerEpoch);
         ledger.add(row);
-        return result(false, callerEpoch);
+        return result(callerEpoch);
     }
 
-    private Map<String, Object> result(boolean fenced, Long acceptedEpoch) {
+    private Map<String, Object> result(Long acceptedEpoch) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("applied", true);
         out.put("ledger_size", ledger.size());
-        out.put("fenced", fenced);
         if (acceptedEpoch != null) {
             out.put("accepted_epoch", acceptedEpoch);
         }

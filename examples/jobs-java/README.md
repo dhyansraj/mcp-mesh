@@ -217,7 +217,7 @@ cd examples/jobs-java/superseded-consumer-java
 MCP_MESH_REGISTRY_URL=http://localhost:8000 mvn spring-boot:run
 ```
 
-Then `meshctl call superseded-consumer-java run_writer --arg count=3`. See the
+Then `meshctl call superseded-consumer-java run_writer '{"count": 3}'`. See the
 Python tree's README (`../jobs/README.md#typed-supersession-signal-supersedederror-issue-1278`)
 for the full conceptual treatment.
 

@@ -12,7 +12,8 @@
     "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
-    "@mcpmesh/sdk": "^2.8.2"
+    "@mcpmesh/sdk": "^2.8.2",
+    "fastmcp": "^4.3.2"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",

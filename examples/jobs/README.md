@@ -241,7 +241,7 @@ MCP_MESH_REGISTRY_URL=http://localhost:8000 \
 Kick off a writer job:
 
 ```bash
-meshctl call superseded-consumer run_writer --arg count=3
+meshctl call superseded-consumer run_writer '{"count": 3}'
 ```
 
 A single, uncontested run returns `{"status": "completed", ...}` — the

@@ -25,8 +25,8 @@
     </properties>
 
     <!--
-      Depends on local mcp-mesh-* artifacts at version 1.4.1+ which are not
-      published to Maven Central. Build them first via:
+      Depends on local mcp-mesh-* artifacts which carry the typed supersession
+      surfaces (#1278) and are not published to Maven Central. Build them first via:
           cd src/runtime/java && mvn install -DskipTests
       Maven and IDEs then resolve them from your local ~/.m2/repository.
     -->
