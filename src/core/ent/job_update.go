@@ -188,6 +188,18 @@ func (ju *JobUpdate) ClearSubmittedPayload() *JobUpdate {
 	return ju
 }
 
+// SetRecvCursor sets the "recv_cursor" field.
+func (ju *JobUpdate) SetRecvCursor(m map[string]int64) *JobUpdate {
+	ju.mutation.SetRecvCursor(m)
+	return ju
+}
+
+// ClearRecvCursor clears the value of the "recv_cursor" field.
+func (ju *JobUpdate) ClearRecvCursor() *JobUpdate {
+	ju.mutation.ClearRecvCursor()
+	return ju
+}
+
 // SetAttemptCount sets the "attempt_count" field.
 func (ju *JobUpdate) SetAttemptCount(i int) *JobUpdate {
 	ju.mutation.ResetAttemptCount()
@@ -467,6 +479,12 @@ func (ju *JobUpdate) sqlSave(ctx context.Context) (n int, err error) {
 	if ju.mutation.SubmittedPayloadCleared() {
 		_spec.ClearField(job.FieldSubmittedPayload, field.TypeJSON)
 	}
+	if value, ok := ju.mutation.RecvCursor(); ok {
+		_spec.SetField(job.FieldRecvCursor, field.TypeJSON, value)
+	}
+	if ju.mutation.RecvCursorCleared() {
+		_spec.ClearField(job.FieldRecvCursor, field.TypeJSON)
+	}
 	if value, ok := ju.mutation.AttemptCount(); ok {
 		_spec.SetField(job.FieldAttemptCount, field.TypeInt, value)
 	}
@@ -689,6 +707,18 @@ func (juo *JobUpdateOne) SetSubmittedPayload(m map[string]interface{}) *JobUpdat
 // ClearSubmittedPayload clears the value of the "submitted_payload" field.
 func (juo *JobUpdateOne) ClearSubmittedPayload() *JobUpdateOne {
 	juo.mutation.ClearSubmittedPayload()
+	return juo
+}
+
+// SetRecvCursor sets the "recv_cursor" field.
+func (juo *JobUpdateOne) SetRecvCursor(m map[string]int64) *JobUpdateOne {
+	juo.mutation.SetRecvCursor(m)
+	return juo
+}
+
+// ClearRecvCursor clears the value of the "recv_cursor" field.
+func (juo *JobUpdateOne) ClearRecvCursor() *JobUpdateOne {
+	juo.mutation.ClearRecvCursor()
 	return juo
 }
 
@@ -1000,6 +1030,12 @@ func (juo *JobUpdateOne) sqlSave(ctx context.Context) (_node *Job, err error) {
 	}
 	if juo.mutation.SubmittedPayloadCleared() {
 		_spec.ClearField(job.FieldSubmittedPayload, field.TypeJSON)
+	}
+	if value, ok := juo.mutation.RecvCursor(); ok {
+		_spec.SetField(job.FieldRecvCursor, field.TypeJSON, value)
+	}
+	if juo.mutation.RecvCursorCleared() {
+		_spec.ClearField(job.FieldRecvCursor, field.TypeJSON)
 	}
 	if value, ok := juo.mutation.AttemptCount(); ok {
 		_spec.SetField(job.FieldAttemptCount, field.TypeInt, value)

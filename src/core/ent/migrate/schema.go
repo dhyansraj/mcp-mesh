@@ -191,6 +191,7 @@ var (
 		{Name: "result", Type: field.TypeJSON, Nullable: true},
 		{Name: "error", Type: field.TypeString, Nullable: true},
 		{Name: "submitted_payload", Type: field.TypeJSON, Nullable: true},
+		{Name: "recv_cursor", Type: field.TypeJSON, Nullable: true},
 		{Name: "attempt_count", Type: field.TypeInt, Default: 0},
 		{Name: "max_retries", Type: field.TypeInt, Default: 1},
 		{Name: "max_duration", Type: field.TypeInt, Nullable: true},
@@ -214,7 +215,7 @@ var (
 			{
 				Name:    "job_lease_expires_at",
 				Unique:  false,
-				Columns: []*schema.Column{JobsColumns[14]},
+				Columns: []*schema.Column{JobsColumns[15]},
 			},
 			{
 				Name:    "job_owner_instance_id",
@@ -229,7 +230,7 @@ var (
 			{
 				Name:    "job_submitted_at_job_id",
 				Unique:  false,
-				Columns: []*schema.Column{JobsColumns[16], JobsColumns[0]},
+				Columns: []*schema.Column{JobsColumns[17], JobsColumns[0]},
 			},
 		},
 	}

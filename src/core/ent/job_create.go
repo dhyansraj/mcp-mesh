@@ -122,6 +122,12 @@ func (jc *JobCreate) SetSubmittedPayload(m map[string]interface{}) *JobCreate {
 	return jc
 }
 
+// SetRecvCursor sets the "recv_cursor" field.
+func (jc *JobCreate) SetRecvCursor(m map[string]int64) *JobCreate {
+	jc.mutation.SetRecvCursor(m)
+	return jc
+}
+
 // SetAttemptCount sets the "attempt_count" field.
 func (jc *JobCreate) SetAttemptCount(i int) *JobCreate {
 	jc.mutation.SetAttemptCount(i)
@@ -422,6 +428,10 @@ func (jc *JobCreate) createSpec() (*Job, *sqlgraph.CreateSpec) {
 	if value, ok := jc.mutation.SubmittedPayload(); ok {
 		_spec.SetField(job.FieldSubmittedPayload, field.TypeJSON, value)
 		_node.SubmittedPayload = value
+	}
+	if value, ok := jc.mutation.RecvCursor(); ok {
+		_spec.SetField(job.FieldRecvCursor, field.TypeJSON, value)
+		_node.RecvCursor = value
 	}
 	if value, ok := jc.mutation.AttemptCount(); ok {
 		_spec.SetField(job.FieldAttemptCount, field.TypeInt, value)

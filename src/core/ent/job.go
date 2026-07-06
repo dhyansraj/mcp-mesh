@@ -37,6 +37,8 @@ type Job struct {
 	Error *string `json:"error,omitempty"`
 	// Full submitted args + headers, used for retry replay
 	SubmittedPayload map[string]interface{} `json:"submitted_payload,omitempty"`
+	// Durable per-filter recvEvent cursor (filter key -> last-processed seq); survives reclaim
+	RecvCursor map[string]int64 `json:"recv_cursor,omitempty"`
 	// Number of attempts made so far
 	AttemptCount int `json:"attempt_count,omitempty"`
 	// Maximum number of attempts allowed
@@ -61,7 +63,7 @@ func (*Job) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case job.FieldResult, job.FieldSubmittedPayload:
+		case job.FieldResult, job.FieldSubmittedPayload, job.FieldRecvCursor:
 			values[i] = new([]byte)
 		case job.FieldProgress:
 			values[i] = new(sql.NullFloat64)
@@ -152,6 +154,14 @@ func (j *Job) assignValues(columns []string, values []any) error {
 			} else if value != nil && len(*value) > 0 {
 				if err := json.Unmarshal(*value, &j.SubmittedPayload); err != nil {
 					return fmt.Errorf("unmarshal field submitted_payload: %w", err)
+				}
+			}
+		case job.FieldRecvCursor:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field recv_cursor", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &j.RecvCursor); err != nil {
+					return fmt.Errorf("unmarshal field recv_cursor: %w", err)
 				}
 			}
 		case job.FieldAttemptCount:
@@ -277,6 +287,9 @@ func (j *Job) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("submitted_payload=")
 	builder.WriteString(fmt.Sprintf("%v", j.SubmittedPayload))
+	builder.WriteString(", ")
+	builder.WriteString("recv_cursor=")
+	builder.WriteString(fmt.Sprintf("%v", j.RecvCursor))
 	builder.WriteString(", ")
 	builder.WriteString("attempt_count=")
 	builder.WriteString(fmt.Sprintf("%v", j.AttemptCount))

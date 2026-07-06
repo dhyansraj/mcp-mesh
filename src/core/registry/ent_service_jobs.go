@@ -373,6 +373,11 @@ type JobDeltaInput struct {
 	ProgressMessage *string
 	Result          map[string]interface{}
 	Error           *string
+	// RecvCursor is the durable per-filter recvEvent cursor snapshot (issue
+	// #1277): filter key -> last-processed seq. nil = the delta did not carry
+	// one (leave the persisted column untouched); non-nil = overwrite it inside
+	// the epoch-fenced guarded UPDATE (so a superseded delta never advances it).
+	RecvCursor map[string]int64
 }
 
 // JobDeltaRejection captures why a single delta was not applied. The handler
@@ -512,6 +517,37 @@ func (s *EntService) ApplyJobDeltas(ctx context.Context, instanceID string, delt
 		}
 		if d.ProgressMessage != nil {
 			upd = upd.SetProgressMessage(*d.ProgressMessage)
+		}
+		// Durable recvEvent cursor (issue #1277). Ride it on the SAME guarded
+		// UPDATE as progress so it is epoch-fenced identically: a superseded
+		// delta's UPDATE affects 0 rows and never advances the persisted cursor.
+		// nil = delta carried none → leave the column as-is. Applied on terminal
+		// deltas too (they carry the caught-up cursor).
+		//
+		// PER-KEY MAX MERGE (not a blind overwrite): base is the row we read
+		// above (j.RecvCursor); the persisted value becomes, per key,
+		// max(existing, incoming), and any existing key absent from the incoming
+		// snapshot is preserved. This makes the column monotonic and robust to
+		// delta reorder / duplication / a lower snapshot read outside the SDK's
+		// cursor lock — a stale-but-in-epoch delta can never regress a higher
+		// persisted seq. The merge is computed from the pre-guard read but WRITTEN
+		// inside the same guarded UPDATE, so it stays epoch-fenced: if the guard
+		// fails (superseded / reclaimed between read and write) Affected=0 and
+		// nothing is written. Same-owner/same-epoch deltas are serialized by the
+		// SDK's single-batch-in-flight flush, and durable snapshots are
+		// monotonic at the source, so the read-modify-write base is not a
+		// concurrent-writer hazard in practice.
+		if d.RecvCursor != nil {
+			merged := make(map[string]int64, len(j.RecvCursor)+len(d.RecvCursor))
+			for k, v := range j.RecvCursor {
+				merged[k] = v
+			}
+			for k, v := range d.RecvCursor {
+				if cur, ok := merged[k]; !ok || v > cur {
+					merged[k] = v
+				}
+			}
+			upd = upd.SetRecvCursor(merged)
 		}
 		if newStatus != nil {
 			upd = upd.SetStatus(*newStatus)

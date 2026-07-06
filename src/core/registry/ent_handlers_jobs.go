@@ -366,6 +366,9 @@ func (h *EntBusinessLogicHandlers) SubmitJobBatch(c *gin.Context) {
 		if d.Result != nil {
 			in.Result = *d.Result
 		}
+		if d.RecvCursor != nil {
+			in.RecvCursor = *d.RecvCursor
+		}
 		deltas = append(deltas, in)
 	}
 
@@ -451,6 +454,13 @@ func (h *EntBusinessLogicHandlers) ClaimJobs(c *gin.Context) {
 		if claimed.LeaseExpiresAt != nil {
 			v := int(claimed.LeaseExpiresAt.Unix())
 			entry.LeaseExpiresAt = &v
+		}
+		// Return the persisted durable recvEvent cursor (issue #1277) so a
+		// re-claimed controller can resume after the last processed position.
+		// nil (never recorded) → omitted.
+		if claimed.RecvCursor != nil {
+			rc := claimed.RecvCursor
+			entry.RecvCursor = &rc
 		}
 		resp.Claimed = append(resp.Claimed, entry)
 	}

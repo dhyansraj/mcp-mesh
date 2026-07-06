@@ -84,6 +84,20 @@ func (Job) Fields() []ent.Field {
 			Optional().
 			Comment("Full submitted args + headers, used for retry replay"),
 
+		// Durable recvEvent cursor (issue #1277). Map from canonical
+		// event-filter key -> highest event seq the handler has provably
+		// finished processing for that filter (a LAGGING cursor: it trails
+		// receipt so at-least-once survives a re-claim). Stamped by the owner's
+		// deltas and written inside the same epoch-fenced guarded UPDATE as
+		// progress (see ApplyJobDeltas), so a superseded delta never advances
+		// it. Returned on claim (ClaimedJob.recv_cursor) so a re-claimed
+		// controller can resume after the last processed position instead of
+		// replaying from seq 0. NULL when the job never recorded one; reclaim
+		// (sweep + force) MUST NOT clear it.
+		field.JSON("recv_cursor", map[string]int64{}).
+			Optional().
+			Comment("Durable per-filter recvEvent cursor (filter key -> last-processed seq); survives reclaim"),
+
 		// Retry bookkeeping.
 		field.Int("attempt_count").
 			Default(0).
