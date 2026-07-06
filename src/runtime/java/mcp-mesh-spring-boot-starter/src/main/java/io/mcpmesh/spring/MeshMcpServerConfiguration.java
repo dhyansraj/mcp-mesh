@@ -66,11 +66,11 @@ public class MeshMcpServerConfiguration {
     private static final Map<String, Object> WRAP_RESULT_META =
         Map.of("fastmcp", Map.of("wrap_result", true));
 
-    // MCP SDK 1.1.0 uses Jackson 3 (tools.jackson)
+    // MCP SDK 2.0.0 uses Jackson 3 (tools.jackson)
     private final tools.jackson.databind.json.JsonMapper mcpJsonMapper;
 
     public MeshMcpServerConfiguration() {
-        // Create Jackson 3 JsonMapper for MCP SDK 1.1.0
+        // Create Jackson 3 JsonMapper for MCP SDK 2.0.0
         // Jackson 3 has built-in java.time support and writes dates as ISO-8601 by default
         this.mcpJsonMapper = tools.jackson.databind.json.JsonMapper.builder().build();
     }
@@ -119,6 +119,8 @@ public class MeshMcpServerConfiguration {
                 .tools(true)
                 .build())
             .immediateExecution(true)
+            // Preserve mesh's lenient cross-runtime coercion + soft-fail semantics; strictness stays opt-in. Adopting SDK-native input validation is tracked in #1303.
+            .validateToolInputs(false)
             .build();
 
         // Register all tools from wrapper registry (includes both @MeshTool and @MeshLlmProvider)
