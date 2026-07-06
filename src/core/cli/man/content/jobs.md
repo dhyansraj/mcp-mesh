@@ -507,6 +507,19 @@ periodic `update_progress` to keep the lease renewed. Set
 `total_deadline` if you want a hard total-runtime bound across all
 attempts, or to opt out of the registry-wide stale ceiling entirely.
 
+**Parked vs. compute-bound gaps.** Which kind of gap the handler is
+sitting in decides whether the lease renews on its own:
+
+- **Parked gap** — blocked inside `recv_event` awaiting the next event.
+  The lease renews **automatically**: the poll *is* the renewal, so no
+  keepalive is needed.
+- **Compute-bound gap** — a long synchronous stretch between event gates
+  (an LLM request, a large local transform). **Nothing renews the lease**
+  during this window. Either emit a periodic `update_progress` keepalive,
+  or size `max_duration` to cover the longest compute-bound gap. A blanket
+  `max_duration` multiplier "to be safe" is the wrong fix — it papers over
+  the specific silent stretch instead of covering it.
+
 ## Claim gating on unavailable capabilities
 
 A claim worker never pulls a job for a capability whose `required`
