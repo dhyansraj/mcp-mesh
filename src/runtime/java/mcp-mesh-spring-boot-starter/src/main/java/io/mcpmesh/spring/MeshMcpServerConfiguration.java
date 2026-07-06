@@ -23,6 +23,7 @@ import org.springframework.boot.web.servlet.ServletRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -53,6 +54,17 @@ public class MeshMcpServerConfiguration {
     private static final Logger log = LoggerFactory.getLogger(MeshMcpServerConfiguration.class);
 
     private static final String MCP_ENDPOINT = "/mcp";
+
+    /**
+     * FastMCP's {@code wrap_result} marker (issue #1250/#1251), carried in the
+     * CallToolResult {@code meta} field — which the MCP SDK serializes on the
+     * wire as {@code _meta}. Signals that {@code structuredContent} is a
+     * {@code {"result": <value>}} envelope wrapping a non-object return, so a
+     * consumer unwraps the single {@code "result"} key. Byte-identical to the
+     * Python provider's {@code {"fastmcp": {"wrap_result": True}}}.
+     */
+    private static final Map<String, Object> WRAP_RESULT_META =
+        Map.of("fastmcp", Map.of("wrap_result", true));
 
     // MCP SDK 1.1.0 uses Jackson 3 (tools.jackson)
     private final tools.jackson.databind.json.JsonMapper mcpJsonMapper;
@@ -168,6 +180,61 @@ public class MeshMcpServerConfiguration {
     }
 
     /**
+     * Build the {@code structuredContent} for a serialized tool return,
+     * mirroring FastMCP / the Python provider (issue #1282, honoring the
+     * #1250/#1251 empty-return contract):
+     * <ul>
+     *   <li>object-shaped return (a {@code Map} or POJO serializing to a JSON
+     *       object) → the object itself, as a {@code Map}, with NO wrap marker;</li>
+     *   <li>every non-object return (list/array, scalar number/boolean, string,
+     *       {@code null}) → wrapped as {@code {"result": <value>}}, paired with
+     *       the {@link #WRAP_RESULT_META} marker (set by the caller).</li>
+     * </ul>
+     *
+     * <p>This produces exactly the emission the Python provider's
+     * empty-collection test asserts: {@code []} → {@code {"result": []}} +
+     * marker, {@code {}} → {@code {}} (no marker), {@code ""} →
+     * {@code {"result": ""}} + marker, {@code null} → {@code {"result": null}}
+     * + marker. Shared so any future structured-output path emits identically
+     * rather than forking.
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> buildStructuredContent(Object result) {
+        if (isObjectShaped(result)) {
+            return mcpJsonMapper.convertValue(result, Map.class);
+        }
+        Map<String, Object> wrapped = new LinkedHashMap<>();
+        wrapped.put("result", result);
+        return wrapped;
+    }
+
+    /**
+     * Whether a tool return is object-shaped — i.e. serializes to a JSON object
+     * ({@code {...}}) rather than an array, scalar, string, or null. Object
+     * returns become {@code structuredContent} directly; everything else is
+     * wrapped in a {@code {"result": X}} envelope with the wrap marker, matching
+     * FastMCP.
+     */
+    private boolean isObjectShaped(Object result) {
+        if (result == null) {
+            return false;
+        }
+        if (result instanceof Map) {
+            return true;
+        }
+        if (result instanceof Iterable
+                || result instanceof CharSequence
+                || result instanceof Number
+                || result instanceof Boolean
+                || result.getClass().isArray()) {
+            return false;
+        }
+        // POJO / other: let Jackson decide by the serialized JSON shape.
+        tools.jackson.databind.JsonNode node = mcpJsonMapper.valueToTree(result);
+        return node != null && node.isObject();
+    }
+
+    /**
      * Create a JsonSchema from a schema map.
      */
     @SuppressWarnings("unchecked")
@@ -228,12 +295,20 @@ public class MeshMcpServerConfiguration {
                 resultJson = mcpJsonMapper.writeValueAsString(result);
             }
 
-            // Return as text content
+            // Return as text content, ADDITIONALLY populating structuredContent
+            // (issue #1282) so spec-compliant MCP clients — and future
+            // structured-first consumers — see the same structured value the
+            // Python provider emits via FastMCP. The text block
+            // (content[0].text = resultJson) is UNCHANGED: mesh consumers
+            // recover text-first (#1250/#1251), so the cross-runtime round-trip
+            // stays byte-identical regardless of this additive field.
+            Object structuredContent = buildStructuredContent(result);
+            Map<String, Object> meta = isObjectShaped(result) ? null : WRAP_RESULT_META;
             return new CallToolResult(
                 List.of(new TextContent(resultJson)),
                 false,  // isError
-                null,   // structuredContent
-                null    // meta
+                structuredContent,
+                meta
             );
 
         } catch (Exception e) {
