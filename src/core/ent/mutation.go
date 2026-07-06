@@ -4701,6 +4701,7 @@ type JobMutation struct {
 	result            *map[string]interface{}
 	error             *string
 	submitted_payload *map[string]interface{}
+	recv_cursor       *map[string]int64
 	attempt_count     *int
 	addattempt_count  *int
 	max_retries       *int
@@ -5265,6 +5266,55 @@ func (m *JobMutation) ResetSubmittedPayload() {
 	delete(m.clearedFields, job.FieldSubmittedPayload)
 }
 
+// SetRecvCursor sets the "recv_cursor" field.
+func (m *JobMutation) SetRecvCursor(value map[string]int64) {
+	m.recv_cursor = &value
+}
+
+// RecvCursor returns the value of the "recv_cursor" field in the mutation.
+func (m *JobMutation) RecvCursor() (r map[string]int64, exists bool) {
+	v := m.recv_cursor
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRecvCursor returns the old "recv_cursor" field's value of the Job entity.
+// If the Job object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobMutation) OldRecvCursor(ctx context.Context) (v map[string]int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRecvCursor is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRecvCursor requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRecvCursor: %w", err)
+	}
+	return oldValue.RecvCursor, nil
+}
+
+// ClearRecvCursor clears the value of the "recv_cursor" field.
+func (m *JobMutation) ClearRecvCursor() {
+	m.recv_cursor = nil
+	m.clearedFields[job.FieldRecvCursor] = struct{}{}
+}
+
+// RecvCursorCleared returns if the "recv_cursor" field was cleared in this mutation.
+func (m *JobMutation) RecvCursorCleared() bool {
+	_, ok := m.clearedFields[job.FieldRecvCursor]
+	return ok
+}
+
+// ResetRecvCursor resets all changes to the "recv_cursor" field.
+func (m *JobMutation) ResetRecvCursor() {
+	m.recv_cursor = nil
+	delete(m.clearedFields, job.FieldRecvCursor)
+}
+
 // SetAttemptCount sets the "attempt_count" field.
 func (m *JobMutation) SetAttemptCount(i int) {
 	m.attempt_count = &i
@@ -5713,7 +5763,7 @@ func (m *JobMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *JobMutation) Fields() []string {
-	fields := make([]string, 0, 17)
+	fields := make([]string, 0, 18)
 	if m.capability != nil {
 		fields = append(fields, job.FieldCapability)
 	}
@@ -5740,6 +5790,9 @@ func (m *JobMutation) Fields() []string {
 	}
 	if m.submitted_payload != nil {
 		fields = append(fields, job.FieldSubmittedPayload)
+	}
+	if m.recv_cursor != nil {
+		fields = append(fields, job.FieldRecvCursor)
 	}
 	if m.attempt_count != nil {
 		fields = append(fields, job.FieldAttemptCount)
@@ -5791,6 +5844,8 @@ func (m *JobMutation) Field(name string) (ent.Value, bool) {
 		return m.Error()
 	case job.FieldSubmittedPayload:
 		return m.SubmittedPayload()
+	case job.FieldRecvCursor:
+		return m.RecvCursor()
 	case job.FieldAttemptCount:
 		return m.AttemptCount()
 	case job.FieldMaxRetries:
@@ -5834,6 +5889,8 @@ func (m *JobMutation) OldField(ctx context.Context, name string) (ent.Value, err
 		return m.OldError(ctx)
 	case job.FieldSubmittedPayload:
 		return m.OldSubmittedPayload(ctx)
+	case job.FieldRecvCursor:
+		return m.OldRecvCursor(ctx)
 	case job.FieldAttemptCount:
 		return m.OldAttemptCount(ctx)
 	case job.FieldMaxRetries:
@@ -5921,6 +5978,13 @@ func (m *JobMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetSubmittedPayload(v)
+		return nil
+	case job.FieldRecvCursor:
+		v, ok := value.(map[string]int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRecvCursor(v)
 		return nil
 	case job.FieldAttemptCount:
 		v, ok := value.(int)
@@ -6089,6 +6153,9 @@ func (m *JobMutation) ClearedFields() []string {
 	if m.FieldCleared(job.FieldSubmittedPayload) {
 		fields = append(fields, job.FieldSubmittedPayload)
 	}
+	if m.FieldCleared(job.FieldRecvCursor) {
+		fields = append(fields, job.FieldRecvCursor)
+	}
 	if m.FieldCleared(job.FieldMaxDuration) {
 		fields = append(fields, job.FieldMaxDuration)
 	}
@@ -6135,6 +6202,9 @@ func (m *JobMutation) ClearField(name string) error {
 		return nil
 	case job.FieldSubmittedPayload:
 		m.ClearSubmittedPayload()
+		return nil
+	case job.FieldRecvCursor:
+		m.ClearRecvCursor()
 		return nil
 	case job.FieldMaxDuration:
 		m.ClearMaxDuration()
@@ -6185,6 +6255,9 @@ func (m *JobMutation) ResetField(name string) error {
 		return nil
 	case job.FieldSubmittedPayload:
 		m.ResetSubmittedPayload()
+		return nil
+	case job.FieldRecvCursor:
+		m.ResetRecvCursor()
 		return nil
 	case job.FieldAttemptCount:
 		m.ResetAttemptCount()

@@ -554,6 +554,16 @@ func SubmittedPayloadNotNil() predicate.Job {
 	return predicate.Job(sql.FieldNotNull(FieldSubmittedPayload))
 }
 
+// RecvCursorIsNil applies the IsNil predicate on the "recv_cursor" field.
+func RecvCursorIsNil() predicate.Job {
+	return predicate.Job(sql.FieldIsNull(FieldRecvCursor))
+}
+
+// RecvCursorNotNil applies the NotNil predicate on the "recv_cursor" field.
+func RecvCursorNotNil() predicate.Job {
+	return predicate.Job(sql.FieldNotNull(FieldRecvCursor))
+}
+
 // AttemptCountEQ applies the EQ predicate on the "attempt_count" field.
 func AttemptCountEQ(v int) predicate.Job {
 	return predicate.Job(sql.FieldEQ(FieldAttemptCount, v))

@@ -3215,6 +3215,26 @@ components:
           nullable: true
           example: "upstream_unavailable"
           description: Failure reason (only on `status=failed`).
+        recv_cursor:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+          nullable: true
+          description: |
+            Durable per-filter recvEvent cursor snapshot (issue #1277). Maps a
+            canonical event-filter key to the highest event `seq` the handler
+            has PROVABLY finished processing for that filter (a lagging cursor —
+            it trails receipt so at-least-once is preserved on resume). The
+            registry MERGES it into the stored column inside the SAME
+            epoch-fenced guarded UPDATE as progress: per filter key the
+            persisted value becomes max(existing, incoming), and keys absent
+            from this snapshot are preserved — a partial cursor map updates only
+            the filters it names, it does not replace the whole column. Because
+            the merge is monotonic per key, out-of-order or duplicate deltas can
+            only hold or advance a filter's cursor, never regress it; a
+            superseded delta's guarded UPDATE affects 0 rows and never advances
+            it. Omit the field entirely to leave the column untouched.
 
     JobBatchRequest:
       type: object
@@ -3319,6 +3339,18 @@ components:
           nullable: true
           minimum: 1
           description: Per-attempt soft timeout in seconds (as recorded on the job).
+        recv_cursor:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+          nullable: true
+          description: |
+            Persisted durable recvEvent cursor for this job (issue #1277), as
+            last stamped by a prior owner's deltas. NULL when the job never
+            recorded one. A resuming controller MAY seed its per-filter cursors
+            from this so it resumes AFTER the last processed position instead of
+            replaying from seq 0. Whether to resume is a runtime decision.
 
     ClaimJobsResponse:
       type: object

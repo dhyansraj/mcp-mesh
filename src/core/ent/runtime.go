@@ -115,23 +115,23 @@ func init() {
 	// job.ClaimEpochValidator is a validator for the "claim_epoch" field. It is called by the builders before save.
 	job.ClaimEpochValidator = jobDescClaimEpoch.Validators[0].(func(int64) error)
 	// jobDescAttemptCount is the schema descriptor for attempt_count field.
-	jobDescAttemptCount := jobFields[10].Descriptor()
+	jobDescAttemptCount := jobFields[11].Descriptor()
 	// job.DefaultAttemptCount holds the default value on creation for the attempt_count field.
 	job.DefaultAttemptCount = jobDescAttemptCount.Default.(int)
 	// job.AttemptCountValidator is a validator for the "attempt_count" field. It is called by the builders before save.
 	job.AttemptCountValidator = jobDescAttemptCount.Validators[0].(func(int) error)
 	// jobDescMaxRetries is the schema descriptor for max_retries field.
-	jobDescMaxRetries := jobFields[11].Descriptor()
+	jobDescMaxRetries := jobFields[12].Descriptor()
 	// job.DefaultMaxRetries holds the default value on creation for the max_retries field.
 	job.DefaultMaxRetries = jobDescMaxRetries.Default.(int)
 	// job.MaxRetriesValidator is a validator for the "max_retries" field. It is called by the builders before save.
 	job.MaxRetriesValidator = jobDescMaxRetries.Validators[0].(func(int) error)
 	// jobDescMaxDuration is the schema descriptor for max_duration field.
-	jobDescMaxDuration := jobFields[12].Descriptor()
+	jobDescMaxDuration := jobFields[13].Descriptor()
 	// job.MaxDurationValidator is a validator for the "max_duration" field. It is called by the builders before save.
 	job.MaxDurationValidator = jobDescMaxDuration.Validators[0].(func(int) error)
 	// jobDescSubmittedAt is the schema descriptor for submitted_at field.
-	jobDescSubmittedAt := jobFields[16].Descriptor()
+	jobDescSubmittedAt := jobFields[17].Descriptor()
 	// job.DefaultSubmittedAt holds the default value on creation for the submitted_at field.
 	job.DefaultSubmittedAt = jobDescSubmittedAt.Default.(func() time.Time)
 	// jobDescID is the schema descriptor for id field.

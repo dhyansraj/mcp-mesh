@@ -182,6 +182,9 @@ impl PyJobController {
             claim_epoch,
             backend.clone(),
             queue.clone(),
+            // No seeded resume cursor at this binding surface (issue #1277
+            // runtime resume gating is a later wave).
+            None,
         );
         // Spawn the batching tick on the shared PyO3 Tokio runtime so
         // mid-flight progress deltas actually reach the registry. We

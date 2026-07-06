@@ -32,6 +32,8 @@ const (
 	FieldError = "error"
 	// FieldSubmittedPayload holds the string denoting the submitted_payload field in the database.
 	FieldSubmittedPayload = "submitted_payload"
+	// FieldRecvCursor holds the string denoting the recv_cursor field in the database.
+	FieldRecvCursor = "recv_cursor"
 	// FieldAttemptCount holds the string denoting the attempt_count field in the database.
 	FieldAttemptCount = "attempt_count"
 	// FieldMaxRetries holds the string denoting the max_retries field in the database.
@@ -64,6 +66,7 @@ var Columns = []string{
 	FieldResult,
 	FieldError,
 	FieldSubmittedPayload,
+	FieldRecvCursor,
 	FieldAttemptCount,
 	FieldMaxRetries,
 	FieldMaxDuration,

@@ -254,12 +254,17 @@ async fn run_loop(
                     // claim so the controller fences its deltas + executor
                     // reads (issue #1252). `None` (old registry) degrades to
                     // legacy owner-only behavior.
+                    // `None` initial_cursors: this wave does NOT resume from the
+                    // persisted recv_cursor — the controller replays from seq 0
+                    // as before. Runtime resume gating (passing
+                    // `claimed.recv_cursor`) is a later wave (issue #1277).
                     let controller = JobController::new_with_epoch(
                         claimed.id.clone(),
                         cfg.instance_id.clone(),
                         claimed.claim_epoch,
                         backend.clone(),
                         queue.clone(),
+                        None,
                     );
                     let dispatcher_clone = dispatcher.clone();
                     let job_id_for_log = claimed.id.clone();
@@ -374,6 +379,7 @@ mod tests {
             claim_epoch: Some(1),
             lease_expires_at: None,
             max_duration: None,
+            recv_cursor: None,
         }
     }
 

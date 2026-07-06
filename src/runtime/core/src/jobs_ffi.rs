@@ -317,6 +317,9 @@ unsafe fn mesh_job_controller_new_impl(
         claim_epoch,
         backend.clone(),
         queue.clone(),
+        // No seeded resume cursor at this binding surface (issue #1277 runtime
+        // resume gating is a later wave).
+        None,
     );
 
     // Spawn the batching tick inside the FFI tokio runtime so mid-flight

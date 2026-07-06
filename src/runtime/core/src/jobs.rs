@@ -340,6 +340,35 @@ pub struct JobController {
     /// for the same `job_id` starts every cursor at 0 (replay-from-0 per
     /// filter on re-claim). Advancement is monotonic per key (never retreats).
     cursors: Arc<std::sync::Mutex<HashMap<String, i64>>>,
+    /// LAGGING durable cursors that back the framework-persisted resume point
+    /// (issue #1277). Parallel to `cursors`, keyed identically ([`Self::filter_key`]),
+    /// but advanced ONE STEP BEHIND: `cursors[K]` moves at event RECEIPT (the
+    /// event returned to the handler), while `durable_cursors[K]` only catches
+    /// up to `cursors[K]` at the NEXT `recv_event(K)` — under filter K's
+    /// serialization lock — the handler coming back for filter K's next event is
+    /// taken as PROOF it finished K's last returned event. On a SUCCESSFUL
+    /// terminal (`complete`) the whole map is advanced to `cursors` (the handler
+    /// finished the last event and completed); on a FAILED terminal (`fail`) it
+    /// is NOT advanced (the handler errored on the last received event, so that
+    /// event is left to be replayed on a resume-retry).
+    ///
+    /// Every enqueued [`JobDelta`] stamps a snapshot of THIS map (never the raw
+    /// `cursors`) in its `recv_cursor` field. Persisting the lagging value is
+    /// what preserves at-least-once: a crash after receipt-before-processing
+    /// leaves the durable cursor BEHIND the received seq, so a re-claim replays
+    /// that event rather than skipping it. Seeded (alongside `cursors`) from a
+    /// claim's persisted `recv_cursor` when the constructor is handed
+    /// `initial_cursors`. Monotonic per key (never retreats). Shared across
+    /// `Clone`s.
+    ///
+    /// CONTRACT (see [`Self::recv_event`] "Durable-resume contract"): the
+    /// commit-on-next-poll advance is only correct when the handler consumes a
+    /// filter SEQUENTIALLY (finish the returned event before requesting the
+    /// next one for that filter). A handler that prefetches or processes a
+    /// filter's events concurrently must NOT enable durable resume — it would
+    /// skip the still-in-flight event on resume. The framework cannot fully
+    /// enforce this for async-spawn handlers; it is a documented contract.
+    durable_cursors: Arc<std::sync::Mutex<HashMap<String, i64>>>,
     /// Per-filter serialization locks. `recv_event` holds ONLY its own
     /// filter's async lock across the load→list→store window, so concurrent
     /// calls on DIFFERENT filters make progress independently (a 60s type-A
@@ -365,7 +394,9 @@ impl JobController {
         backend: Arc<dyn TaskBackend>,
         queue: Arc<Mutex<CoalescingQueue>>,
     ) -> Self {
-        Self::new_with_epoch(job_id, instance_id, None, backend, queue)
+        // No epoch AND no seed cursors: every filter replays from seq 0
+        // (current push-mode / legacy behavior).
+        Self::new_with_epoch(job_id, instance_id, None, backend, queue, None)
     }
 
     /// Construct a controller carrying the claim generation minted by the
@@ -373,13 +404,22 @@ impl JobController {
     /// [`crate::task_backend::ClaimedJob::claim_epoch`] on the claim-worker
     /// path so this execution is fenced; `None` degrades to legacy
     /// owner-only behavior (never fabricate `0`).
+    ///
+    /// `initial_cursors` seeds the resume point (issue #1277): when `Some(map)`,
+    /// BOTH `cursors` AND `durable_cursors` are seeded from it, so the first
+    /// `recv_event(K)` reads strictly AFTER the persisted seq for filter K (and
+    /// the durable cursor already sits there). When `None` (this wave's
+    /// claim-worker path — resume gating is a later wave), both start empty and
+    /// every filter replays from seq 0, byte-identical to prior behavior.
     pub fn new_with_epoch(
         job_id: impl Into<String>,
         instance_id: impl Into<String>,
         claim_epoch: Option<i64>,
         backend: Arc<dyn TaskBackend>,
         queue: Arc<Mutex<CoalescingQueue>>,
+        initial_cursors: Option<HashMap<String, i64>>,
     ) -> Self {
+        let seed = initial_cursors.unwrap_or_default();
         Self {
             job_id: job_id.into(),
             instance_id: instance_id.into(),
@@ -387,7 +427,8 @@ impl JobController {
             backend,
             queue,
             terminal: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            cursors: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            cursors: Arc::new(std::sync::Mutex::new(seed.clone())),
+            durable_cursors: Arc::new(std::sync::Mutex::new(seed)),
             recv_locks: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
@@ -440,6 +481,55 @@ impl JobController {
         self.claim_epoch
     }
 
+    /// Advance the LAGGING durable cursor for filter `key` up to the current
+    /// receipt cursor for the same filter (issue #1277). Called at the ENTRY of
+    /// `recv_event(K)`: the handler coming back for K's next event proves it
+    /// finished K's last RETURNED event, so `durable_cursors[K]` may now catch
+    /// up to `cursors[K]`. Monotonic (never retreats): under concurrent
+    /// same-filter entry a stale `cursors` read can't pull the durable cursor
+    /// backwards. Reads `cursors` and writes `durable_cursors` in SEPARATE lock
+    /// scopes so the two std mutexes are never held simultaneously.
+    fn advance_durable_to_cursor(&self, key: &str) {
+        let cur = *self
+            .cursors
+            .lock()
+            .expect("cursors poisoned")
+            .get(key)
+            .unwrap_or(&0);
+        let mut dur = self.durable_cursors.lock().expect("durable_cursors poisoned");
+        let e = dur.entry(key.to_string()).or_insert(0);
+        if cur > *e {
+            *e = cur;
+        }
+    }
+
+    /// Advance the durable cursor for EVERY filter up to its receipt cursor
+    /// (issue #1277). Called on the terminal delta path: the handler finished
+    /// the last returned event of every filter and completed, so the whole
+    /// durable map may catch up to `cursors`. Monotonic per key.
+    fn advance_durable_all(&self) {
+        let snapshot = self.cursors.lock().expect("cursors poisoned").clone();
+        let mut dur = self.durable_cursors.lock().expect("durable_cursors poisoned");
+        for (k, v) in snapshot {
+            let e = dur.entry(k).or_insert(0);
+            if v > *e {
+                *e = v;
+            }
+        }
+    }
+
+    /// Snapshot the lagging durable cursors to stamp onto an outgoing
+    /// [`JobDelta::recv_cursor`] (issue #1277). `None` when empty so the wire
+    /// field is omitted and the registry leaves the persisted column untouched.
+    fn durable_snapshot(&self) -> Option<HashMap<String, i64>> {
+        let dur = self.durable_cursors.lock().expect("durable_cursors poisoned");
+        if dur.is_empty() {
+            None
+        } else {
+            Some(dur.clone())
+        }
+    }
+
     /// Enqueue a progress update. Coalesces with any prior pending
     /// progress for this job — only the latest survives the next flush.
     pub async fn update_progress(&self, progress: f32, message: Option<String>) {
@@ -447,6 +537,10 @@ impl JobController {
         // Stamp the claim epoch so the registry can fence a superseded owner
         // (no-op when `None` — the field is omitted from the wire).
         delta.claim_epoch = self.claim_epoch;
+        // Ride the LAGGING durable recvEvent cursor up (issue #1277): the
+        // persisted resume point, always trailing receipt so a re-claim replays
+        // the last in-flight event (at-least-once). None when nothing consumed.
+        delta.recv_cursor = self.durable_snapshot();
         let mut q = self.queue.lock().await;
         // Check the terminal sentinel UNDER the queue lock: flush_terminal
         // sets it (and evicts pending) while holding the same lock, so a
@@ -494,6 +588,9 @@ impl JobController {
     pub async fn request_input(&self, prompt: Option<String>) -> Result<(), JobError> {
         let mut delta = JobDelta::input_required(self.job_id.clone(), prompt);
         delta.claim_epoch = self.claim_epoch;
+        // Carry the lagging durable recvEvent cursor (issue #1277) so this
+        // immediately-flushed control-plane delta persists the resume point too.
+        delta.recv_cursor = self.durable_snapshot();
         // Evict any pending coalesced progress delta for this job UNDER the
         // queue lock before the immediate flush — same fence `flush_terminal`
         // uses — so a stale progress delta queued just before this call can't
@@ -536,24 +633,56 @@ impl JobController {
 
     /// Mark the job complete with the given result. Flushes immediately
     /// (terminal status — application is done).
+    ///
+    /// SUCCESS catches the durable cursor up to receipt (issue #1277): a
+    /// completed handler PROVABLY finished the last returned event of every
+    /// filter, so `advance_durable=true`.
     pub async fn complete(&self, result: serde_json::Value) -> Result<(), JobError> {
         let delta = JobDelta::completed(self.job_id.clone(), result);
-        self.flush_terminal(delta).await
+        self.flush_terminal(delta, true).await
     }
 
     /// Mark the job failed with the given error. Flushes immediately.
     /// Retry semantics (or lack thereof) are decided by the registry based
     /// on the job's `max_retries` — see design doc "Failure & Retry".
+    ///
+    /// FAILURE must NOT advance the durable cursor (issue #1277): the handler
+    /// ERRORED on (at least) the last received event, so that event is NOT
+    /// proven-done — advancing durable past it would let a resume-on-retry skip
+    /// it, breaking at-least-once. So `advance_durable=false`: the terminal
+    /// delta stamps the LAGGING `durable_snapshot()` (the last proven-done
+    /// value, exactly like `update_progress`), leaving a re-claim to replay the
+    /// errored event.
     pub async fn fail(&self, error: impl Into<String>) -> Result<(), JobError> {
         let delta = JobDelta::failed(self.job_id.clone(), error);
-        self.flush_terminal(delta).await
+        self.flush_terminal(delta, false).await
     }
 
-    async fn flush_terminal(&self, mut delta: JobDelta) -> Result<(), JobError> {
+    /// Flush a terminal delta immediately. `advance_durable` selects the
+    /// durable-cursor treatment (issue #1277): `true` (success) catches every
+    /// filter's durable cursor up to its receipt cursor before stamping; `false`
+    /// (failure) stamps the lagging snapshot untouched, so the errored event is
+    /// replayed on resume.
+    async fn flush_terminal(
+        &self,
+        mut delta: JobDelta,
+        advance_durable: bool,
+    ) -> Result<(), JobError> {
         // Stamp the claim epoch onto the terminal delta too (no-op when
         // `None`). A terminal write from a superseded owner is rejected
         // claim_superseded rather than stomping the new owner's row.
         delta.claim_epoch = self.claim_epoch;
+        // Durable recvEvent cursor (issue #1277). On SUCCESS the handler proved
+        // it finished the last returned event of every filter → catch the
+        // durable cursors up to the receipt cursors. On FAILURE the handler
+        // errored on the last received event → do NOT advance; the lagging
+        // snapshot leaves that event to be replayed on a resume-retry. Either
+        // way stamp the (post-decision) durable snapshot; coalescing keeps the
+        // latest, which is monotonically the highest — correct.
+        if advance_durable {
+            self.advance_durable_all();
+        }
+        delta.recv_cursor = self.durable_snapshot();
         // Set the per-controller terminal sentinel and evict the pending
         // entry BEFORE dropping the lock — this slams the door on any
         // racing `update_progress` that lands while the backend submit is
@@ -732,6 +861,28 @@ impl JobController {
     ///   no longer exists
     /// - `Err(Backend(...))` for other transport-layer failures (with
     ///   the same transient-error backoff pattern as `JobProxy::wait`)
+    ///
+    /// # Durable-resume contract (issue #1277)
+    ///
+    /// This call is the commit point for the LAGGING [`Self::durable_cursors`]:
+    /// re-entering `recv_event` for filter `K` is treated by the framework as
+    /// PROOF that the handler finished processing filter `K`'s previously
+    /// returned event, so `durable_cursors[K]` is advanced up to the receipt
+    /// cursor `cursors[K]` here (commit-on-next-poll, Kafka-style). The advance
+    /// happens per-filter and only while holding filter `K`'s serialization lock
+    /// (so a concurrent same-filter caller can't race the advance), and NEVER
+    /// touches another filter's durable cursor.
+    ///
+    /// The invariant this rests on — "the handler consumes a filter SEQUENTIALLY:
+    /// it fully processes the returned event before requesting the next one for
+    /// that filter" — is a documented streaming contract, not something the
+    /// framework can fully enforce (an async handler is free to `recv → spawn →
+    /// recv`). A handler that PREFETCHES or processes a filter's events
+    /// CONCURRENTLY MUST NOT enable durable resume: on resume it would skip the
+    /// still-in-flight event, because requesting the next one was taken as proof
+    /// the prior one was done. Sequential-per-filter consumption is required for
+    /// the persisted `recv_cursor` to be safe; Wave-3 user docs carry the
+    /// user-facing version of this rule.
     pub async fn recv_event(
         &self,
         types: Option<Vec<String>>,
@@ -803,6 +954,18 @@ impl JobController {
                 g = filter_lock.lock() => g,
             }
         };
+
+        // Durable-cursor commit (issue #1277) — see the "Durable-resume
+        // contract" section on this method's doc. Now that we HOLD filter K's
+        // serialization lock, catch its lagging durable cursor up to the receipt
+        // cursor: re-entering recv for K proves the handler finished K's last
+        // RETURNED event. Done AFTER lock acquisition (not at bare entry) so a
+        // concurrent same-filter recv can't race the advance itself; strictly
+        // per-filter (never copies the whole map) so a recv on filter A never
+        // advances filter B's durable cursor. The per-key max in
+        // `advance_durable_to_cursor` keeps it monotonic.
+        self.advance_durable_to_cursor(&key);
+
         // Tracks the start of the current contiguous transient-failure
         // window for the same recovery semantics as `JobProxy::wait`.
         let mut transient_failure_started: Option<Instant> = None;
@@ -2944,6 +3107,7 @@ mod tests {
             claim_epoch,
             backend.clone() as Arc<dyn TaskBackend>,
             new_coalescing_queue(),
+            None,
         );
         (backend, ctrl)
     }
@@ -2959,6 +3123,7 @@ mod tests {
             Some(7),
             backend.clone() as Arc<dyn TaskBackend>,
             new_coalescing_queue(),
+            None,
         );
         assert_eq!(with_epoch.claim_epoch(), Some(7));
         let legacy = JobController::new(
@@ -3126,6 +3291,7 @@ mod tests {
             Some(1),
             backend.clone() as Arc<dyn TaskBackend>,
             new_coalescing_queue(),
+            None,
         );
         let h2_ctrl = JobController::new_with_epoch(
             "j-iscancel",
@@ -3133,6 +3299,7 @@ mod tests {
             Some(2),
             backend.clone() as Arc<dyn TaskBackend>,
             new_coalescing_queue(),
+            None,
         );
 
         // Register both execution frames (H1 under H2). The frame tokens are
@@ -3789,6 +3956,283 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(e2.seq, 2, "Some([]) shares the unfiltered cursor with None");
+    }
+
+    // ---- Phase 1 (#1277): durable, framework-persisted recvEvent cursor -----
+    //
+    // The in-memory `cursors` map advances at event RECEIPT; the parallel
+    // `durable_cursors` map LAGS one step behind (it catches up only when the
+    // handler re-enters recv for the same filter, or on terminal). Deltas stamp
+    // the LAGGING value, so persisting it preserves at-least-once across a
+    // re-claim. These tests pin that lag, the terminal catch-up, seeding, and
+    // per-filter independence of the durable advance.
+
+    #[tokio::test]
+    async fn durable_cursor_lags_receipt_and_stamps_lagging_value() {
+        // recv returns seq 1 (cursors[""]=1), but the durable cursor set at
+        // recv-ENTRY is still 0 (nothing yet PROVEN processed). A progress delta
+        // enqueued AFTER receipt but BEFORE the next recv must stamp the durable
+        // (0), NOT the raw cursor (1) — so a resume reads `after=0` and REPLAYS
+        // seq 1 (at-least-once). This is the core at-least-once guarantee.
+        let (backend, ctrl) = make_controller("j-durable-lag").await;
+        backend.push_event("j-durable-lag", "tick", serde_json::json!({}));
+
+        let ev = ctrl
+            .recv_event(None, Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .expect("event seq 1");
+        assert_eq!(ev.seq, 1);
+        // Raw receipt cursor advanced to 1; durable still lags at 0.
+        assert_eq!(*ctrl.cursors.lock().unwrap().get("").unwrap(), 1);
+        assert_eq!(*ctrl.durable_cursors.lock().unwrap().get("").unwrap(), 0);
+
+        // Enqueue a progress delta before re-entering recv.
+        ctrl.update_progress(0.5, None).await;
+        let q = ctrl.queue.lock().await;
+        let delta = q
+            .pending
+            .get("j-durable-lag")
+            .expect("pending progress delta");
+        let rc = delta
+            .recv_cursor
+            .as_ref()
+            .expect("progress delta must stamp recv_cursor");
+        assert_eq!(
+            rc.get(""),
+            Some(&0),
+            "stamped recv_cursor must be the LAGGING durable (0), not the raw receipt cursor (1)"
+        );
+    }
+
+    #[tokio::test]
+    async fn durable_cursor_catches_up_on_terminal() {
+        // On the terminal delta path the durable cursor catches up to the
+        // receipt cursor for every filter (the handler finished the last
+        // returned event and completed). The terminal delta stamps the caught-up
+        // value (== the final received seq).
+        let (backend, ctrl) = make_controller("j-durable-term").await;
+        backend.push_event("j-durable-term", "tick", serde_json::json!({}));
+
+        let ev = ctrl
+            .recv_event(None, Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .expect("event seq 1");
+        assert_eq!(ev.seq, 1);
+        // Durable lags at 0 until the terminal advances it.
+        assert_eq!(*ctrl.durable_cursors.lock().unwrap().get("").unwrap(), 0);
+
+        ctrl.complete(serde_json::json!({"ok": true})).await.unwrap();
+        let (_, deltas) = backend.last_batch().unwrap();
+        let term = &deltas[0];
+        assert_eq!(term.status, Some(JobStatus::Completed));
+        let rc = term
+            .recv_cursor
+            .as_ref()
+            .expect("terminal delta must stamp recv_cursor");
+        assert_eq!(
+            rc.get(""),
+            Some(&1),
+            "terminal catches the durable cursor up to the final received seq"
+        );
+    }
+
+    #[tokio::test]
+    async fn fail_terminal_stamps_lagging_durable_not_advanced() {
+        // FAILURE contrast to complete(): the handler errored on the last
+        // received event, so the failed terminal delta must stamp the LAGGING
+        // durable (< the received seq) and must NOT advance the durable map —
+        // a resume-retry then replays the errored event (at-least-once).
+        let (backend, ctrl) = make_controller("j-fail-lag").await;
+        backend.push_event("j-fail-lag", "tick", serde_json::json!({}));
+
+        let ev = ctrl
+            .recv_event(None, Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .expect("event seq 1");
+        assert_eq!(ev.seq, 1);
+        assert_eq!(*ctrl.durable_cursors.lock().unwrap().get("").unwrap(), 0);
+
+        ctrl.fail("boom").await.unwrap();
+        let (_, deltas) = backend.last_batch().unwrap();
+        let term = &deltas[0];
+        assert_eq!(term.status, Some(JobStatus::Failed));
+        let rc = term
+            .recv_cursor
+            .as_ref()
+            .expect("failed terminal delta must stamp recv_cursor");
+        assert_eq!(
+            rc.get(""),
+            Some(&0),
+            "fail() must stamp the LAGGING durable (0), NOT catch up to the errored seq (1)"
+        );
+        // The durable map itself was left un-advanced.
+        assert_eq!(
+            *ctrl.durable_cursors.lock().unwrap().get("").unwrap(),
+            0,
+            "fail() must not advance durable_cursors"
+        );
+    }
+
+    #[tokio::test]
+    async fn durable_snapshots_coalesce_to_highest() {
+        // Two progress deltas coalesce to ONE pending delta. Because durable is
+        // monotonic and the LATEST snapshot is the highest, the coalesced delta
+        // carries the highest durable value — never a stale lower one.
+        let (backend, ctrl) = make_controller("j-coalesce-mono").await;
+        backend.push_event("j-coalesce-mono", "tick", serde_json::json!({})); // seq 1
+        backend.push_event("j-coalesce-mono", "tick", serde_json::json!({})); // seq 2
+
+        let e1 = ctrl
+            .recv_event(None, Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(e1.seq, 1);
+        ctrl.update_progress(0.3, None).await; // stamps durable {"":0}
+
+        // Second recv (under lock) advances durable[""] to 1, returns seq 2.
+        let e2 = ctrl
+            .recv_event(None, Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(e2.seq, 2);
+        ctrl.update_progress(0.6, None).await; // stamps durable {"":1}, coalesces
+
+        let q = ctrl.queue.lock().await;
+        assert_eq!(q.pending.len(), 1, "progress deltas coalesce to one");
+        let rc = q
+            .pending
+            .get("j-coalesce-mono")
+            .unwrap()
+            .recv_cursor
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            rc.get(""),
+            Some(&1),
+            "coalesced delta must carry the HIGHEST durable (1), not the stale 0"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_input_stamps_lagging_durable() {
+        // request_input flushes immediately; its delta must carry the LAGGING
+        // durable snapshot (like update_progress), not the raw receipt cursor.
+        let (backend, ctrl) = make_controller("j-reqinput-lag").await;
+        backend.push_event("j-reqinput-lag", "tick", serde_json::json!({}));
+
+        let ev = ctrl
+            .recv_event(None, Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .expect("event seq 1");
+        assert_eq!(ev.seq, 1);
+
+        ctrl.request_input(Some("need answer".into())).await.unwrap();
+        let (_, deltas) = backend.last_batch().unwrap();
+        let d = &deltas[0];
+        assert_eq!(d.status, Some(JobStatus::InputRequired));
+        let rc = d
+            .recv_cursor
+            .as_ref()
+            .expect("request_input must stamp recv_cursor");
+        assert_eq!(
+            rc.get(""),
+            Some(&0),
+            "request_input stamps the lagging durable (0), not the received seq (1)"
+        );
+    }
+
+    #[tokio::test]
+    async fn new_with_epoch_seeds_cursors_and_durable() {
+        // Seeding: `Some(map)` seeds BOTH cursors AND durable_cursors. recv then
+        // resumes reading strictly AFTER the seeded seq, and the durable cursor
+        // starts there too (so it still lags the newly-received event).
+        let (backend, _legacy) = make_controller("j-seed").await;
+        backend.push_event("j-seed", "a", serde_json::json!({})); // seq 1
+        backend.push_event("j-seed", "b", serde_json::json!({})); // seq 2
+        backend.push_event("j-seed", "c", serde_json::json!({})); // seq 3
+
+        let mut seed = HashMap::new();
+        seed.insert(String::new(), 2_i64); // unfiltered key = ""
+        let ctrl = JobController::new_with_epoch(
+            "j-seed".to_string(),
+            "inst-1".to_string(),
+            None,
+            backend.clone() as Arc<dyn TaskBackend>,
+            new_coalescing_queue(),
+            Some(seed),
+        );
+
+        // Resumes AFTER seq 2 → returns seq 3 (does NOT replay 1/2).
+        let ev = ctrl
+            .recv_event(None, Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .expect("resumed event");
+        assert_eq!(ev.seq, 3, "seeded cursor resumes after seq 2");
+
+        // Durable was seeded at 2 and lags the just-received seq 3.
+        ctrl.update_progress(0.5, None).await;
+        let q = ctrl.queue.lock().await;
+        let rc = q
+            .pending
+            .get("j-seed")
+            .unwrap()
+            .recv_cursor
+            .as_ref()
+            .expect("recv_cursor stamped");
+        assert_eq!(
+            rc.get(""),
+            Some(&2),
+            "durable seeded at 2 lags the received seq 3 (resume replays seq 3)"
+        );
+    }
+
+    #[tokio::test]
+    async fn durable_advance_is_per_filter() {
+        // A recv on filter A advances ONLY A's durable cursor, never B's. The
+        // whole-map copy happens exclusively on terminal.
+        let (backend, ctrl) = make_controller("j-durable-perfilter").await;
+        backend.push_event("j-durable-perfilter", "A", serde_json::json!({})); // seq 1
+        backend.push_event("j-durable-perfilter", "B", serde_json::json!({})); // seq 2
+        backend.push_event("j-durable-perfilter", "A", serde_json::json!({})); // seq 3
+
+        // recv A → seq 1: durable["A"] set to 0 at entry; cursors["A"]=1.
+        let a1 = ctrl
+            .recv_event(Some(vec!["A".into()]), Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .expect("A seq 1");
+        assert_eq!(a1.seq, 1);
+        // recv B → seq 2: durable["B"] set to 0 at entry — does NOT touch A.
+        let b = ctrl
+            .recv_event(Some(vec!["B".into()]), Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .expect("B seq 2");
+        assert_eq!(b.seq, 2);
+        {
+            let dur = ctrl.durable_cursors.lock().unwrap();
+            assert_eq!(dur.get("A"), Some(&0), "B recv must NOT advance A's durable");
+            assert_eq!(dur.get("B"), Some(&0), "B durable lags its receipt");
+        }
+
+        // recv A again → entry advances durable["A"] to cursors["A"]=1 (A's
+        // seq 1 proven finished), returns seq 3. B's durable stays 0.
+        let a2 = ctrl
+            .recv_event(Some(vec!["A".into()]), Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .expect("A seq 3");
+        assert_eq!(a2.seq, 3);
+        let dur = ctrl.durable_cursors.lock().unwrap();
+        assert_eq!(dur.get("A"), Some(&1), "A recv advanced A's durable to 1");
+        assert_eq!(dur.get("B"), Some(&0), "A recv left B's durable untouched");
     }
 
     /// Grab a clone of the per-filter serialization lock for `types` off a

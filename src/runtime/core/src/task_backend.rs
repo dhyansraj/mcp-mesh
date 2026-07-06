@@ -10,6 +10,7 @@
 //!
 //! See `MESHJOB_DESIGN.org` → "Architecture / Layer map" for context.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -88,6 +89,16 @@ pub struct JobDelta {
     pub result: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Durable per-filter recvEvent cursor snapshot (issue #1277): canonical
+    /// filter key -> highest event seq the handler has PROVABLY finished
+    /// processing for that filter. Stamped by [`crate::jobs::JobController`]
+    /// from its LAGGING `durable_cursors` (never the raw receipt cursor), so
+    /// the persisted value trails receipt and a re-claim replays the last
+    /// in-flight event (at-least-once). `None` (SDKs that don't track a durable
+    /// cursor) is omitted from the wire and the registry leaves the column
+    /// untouched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recv_cursor: Option<HashMap<String, i64>>,
 }
 
 impl JobDelta {
@@ -101,6 +112,7 @@ impl JobDelta {
             progress_message: message,
             result: None,
             error: None,
+            recv_cursor: None,
         }
     }
 
@@ -120,6 +132,7 @@ impl JobDelta {
             progress_message: message,
             result: None,
             error: None,
+            recv_cursor: None,
         }
     }
 
@@ -133,6 +146,7 @@ impl JobDelta {
             progress_message: None,
             result: Some(result),
             error: None,
+            recv_cursor: None,
         }
     }
 
@@ -146,6 +160,7 @@ impl JobDelta {
             progress_message: None,
             result: None,
             error: Some(error.into()),
+            recv_cursor: None,
         }
     }
 
@@ -213,6 +228,14 @@ pub struct ClaimedJob {
     pub lease_expires_at: Option<i64>,
     #[serde(default)]
     pub max_duration: Option<u32>,
+    /// Persisted durable recvEvent cursor for this job (issue #1277), as last
+    /// stamped by a prior owner's deltas. `None` when the job never recorded
+    /// one. A resuming controller MAY seed [`crate::jobs::JobController`]'s
+    /// per-filter cursors from this so it resumes AFTER the last processed
+    /// position instead of replaying from seq 0 — whether to resume is a
+    /// runtime decision (later wave); this field just carries the value down.
+    #[serde(default)]
+    pub recv_cursor: Option<HashMap<String, i64>>,
 }
 
 /// Response from `POST /jobs/claim`.
