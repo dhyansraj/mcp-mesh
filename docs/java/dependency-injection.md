@@ -215,12 +215,29 @@ public class MediaGatewayApplication {
 - Parameters follow the `@MeshTool` convention: **0 params** → no-arg call; **exactly 1 unannotated POJO/record param** → that object becomes the params (scalars still need `@Param`); **2+ params** → each needs `@Param("name")`.
 - Return `T` (synchronous), `CompletableFuture<T>` (async), or `java.util.concurrent.Flow.Publisher<String>` (streaming).
 
+### Views as tool parameters
+
+A view can also be consumed as a `@MeshTool` method **parameter** instead of an autowired bean. The view's methods then become dependency edges **on that tool** — declared after the tool's explicit `@Selector` deps, name-sorted per view, and in parameter order when a method takes several views — so the tool's dep count in `meshctl list` includes them. A view parameter must **not** carry `@Param`.
+
+```java
+@MeshTool(capability = "process_media",
+          dependencies = @Selector(capability = "audit_log"))
+public Result processMedia(
+        @Param(value = "assetId", description = "Asset id") String assetId,
+        McpMeshTool<String> auditLog,
+        MediaService media) {   // view param → media_caption + media_thumbnail + media_transcribe edges
+    ...
+}
+```
+
+The same interface can be used both ways at once — autowired as a bean **and** passed as a tool parameter. The two consumption styles resolve independently (each dependency event feeds both the tool's wrapper slot and the shared bean facade), but shared capabilities register as a **single** wire edge: the tool-declared edge wins, and the bean path's synthetic carrier only registers capabilities not already declared elsewhere — so `meshctl list` shows N edges, not 2N. `minAvailable` still applies at the facade. Crucially, a `required = true` view method now participates in **that tool's** pre-invoke guard: if the edge is unresolved the tool returns the structured `dependency_unavailable` refusal before the handler runs, on both the direct and claim paths — exactly like a tool-declared `@Selector` dependency.
+
 ### Required, optional, and the availability floor
 
 `required = true` on a view method behaves like a class-level `@MeshDependsOn` required dependency (see [Required Dependencies](#required-dependencies) below): it participates in cross-source required-wins dedupe, flips the registry-side availability of that capability's carrier when unresolved (visible in `meshctl list` and the registry API), and promotes any matching route-perimeter 503 guard. An optional method whose provider is down throws `MeshToolUnavailableException` on **that call only**; catch it for graceful degradation while the rest of the view keeps working.
 
-!!! note "One difference from a tool-declared slot"
-    A view is class-level, so the framework cannot know which `@MeshTool` methods call it and does **not** add a pre-invoke structured `dependency_unavailable` refusal to those tools — a call to a required-but-unresolved view method simply throws `MeshToolUnavailableException`, surfacing as an ordinary tool error. If a specific `@MeshTool` needs the pre-invoke structured refusal for a capability, declare it as a `@MeshTool` dependency slot (`dependencies = @Selector(...)`) instead; tool-declared slots get the guard, views do not.
+!!! note "One difference when injected as a bean"
+    An autowired view facade is class-level, so the framework cannot know which `@MeshTool` methods call it and does **not** add a pre-invoke structured `dependency_unavailable` refusal to those tools — a call to a required-but-unresolved view method simply throws `MeshToolUnavailableException`, surfacing as an ordinary tool error. To get the pre-invoke structured refusal for a capability, either declare it as a `@MeshTool` dependency slot (`dependencies = @Selector(...)`), or pass the view as a `@MeshTool` parameter (see [Views as tool parameters](#views-as-tool-parameters) above) — the view's edges become tool-declared and its `required` methods join that tool's guard.
 
 The optional `@McpMeshService(minAvailable = N)` adds a consumer-local availability floor: when fewer than `N` of the view's methods currently resolve, **every** facade call fails with `MeshServiceUnavailableException` — synchronous methods throw, `CompletableFuture` methods return a failed future (settle-grace-aware). The default `0` means no floor — each method soft- or hard-fails per its own `required` flag.
 

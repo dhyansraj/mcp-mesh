@@ -16,7 +16,7 @@ changes. The group is a typed view; the capability remains the atom.
 | `caption-provider`    | 8110 | `media_caption`    | Provider A — captions an asset         |
 | `thumbnail-provider`  | 8111 | `media_thumbnail`  | Provider B — thumbnails an asset       |
 | `transcribe-provider` | 8112 | `media_transcribe` | Provider C — transcribes an asset      |
-| `media-gateway`       | 8113 | `process_media`    | Consumer — one `MediaService` view     |
+| `media-gateway`       | 8113 | `process_media`, `process_media_strict` | Consumer — one `MediaService` view, consumed two ways |
 
 The consumer declares one interface aggregating all three capabilities:
 
@@ -46,6 +46,48 @@ calls the methods directly — no manual proxy wiring. `caption` is `required`;
   `MeshToolUnavailableException` when their provider is absent; the gateway
   catches it and substitutes a fallback, exactly as the feature intends. The
   `required` `caption` edge is expected to always resolve.
+
+## Two ways to consume a service view
+
+The gateway exposes the SAME fan-out logic through two tools, one per
+consumption style:
+
+| Tool                    | View injected as        | Scope        | Missing REQUIRED `caption` provider                                                   | View edges in `meshctl list` |
+|-------------------------|-------------------------|--------------|--------------------------------------------------------------------------------------|------------------------------|
+| `process_media`         | constructor bean (phase 1) | app-wide  | handler runs, then the `caption(...)` call throws `MeshToolUnavailableException`      | none of its own (deduped)    |
+| `process_media_strict`  | `@MeshTool` parameter (phase 2) | tool-scoped | tool returns the structured `dependency_unavailable` refusal **before** the handler runs | yes — 3 edges on this tool   |
+
+> Both tools share the SAME `MediaService` interface, so the three capabilities
+> register **once**, not twice. The bean path's synthetic carrier dedupes against
+> `process_media_strict`'s tool-declared edges (the tool-declared edge wins), so
+> `meshctl list` shows three view edges total — on `process_media_strict` — not
+> six. Had no tool consumed the view, the bean path would register those three on
+> its own synthetic carrier instead.
+
+```java
+// Phase 1 — bean: app-wide facade, no tool-boundary refusal
+@MeshTool(capability = "process_media")
+public Map<String, Object> processMedia(@Param("assetId") String assetId,
+                                        @Param("text") String text) {
+    return combine(this.media, assetId, text);        // this.media is @Autowired
+}
+
+// Phase 2 — tool parameter: view methods become dependency edges ON THIS TOOL,
+// positionally after any explicit @Selector deps; required edges gate the tool.
+@MeshTool(capability = "process_media_strict")
+public Map<String, Object> processStrict(@Param("assetId") String assetId,
+                                         @Param("text") String text,
+                                         MediaService media) {   // NOT @Param
+    return combine(media, assetId, text);
+}
+```
+
+Because `caption` is `required = true`, the tool-parameter form gets a
+tool-boundary pre-invoke guard: the mesh refuses the call with a structured
+error the instant the caption edge is unresolved, so the handler body never runs
+with a missing required dependency. The bean form has no such boundary — the
+view is app-wide and a missing required capability only surfaces as an exception
+mid-handler.
 
 ## Method rules (recap)
 
@@ -78,10 +120,12 @@ meshctl start examples/java/service-view/transcribe-provider
 meshctl start examples/java/service-view/media-gateway
 ```
 
-Once all four are healthy, call the gateway's entry-point tool:
+Once all four are healthy, call either entry-point tool — both fan out across
+all three providers and return the same shape:
 
 ```bash
-meshctl call process_media '{"assetId": "asset-1", "text": "a cat on a sofa"}'
+meshctl call process_media        '{"assetId": "asset-1", "text": "a cat on a sofa"}'
+meshctl call process_media_strict '{"assetId": "asset-1", "text": "a cat on a sofa"}'
 ```
 
 Expected output — one interface, three different serving agents:
@@ -95,15 +139,22 @@ Expected output — one interface, three different serving agents:
 }
 ```
 
-### See graceful degradation
+`process_media_strict` also lists the three view edges as its own dependencies:
 
-Stop one optional provider and call again — only that method degrades. Allow a
-few seconds for the consumer's next heartbeat to rebind before the degraded
-call; an immediate call can still hit the old provider proxy and succeed:
+```bash
+meshctl list   # media-gateway's process_media_strict shows media_caption, media_thumbnail, media_transcribe
+```
+
+### See graceful degradation (optional edge)
+
+Stop one OPTIONAL provider and call again — only that method degrades, in BOTH
+tools. Allow a few seconds for the consumer's next heartbeat to rebind before
+the degraded call; an immediate call can still hit the old provider proxy and
+succeed:
 
 ```bash
 meshctl stop transcribe-provider
-meshctl call process_media '{"assetId": "asset-1", "text": "a cat on a sofa"}'
+meshctl call process_media_strict '{"assetId": "asset-1", "text": "a cat on a sofa"}'
 ```
 
 ```json
@@ -117,6 +168,41 @@ meshctl call process_media '{"assetId": "asset-1", "text": "a cat on a sofa"}'
 
 The `caption` and `thumbnail` methods still resolve to their own agents — proof
 that each view method is an independent dependency edge.
+
+### See the tool-boundary refusal (required edge)
+
+Now stop the REQUIRED `caption-provider` and contrast the two consumption
+styles:
+
+```bash
+meshctl stop caption-provider
+
+# Phase 2 — tool parameter: refused BEFORE the handler runs, with a structured error
+meshctl call process_media_strict '{"assetId": "asset-1", "text": "a cat on a sofa"}'
+```
+
+The call comes back as an MCP error result — `isError: true`, with the structured
+refusal as JSON escaped inside `content[0].text`:
+
+```json
+{
+  "content": [
+    { "type": "text", "text": "{\"error\": \"dependency_unavailable\", \"capability\": \"media_caption\"}" }
+  ],
+  "isError": true
+}
+```
+
+```bash
+# Phase 1 — bean: no tool-boundary gate; the handler runs and the required
+# caption call throws MeshToolUnavailableException, surfacing as a plain tool error
+meshctl call process_media '{"assetId": "asset-1", "text": "a cat on a sofa"}'
+```
+
+Only the tool-parameter form (`process_media_strict`) turns a missing REQUIRED
+view method into a clean, structured pre-invoke refusal — the phase-2 payoff.
+Restart `caption-provider` (and `transcribe-provider`) to return to the healthy
+output above.
 
 Each agent directory also ships the full scaffolded file set (`Dockerfile`,
 `helm-values.yaml`, etc.) for Docker/Kubernetes deployment — see

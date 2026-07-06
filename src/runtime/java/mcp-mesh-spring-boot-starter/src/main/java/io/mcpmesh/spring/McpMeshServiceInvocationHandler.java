@@ -4,7 +4,6 @@ import io.mcpmesh.types.McpMeshTool;
 import io.mcpmesh.types.MeshServiceUnavailableException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
@@ -43,15 +42,33 @@ class McpMeshServiceInvocationHandler implements InvocationHandler {
 
     private static final Logger log = LoggerFactory.getLogger(McpMeshServiceInvocationHandler.class);
 
+    /**
+     * Pluggable per-method proxy + settle-key lookup — the ONLY difference
+     * between the two facade paths (RFC #1280 phase 1 vs phase 2). Floor / param
+     * / return / dispatch logic is shared.
+     *
+     * <ul>
+     *   <li><b>Bean path (phase 1):</b> injector-backed — {@code proxyFor} returns
+     *       {@link MeshDependencyInjector}'s shared per-capability proxy;
+     *       {@code settleKey} is the capability name.</li>
+     *   <li><b>Tool-param path (phase 2):</b> wrapper-slot-backed — {@code proxyFor}
+     *       reads the {@link MeshToolWrapper}'s per-method slot proxy;
+     *       {@code settleKey} is the {@code funcId:dep_N} composite key.</li>
+     * </ul>
+     */
+    interface ViewProxyBinding {
+        /** Non-null proxy for the binding's method (unresolved → an unavailable sentinel). */
+        McpMeshTool<?> proxyFor(McpMeshServiceRegistrar.ServiceMethodBinding binding);
+
+        /** Settle-wait key for the binding's capability (capability name or funcId:dep_N). */
+        String settleKey(McpMeshServiceRegistrar.ServiceMethodBinding binding);
+    }
+
     private final String serviceName;
     private final int minAvailable;
     private final Map<Method, McpMeshServiceRegistrar.ServiceMethodBinding> bindings;
-    private final ConfigurableListableBeanFactory beanFactory;
-    private final AtomicReference<MeshDependencyInjector> injectorRef;
+    private final ViewProxyBinding proxyBinding;
     private final ObjectMapper objectMapper;
-
-    /** Per-method resolved proxy cache — the proxy reference is stable. */
-    private final Map<Method, McpMeshTool<?>> proxyCache = new ConcurrentHashMap<>();
 
     /**
      * Cache for the binding lookup of a Method that isn't an exact key in
@@ -74,13 +91,11 @@ class McpMeshServiceInvocationHandler implements InvocationHandler {
             Class<?> iface,
             int minAvailable,
             List<McpMeshServiceRegistrar.ServiceMethodBinding> bindingList,
-            ConfigurableListableBeanFactory beanFactory,
-            AtomicReference<MeshDependencyInjector> injectorRef,
+            ViewProxyBinding proxyBinding,
             ObjectMapper objectMapper) {
         this.serviceName = iface.getSimpleName();
         this.minAvailable = minAvailable;
-        this.beanFactory = beanFactory;
-        this.injectorRef = injectorRef;
+        this.proxyBinding = proxyBinding;
         this.objectMapper = objectMapper;
         Map<Method, McpMeshServiceRegistrar.ServiceMethodBinding> map = new LinkedHashMap<>();
         for (McpMeshServiceRegistrar.ServiceMethodBinding b : bindingList) {
@@ -192,7 +207,10 @@ class McpMeshServiceInvocationHandler implements InvocationHandler {
             }
             McpMeshTool<?> proxy = proxyFor(b);
             if (!proxy.isAvailable() && !settled) {
-                settle.awaitDependency(b.capability(), b.capability());
+                settle.awaitDependency(proxyBinding.settleKey(b), b.capability());
+                // The wrapper-slot path replaces the slot with a NEW proxy on
+                // resolution (the injector path mutates in place), so re-read.
+                proxy = proxyFor(b);
             }
             if (proxy.isAvailable()) {
                 available++;
@@ -228,19 +246,9 @@ class McpMeshServiceInvocationHandler implements InvocationHandler {
         return available;
     }
 
-    /** Lazily resolve + cache the per-method proxy (stable reference). */
+    /** Resolve the per-method proxy via the pluggable strategy (never null). */
     private McpMeshTool<?> proxyFor(McpMeshServiceRegistrar.ServiceMethodBinding binding) {
-        return proxyCache.computeIfAbsent(binding.method(), m ->
-            injector().getToolProxy(binding.capability(), binding.resolvedProxyType()));
-    }
-
-    private MeshDependencyInjector injector() {
-        MeshDependencyInjector injector = injectorRef.get();
-        if (injector == null) {
-            injector = beanFactory.getBean(MeshDependencyInjector.class);
-            injectorRef.compareAndSet(null, injector);
-        }
-        return injector;
+        return proxyBinding.proxyFor(binding);
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})

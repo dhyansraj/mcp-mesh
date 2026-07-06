@@ -148,7 +148,13 @@ public interface MediaService {
 | -------------- | -------- | -------------------------------------------------------------------------- |
 | `minAvailable` | No       | Availability floor; below it every facade call fails with `MeshServiceUnavailableException` — synchronous methods throw, `CompletableFuture` methods return a failed future (default `0` = no floor) |
 
-Each method expands into an ordinary dependency edge, so a view over N capabilities shows as N dependencies in `meshctl list`. For the full semantics — param-mapping rules, return types, `required`/optional behavior, and the availability floor — see the [Dependency Injection](dependency-injection.md#service-views-with-mcpmeshservice) guide.
+Each method expands into an ordinary dependency edge, so a view over N capabilities shows as N dependencies in `meshctl list`. A view is consumed two ways: `@Autowired` as a facade bean, or passed as a `@MeshTool` **parameter** — where its methods become dependency edges on that tool and any `required` view method joins the tool's pre-invoke `dependency_unavailable` guard:
+
+```java
+public Result process(@Param("id") String id, MediaService media) { ... }  // view param → per-method edges
+```
+
+For the full semantics — param-mapping rules, return types, `required`/optional behavior, the availability floor, and both consumption styles — see the [Dependency Injection](dependency-injection.md#service-views-with-mcpmeshservice) guide.
 
 ## @MeshLlm
 

@@ -21,6 +21,15 @@ async def bravo_tool() -> dict:
     return {"agent": "provider-bravo", "cap": "view-cap-bravo", "msg": "hello-from-bravo"}
 
 
+# RFC #1280 phase 2 (tc06/tc07): tp-cap-* namespace for the Java
+# view_tool_param tool's view PARAMETER — see provider-alpha for why the
+# namespace is distinct from view-cap-*.
+@app.tool()
+@mesh.tool(capability="tp-cap-bravo", description="Self-identifying tool-param payload from provider-bravo")
+async def tp_bravo_tool() -> dict:
+    return {"agent": "provider-bravo", "cap": "tp-cap-bravo", "msg": "hello-from-bravo-tp"}
+
+
 @mesh.agent(
     name="provider-bravo",
     version="1.0.0",

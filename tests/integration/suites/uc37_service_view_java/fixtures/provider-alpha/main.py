@@ -21,6 +21,17 @@ async def alpha_tool() -> dict:
     return {"agent": "provider-alpha", "cap": "view-cap-alpha", "msg": "hello-from-alpha"}
 
 
+# RFC #1280 phase 2 (tc06/tc07): same provider also backs the tp-cap-*
+# namespace consumed by the Java view_tool_param tool's view PARAMETER —
+# deliberately distinct from view-cap-* so the consumer's two dependency
+# carriers (per-tool edges vs the __mesh_service_deps synthetic) stay
+# independently observable in the registry.
+@app.tool()
+@mesh.tool(capability="tp-cap-alpha", description="Self-identifying tool-param payload from provider-alpha")
+async def tp_alpha_tool() -> dict:
+    return {"agent": "provider-alpha", "cap": "tp-cap-alpha", "msg": "hello-from-alpha-tp"}
+
+
 @mesh.agent(
     name="provider-alpha",
     version="1.0.0",

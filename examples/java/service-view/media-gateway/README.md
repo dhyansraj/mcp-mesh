@@ -2,8 +2,15 @@
 
 The consumer in the [`@McpMeshService` service-view example](../README.md).
 Declares one typed `MediaService` interface aggregating three capabilities and
-exposes a `process_media` tool that fans a request out across all three view
-methods — each served by a different provider agent.
+exposes two tools that fan a request out across all three view methods — each
+served by a different provider agent — demonstrating BOTH consumption styles:
+
+- `process_media` — the view is a constructor-injected Spring bean (phase 1).
+- `process_media_strict` — the view is a `@MeshTool` method parameter (phase 2),
+  so its methods become dependency edges on that tool and the `required`
+  `caption` edge gates the tool with the structured `dependency_unavailable`
+  refusal. See the [top-level README](../README.md) for the side-by-side
+  contrast and demo commands.
 
 ## Overview
 
@@ -48,7 +55,8 @@ meshctl start examples/java/service-view/media-gateway
 The agent will start on port 8113 by default. Then:
 
 ```bash
-meshctl call process_media '{"assetId": "asset-1", "text": "a cat on a sofa"}'
+meshctl call process_media        '{"assetId": "asset-1", "text": "a cat on a sofa"}'
+meshctl call process_media_strict '{"assetId": "asset-1", "text": "a cat on a sofa"}'
 ```
 
 ## Project Structure
