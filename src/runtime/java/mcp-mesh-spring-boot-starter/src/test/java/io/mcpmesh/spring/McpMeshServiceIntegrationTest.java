@@ -873,8 +873,12 @@ class McpMeshServiceIntegrationTest {
             assertThat(context).hasNotFailed();
             Views.FloorService floor = context.getBean(Views.FloorService.class);
             CompletableFuture<String> future = floor.deltaAsync();
-            assertThat(future).isCompletedExceptionally();
-            assertThatThrownBy(future::join).hasCauseInstanceOf(MeshServiceUnavailableException.class);
+            // The floored async path runs enforceFloor off-thread (common pool),
+            // so the future completes exceptionally a beat later — AWAIT it
+            // (bounded, no sleep) instead of sampling its immediate state.
+            assertThatThrownBy(() -> future.get(5, java.util.concurrent.TimeUnit.SECONDS))
+                .isInstanceOf(java.util.concurrent.ExecutionException.class)
+                .hasCauseInstanceOf(MeshServiceUnavailableException.class);
         });
     }
 
