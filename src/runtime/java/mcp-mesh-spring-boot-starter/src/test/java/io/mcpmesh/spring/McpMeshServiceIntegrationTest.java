@@ -645,8 +645,8 @@ class McpMeshServiceIntegrationTest {
     }
 
     @Test
-    @DisplayName("MED-4: @McpMeshService on a class boot-fails")
-    void meshServiceOnClassBootFail() {
+    @DisplayName("Phase 3: a producer class with a blank prefix boot-fails (needs a name prefix)")
+    void producerClassBlankPrefixBootFails() {
         // Phase 3: a producer class annotated @McpMeshService with a BLANK prefix
         // boot-fails (needs a name prefix).
         runnerFor("io.mcpmesh.spring.svbad.onclass", BlankPrefixConfig.class).run(context -> {

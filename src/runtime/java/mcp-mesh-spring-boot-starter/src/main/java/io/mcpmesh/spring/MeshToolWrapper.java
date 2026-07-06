@@ -491,9 +491,10 @@ public class MeshToolWrapper implements McpToolHandler {
                 // RFC #1280 phase 2/3: near-miss view param. A @McpMeshService
                 // INTERFACE param (direct or inherited) is a valid view and was
                 // already skipped into viewParamPositions above; only a
-                // @McpMeshService-annotated CLASS reaches here — a class cannot
-                // be a view param (a class-level @McpMeshService publishes methods
-                // as tools on the producer side, it is not an injectable view).
+                // non-interface type that carries or inherits @McpMeshService
+                // reaches here — a class cannot be a view param (a class-level
+                // @McpMeshService publishes methods as tools on the producer
+                // side, it is not an injectable view).
                 if (!type.isInterface()
                         && AnnotationUtils.findAnnotation(type, McpMeshService.class) != null) {
                     throw new IllegalStateException(
@@ -502,7 +503,8 @@ public class MeshToolWrapper implements McpToolHandler {
                             + "Parameter at position " + i + " (type " + type.getName()
                             + ") in method " + method.getName() + " of "
                             + method.getDeclaringClass().getName()
-                            + " is a class annotated @McpMeshService.");
+                            + " carries or inherits @McpMeshService but is not an interface, "
+                            + "so it cannot be a view parameter.");
                 }
                 // Regular MCP parameter - must have @Param
                 Param paramAnn = param.getAnnotation(Param.class);

@@ -374,7 +374,11 @@ class McpMeshServiceToolParamTest {
         assertTrue(ex.getMessage().contains("view parameters must be @McpMeshService interfaces"),
             ex.getMessage());
         assertTrue(ex.getMessage().contains("publishes methods as tools (producer side)"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("carries or inherits @McpMeshService but is not an interface"),
+            ex.getMessage());
         assertTrue(ex.getMessage().contains(ClassParamBean.class.getName()), ex.getMessage());
+        assertTrue(ex.getMessage().contains(AnnotatedClassView.class.getName()),
+            "message names the resolved parameter type: " + ex.getMessage());
     }
 
     @Test

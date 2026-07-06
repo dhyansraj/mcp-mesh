@@ -263,7 +263,7 @@ public class MediaProvider {
 - Methods publish in **name-sorted** order. Only **public, instance** methods **declared on the class itself** are published — non-public, `static`, `Object`, and inherited-from-superclass methods are skipped.
 - An **explicit `@MeshTool`** on a method wins — use it whenever a method needs a custom capability, tags, version, or description; producer sugar synthesizes none of those.
 - **Overloaded** public methods collide on `prefix.<name>` and boot-fail: rename one, make one non-public, or give one an explicit `@MeshTool`.
-- `minAvailable` is a consumer-view attribute; on a producer class it logs a WARN and is ignored. A `@McpMeshService` class that Spring doesn't manage as a bean WARNs at scan time and publishes nothing.
+- `minAvailable` is a consumer-view attribute; on a producer class it logs a WARN and is ignored. A `@McpMeshService` class that Spring doesn't manage as a bean WARNs during startup, after bean initialization, and publishes nothing.
 
 !!! note "Discovery caveat"
     An auto-registered facade **bean** requires `@McpMeshService` directly on the interface. An interface that only *inherits* `@McpMeshService` from a super-interface is still usable as a `@MeshTool` view parameter, but is not auto-discovered as a bean.
