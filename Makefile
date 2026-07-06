@@ -507,7 +507,7 @@ npm-clean:
 	@echo "✅ npm artifacts cleaned"
 
 # Dashboard
-.PHONY: ui-install ui-dev ui-build ui-clean
+.PHONY: ui-install ui-dev ui-build ui-test ui-clean
 
 ui-install:
 	cd src/ui && npm install
@@ -517,6 +517,9 @@ ui-dev:
 
 ui-build:
 	cd src/ui && npm run build
+
+ui-test:
+	cd src/ui && npm run test
 
 ui-clean:
 	rm -rf src/ui/dist
@@ -571,6 +574,7 @@ help:
 	@echo "  ui-install    - Install dashboard dependencies"
 	@echo "  ui-dev        - Start dashboard dev server (port 3000)"
 	@echo "  ui-build      - Build dashboard for production"
+	@echo "  ui-test       - Run dashboard component/unit tests (vitest)"
 	@echo "  ui-clean      - Clean dashboard build artifacts"
 	@echo "  help          - Show this help"
 	@echo ""
