@@ -740,10 +740,88 @@ per-`types` filter**: each distinct filter is an independent stream with
 its own cursor, so interleaving `recv_event(types=["A"])` and
 `recv_event(types=["B"])` never lets one filter's consumption skip the
 other's earlier events. Delivery is exactly-once within a filter stream
-and at-least-once across different filters. A fresh controller for the
-same `job_id` (e.g. a re-claim) replays every filter from `seq=0`; the
-running handler always sees events in monotonic seq order within a
-stream.
+and at-least-once across different filters. Within a stream the running
+handler always sees events in monotonic seq order.
+
+**On (re-)claim the default replays every filter from `seq=0`.** A fresh
+controller for the same `job_id` (e.g. a re-claim) starts each filter at the
+beginning of the log. That is the safe default for idempotent or
+cheap-to-recompute handlers.
+
+#### `resume_cursor` — durable cursor resume (opt-in)
+
+A **task tool** can opt into a durable per-filter cursor so a re-claimed
+handler resumes **after** the last processed event instead of replaying from
+`seq=0`. Reach for it when the per-event work is non-idempotent or expensive
+and must not be redone on re-claim:
+
+<!-- markdownlint-disable MD046 -->
+=== "Python"
+
+    ```python
+    @app.tool()
+    @mesh.tool(capability="run_workflow", task=True, resume_cursor=True)
+    async def run_workflow(tenant_id: str, job: MeshJob = None) -> dict:
+        while True:
+            event = await job.recv_event(types=["user_input"], timeout_secs=10.0)
+            if event is None:
+                continue
+            # ...process sequentially, then loop to request the next event...
+    ```
+
+=== "TypeScript"
+
+    ```typescript
+    agent.addTool({
+      name: "run_workflow",
+      capability: "run_workflow",
+      task: true,
+      resumeCursor: true,
+      execute: async ({ tenant_id }, job: MeshJob | null = null) => {
+        if (!job) throw new Error("job slot is not bound");
+        while (true) {
+          const event = await job.recvEvent(["user_input"], 10);
+          if (event === null) continue;
+          // ...process sequentially, then loop to request the next event...
+        }
+      },
+    });
+    ```
+
+=== "Java"
+
+    ```java
+    @MeshTool(capability = "run_workflow", task = true, resumeCursor = true)
+    public Map<String, Object> runWorkflow(
+        @Param("tenant_id") String tenantId,
+        MeshJob job) throws Exception {
+      JobController controller = (JobController) job;
+      while (true) {
+        Map<String, Object> event = controller.recvEvent(
+            List.of("user_input"), Duration.ofSeconds(10));
+        if (event == null) continue;
+        // ...process sequentially, then loop to request the next event...
+      }
+    }
+    ```
+<!-- markdownlint-enable MD046 -->
+
+The framework persists each per-filter cursor on the job row through the
+normal **epoch-fenced delta flush**; on re-claim the new controller resumes
+past the persisted seqs. This preserves **at-least-once**: a crash replays
+only the un-flushed tail — a small, bounded replay of the most recent events
+— never the whole log. Handlers must still tolerate that bounded replay;
+design for at-least-once, not exactly-once.
+
+!!! danger "Durable resume requires sequential per-filter consumption"
+
+    The cursor advances when the handler requests the *next* event of a
+    filter — that `recv_event` call is treated as proof the prior event
+    finished (commit-on-poll, Kafka-style). A handler that **prefetches** or
+    processes a filter's events **concurrently** (recv → spawn async → recv
+    again before the first finished) must **not** enable `resume_cursor`:
+    resume would skip the still-in-flight event. If you pipeline a filter,
+    stay on the replay-from-`seq=0` default (or checkpoint yourself).
 
 ### Posting events from outside the handler
 

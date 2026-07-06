@@ -1,0 +1,249 @@
+# tc32_resume_cursor_off_replays_from_zero_java — CONTROL for tc31_java (#1277).
+#
+# Java port of uc21/tc32. Same fixture, same forced reclaim, same event log —
+# the ONLY difference is the tool's opt-in: replay_task is declared WITHOUT
+# `resumeCursor`, so the re-claimed JNA controller is NOT seeded (opened via the
+# plain JobController.open, not openWithResume) and recvEvent REPLAYS from seq 0.
+# seq=1 / seq=2 appear TWICE here vs ONCE in tc31_java. That single-bit contrast
+# proves the resume is the opt-in, not the reclaim.
+#
+# See uc21_meshjob/tc32_resume_cursor_off_replays_from_zero/test.yaml for the
+# full writeup. RECLAIM MECHANISM / TIMEOUT BUDGET: identical to tc31_java.
+
+name: "MeshJob Java: resume_cursor OFF (control) REPLAYS recvEvent from seq 0 on reclaim"
+description: "Java replay_task (no resumeCursor) re-claimed via meshctl job reclaim replays from seq 0 — every pre-reclaim event consumed twice; proves the tc31_java resume is the opt-in"
+tags:
+  - meshjob
+  - java
+  - issue-1277
+  - events
+  - resume-cursor
+  - reclaim
+  - control
+  - slow
+timeout: 420
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-java /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-java /workspace/
+
+  - name: "Install provider deps"
+    handler: maven-install
+    path: /workspace/long-task-provider-java
+    timeout: 600
+
+  - name: "Install consumer deps"
+    handler: maven-install
+    path: /workspace/long-task-consumer-java
+    timeout: 600
+
+  # DEFAULT knobs — the forced reclaim must be the ONLY lease actor.
+  - routine: start_registry
+
+  - name: "Start provider (port 9120)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
+
+  - name: "Wait for Java provider healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] && exit 0; sleep 2
+      done
+      echo "ERROR: provider not healthy"
+      meshctl logs long-task-provider-java 2>&1 | tail -50 || true
+      exit 1
+    timeout: 150
+
+  - name: "Start consumer (port 9121)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-java --env MCP_MESH_HTTP_PORT=9121 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  - name: "Wait for provider + consumer healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(curl -s http://localhost:8000/agents)
+        OK=1
+        S=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] || OK=0
+        S=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] || OK=0
+        if [ "$OK" = "1" ]; then
+          echo "all agents healthy after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: agents not healthy within 120s"
+      meshctl logs long-task-provider-java 2>&1 | tail -50 || true
+      meshctl logs long-task-consumer-java 2>&1 | tail -50 || true
+      curl -s http://localhost:8000/agents | jq '.agents[] | {name, status, last_seen}'
+      exit 1
+    capture: wait_registration
+    timeout: 150
+
+  - name: "Submit replay_task (resumeCursor OFF — control)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_replay '{}'
+    capture: submit_resp
+    timeout: 60
+
+  - name: "Capture job_id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      # Portable job_id extraction across all three runtimes (#1282): the
+      # job_id lives as escaped JSON inside content[0].text on EVERY runtime,
+      # whereas structuredContent.job_id exists only on Python. fromjson?
+      # guards absent/non-JSON text → empty (no crash) so a bad response
+      # surfaces as an empty JOB_ID the gate step fails loudly on.
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson? | .job_id // empty' 2>/dev/null)
+      echo "JOB_ID=${JOB_ID}"
+    capture: job_id_extract
+
+  - name: "Post work events e1..e5 (non-final)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      echo "JOB_ID=${JOB_ID}"
+      for n in 1 2 3 4 5; do
+        SEQ=$(curl -s -X POST "http://localhost:8000/jobs/${JOB_ID}/events" \
+          -H 'Content-Type: application/json' \
+          -d "{\"type\":\"work\",\"payload\":{\"i\":${n}}}" | jq -r '.seq')
+        echo "posted work i=${n} seq=${SEQ}"
+      done
+    capture: post_events
+    timeout: 30
+
+  - name: "Gate: durable recv_cursor.work flushed >= 2"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      for i in $(seq 1 40); do
+        RC=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.recv_cursor.work // 0')
+        echo "poll ${i}: recv_cursor.work=${RC}"
+        if [ "${RC}" -ge 2 ] 2>/dev/null; then
+          echo "CURSOR_FLUSHED=1 recv_cursor.work=${RC}"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: recv_cursor.work never reached 2 within 40s"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status, recv_cursor, attempt_count, claim_epoch}'
+      exit 1
+    capture: flush_gate
+    timeout: 50
+
+  - name: "Force-reclaim the job via meshctl"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      meshctl job reclaim "${JOB_ID}"
+    capture: reclaim_out
+    timeout: 30
+
+  - name: "Wait for the re-claim (epoch 2, attempt 2)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      for i in $(seq 1 40); do
+        ROW=$(curl -s "http://localhost:8000/jobs/${JOB_ID}")
+        OK=$(echo "$ROW" | jq '(.claim_epoch == 2) and (.attempt_count == 2)')
+        if [ "$OK" = "true" ]; then
+          echo "RECLAIMED_E2=1 after ~${i}s"
+          echo "$ROW" | jq -c '{status, owner_instance_id, claim_epoch, attempt_count, recv_cursor}'
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: job was not re-claimed at epoch 2 within 40s"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '.'
+      exit 1
+    capture: reclaim2_wait
+    timeout: 50
+
+  - name: "Post the final terminator and wait for completion"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      SEQ=$(curl -s -X POST "http://localhost:8000/jobs/${JOB_ID}/events" \
+        -H 'Content-Type: application/json' \
+        -d '{"type":"work","payload":{"i":6,"final":true}}' | jq -r '.seq')
+      echo "posted terminator seq=${SEQ}"
+      for i in $(seq 1 30); do
+        ST=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.status')
+        echo "poll ${i}: status=${ST}"
+        if [ "$ST" = "completed" ]; then
+          echo "COMPLETED=1 after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: job did not complete within 30s of the terminator"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status, error, recv_cursor}'
+      exit 1
+    capture: completion_wait
+    timeout: 45
+
+  - name: "Compute processed-seq counts from the sink"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      SINK="/tmp/uc23-resume-processed-${JOB_ID}"
+      echo "SINK=${SINK}"
+      # grep -c prints 0 AND exits 1 on a zero count, so a bare `|| echo 0`
+      # would emit a doubled `0`. Capture then default-to-0 so exactly one
+      # value is emitted per seq (single-0 on zero/absent).
+      S1=$(grep -c '^seq=1$' "${SINK}" 2>/dev/null || true); echo "SEQ1_COUNT=${S1:-0}"
+      S2=$(grep -c '^seq=2$' "${SINK}" 2>/dev/null || true); echo "SEQ2_COUNT=${S2:-0}"
+      S6=$(grep -c '^seq=6$' "${SINK}" 2>/dev/null || true); echo "SEQ6_COUNT=${S6:-0}"
+      echo "--- full sink ---"
+      cat "${SINK}" 2>/dev/null || echo "(sink missing)"
+    capture: sink_counts
+
+assertions:
+  - expr: "${captured.wait_registration} contains 'healthy'"
+    message: "both agents must be healthy before the job is submitted"
+  - expr: "${captured.flush_gate} contains 'CURSOR_FLUSHED=1'"
+    message: "the durable recv_cursor for 'work' must reach >= 2 before the reclaim (the registry persists it regardless of the tool flag)"
+  - expr: "${captured.reclaim_out} contains 'reclaimed'"
+    message: "meshctl job reclaim must report success"
+  - expr: "${captured.reclaim_out} not contains '(none'"
+    message: "an actual owner must have been evicted — the parked attempt 1 was claimed when reclaimed"
+  - expr: "${captured.reclaim2_wait} contains 'RECLAIMED_E2=1'"
+    message: "the reclaimed job must be re-claimed at epoch 2 / attempt 2"
+  - expr: "${captured.completion_wait} contains 'COMPLETED=1'"
+    message: "attempt 2 must drive the job to completed via the terminator"
+
+  # THE CONTROL — replay-from-0 through the JNA binding.
+  - expr: "${captured.sink_counts} contains 'SEQ1_COUNT=2'"
+    message: "CONTROL: with resumeCursor OFF, seq=1 must be processed TWICE (attempt 2 replays from seq 0). A value of 1 means the default wrongly resumed."
+  - expr: "${captured.sink_counts} contains 'SEQ2_COUNT=2'"
+    message: "CONTROL: seq=2 must be processed TWICE under replay-from-0"
+  - expr: "${captured.sink_counts} not contains 'SEQ1_COUNT=1'"
+    message: "the default (no opt-in) must NOT resume — seq=1 processed once would mean resume leaked into the control"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

@@ -50,6 +50,33 @@ routines:
         capture: registry_start
         timeout: 30
 
+  # Start the registry with DEFAULT knobs — no fast sweep, no stale ceiling.
+  # Used by the durable-cursor resume tests (tc31 / tc32, issue #1277): those
+  # force a re-claim ON DEMAND via `meshctl job reclaim`, so the sweep must not
+  # be a confounder. With the default 5min tick and a 60s lease renewed every
+  # recvEvent round (poll-liveness), the admin reclaim is provably the ONLY
+  # actor that can evict the owner inside the window (uc36 rationale). Mirror of
+  # uc21_meshjob/routines.yaml::start_registry.
+  start_registry:
+    description: "Start the mesh registry with default knobs (admin reclaim must be the only lease actor)"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: |
+          meshctl start --registry-only -d
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              echo "registry ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "ERROR: registry did not become ready in 20s"
+          tail -50 ~/.mcp-mesh/logs/registry.log 2>/dev/null || true
+          exit 1
+        capture: registry_start
+        timeout: 30
+
   # Stop everything started by this test (agents + registry).
   stop_all:
     description: "Stop all mesh processes started by this test"

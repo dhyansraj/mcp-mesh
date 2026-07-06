@@ -82,6 +82,69 @@ async def event_aware_long_task(controller: MeshJob = None) -> dict:
         )
 
 
+@app.tool()
+@mesh.tool(
+    capability="resumable_event_task",
+    task=True,
+    resume_cursor=True,
+    description=(
+        "Durable variant of event_aware_long_task. Opts into "
+        "resume_cursor so a re-claimed run resumes after the last "
+        "processed event instead of replaying its event log from seq 0."
+    ),
+)
+async def resumable_event_task(controller: MeshJob = None) -> dict:
+    """Accumulate each ``work`` event's amount, exit cleanly on ``stop``.
+
+    ``resume_cursor=True`` (issue #1277): if this job is re-claimed after a
+    crash or reclaim, the handler resumes ``recv_event`` from the persisted
+    per-filter cursor — it does NOT replay the event log from seq 0, so the
+    non-idempotent ``total += amount`` accumulation below is not re-applied
+    for events already consumed on the prior claim.
+
+    Resume contract:
+      * At-least-once still holds: a bounded tail of already-processed events
+        may replay on resume, so keep per-event effects tolerant of a rare
+        repeat (or fence on ``event['seq']``).
+      * Consumption MUST stay strictly sequential-per-filter: process each
+        event fully before calling ``recv_event`` again. Do NOT prefetch a
+        batch or fan events out to concurrent workers — the persisted cursor
+        only advances correctly for in-order, one-at-a-time draining.
+    """
+    if controller is None:
+        return {"error": "no job controller injected"}
+
+    total = 0
+    processed = 0
+    while True:
+        event = await controller.recv_event(
+            types=["work", "stop"], timeout_secs=30.0
+        )
+        if event is None:
+            continue
+
+        if event["type"] == "stop":
+            payload = {
+                "processed": processed,
+                "total": total,
+                "status": "stopped",
+            }
+            await controller.complete(payload)
+            return payload
+
+        # Sequential-per-filter: this non-idempotent accumulation runs once
+        # per event, in order, before we request the next one. The persisted
+        # cursor advances only because we never prefetch or spawn here.
+        amount = (event.get("payload") or {}).get("amount", 1)
+        total += amount
+        processed += 1
+        await controller.update_progress(
+            min(processed / 10.0, 0.99),
+            f"applied work item {processed} "
+            f"(seq={event['seq']}, total={total})",
+        )
+
+
 @mesh.agent(
     name="event-aware-provider",
     version="1.0.0",

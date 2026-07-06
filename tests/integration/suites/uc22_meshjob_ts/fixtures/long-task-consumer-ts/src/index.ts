@@ -651,6 +651,56 @@ agent.addTool({
   },
 });
 
+// ---------------------------------------------------------------------------
+// Durable recvEvent cursor resume submitters (tc31 / tc32, issue #1277)
+// ---------------------------------------------------------------------------
+//
+// Both submit-only: return the job_id and let the TC driver post the 'work'
+// events + force the reclaim via meshctl and raw registry HTTP. maxRetries=1
+// budgets exactly the one forced reclaim (attempt 2). maxDuration=60 sizes a
+// lease window that poll-liveness (each recvEvent round) keeps renewed, so the
+// ONLY eviction actor is the admin reclaim — no natural lease lapse confounds.
+// ---------------------------------------------------------------------------
+agent.addTool({
+  name: "commission_resume",
+  capability: "commission_resume",
+  dependencies: [{ capability: "resume_task" }],
+  meshJobDepIndex: 0,
+  description:
+    "Submit resume_task (resumeCursor ON) and return the job_id; driver posts events + reclaims.",
+  parameters: z.object({}).passthrough(),
+  execute: async (_args, resumeTask: MeshJob | null = null) => {
+    if (!resumeTask?.submit) {
+      return { error: "resume_task submitter not injected" };
+    }
+    const proxy = await resumeTask.submit(
+      {},
+      { maxDuration: 60, maxRetries: 1 },
+    );
+    return { job_id: (proxy as { jobId?: string }).jobId ?? null };
+  },
+});
+
+agent.addTool({
+  name: "commission_replay",
+  capability: "commission_replay",
+  dependencies: [{ capability: "replay_task" }],
+  meshJobDepIndex: 0,
+  description:
+    "Submit replay_task (resumeCursor OFF — control) and return the job_id; driver posts events + reclaims.",
+  parameters: z.object({}).passthrough(),
+  execute: async (_args, replayTask: MeshJob | null = null) => {
+    if (!replayTask?.submit) {
+      return { error: "replay_task submitter not injected" };
+    }
+    const proxy = await replayTask.submit(
+      {},
+      { maxDuration: 60, maxRetries: 1 },
+    );
+    return { job_id: (proxy as { jobId?: string }).jobId ?? null };
+  },
+});
+
 console.log(
   `long-task-consumer-ts uc22 fixture defined on port ${HTTP_PORT}. Waiting for auto-start...`,
 );

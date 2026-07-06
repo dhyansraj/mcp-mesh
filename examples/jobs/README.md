@@ -80,7 +80,9 @@ demonstrate the pattern end-to-end:
 
 - `event-aware-provider/main.py` — registers `event_aware_long_task`
   as `task=True`. Loops on `controller.recv_event(types=["work", "stop"])`,
-  processing `work` events and exiting cleanly on `stop`.
+  processing `work` events and exiting cleanly on `stop`. The same file
+  also registers `resumable_event_task`, a durable variant that adds
+  `resume_cursor=True` (issue #1277) — see below.
 - `event-aware-consumer/main.py` — registers `drive_event_aware_task`
   which depends on `event_aware_long_task`. Submits the job, spawns a
   background subscriber via `mesh.jobs.subscribe_events`, posts 3
@@ -136,6 +138,35 @@ the symmetry between `recv_event`/`post_event`/`send_event`, the
 synthetic-cancel-event pattern, and the multi-cursor semantics — see
 [`docs/concepts/jobs.md#event-injection`](../../docs/concepts/jobs.md#event-injection)
 and [`#stream-subscription`](../../docs/concepts/jobs.md#stream-subscription).
+
+### Durable cursor resume (`resume_cursor`, issue #1277)
+
+By default a re-claimed task handler replays its event log from seq 0 —
+correct for idempotent handlers, but wrong for one that accumulates
+non-idempotent per-event state. The provider's second tool,
+`resumable_event_task`, opts in:
+
+```python
+@mesh.tool(capability="resumable_event_task", task=True, resume_cursor=True)
+async def resumable_event_task(controller: MeshJob = None) -> dict:
+    ...
+```
+
+With `resume_cursor=True`, a handler re-claimed after a crash or reclaim
+resumes `recv_event` from the persisted per-filter cursor — it does not
+replay already-consumed events, so its `total += amount` accumulation is
+not double-applied. Two rules the handler must honor to opt in safely:
+
+- **Still design for at-least-once.** A bounded tail of already-processed
+  events may replay on resume; keep per-event effects tolerant of a rare
+  repeat (or fence on `event["seq"]`).
+- **Consume strictly sequential-per-filter.** Process each event fully
+  before the next `recv_event`; never prefetch a batch or fan events out
+  to concurrent workers — the persisted cursor only advances correctly
+  for in-order, one-at-a-time draining.
+
+Drive it exactly like the base task, targeting the `resumable_event_task`
+capability instead.
 
 ## What's NOT in v2.2 yet
 

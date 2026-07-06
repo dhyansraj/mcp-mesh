@@ -94,4 +94,63 @@ agent.addTool({
   },
 });
 
+agent.addTool({
+  name: "resumable_event_task",
+  capability: "resumable_event_task",
+  task: true,
+  // Issue #1277: opt into durable cursor resume. On re-claim the handler
+  // resumes recvEvent from the persisted per-filter cursor instead of
+  // replaying its event log from seq 0, so the non-idempotent `total +=`
+  // accumulation below is not re-applied for events already consumed.
+  //   * At-least-once still holds: a bounded tail may replay on resume, so
+  //     keep per-event effects tolerant of a rare repeat (or fence on seq).
+  //   * Consumption MUST stay strictly sequential-per-filter: process each
+  //     event fully before the next recvEvent. Do NOT prefetch or fan out to
+  //     concurrent workers — the persisted cursor only advances correctly for
+  //     in-order, one-at-a-time draining.
+  resumeCursor: true,
+  // Sig pos 0 is the args object; the MeshJob controller lands at 1.
+  meshJobParamIndex: 1,
+  description:
+    "Durable variant of event_aware_long_task. Opts into resumeCursor so " +
+    "a re-claimed run resumes after the last processed event instead of " +
+    "replaying its event log from seq 0.",
+  parameters: z.object({}).passthrough(),
+  execute: async (_args, controller: MeshJob | null = null) => {
+    if (!controller?.recvEvent) {
+      return { error: "no job controller injected" };
+    }
+
+    let total = 0;
+    let processed = 0;
+    while (true) {
+      const event = await controller.recvEvent(["work", "stop"], 30);
+      if (event === null) {
+        continue;
+      }
+
+      if (event.type === "stop") {
+        const payload = { processed, total, status: "stopped" };
+        if (controller.complete) {
+          await controller.complete(payload);
+        }
+        return payload;
+      }
+
+      // Sequential-per-filter: this non-idempotent accumulation runs once
+      // per event, in order, before we request the next one.
+      const amount =
+        (event.payload as { amount?: number } | null)?.amount ?? 1;
+      total += amount;
+      processed += 1;
+      if (controller.updateProgress) {
+        await controller.updateProgress(
+          Math.min(processed / 10.0, 0.99),
+          `applied work item ${processed} (seq=${event.seq}, total=${total})`,
+        );
+      }
+    }
+  },
+});
+
 console.log("event-aware-provider-ts agent defined. Waiting for auto-start...");

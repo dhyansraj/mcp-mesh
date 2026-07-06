@@ -18,6 +18,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -632,5 +633,142 @@ public class LongTaskProviderApplication {
         Map<String, Object> neverAnswered = new LinkedHashMap<>();
         neverAnswered.put("status", "never_answered");
         return neverAnswered;
+    }
+
+    // -------------------------------------------------------------------
+    // Durable recvEvent cursor resume (tc31 / tc32 — issue #1277)
+    // -------------------------------------------------------------------
+    //
+    // Java port of uc21's resume_task/replay_task and uc22's TS twins. Two
+    // capabilities with the SAME body but opposite {@code resumeCursor} opt-in —
+    // this is the first e2e exercise of the JNA/C-FFI binding's core resume
+    // (Wave-2 unit tests bound to MOCKED controllers).
+    //
+    // Both loop on {@code recvEvent(["work"])}, record every processed seq to a
+    // job-id-keyed sink, and emit {@code updateProgress} AFTER each event. The
+    // progress delta FLUSHES the lagging durable recv_cursor to the registry
+    // (the cursor rides the delta, trailing receipt by one — at-least-once). On a
+    // re-claim the claim response carries the persisted recv_cursor; the Java
+    // ClaimDispatcher opens the new controller via
+    // {@code JobController.openWithResume(...)} when {@code resumeCursor=true},
+    // so {@code recvEvent} resumes AFTER the persisted position instead of
+    // replaying from seq 0.
+    //
+    //   - resume_task (resumeCursor=true)  — early durably-flushed events are
+    //     consumed EXACTLY ONCE across both claims (resume).
+    //   - replay_task (resumeCursor absent) — control: a re-claim replays from
+    //     seq 0, so every pre-reclaim event is consumed a SECOND time.
+    //
+    // The ONLY difference is the annotation flag, so any behavioural divergence
+    // the integration TCs observe is attributable to the opt-in alone. Note
+    // (Java-specific): a superseded attempt-1's next recvEvent is rejected by the
+    // registry (epoch fencing) and throws / returns null; because a single
+    // controller's cursor is monotonic it never re-returns an early seq, so
+    // attempt 1 records each early seq at most once regardless — the
+    // count(seq=1)==1 resume assertion is robust to Java's blocking model.
+    // -------------------------------------------------------------------
+
+    // Single-type filter ["work"] canonicalises to the bare key "work" on the
+    // registry side (jobs.rs::filter_key) — the integration gate reads
+    // .recv_cursor.work.
+    private static final List<String> RESUME_FILTER = List.of("work");
+
+    private static Path resumeSinkPath(String jobId) {
+        // SINGLE-REPLICA ASSUMPTION: this /tmp sink assumes the SAME provider
+        // process re-claims the job after the reclaim (the suite runs one
+        // provider = sole claimant, so attempt 1 and attempt 2 share a
+        // filesystem). If this fixture is ever scaled to 2+ replicas the sink
+        // must move to a tool-call / registry read (e.g. job progress or the
+        // event log), since a reclaim could land on a different node whose
+        // /tmp the driver cannot see.
+        return Paths.get("/tmp/uc23-resume-processed-" + jobId);
+    }
+
+    /**
+     * Append one processed-seq line. The driver counts occurrences of a given
+     * seq across BOTH claims: exactly-once ⇒ resume, twice ⇒ replay-from-0.
+     * Synchronized so a superseded attempt racing the resumed one can't
+     * interleave a half-written line.
+     */
+    private static synchronized void recordProcessedSeq(String jobId, Object seq) {
+        try {
+            Files.write(
+                resumeSinkPath(jobId),
+                ("seq=" + seq + "\n").getBytes(StandardCharsets.UTF_8),
+                StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        } catch (IOException e) {
+            throw new RuntimeException("failed to record processed seq", e);
+        }
+    }
+
+    private static Map<String, Object> consumeWorkLoop(JobController controller) {
+        List<Object> processed = new ArrayList<>();
+        // Bounded loop (safety net). 60 rounds * 3s = 180s park ceiling — longer
+        // than the reclaim window, shorter than the TC timeout so a wedged run
+        // fails loudly. A superseded attempt's next recvEvent is rejected
+        // claim_superseded and throws / returns null; we record NOTHING on that
+        // path (recvEvent returns no event), so a superseded attempt contributes
+        // no spurious seqs.
+        for (int i = 0; i < 60; i++) {
+            Map<String, Object> event = controller.recvEvent(
+                RESUME_FILTER, Duration.ofSeconds(3));
+            if (event == null) {
+                // No work yet — keep parking across the reclaim boundary.
+                continue;
+            }
+            Object seq = event.get("seq");
+            recordProcessedSeq(controller.jobId(), seq);
+            processed.add(seq);
+            // Flush the lagging durable cursor by emitting a progress delta
+            // AFTER processing — the persistence step under test.
+            double prog = seq instanceof Number nseq
+                ? Math.min(nseq.doubleValue() / 10.0, 0.99) : 0.5;
+            controller.updateProgress(prog, "processed seq=" + seq);
+            Object payloadRaw = event.get("payload");
+            if (payloadRaw instanceof Map<?, ?> payloadMap
+                && Boolean.TRUE.equals(payloadMap.get("final"))) {
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("status", "done");
+                result.put("processed", processed);
+                controller.complete(result);
+                return result;
+            }
+        }
+        Map<String, Object> exhausted = new LinkedHashMap<>();
+        exhausted.put("status", "loop_exhausted");
+        exhausted.put("processed", processed);
+        return exhausted;
+    }
+
+    @MeshTool(
+        capability = "resume_task",
+        task = true,
+        resumeCursor = true,
+        description = "Consume 'work' events; on re-claim RESUMES after the persisted recvEvent cursor (issue #1277 opt-in ON)."
+    )
+    public Map<String, Object> resumeTask(MeshJob job) {
+        JobController controller = job instanceof JobController c ? c : null;
+        if (controller == null) {
+            Map<String, Object> noJob = new LinkedHashMap<>();
+            noJob.put("status", "no_job_ctx");
+            return noJob;
+        }
+        return consumeWorkLoop(controller);
+    }
+
+    @MeshTool(
+        capability = "replay_task",
+        task = true,
+        // resumeCursor defaults false — the control: a re-claim replays from seq 0.
+        description = "Consume 'work' events; on re-claim REPLAYS from seq 0 (issue #1277 opt-in OFF — control)."
+    )
+    public Map<String, Object> replayTask(MeshJob job) {
+        JobController controller = job instanceof JobController c ? c : null;
+        if (controller == null) {
+            Map<String, Object> noJob = new LinkedHashMap<>();
+            noJob.put("status", "no_job_ctx");
+            return noJob;
+        }
+        return consumeWorkLoop(controller);
     }
 }

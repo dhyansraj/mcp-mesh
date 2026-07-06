@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,19 +17,20 @@ import (
 // package (same decoupling as AuditEvent). Only the fields meshctl renders
 // are declared; unknown fields are ignored on decode.
 type jobRecord struct {
-	ID              string `json:"id"`
-	Capability      string `json:"capability"`
-	Status          string `json:"status"`
-	OwnerInstanceID *string `json:"owner_instance_id"`
-	ClaimEpoch      int64  `json:"claim_epoch"`
-	AttemptCount    int    `json:"attempt_count"`
-	MaxRetries      int    `json:"max_retries"`
-	ProgressMessage *string `json:"progress_message"`
-	Error           *string `json:"error"`
-	LeaseExpiresAt  *int64 `json:"lease_expires_at"`
-	LastHeartbeatAt *int64 `json:"last_heartbeat_at"`
-	SubmittedAt     int64  `json:"submitted_at"`
-	SubmittedBy     string `json:"submitted_by"`
+	ID              string           `json:"id"`
+	Capability      string           `json:"capability"`
+	Status          string           `json:"status"`
+	OwnerInstanceID *string          `json:"owner_instance_id"`
+	ClaimEpoch      int64            `json:"claim_epoch"`
+	AttemptCount    int              `json:"attempt_count"`
+	MaxRetries      int              `json:"max_retries"`
+	ProgressMessage *string          `json:"progress_message"`
+	Error           *string          `json:"error"`
+	LeaseExpiresAt  *int64           `json:"lease_expires_at"`
+	LastHeartbeatAt *int64           `json:"last_heartbeat_at"`
+	SubmittedAt     int64            `json:"submitted_at"`
+	SubmittedBy     string           `json:"submitted_by"`
+	RecvCursor      map[string]int64 `json:"recv_cursor"`
 }
 
 // reclaimResult mirrors the registry's generated.ReclaimJobResponse.
@@ -159,6 +161,9 @@ func printJob(cmd *cobra.Command, j *jobRecord) {
 	}
 	fmt.Fprintf(out, "Lease expiry: %s\n", formatEpoch(j.LeaseExpiresAt))
 	fmt.Fprintf(out, "Last beat:    %s\n", formatEpoch(j.LastHeartbeatAt))
+	if len(j.RecvCursor) > 0 {
+		fmt.Fprintf(out, "Recv cursor:  %s\n", formatRecvCursor(j.RecvCursor))
+	}
 	fmt.Fprintf(out, "Submitted:    %s by %s\n", formatEpoch(&j.SubmittedAt), j.SubmittedBy)
 	if j.Error != nil && *j.Error != "" {
 		fmt.Fprintf(out, "Error:        %s\n", *j.Error)
@@ -249,4 +254,24 @@ func formatEpoch(epoch *int64) string {
 		return "-"
 	}
 	return time.Unix(*epoch, 0).UTC().Format(time.RFC3339)
+}
+
+// formatRecvCursor renders the durable per-filter recvEvent cursor (issue
+// #1277) as `key=seq` pairs, sorted by key for deterministic output. The
+// unfiltered stream's empty key renders as `(all)`.
+func formatRecvCursor(rc map[string]int64) string {
+	keys := make([]string, 0, len(rc))
+	for k := range rc {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		label := k
+		if label == "" {
+			label = "(all)"
+		}
+		parts = append(parts, fmt.Sprintf("%s=%d", label, rc[k]))
+	}
+	return strings.Join(parts, ", ")
 }

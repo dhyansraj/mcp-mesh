@@ -22,7 +22,7 @@
  */
 import { FastMCP, mesh, type MeshJob, type McpMeshTool } from "@mcpmesh/sdk";
 import { z } from "zod";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, appendFileSync } from "node:fs";
 
 const HTTP_PORT = parseInt(process.env.MCP_MESH_HTTP_PORT ?? "9110", 10);
 
@@ -533,6 +533,122 @@ agent.addTool({
       }
     }
     return { status: "never_answered" };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Durable recvEvent cursor resume (tc31 / tc32 — issue #1277)
+// ---------------------------------------------------------------------------
+//
+// TS port of uc21_meshjob/fixtures/long-task-provider/main.py
+// (resume_task / replay_task). Two capabilities with the SAME body but
+// opposite `resumeCursor` opt-in — this is the first e2e exercise of the
+// napi binding's core resume (Wave-2 unit tests bound to MOCKED controllers).
+//
+// Both loop on `recvEvent(["work"])`, record every processed seq to a
+// job-id-keyed sink, and emit `updateProgress` AFTER each event. The progress
+// delta FLUSHES the lagging durable recv_cursor to the registry (the cursor
+// rides the delta, trailing receipt by one — at-least-once). On a re-claim the
+// claim response carries the persisted recv_cursor; the napi ClaimDispatcher
+// serialises it and — because `resumeCursor: true` opted in — the dispatch gate
+// seeds the new controller so `recvEvent` resumes AFTER the persisted position.
+//
+//   * resume_task (resumeCursor: true)  — early durably-flushed events are
+//     consumed EXACTLY ONCE across both claims (resume).
+//   * replay_task (resumeCursor absent) — control: a re-claim replays from
+//     seq 0, so every pre-reclaim event is consumed a SECOND time.
+//
+// The ONLY difference is the decorator flag, so any behavioural divergence the
+// integration TCs observe is attributable to the opt-in alone.
+// ---------------------------------------------------------------------------
+
+// Single-type filter ["work"] canonicalises to the bare key "work" on the
+// registry side (jobs.rs::filter_key) — the integration gate reads
+// .recv_cursor.work.
+const RESUME_FILTER = ["work"];
+
+function resumeSinkPath(jobId: string): string {
+  // SINGLE-REPLICA ASSUMPTION: this /tmp sink assumes the SAME provider process
+  // re-claims the job after the reclaim (the suite runs one provider = sole
+  // claimant, so attempt 1 and attempt 2 share a filesystem). If this fixture is
+  // ever scaled to 2+ replicas the sink must move to a tool-call / registry read
+  // (e.g. job progress or the event log), since a reclaim could land on a
+  // different node whose /tmp the driver cannot see.
+  return `/tmp/uc22-resume-processed-${jobId}`;
+}
+
+function recordProcessedSeq(jobId: string, seq: number): void {
+  // Append one processed-seq line. The driver counts occurrences of a given
+  // seq across BOTH claims: exactly-once ⇒ resume, twice ⇒ replay-from-0.
+  appendFileSync(resumeSinkPath(jobId), `seq=${seq}\n`, "utf8");
+}
+
+async function consumeWorkLoop(
+  job: MeshJob,
+): Promise<Record<string, unknown>> {
+  const processed: number[] = [];
+  // Bounded loop (safety net). 60 rounds * 3s = 180s park ceiling — longer
+  // than the reclaim window, shorter than the TC timeout so a wedged run fails
+  // loudly. A superseded attempt's next recvEvent is rejected claim_superseded
+  // and throws; we let that propagate (nothing recorded on that path — the
+  // epoch-1 terminal report is fenced by the registry).
+  for (let i = 0; i < 60; i++) {
+    const event = await job.recvEvent!(RESUME_FILTER, 3);
+    if (event === null) {
+      // No work yet — keep parking across the reclaim boundary.
+      continue;
+    }
+    const seq = event.seq;
+    recordProcessedSeq(job.jobId ?? "", seq);
+    processed.push(seq);
+    // Flush the lagging durable cursor by emitting a progress delta AFTER
+    // processing — the persistence step under test.
+    if (job.updateProgress) {
+      await job.updateProgress(Math.min(seq / 10, 0.99), `processed seq=${seq}`);
+    }
+    const payload = event.payload as Record<string, unknown> | null;
+    if (payload && typeof payload === "object" && payload.final === true) {
+      const result = { status: "done", processed };
+      if (job.complete) {
+        await job.complete(result);
+      }
+      return result;
+    }
+  }
+  return { status: "loop_exhausted", processed };
+}
+
+agent.addTool({
+  name: "resume_task",
+  capability: "resume_task",
+  task: true,
+  resumeCursor: true,
+  meshJobParamIndex: 1,
+  description:
+    "Consume 'work' events; on re-claim RESUMES after the persisted recvEvent cursor (issue #1277 opt-in ON).",
+  parameters: z.object({}).passthrough(),
+  execute: async (_args, job: MeshJob | null = null) => {
+    if (!job?.recvEvent) {
+      return { status: "no_job_ctx" };
+    }
+    return await consumeWorkLoop(job);
+  },
+});
+
+agent.addTool({
+  name: "replay_task",
+  capability: "replay_task",
+  task: true,
+  // resumeCursor defaults false — the control: a re-claim replays from seq 0.
+  meshJobParamIndex: 1,
+  description:
+    "Consume 'work' events; on re-claim REPLAYS from seq 0 (issue #1277 opt-in OFF — control).",
+  parameters: z.object({}).passthrough(),
+  execute: async (_args, job: MeshJob | null = null) => {
+    if (!job?.recvEvent) {
+      return { status: "no_job_ctx" };
+    }
+    return await consumeWorkLoop(job);
   },
 });
 
