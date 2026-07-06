@@ -170,6 +170,25 @@ post_run:
   - routine: global.cleanup_workspace
 ```
 
+## Timeout budgets & the shared build cache
+
+Per-TC `timeout` values assume the shared maven/npm build cache is **warm**:
+the suite/runner populates it once, and per-TC workspaces reuse it. Timeouts
+are sized for the warm case plus slack — NOT a cold-cache sum of step budgets.
+This is the suite's actual, working convention: most existing TCs run at
+120–420s with one or two `maven-install`/`npm-install` steps whose individual
+step budgets alone would exceed the TC timeout on a cold cache.
+
+When writing new TCs:
+
+- Size the `timeout` for the warm case with reasonable slack. Do NOT budget a
+  full cold `maven-install`/`npm-install` (~600s each) unless the TC can
+  genuinely run first on a cold cache.
+- A few of the newest TCs (uc37 tc08–tc12) carry explicit cold-cache
+  step-budget arithmetic in their header comments as extra headroom. That is
+  acceptable defensive slack, not the required norm — don't sweep existing
+  timeouts up to match, and don't feel obliged to replicate the arithmetic.
+
 ## Test Results
 
 Results are stored in `results.db` (SQLite). View recent runs:

@@ -1,3 +1,3 @@
-"""Entry point for `python -m data_provider`."""
+"""Entry point for `python -m data-provider` (run from examples/required-dependency/python/)."""
 
 from . import main  # noqa: F401 — importing `main` triggers the @mesh.agent decorator
