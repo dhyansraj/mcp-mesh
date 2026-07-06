@@ -32,6 +32,7 @@
 import type { Request, Response, NextFunction, RequestHandler } from "express";
 import type { DependencySpec, McpMeshTool, DependencyKwargs, TagSpec } from "./types.js";
 import { normalizeDependency, runWithPropagatedHeaders, runWithTraceContext } from "./proxy.js";
+import { assertNoServiceViewDeps } from "./service-view.js";
 import { getApiRuntime, introspectExpressRoutes } from "./api-runtime.js";
 import { getSettleState, type PendingSettleDep } from "./settle.js";
 import {
@@ -369,6 +370,11 @@ export function route(
   options?: { dependencyKwargs?: DependencyKwargs[] }
 ): RequestHandler {
   const registry = RouteRegistry.getInstance();
+
+  // RFC #1280: service views are a tool-parameter surface only. A view in
+  // mesh.route deps is out of scope — reject rather than shipping a malformed
+  // `capability: undefined` edge.
+  assertNoServiceViewDeps(dependencies, "mesh.route");
 
   // We don't know the method/path yet since this is called before app.get/post/etc
   // So we'll register with placeholder and update when the middleware is called

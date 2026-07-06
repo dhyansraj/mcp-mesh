@@ -52,6 +52,7 @@
 
 import { mesh as meshFn, MeshAgent } from "./agent.js";
 import { route, routeWithConfig } from "./route.js";
+import { serviceView } from "./service-view.js";
 import { bindToExpress } from "./api-runtime.js";
 import { llm } from "./llm.js";
 import { llmProvider } from "./llm-provider.js";
@@ -118,6 +119,8 @@ interface MeshNamespace {
   llm: typeof llm;
   /** Create a zero-code LLM provider tool */
   llmProvider: typeof llmProvider;
+  /** Create a consumer service view (RFC #1280) for a tool dependency slot */
+  serviceView: typeof serviceView;
   /** Pipe an AsyncIterable<string> to an Express response as text/event-stream */
   sseStream: typeof sseStream;
   /** A2A v1.0 producer surface (issue #933). */
@@ -142,6 +145,7 @@ const mesh: MeshNamespace = Object.assign(meshFn, {
   bind: bindToExpress,
   llm,
   llmProvider,
+  serviceView,
   sseStream,
   a2a,
   jobs,
@@ -190,6 +194,22 @@ export {
   type MeshRouteConfig,
   type RouteMetadata,
 } from "./route.js";
+
+// Service views (RFC #1280) — consumer view factory + producer sugar surface.
+export {
+  serviceView,
+  isServiceView,
+  MeshServiceUnavailableError,
+  SERVICE_VIEW_BRAND,
+  CAPABILITY_NAME_PATTERN,
+  type ServiceView,
+  type ServiceViewSpec,
+  type ServiceViewMethodSpec,
+  type MeshServiceFacade,
+  type MeshServiceFacadeMethod,
+  type ServiceProducerMethod,
+  type ServiceProducerMethodObject,
+} from "./service-view.js";
 
 // Proxy utilities (for advanced use)
 export { createProxy, normalizeDependency, getCurrentPropagatedHeaders, callingJob, type CallingJob, extractContent, streamMcpTool, type MultiContentResult } from "./proxy.js";

@@ -1,0 +1,22 @@
+{
+  "name": "ts-view-consumer",
+  "version": "1.0.0",
+  "description": "uc37 TypeScript service-view consumer of the Java svc.* producer (RFC #1280)",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "@mcpmesh/sdk": "^2.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}

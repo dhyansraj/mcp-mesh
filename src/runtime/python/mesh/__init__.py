@@ -137,6 +137,18 @@ def __getattr__(name):
         from ._a2a_consumer import A2AJobCanceled
 
         return A2AJobCanceled
+    elif name == "service":
+        from ._service import service
+
+        return service
+    elif name == "selector":
+        from ._service import selector
+
+        return selector
+    elif name == "MeshServiceUnavailableError":
+        from ._service import MeshServiceUnavailableError
+
+        return MeshServiceUnavailableError
     elif name == "llm":
         return decorators.llm
     elif name == "llm_provider":

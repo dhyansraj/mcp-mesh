@@ -30,8 +30,19 @@ import type {
   ToolMeta,
   McpMeshTool,
   NormalizedDependency,
+  DependencyKwargs,
   LlmProviderConfig,
 } from "./types.js";
+import {
+  expandDependencies,
+  isServiceView,
+  MeshServiceUnavailableError,
+  CAPABILITY_NAME_PATTERN,
+  defaultProducerParams,
+  type DepSlot,
+  type MeshServiceFacadeMethod,
+  type ServiceProducerMethod,
+} from "./service-view.js";
 import {
   resolveConfig,
   generateAgentIdSuffix,
@@ -41,7 +52,7 @@ import {
   NEXT_EVENT_BACKOFF_CAP_MS,
 } from "./config.js";
 import { enrichSchemaWithMediaTypes } from "./media-param.js";
-import { createProxy, normalizeDependency, runWithTraceContext, runWithPropagatedHeaders, PROXY_DISPATCH_META } from "./proxy.js";
+import { createProxy, runWithTraceContext, runWithPropagatedHeaders, PROXY_DISPATCH_META } from "./proxy.js";
 import {
   readJobHeaders,
   runWithJobContext,
@@ -582,11 +593,43 @@ export class MeshAgent {
       return this;
     }
 
-    // Normalize dependencies
-    const normalizedDeps: NormalizedDependency[] = (def.dependencies ?? []).map(
-      normalizeDependency
+    // Normalize dependencies. RFC #1280: a `mesh.serviceView(...)` entry
+    // occupies ONE positional slot but expands into N ordinary edges (name-
+    // sorted, in-place). `normalizedDeps` is the FLAT edge array — the wire
+    // payload, settle keys, resolution events, and resolvedDeps all index it
+    // exactly as before; `depSlots` maps each positional execute slot to its
+    // edge (a `dep`) or edge-range (a `view`). For a view-free tool the edges
+    // are byte-identical to `deps.map(normalizeDependency)` and
+    // `depSlots[i].edgeIndex === i` — zero behavior change.
+    const { edges: normalizedDeps, slots: depSlots } = expandDependencies(
+      def.dependencies ?? [],
+      toolName,
     );
     const depEndpoints = normalizedDeps.map((d) => d.capability);
+
+    // Phase 1 MeshJob substrate: meshJobDepIndex is an index into the AUTHORED
+    // dependencies array (i.e. a positional slot). It must point at an ordinary
+    // dependency slot, never a service-view slot (a view has no single edge to
+    // swap for a submitter).
+    if (def.meshJobDepIndex !== undefined) {
+      const slot = depSlots[def.meshJobDepIndex];
+      if (slot && slot.kind === "view") {
+        throw new Error(
+          `addTool({ meshJobDepIndex: ${def.meshJobDepIndex} }) for tool ` +
+            `'${toolName}' points at a mesh.serviceView slot — a MeshJob ` +
+            `submitter can only replace an ordinary dependency slot.`,
+        );
+      }
+    }
+
+    // The flat edge index of the MeshJob submitter slot (if any). Used by the
+    // edge-indexed skip logic below (settle declaration/wait, required guard).
+    // For a view-free tool this equals `def.meshJobDepIndex` (slot index ===
+    // edge index), so those loops are byte-identical to before.
+    const meshJobEdgeIndex =
+      def.meshJobDepIndex === undefined
+        ? undefined
+        : (depSlots[def.meshJobDepIndex] as { edgeIndex: number }).edgeIndex;
 
     // Settling-window grace (#1193): declare this tool's proxy deps with the
     // process-wide settle state so the agent-level "all declared deps
@@ -594,7 +637,7 @@ export class MeshAgent {
     // submitter is constructed locally, not resolved by an event.
     const settleState = getSettleState();
     normalizedDeps.forEach((_dep, depIndex) => {
-      if (depIndex !== def.meshJobDepIndex) {
+      if (depIndex !== meshJobEdgeIndex) {
         settleState.registerDeclared(`${toolName}:dep_${depIndex}`);
       }
     });
@@ -631,6 +674,20 @@ export class MeshAgent {
           `Set 'task: true' explicitly if you intend a producer.`,
       );
     }
+    // RFC #1280: same force-disable + non-silent warning for view-bound tools.
+    // A serviceView facade wraps live closures over resolvedDeps and has no
+    // PROXY_DISPATCH_META, so it can't cross the worker_threads boundary — the
+    // wrapper runs view-bound tools inline. Warn once (like the job-bound case)
+    // so users who opted into MCP_MESH_TOOL_ISOLATION know it does not apply.
+    const isViewBoundForLog = depSlots.some((s) => s.kind === "view");
+    if (isViewBoundForLog && isolationEnvSet) {
+      console.warn(
+        `[mesh-tool] '${toolName}' injects a mesh.serviceView facade; worker ` +
+          `isolation is disabled for view-bound tools (facades wrap live ` +
+          `closures over resolved dependencies that don't cross worker ` +
+          `boundaries).`,
+      );
+    }
 
     // Create wrapper that injects dependencies positionally and handles tracing
     const wrappedExecute = async (
@@ -646,7 +703,7 @@ export class MeshAgent {
         normalizedDeps.forEach((dep, depIndex) => {
           const depKey = `${toolName}:dep_${depIndex}`;
           if (
-            depIndex !== meshJobDepIndex &&
+            depIndex !== meshJobEdgeIndex &&
             !this.resolvedDeps.has(depKey)
           ) {
             pendingSettle.push({ depKey, capability: dep.capability });
@@ -657,19 +714,29 @@ export class MeshAgent {
         }
       }
 
-      // Build positional deps array using composite keys (toolName:dep_index)
-      // Phase 1 MeshJob substrate (consumer-side): if meshJobDepIndex is
-      // set, swap the McpMeshTool proxy at that slot for a
-      // MeshJobSubmitter targeting that dep's capability. We bind the
-      // submitter to the live registryUrl/agentId so it can submit
-      // jobs without needing access to the agent instance.
+      // Build positional deps array (one entry per authored slot). A view slot
+      // yields a facade; the MeshJob slot yields a MeshJobSubmitter; every other
+      // slot yields resolvedDeps.get(...) ?? null.
       const depsArray = this._buildDepSlots(
         toolName,
+        depSlots,
         normalizedDeps,
         meshJobDepIndex,
         settleState,
       );
-      const injectedCount = depsArray.filter((d) => d !== null).length;
+      // Trace metric: count resolved EDGES, not slots — a view slot always
+      // yields a non-null facade, so counting slots would inflate the numerator
+      // against the edge-based dependency total. Excludes the MeshJob submitter
+      // edge (built locally, never a resolved proxy) and adds it back as one
+      // injected slot so a view-free tool's count is byte-identical to before.
+      let injectedCount = 0;
+      for (let e = 0; e < normalizedDeps.length; e++) {
+        if (e === meshJobEdgeIndex) continue;
+        if ((this.resolvedDeps.get(`${toolName}:dep_${e}`) ?? null) !== null) {
+          injectedCount++;
+        }
+      }
+      if (meshJobDepIndex !== undefined) injectedCount++;
 
       // Issue #1273: detect a required dependency slot that is still
       // unresolved AFTER the settle wait above (depsArray was built
@@ -678,13 +745,17 @@ export class MeshAgent {
       // direct tools/call refuses, an inbound JOB dispatch releases the
       // lease. Optional deps keep null-passthrough; the MeshJob submitter
       // slot is skipped (built locally, never a resolved proxy).
+      // Evaluate per-EDGE against resolvedDeps (not per-slot against depsArray):
+      // a view slot collapses N edges into one non-null facade, so a required
+      // view-method edge must be checked on the flat edge state. For a view-free
+      // tool this is equivalent to the old `depsArray[depIndex] == null` test.
       let missingRequiredCap: string | null = null;
       for (let depIndex = 0; depIndex < normalizedDeps.length; depIndex++) {
         const dep = normalizedDeps[depIndex];
         if (
           dep.required === true &&
-          depIndex !== meshJobDepIndex &&
-          depsArray[depIndex] == null
+          depIndex !== meshJobEdgeIndex &&
+          (this.resolvedDeps.get(`${toolName}:dep_${depIndex}`) ?? null) == null
         ) {
           missingRequiredCap = dep.capability;
           break;
@@ -835,9 +906,15 @@ export class MeshAgent {
       // cached client + connection pool intact across calls.
       const isA2aBound = a2aClient !== null;
       const isJobBound = isTaskTool || meshJobDepIndex !== undefined;
+      // RFC #1280: a service-view facade wraps live closures over resolvedDeps
+      // and cannot be serialised across the worker_threads boundary (it has no
+      // PROXY_DISPATCH_META). Force inline execution for view-bound tools, like
+      // job-bound and A2A-bound tools.
+      const isViewBound = depSlots.some((s) => s.kind === "view");
       const isolationEnabled =
         !isJobBound &&
         !isA2aBound &&
+        !isViewBound &&
         (process.env.MCP_MESH_TOOL_ISOLATION ?? "true").toLowerCase() !== "false";
 
       try {
@@ -1044,7 +1121,7 @@ export class MeshAgent {
           normalizedDeps.forEach((dep, depIndex) => {
             const depKey = `${toolName}:dep_${depIndex}`;
             if (
-              depIndex !== meshJobDepIndex &&
+              depIndex !== meshJobEdgeIndex &&
               !this.resolvedDeps.has(depKey)
             ) {
               pendingSettle.push({ depKey, capability: dep.capability });
@@ -1056,6 +1133,7 @@ export class MeshAgent {
         }
         const liveDeps = this._buildDepSlots(
           toolName,
+          depSlots,
           normalizedDeps,
           meshJobDepIndex,
           settleState,
@@ -1081,7 +1159,7 @@ export class MeshAgent {
       // covers both an absent key and an explicit null slot.
       const requiredSlots: Array<[number, string]> = [];
       normalizedDeps.forEach((dep, depIndex) => {
-        if (dep.required && depIndex !== meshJobDepIndex) {
+        if (dep.required && depIndex !== meshJobEdgeIndex) {
           requiredSlots.push([depIndex, dep.capability]);
         }
       });
@@ -1111,6 +1189,30 @@ export class MeshAgent {
     if (def.outputSchema) {
       outputSchemaRaw = this.convertZodToJsonSchema(def.outputSchema);
     }
+
+    // dependencyKwargs is authored per positional SLOT but consumed per flat
+    // EDGE (handleDependencyAvailable reads meta.dependencyKwargs[depIndex] with
+    // the event's edge index). For a view-free tool slot index === edge index,
+    // so pass it through unchanged (byte-identical). When a view slot is present,
+    // remap each slot's kwargs onto its edge(s) — a view's single kwargs entry
+    // applies to each of its method edges.
+    let edgeDependencyKwargs = def.dependencyKwargs;
+    if (def.dependencyKwargs && depSlots.some((s) => s.kind === "view")) {
+      const remapped: (DependencyKwargs | undefined)[] = new Array(
+        normalizedDeps.length,
+      );
+      depSlots.forEach((slot, slotIndex) => {
+        const kw = def.dependencyKwargs?.[slotIndex];
+        if (slot.kind === "dep") {
+          remapped[slot.edgeIndex] = kw;
+        } else {
+          for (const m of slot.methods) {
+            remapped[m.edgeIndex] = kw;
+          }
+        }
+      });
+      edgeDependencyKwargs = remapped as DependencyKwargs[];
+    }
     this.tools.set(toolName, {
       capability: def.capability ?? toolName,
       version: def.version ?? "1.0.0",
@@ -1121,7 +1223,7 @@ export class MeshAgent {
       // Issue #547 Phase 4: per-tool override (default true = current behavior).
       outputSchemaStrict: def.outputSchemaStrict !== false,
       dependencies: normalizedDeps,
-      dependencyKwargs: def.dependencyKwargs,
+      dependencyKwargs: edgeDependencyKwargs,
       // Phase 1 MeshJob substrate: stamp producer's long-running flag
       // so the heartbeat pipeline ships it to the registry. Consumers
       // read this to decide between job semantics and a regular
@@ -1138,6 +1240,132 @@ export class MeshAgent {
         def.a2aConfig !== undefined ? this.config.name : undefined,
     });
 
+    return this;
+  }
+
+  /**
+   * RFC #1280 producer sugar: publish each entry of `methods` as an ordinary
+   * mesh tool with capability `prefix.<method>`, routed through the SAME
+   * `addTool` machinery (schemas, heartbeat, DI, duplicate handling all fall
+   * out). Entries are registered NAME-SORTED for deterministic registration.
+   *
+   * Each entry is either a bare execute function (shorthand) or an object
+   * `{ execute, parameters?, tags?, version?, description?, dependencies?, ... }`
+   * carrying any `addTool` passthrough (but NOT `name`/`capability` — those are
+   * derived). A method with no `parameters` gets a permissive passthrough schema.
+   *
+   * The prefix AND every derived capability are validated against the segment-
+   * wise dotted grammar (kept in lockstep with the Go registry validator —
+   * src/core/registry/validation.go). This is the ONLY place the SDK validates a
+   * capability name (it validates only the names it SYNTHESIZES); hand-written
+   * capabilities remain the registry's authority.
+   *
+   * @example
+   * ```typescript
+   * agent.addService("media", {
+   *   caption: async (args) => ({ caption: `...${args.text}` }),
+   *   thumbnail: { execute: async (args) => ({ url: "..." }), tags: ["fast"] },
+   * });
+   * // → tools/capabilities "media.caption" and "media.thumbnail"
+   * ```
+   */
+  addService(
+    prefix: string,
+    methods: Record<string, ServiceProducerMethod>,
+  ): this {
+    if (typeof prefix !== "string" || prefix.trim() === "") {
+      throw new Error(
+        "addService: a non-empty capability prefix is required " +
+          '(e.g. addService("media", { ... })).',
+      );
+    }
+    if (!CAPABILITY_NAME_PATTERN.test(prefix)) {
+      throw new Error(
+        `addService: prefix '${prefix}' is not a valid capability name — each ` +
+          `dot-separated segment must start with a letter and contain only ` +
+          `letters, digits, '_' or '-' (cross-ref src/core/registry/validation.go).`,
+      );
+    }
+    if (methods == null || typeof methods !== "object") {
+      throw new Error(
+        `addService("${prefix}", ...): methods must be an object mapping ` +
+          `method names to producer functions/definitions.`,
+      );
+    }
+    const names = Object.keys(methods).sort();
+    if (names.length === 0) {
+      throw new Error(
+        `addService("${prefix}", ...): at least one method is required.`,
+      );
+    }
+
+    // Pass 1 — validate EVERY derived name/entry before registering any tool so
+    // an invalid method mid-map is atomic (registers nothing). Also rejects a
+    // derived capability that collides with an already-registered tool (scoped
+    // to addService: addTool's own last-wins behavior for hand-written tools is
+    // unchanged).
+    const prepared: Array<{
+      capability: string;
+      def: import("./service-view.js").ServiceProducerMethodObject;
+    }> = [];
+    for (const method of names) {
+      const capability = `${prefix}.${method}`;
+      // Validate the FULL derived capability, not just the prefix: a method
+      // name may contain characters ('$', unicode, ...) the grammar rejects.
+      if (!CAPABILITY_NAME_PATTERN.test(capability)) {
+        throw new Error(
+          `addService("${prefix}", ...): method '${method}' derives capability ` +
+            `'${capability}', which is not a valid capability name (each ` +
+            `dot-separated segment must start with a letter and contain only ` +
+            `letters, digits, '_' or '-'). Rename the method.`,
+        );
+      }
+      if (this.tools.has(capability)) {
+        throw new Error(
+          `addService("${prefix}", ...): method '${method}' derives tool/` +
+            `capability '${capability}', which is already registered. Rename ` +
+            `the method or the conflicting tool.`,
+        );
+      }
+      const entry = methods[method];
+      // Guard: a service-view value here is the consumer surface used in the
+      // wrong role (producer). Fail loud.
+      if (isServiceView(entry)) {
+        throw new Error(
+          `addService("${prefix}", ...): method '${method}' is a ` +
+            `mesh.serviceView(...) — that is a CONSUMER view, not a producer ` +
+            `method. Provide an execute function or { execute, ... } object.`,
+        );
+      }
+      let def: import("./service-view.js").ServiceProducerMethodObject;
+      if (typeof entry === "function") {
+        def = { execute: entry as MeshToolDef["execute"] };
+      } else if (
+        entry != null &&
+        typeof entry === "object" &&
+        typeof (entry as { execute?: unknown }).execute === "function"
+      ) {
+        def = entry as import("./service-view.js").ServiceProducerMethodObject;
+      } else {
+        throw new Error(
+          `addService("${prefix}", ...): method '${method}' must be an execute ` +
+            `function or an object with an execute function.`,
+        );
+      }
+      prepared.push({ capability, def });
+    }
+
+    // Pass 2 — register through the existing addTool machinery. Derived name ===
+    // derived capability for deterministic uniqueness.
+    for (const { capability, def } of prepared) {
+      this.addTool({
+        ...(def as object),
+        name: capability,
+        capability,
+        parameters: def.parameters ?? defaultProducerParams(),
+        execute: def.execute,
+      } as MeshToolDef);
+    }
     return this;
   }
 
@@ -1252,36 +1480,46 @@ export class MeshAgent {
    * Build the positional dependency-slot array for one tool call, shared by
    * BOTH the inbound HTTP wrapper (wrappedExecute) and the claim-dispatch
    * path (the ClaimHandler for task:true tools). Centralising this keeps the
-   * two slot-assembly sites identical:
+   * two slot-assembly sites identical. One entry per AUTHORED slot:
+   *   - a service-view slot (RFC #1280) → a facade over its method edges
    *   - the MeshJob slot (meshJobDepIndex) → a freshly-bound MeshJobSubmitter
-   *   - every other slot → resolvedDeps.get(`${toolName}:dep_${index}`) ?? null
+   *   - every other slot → resolvedDeps.get(`${toolName}:dep_${edgeIndex}`) ?? null
+   *
+   * `depSlots` carries the slot→edge mapping (a `dep` slot owns one edge; a
+   * `view` slot owns a contiguous edge range). `edges` is the flat edge array;
+   * a slot's proxy/capability is read via its edge index.
    *
    * #1231: a typed dep slot can resolve at the registry yet never receive an
    * injected proxy, leaving the parameter null. Once the settle latch has
    * flipped (during settling the proxy may still land), warn ONCE per
    * tool+slot — the array is rebuilt per call, so a per-call warning would
-   * spam. The warn-once dedupe keys on `${toolName}:dep_${index}` via the
+   * spam. The warn-once dedupe keys on `${toolName}:dep_${edgeIndex}` via the
    * module-level `_unwiredSlotWarned` Set, so a tool exercised via BOTH the
    * inbound and claim paths warns at most once total.
    */
   private _buildDepSlots(
     toolName: string,
-    normalizedDeps: NormalizedDependency[],
+    depSlots: DepSlot[],
+    edges: NormalizedDependency[],
     meshJobDepIndex: number | undefined,
     settleState: SettleState,
-  ): (McpMeshTool | MeshJobSubmitter | null)[] {
-    return normalizedDeps.map((dep, depIndex) => {
-      if (depIndex === meshJobDepIndex) {
+  ): (McpMeshTool | MeshJobSubmitter | Record<string, MeshServiceFacadeMethod> | null)[] {
+    return depSlots.map((slot, slotIndex) => {
+      if (slot.kind === "view") {
+        return this._buildServiceViewFacade(toolName, slot, edges, settleState);
+      }
+      const edgeIndex = slot.edgeIndex;
+      if (slotIndex === meshJobDepIndex) {
         // Build the submitter lazily per call so we always pick up the
         // current registryUrl (test harnesses sometimes mutate it between
         // calls).
         return new MeshJobSubmitter(
-          dep.capability,
+          edges[edgeIndex].capability,
           this.agentId,
           this.config.registryUrl,
         );
       }
-      const slotKey = `${toolName}:dep_${depIndex}`;
+      const slotKey = `${toolName}:dep_${edgeIndex}`;
       const proxy = this.resolvedDeps.get(slotKey) ?? null;
       // #1231: a declared typed dep slot that is still null AFTER settling
       // never received an injected proxy. Warn ONCE per tool+slot. Note this
@@ -1291,15 +1529,126 @@ export class MeshAgent {
         if (!_unwiredSlotWarned.has(slotKey)) {
           _unwiredSlotWarned.add(slotKey);
           console.warn(
-            `[mesh-tool] dependency '${dep.capability}' on '${toolName}' ` +
-              `is still null after settling — no proxy was injected into ` +
-              `positional slot ${depIndex}. Fix: ensure the provider for ` +
-              `'${dep.capability}' is registered and reachable.`,
+            `[mesh-tool] dependency '${edges[edgeIndex].capability}' on ` +
+              `'${toolName}' is still null after settling — no proxy was ` +
+              `injected into positional slot ${slotIndex}. Fix: ensure the ` +
+              `provider for '${edges[edgeIndex].capability}' is registered ` +
+              `and reachable.`,
           );
         }
       }
       return proxy;
     });
+  }
+
+  /**
+   * RFC #1280: build the facade injected at a service-view slot. Each facade
+   * method reads its edge's CURRENT proxy from `resolvedDeps` at call time —
+   * rebinding-free: a `dependency_available`/`unavailable` event swapping the
+   * per-edge proxy is observed on the next call without rebuilding the facade.
+   *
+   * The `minAvailable` floor is enforced BEFORE delegation on every call: below
+   * the floor during the settling window (#1193) the method performs the same
+   * bounded, capability-keyed wait the injected-proxy path uses, recounts, then
+   * throws {@link MeshServiceUnavailableError}. An unresolved OPTIONAL method
+   * edge throws a `TypeError` — the same failure shape a directly-injected
+   * unresolved `McpMeshTool` (a null proxy) produces when called.
+   */
+  private _buildServiceViewFacade(
+    toolName: string,
+    slot: Extract<DepSlot, { kind: "view" }>,
+    edges: NormalizedDependency[],
+    settleState: SettleState,
+  ): Record<string, MeshServiceFacadeMethod> {
+    const total = slot.methods.length;
+    const floor = slot.minAvailable;
+    const viewName = slot.name;
+
+    const countAvailable = (): number => {
+      let n = 0;
+      for (const m of slot.methods) {
+        if ((this.resolvedDeps.get(`${toolName}:dep_${m.edgeIndex}`) ?? null) !== null) {
+          n++;
+        }
+      }
+      return n;
+    };
+
+    const enforceFloor = async (): Promise<void> => {
+      if (floor <= 0) return;
+      let available = countAvailable();
+      // Below the floor during the settling window: perform a bounded wait that
+      // RACES all of the view's still-pending edges (wake on ANY resolution),
+      // recounts, and breaks the moment the floor is met — so a call gated on
+      // the floor wakes when ANY qualifying edge lands, never sleeping the full
+      // window on a still-pending sibling key. Once settled the waits are
+      // no-ops and the floor fails fast.
+      while (
+        available < floor &&
+        !settleState.isSettled() &&
+        settleState.remainingMs() > 0
+      ) {
+        // Only edges that can still fire a settle WAKE are worth waiting on: a
+        // key already in the settle ratchet (resolved at least once) will never
+        // re-fire its waiter, so if such an edge has since flapped to a null
+        // proxy `waitForAny` would filter it out and return immediately — a hot
+        // busy-loop until the window expires. Excluding ratchet-resolved keys
+        // here means `pending` empties and we break to the final recount/throw
+        // the instant no wakeable edge remains (no spin).
+        const pending: PendingSettleDep[] = [];
+        for (const m of slot.methods) {
+          const key = `${toolName}:dep_${m.edgeIndex}`;
+          if (
+            (this.resolvedDeps.get(key) ?? null) === null &&
+            !settleState.isResolved(key)
+          ) {
+            pending.push({ depKey: key, capability: edges[m.edgeIndex].capability });
+          }
+        }
+        if (pending.length === 0) break;
+        await settleState.waitForAny(pending);
+        available = countAvailable();
+      }
+      if (available < floor) {
+        throw new MeshServiceUnavailableError(viewName, available, total, floor);
+      }
+    };
+
+    const facade: Record<string, MeshServiceFacadeMethod> = {};
+    for (const m of slot.methods) {
+      const key = `${toolName}:dep_${m.edgeIndex}`;
+      const capability = edges[m.edgeIndex].capability;
+      // #1231 parity for view edges: a method edge that resolved at the registry
+      // yet never received an injected proxy stays null after settling. Warn
+      // ONCE per tool+edge (facade is rebuilt per call), naming the view method
+      // and capability so the diagnostic matches the slot-dep warning.
+      if ((this.resolvedDeps.get(key) ?? null) === null && settleState.isSettled()) {
+        if (!_unwiredSlotWarned.has(key)) {
+          _unwiredSlotWarned.add(key);
+          console.warn(
+            `[mesh-tool] service view '${viewName}' method '${m.method}' ` +
+              `(capability '${capability}') on '${toolName}' is still null ` +
+              `after settling — no proxy was injected. Fix: ensure the provider ` +
+              `for '${capability}' is registered and reachable.`,
+          );
+        }
+      }
+      facade[m.method] = async (args, options) => {
+        await enforceFloor();
+        const proxy = this.resolvedDeps.get(key) ?? null;
+        if (proxy === null) {
+          // Mirror the failure shape of calling an unresolved McpMeshTool
+          // (a null proxy) directly — a TypeError.
+          throw new TypeError(
+            `service view '${viewName}' method '${m.method}' (capability ` +
+              `'${capability}') is unavailable — the dependency did not ` +
+              `resolve (unresolved optional edge).`,
+          );
+        }
+        return proxy(args, options);
+      };
+    }
+    return facade;
   }
 
   private _getOrBuildA2AClient(config: A2AClientConfig): A2AClient {

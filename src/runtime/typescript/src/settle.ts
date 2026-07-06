@@ -243,31 +243,39 @@ export class SettleState {
   }
 
   /**
-   * Wait until `depKey` resolves or the remaining settle budget elapses.
-   * Event-driven: the dependency's resolution promise is raced against a
-   * timer bounded by the remaining window — never a fixed sleep.
+   * Shared wait plumbing for {@link waitFor} / {@link waitForAny}: log the
+   * settle cadence for each capability (INFO first time, DEBUG after), bump the
+   * diagnostic `waitCount`, and race every `depKeys` resolution waiter against
+   * ONE budget timer bounded by `remaining` — never a fixed sleep. Callers apply
+   * their own resolved-state filtering + early-return BEFORE calling this, so
+   * `depKeys` are the genuinely-still-pending keys and `remaining > 0`.
+   *
+   * On timeout the caller simply proceeds — the unresolved dep injects null
+   * exactly as today; the existing unresolved-dep handling covers the
+   * diagnostic (no double-logging here).
    */
-  async waitFor(depKey: string, capability: string): Promise<void> {
-    const remaining = this.remainingMs();
-    if (remaining <= 0 || this.resolved.has(depKey)) {
-      return;
-    }
-    const waiter = this.waiterFor(depKey);
+  private async raceWaiters(
+    depKeys: readonly string[],
+    capabilities: readonly string[],
+    remaining: number,
+  ): Promise<void> {
     const remainingSecs = (remaining / 1000).toFixed(1);
-    const message = `waiting up to ${remainingSecs}s for dependency '${capability}' to settle`;
-    if (!this.loggedWaits.has(capability)) {
-      // One INFO line per capability per process; later waits at DEBUG
-      // (matches the Python/Java log cadence).
-      this.loggedWaits.add(capability);
-      console.log(message);
-    } else {
-      console.debug(message);
+    for (const capability of capabilities) {
+      const message = `waiting up to ${remainingSecs}s for dependency '${capability}' to settle`;
+      if (!this.loggedWaits.has(capability)) {
+        // One INFO line per capability per process; later waits at DEBUG
+        // (matches the Python/Java log cadence).
+        this.loggedWaits.add(capability);
+        console.log(message);
+      } else {
+        console.debug(message);
+      }
     }
     this.waitCount++;
     let timer: NodeJS.Timeout | undefined;
     try {
       await Promise.race([
-        waiter.promise,
+        ...depKeys.map((k) => this.waiterFor(k).promise),
         new Promise<void>((resolve) => {
           timer = setTimeout(resolve, remaining);
           // Never keep the process alive just for a settle timer.
@@ -279,9 +287,19 @@ export class SettleState {
         clearTimeout(timer);
       }
     }
-    // On timeout we simply proceed — the unresolved dep injects null
-    // exactly as today; the existing unresolved-dep handling covers the
-    // diagnostic (no double-logging here).
+  }
+
+  /**
+   * Wait until `depKey` resolves or the remaining settle budget elapses.
+   * Event-driven: the dependency's resolution promise is raced against a
+   * timer bounded by the remaining window — never a fixed sleep.
+   */
+  async waitFor(depKey: string, capability: string): Promise<void> {
+    const remaining = this.remainingMs();
+    if (remaining <= 0 || this.resolved.has(depKey)) {
+      return;
+    }
+    await this.raceWaiters([depKey], [capability], remaining);
   }
 
   /**
@@ -293,6 +311,27 @@ export class SettleState {
     for (const { depKey, capability } of pending) {
       await this.waitFor(depKey, capability);
     }
+  }
+
+  /**
+   * Wait until ANY of `pending` resolves or the remaining settle budget
+   * elapses. Unlike {@link awaitPending} (which blocks on each key in turn),
+   * this races every pending key's resolution promise against ONE budget timer,
+   * so a caller gated on a floor wakes the moment ANY qualifying dependency
+   * lands — never sleeping on an already-satisfied floor because it happened to
+   * be awaiting a still-pending sibling key (RFC #1280 minAvailable).
+   */
+  async waitForAny(pending: PendingSettleDep[]): Promise<void> {
+    const remaining = this.remainingMs();
+    const unresolved = pending.filter((p) => !this.resolved.has(p.depKey));
+    if (remaining <= 0 || unresolved.length === 0) {
+      return;
+    }
+    await this.raceWaiters(
+      unresolved.map((p) => p.depKey),
+      unresolved.map((p) => p.capability),
+      remaining,
+    );
   }
 }
 

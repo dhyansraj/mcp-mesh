@@ -1,0 +1,35 @@
+# Helm values for deploying transcribe-provider with mcp-mesh-agent chart
+# Usage: helm install transcribe-provider oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent -f helm-values.yaml
+# Check latest version: helm show chart oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent
+
+image:
+  repository: your-registry/transcribe-provider
+  tag: "v1.0.0"  # Your image version. Override with: --set image.tag=v1.2.3
+  pullPolicy: IfNotPresent
+
+agent:
+  name: transcribe-provider
+  runtime: python
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+mesh:
+  enabled: true
+  # Short name resolves in same namespace as core. For cross-namespace:
+  #   registry.host: mcp-core-mcp-mesh-registry.<core-namespace>.svc.cluster.local
+
+registry:
+  host: "mcp-core-mcp-mesh-registry"
+  port: "8000"
+
+# Optional: Additional environment variables
+# Uncomment to add — leaving commented avoids overriding base values
+# env:
+#   - name: LOG_LEVEL
+#     value: "INFO"

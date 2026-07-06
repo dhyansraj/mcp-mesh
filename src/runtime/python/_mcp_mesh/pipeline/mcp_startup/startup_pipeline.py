@@ -14,7 +14,7 @@ from . import (ConfigurationStep, DecoratorCollectionStep,
                FastMCPServerDiscoveryStep, HeartbeatLoopStep,
                HeartbeatPreparationStep, JobsCancelRouteStep,
                JobsClaimWorkersStep, JobsHelperToolsStep,
-               MediaStoreValidationStep)
+               MediaStoreValidationStep, ServiceViewProducerServingStep)
 from .server_discovery import ServerDiscoveryStep
 
 logger = logging.getLogger(__name__)
@@ -62,6 +62,10 @@ class StartupPipeline(MeshPipeline):
             # Phase 1 MeshJob: register helper tools on the FastMCP server
             # BEFORE FastAPIServerSetup mounts it (so they appear in /tools/list).
             JobsHelperToolsStep(),
+            # RFC #1280: attach @mesh.service producer-sugar tools to the served
+            # FastMCP server(s) — same late-bind timing as the job helpers, so
+            # sugar-published tools appear in /tools/list and answer tools/call.
+            ServiceViewProducerServingStep(),
             HeartbeatPreparationStep(),  # Prepare heartbeat payload structure (can now access FastMCP schemas)
             ServerDiscoveryStep(),  # Discover existing uvicorn servers from immediate startup
             HeartbeatLoopStep(),  # Setup background heartbeat config (handles no registry gracefully)

@@ -1,0 +1,203 @@
+# tc11_ts_view_consumer — RFC #1280 cross-runtime consumer parity
+# (TYPESCRIPT): a mesh.serviceView(...) in a TS consumer binds the DOTTED
+# svc.* capabilities published by the JAVA producer's @McpMeshService("svc")
+# sugar, and the required-edge refusal envelope matches the Java/Python
+# tool-param paths (tc06/tc10).
+#
+# Topology: java-view-producer (svc.alpha + svc.bravo) + ts-view-consumer
+# whose serviceView occupies ONE dependencies slot (two name-sorted edges,
+# bravo required=true) fanned out to the ts_view_report execute's facade arg.
+#
+# Design guarantees under test:
+#   1. Cross-runtime binding: both facade methods answer FROM THE JAVA AGENT
+#      — the report pairs alpha->java-view-producer/svc.alpha and
+#      bravo->java-view-producer/svc.bravo (anchored key:value pairs).
+#   2. Refusal parity: kill java-view-producer -> invoking ts_view_report is
+#      REFUSED pre-invoke with the structured
+#      {"error":"dependency_unavailable","capability":"svc.bravo"} result
+#      (isError=true) — a TS view expands into ordinary tool dependency
+#      slots, so its required edges sit under the same #1273 guard as
+#      hand-written deps. A report carrying bravo_error instead would mean
+#      execute ran with a dead REQUIRED proxy. (Body tokens judged
+#      structurally on the raw envelope — grep — with isError via jq; the TS
+#      error text shape is not a contract.)
+#   3. Organic recovery: restart the producer -> the report binds again with
+#      no consumer restart.
+#
+# Timing: transitions ride the default health debounce (~15-25s) plus one
+# consumer heartbeat — polled with deadlines. No dependency-resolution waits
+# (issue #1193): the baseline call rides the settle window. TC timeout =
+# cold-cache step-budget sum: copy 120 + maven 600 + npm 600 + starts 2x120
+# + registration 260 + baseline poll 200 + kill 120 + refusal poll 140 +
+# restart 120 + recovery poll 190 = 2590, rounded up with slack to 2800.
+
+name: "Service views cross-runtime: TypeScript mesh.serviceView over the Java svc.* producer"
+description: "ts-view-consumer's serviceView binds svc.alpha/svc.bravo from java-view-producer; kill producer: structured dependency_unavailable refusal (svc.bravo required) from the TS tool; restart: recovers"
+tags:
+  - integration
+  - typescript
+  - java
+  - registry
+  - service-view
+  - rfc-1280
+  - required-deps
+  - availability
+  - slow
+timeout: 2800
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/java-view-producer /workspace/
+      cp -rL /uc-artifacts/ts-view-consumer /workspace/
+
+  - name: "Install producer Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-view-producer
+    timeout: 600
+
+  - name: "Install ts-view-consumer deps"
+    handler: npm-install
+    path: /workspace/ts-view-consumer
+    timeout: 600
+
+  - name: "Start java-view-producer (port 9202)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start /workspace/java-view-producer --env MCP_MESH_HTTP_PORT=9202 -d
+
+  - name: "Start ts-view-consumer (port 9401)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start ts-view-consumer/src/index.ts --env MCP_MESH_HTTP_PORT=9401 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+
+  # Liveness only (issue #1193): 240s deadline covers the cold JVM start.
+  - routine: global.wait_for_agents_registered
+    params:
+      agents: "java-view-producer ts-view-consumer"
+
+  # Baseline: both methods served by the JAVA agent with dotted caps.
+  # ENVELOPE: the TS tool returns JSON.stringify(...) so content[0].text
+  # parses with the portable `.content[0].text | fromjson` idiom; equality
+  # inside the jq filter; anchored key:value pairing.
+  - name: "Wait for cross-runtime report (baseline)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESP=""
+      for i in $(seq 1 90); do
+        RESP=$(meshctl call ts_view_report '{}' --raw 2>&1 || true)
+        A=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .alpha_agent == "java-view-producer" and .alpha_cap == "svc.alpha"' 2>/dev/null || echo "")
+        B=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .bravo_agent == "java-view-producer" and .bravo_cap == "svc.bravo"' 2>/dev/null || echo "")
+        if [ "$A" = "true" ] && [ "$B" = "true" ]; then
+          echo "TS_VIEW_BOUND=1 after ~$((i*2))s"
+          echo "$RESP"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: ts_view_report never reported both svc.* methods served by java-view-producer within 180s"
+      echo "last response: $RESP"
+      meshctl logs ts-view-consumer 2>/dev/null | tail -40 || true
+      exit 1
+    capture: ts_baseline
+    timeout: 200
+
+  - name: "Kill java-view-producer"
+    handler: shell
+    workdir: /workspace
+    command: meshctl stop java-view-producer
+    capture: kill_producer
+
+  # Guarantee 2: the structured pre-invoke refusal from the TS tool. Poll
+  # until the guard fires (the consumer's heartbeat must first drop the
+  # slot; the interim window may surface a handler-level bravo_error
+  # report). The loop exit REQUIRES the structural refusal shape —
+  # isError==true (a handler-level report is a SUCCESS result carrying the
+  # error text, so tokens alone could exit on a transient) — plus the body:
+  # parsed `.error == "dependency_unavailable" and .capability ==
+  # "svc.bravo"` when content[0].text is pure JSON, with raw-token matching
+  # as the fallback for a wrapped error text.
+  - name: "Wait for the structured dependency_unavailable refusal"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESP=""
+      for i in $(seq 1 60); do
+        RESP=$(meshctl call ts_view_report '{}' --raw 2>&1 || true)
+        ISERR=$(echo "$RESP" | jq -r '.isError == true' 2>/dev/null || echo "")
+        BODY=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .error == "dependency_unavailable" and .capability == "svc.bravo"' 2>/dev/null || echo "")
+        if [ "$ISERR" = "true" ]; then
+          if [ "$BODY" = "true" ] || { echo "$RESP" | grep -q 'dependency_unavailable' && echo "$RESP" | grep -q 'svc.bravo'; }; then
+            echo "TS_REFUSAL_STRUCTURED=1 after ~$((i*2))s"
+            echo "TS_REFUSAL_ISERROR=1"
+            [ "$BODY" = "true" ] && echo "TS_REFUSAL_BODY_PARSED=1"
+            echo "$RESP"
+            exit 0
+          fi
+        fi
+        sleep 2
+      done
+      echo "ERROR: the structured dependency_unavailable refusal never appeared within 120s"
+      echo "last response: $RESP"
+      meshctl logs ts-view-consumer 2>/dev/null | tail -40 || true
+      exit 1
+    capture: ts_refusal
+    timeout: 140
+
+  - name: "Restart java-view-producer"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start /workspace/java-view-producer --env MCP_MESH_HTTP_PORT=9202 -d
+
+  # Guarantee 3: organic recovery — no consumer restart. Long deadline: the
+  # producer is a cold-restart JVM.
+  - name: "Wait for cross-runtime report recovery"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESP=""
+      for i in $(seq 1 85); do
+        RESP=$(meshctl call ts_view_report '{}' --raw 2>&1 || true)
+        RECOVERED=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .bravo_agent == "java-view-producer"' 2>/dev/null || echo "")
+        if [ "$RECOVERED" = "true" ]; then
+          echo "TS_VIEW_RECOVERED=1 after ~$((i*2))s"
+          echo "$RESP"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: ts_view_report never recovered within 170s of restarting the producer"
+      echo "last response: $RESP"
+      meshctl logs ts-view-consumer 2>/dev/null | tail -40 || true
+      exit 1
+    capture: ts_recovery
+    timeout: 190
+
+assertions:
+  # Guarantee 1: cross-runtime per-method binding (anchored pairs verified
+  # in-shell; markers are the verdicts)
+  - expr: "${captured.ts_baseline} contains 'TS_VIEW_BOUND=1'"
+    message: "both TS facade methods must be served by the JAVA producer with the correct dotted capability payloads (svc.alpha / svc.bravo)"
+  - expr: "${captured.ts_baseline} not contains '_error'"
+    message: "no view method may degrade at baseline (producer up)"
+
+  # Guarantee 2: refusal parity with the Java/Python tool-param paths
+  - expr: "${captured.ts_refusal} contains 'TS_REFUSAL_STRUCTURED=1'"
+    message: "the TS tool must refuse with the structured contract (dependency_unavailable naming svc.bravo) — a bravo_error report would mean execute ran with a dead REQUIRED proxy"
+  - expr: "${captured.ts_refusal} contains 'TS_REFUSAL_ISERROR=1'"
+    message: "the refusal must be an isError=true tool result, not a successful report"
+
+  # Guarantee 3: organic recovery
+  - expr: "${captured.ts_recovery} contains 'TS_VIEW_RECOVERED=1'"
+    message: "the report must bind again after the producer restarts, with no consumer restart"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace
