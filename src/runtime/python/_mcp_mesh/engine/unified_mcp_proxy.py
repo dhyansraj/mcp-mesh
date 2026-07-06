@@ -24,6 +24,9 @@ from ..shared.logging_config import (
 from ..shared.sse_parser import SSEParser
 from ..tracing.context import TraceContext
 from ..tracing.utils import generate_span_id
+from fastmcp.exceptions import ToolError
+
+from .superseded import SupersededError, parse_superseded_envelope
 
 logger = logging.getLogger(__name__)
 
@@ -799,6 +802,12 @@ class UnifiedMCPProxy:
                 # HTTP direct path (PRIMARY) — pooled httpx client, no MCP session overhead
                 result = await self._http_call(name, args_with_trace)
                 return result
+            except SupersededError:
+                # Issue #1278: a superseded refusal from the PRIMARY transport is
+                # an application response, not a transport failure — propagate it
+                # typed WITHOUT falling back to the FastMCP client (which would
+                # invoke the provider a SECOND time). Specific-before-generic.
+                raise
             except Exception as e:
                 error_msg = str(e)
                 # Don't fallback on application-level errors — the remote tool responded
@@ -825,6 +834,11 @@ class UnifiedMCPProxy:
                             f"{tp}✅ FastMCP fallback successful: {name} in {duration_ms}ms → {format_result_summary(converted_result)}"
                         )
                         return converted_result
+                except SupersededError:
+                    # Issue #1278: if the fallback path itself surfaces the typed
+                    # supersession signal, propagate it untouched rather than
+                    # rewrapping into a generic RuntimeError.
+                    raise
                 except Exception as fallback_error:
                     raise RuntimeError(
                         f"Tool call to '{name}' failed: HTTP={e}, FastMCP={fallback_error}"
@@ -848,6 +862,15 @@ class UnifiedMCPProxy:
                             error_text = item.text
                             break
                 self.logger.error(f"Remote tool returned error: {error_text}")
+                # Typed supersession signal (issue #1278): a provider that
+                # rejected this call as coming from a superseded executor emits
+                # the reserved ``{"error":"claim_superseded"}`` envelope. Re-
+                # raise it as the typed SupersededError so the caller unwinds
+                # with one ``except mesh.SupersededError``. Defensive parse —
+                # a non-superseded isError falls through to the generic error.
+                superseded = parse_superseded_envelope(error_text)
+                if superseded is not None:
+                    raise superseded
                 raise RuntimeError(f"Remote tool call failed: {error_text}")
 
             # Handle CallToolResult objects
@@ -909,6 +932,10 @@ class UnifiedMCPProxy:
                     return str(mcp_result)
 
         except RuntimeError:
+            raise
+        except SupersededError:
+            # Issue #1278: the typed supersession signal must propagate — it is
+            # a recognized error, not a conversion failure to swallow.
             raise
         except Exception as e:
             self.logger.warning(
@@ -1343,6 +1370,13 @@ class UnifiedMCPProxy:
                         error_text = item["text"]
                         break
                 self.logger.error(f"❌ Remote tool error: {error_text}")
+                # Typed supersession signal (issue #1278) — HTTP-fallback twin
+                # of the FastMCP recognize above. Re-raise the reserved
+                # ``claim_superseded`` envelope as SupersededError; defensive
+                # parse falls through to the generic error otherwise.
+                superseded = parse_superseded_envelope(error_text)
+                if superseded is not None:
+                    raise superseded
                 raise RuntimeError(f"Tool call error: {error_text}")
 
             # Calculate performance metrics
@@ -1366,6 +1400,13 @@ class UnifiedMCPProxy:
             raise RuntimeError(
                 f"HTTP error {e.response.status_code}: {e.response.text[:200]}"
             )
+        except SupersededError:
+            # Issue #1278: the typed supersession signal recognized above must
+            # re-raise UNTOUCHED — the generic rewrap below would turn it into a
+            # "HTTP call failed" RuntimeError that _call_remote_tool then treats
+            # as a transport failure and retries via the FastMCP fallback
+            # (double-invoking the provider). Specific-before-generic ordering.
+            raise
         except Exception as e:
             self.logger.error(f"❌ HTTP call failed: {type(e).__name__}: {e}")
             raise RuntimeError(f"HTTP call failed: {e}")
@@ -1488,7 +1529,22 @@ class UnifiedMCPProxy:
                         pass
                     final_result = None
                 else:
-                    final_result = await call_task
+                    try:
+                        final_result = await call_task
+                    except ToolError as e:
+                        # Issue #1278: a superseded streaming producer surfaces
+                        # here as a fastmcp ToolError whose message is the
+                        # reserved ``claim_superseded`` envelope. Re-raise it
+                        # typed so streaming callers get the same one-catch
+                        # (``except mesh.SupersededError``) contract as the
+                        # unary path. Already-typed or non-superseded ToolErrors
+                        # propagate unchanged.
+                        if isinstance(e, SupersededError):
+                            raise
+                        superseded = parse_superseded_envelope(str(e))
+                        if superseded is not None:
+                            raise superseded from e
+                        raise
 
                 # If the producer was non-streaming and no progress chunks
                 # arrived, extract text from the final CallToolResult and yield

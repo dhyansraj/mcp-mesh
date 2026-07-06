@@ -177,6 +177,50 @@ not double-applied. Two rules the handler must honor to opt in safely:
 Drive it exactly like the base task, targeting the `resumable_event_task`
 capability instead.
 
+## Typed supersession signal (`MeshSupersededException`, issue #1278)
+
+`superseded-provider-java/` + `superseded-consumer-java/` port the calling-job
+fencing pattern to Java. A `task = true` writer job makes mutating downstream
+calls; when it is superseded, the provider fences its writes and the consumer
+unwinds with ONE `catch (MeshSupersededException)`.
+
+Three moving parts:
+
+1. **Calling-job identity is the decision input (#1263).** A `task = true`
+   handler runs *as* a job, so every outbound mesh call carries its identity on
+   the `x-mesh-calling-*` headers. The provider reads it with
+   `MeshCallContext.callingJob()` → `CallingJob(jobId, claimEpoch)`.
+2. **The app decides supersession; the framework does not.** `applyWrite`
+   remembers the highest `claimEpoch` accepted per `jobId` and rejects any call
+   whose epoch is lower.
+3. **The typed error is the one-catch unwind (#1278).** The provider rejects
+   with `throw new MeshSupersededException(detail)` — on the wire the reserved
+   `{"error":"claim_superseded","detail":...}` envelope. The caller's injected
+   proxy re-throws `MeshSupersededException`, so the consumer wraps its whole
+   write batch in ONE `catch (MeshSupersededException e)` instead of
+   string-matching the marker after every call.
+
+Distinct from `dependency_unavailable` (#1273): that means "capability
+unreachable"; supersession means "you personally are stale". Both are typed so
+the contract (the reserved envelope), not the error string, drives
+classification.
+
+```bash
+# Build the SDK first if you haven't: (cd src/runtime/java && mvn install -DskipTests)
+
+# Terminal 2 — provider (port 9124)
+cd examples/jobs-java/superseded-provider-java
+MCP_MESH_REGISTRY_URL=http://localhost:8000 mvn spring-boot:run
+
+# Terminal 3 — consumer (port 9125)
+cd examples/jobs-java/superseded-consumer-java
+MCP_MESH_REGISTRY_URL=http://localhost:8000 mvn spring-boot:run
+```
+
+Then `meshctl call superseded-consumer-java run_writer --arg count=3`. See the
+Python tree's README (`../jobs/README.md#typed-supersession-signal-supersedederror-issue-1278`)
+for the full conceptual treatment.
+
 ## What's NOT in v2.2 yet
 
 - Idempotency keys for retries (future).

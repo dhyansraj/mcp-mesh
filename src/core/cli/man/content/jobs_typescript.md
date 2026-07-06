@@ -670,6 +670,65 @@ and read-only — reading it has no effect on the call. This is the
 provider-side dual of `currentJob()`: `currentJob()` answers "what job am I
 executing *as*", `callingJob()` answers "what job *invoked* me".
 
+## Typed supersession signal
+
+Stamping the caller's epoch (above) lets a provider *dedupe* a superseded
+write after the fact. When the provider is a **state authority** that must
+*reject* the stale write outright, it compares the caller's epoch against
+its own live/expected epoch and throws a typed error. The framework does
+**not** auto-detect supersession — the app owns the "is this caller stale?"
+decision (it holds the authoritative epoch); the framework only carries the
+typed signal end to end.
+
+The provider throws `MeshSupersededError` (exported from the package root):
+
+```typescript
+import { callingJob, MeshSupersededError } from "@mcpmesh/sdk";
+
+agent.addTool({
+  name: "record_charge",
+  capability: "record_charge",
+  parameters: z.object({ order_id: z.string(), amount: z.number() }),
+  execute: async ({ order_id, amount }) => {
+    const caller = callingJob();          // { jobId, claimEpoch } | null
+    const live = await ledger.liveEpoch(order_id);   // the app's authoritative epoch
+    if (caller && caller.claimEpoch != null && caller.claimEpoch < live) {
+      // Stale executor — reject instead of applying the write.
+      throw new MeshSupersededError(`stale epoch ${caller.claimEpoch}`);
+    }
+    await ledger.upsert({ key: order_id, amount });
+    return { order_id };
+  },
+});
+```
+
+The signal crosses the wire as a reserved `{"error":"claim_superseded"}`
+app envelope — the same `claim_superseded` vocabulary the registry uses to
+fence job writes. On the **calling** side, the injected mesh proxy
+recognizes that envelope and re-throws the same typed error, so a superseded
+executor unwinds with **one** catch instead of string-matching an error
+marker after every mutating call:
+
+```typescript
+import { MeshSupersededError } from "@mcpmesh/sdk";
+
+try {
+  await recordCharge({ order_id, amount: 42 });   // injected mesh dependency
+  await settleLedger({ order_id });
+} catch (e) {
+  if (e instanceof MeshSupersededError) return;   // superseded — unwind cleanly
+  throw e;
+}
+```
+
+`MeshSupersededError` is distinct from a generic tool failure and from the
+`dependency_unavailable` refusal (an unresolved required dep, `meshctl man
+dependency-injection --typescript`) — it means specifically *you are running
+under a superseded claim*. It does **not** change delivery: jobs remain
+**at-least-once** and a fenced re-execution still runs under the new claim;
+the typed signal only lets the stale attempt bow out on its first rejected
+write rather than every downstream provider re-checking a string marker.
+
 ## Out-of-band inspection
 
 Three SDK-managed helper tools are auto-registered on every mesh

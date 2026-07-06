@@ -1,5 +1,6 @@
 package io.mcpmesh.spring;
 
+import io.mcpmesh.types.MeshSupersededException;
 import io.mcpmesh.types.MeshToolCallException;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -90,6 +91,15 @@ class McpHttpClientStreamTest {
     private String finalErrorEvent(long requestId, String message) {
         String body = "{\"jsonrpc\":\"2.0\",\"id\":" + requestId
             + ",\"error\":{\"code\":-32000,\"message\":\"" + message + "\"}}";
+        return sseEvent(body);
+    }
+
+    /** Final tool result with isError=true whose text block is {@code envelope}. */
+    private String finalIsErrorResultEvent(long requestId, String envelope) {
+        String escaped = envelope.replace("\"", "\\\"");
+        String body = "{\"jsonrpc\":\"2.0\",\"id\":" + requestId
+            + ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"" + escaped
+            + "\"}],\"isError\":true}}";
         return sseEvent(body);
     }
 
@@ -263,6 +273,66 @@ class McpHttpClientStreamTest {
             () -> collect(client.streamTool(endpoint, "tool", null, null)));
         assertTrue(ex.getMessage().contains("tool blew up"),
             "Expected exception to include error message, got: " + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("#1278: a stream ending with the reserved claim_superseded envelope surfaces MeshSupersededException")
+    void onSupersededEnvelope_surfacesTypedSignal() {
+        server.setDispatcher(new okhttp3.mockwebserver.Dispatcher() {
+            @Override
+            public MockResponse dispatch(RecordedRequest request) {
+                String body = request.getBody().readUtf8();
+                try {
+                    JsonNode bodyJson = mapper.readTree(body);
+                    String token = bodyJson.get("params").get("_meta").get("progressToken").asText();
+                    long id = bodyJson.get("id").asLong();
+                    String sse = progressEvent(token, 1, "partial")
+                               + finalIsErrorResultEvent(id,
+                                   "{\"error\":\"claim_superseded\",\"detail\":\"stale\"}");
+                    return new MockResponse()
+                        .setBody(sse)
+                        .setHeader("Content-Type", "text/event-stream");
+                } catch (Exception e) {
+                    return new MockResponse().setResponseCode(500);
+                }
+            }
+        });
+
+        String endpoint = server.url("/").toString();
+        MeshSupersededException ex = assertThrows(MeshSupersededException.class,
+            () -> collect(client.streamTool(endpoint, "tool", null, null)),
+            "the reserved envelope ending a stream must surface as the typed signal");
+        assertEquals("stale", ex.getDetail());
+    }
+
+    @Test
+    @DisplayName("#1278: a GENERIC tool-level isError ending a stream stays a clean end-of-stream (pre-existing behavior, unchanged)")
+    void onGenericIsError_stillCleanEndOfStream() throws Exception {
+        server.setDispatcher(new okhttp3.mockwebserver.Dispatcher() {
+            @Override
+            public MockResponse dispatch(RecordedRequest request) {
+                String body = request.getBody().readUtf8();
+                try {
+                    JsonNode bodyJson = mapper.readTree(body);
+                    String token = bodyJson.get("params").get("_meta").get("progressToken").asText();
+                    long id = bodyJson.get("id").asLong();
+                    String sse = progressEvent(token, 1, "kept")
+                               + finalIsErrorResultEvent(id, "boom: generic tool error");
+                    return new MockResponse()
+                        .setBody(sse)
+                        .setHeader("Content-Type", "text/event-stream");
+                } catch (Exception e) {
+                    return new MockResponse().setResponseCode(500);
+                }
+            }
+        });
+
+        String endpoint = server.url("/").toString();
+        // Narrow scope: only the reserved envelope is surfaced. A generic
+        // tool-level isError remains a clean end-of-stream (the broader
+        // streaming-isError gap is pre-existing and intentionally untouched).
+        List<String> chunks = collect(client.streamTool(endpoint, "tool", null, null));
+        assertEquals(List.of("kept"), chunks);
     }
 
     @Test

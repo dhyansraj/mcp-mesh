@@ -312,6 +312,15 @@ export {
   ProviderUnavailableError,
 } from "./errors.js";
 
+// Typed supersession signal (issue #1278): a provider throws
+// MeshSupersededError to reject a superseded caller; the injected proxy
+// re-throws it on the calling side.
+export {
+  MeshSupersededError,
+  CLAIM_SUPERSEDED_MARKER,
+  parseSupersededEnvelope,
+} from "./superseded.js";
+
 // SSE utilities
 export { parseSSEResponse, isSSEResponse, parseSSEStream } from "./sse.js";
 export { sseStream } from "./sse-stream.js";

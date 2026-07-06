@@ -231,6 +231,13 @@ def __getattr__(name):
         from _mcp_mesh.engine.job_context import CallingJob
 
         return CallingJob
+    elif name == "SupersededError":
+        # Issue #1278: typed supersession signal. A provider raises this to
+        # reject a call from a superseded executor; the calling side's injected
+        # proxy re-raises it on recognizing the reserved envelope.
+        from _mcp_mesh.engine.superseded import SupersededError
+
+        return SupersededError
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 

@@ -808,6 +808,64 @@ it has no effect on the call. This is the provider-side dual of
 `JobContext.current()`: `JobContext.current()` answers "what job am I
 executing *as*", `callingJob()` answers "what job *invoked* me".
 
+## Typed supersession signal
+
+Stamping the caller's epoch (above) lets a provider *dedupe* a superseded
+write after the fact. When the provider is a **state authority** that must
+*reject* the stale write outright, it compares the caller's epoch against
+its own live/expected epoch and throws a typed exception. The framework does
+**not** auto-detect supersession — the app owns the "is this caller stale?"
+decision (it holds the authoritative epoch); the framework only carries the
+typed signal end to end.
+
+The provider throws `MeshSupersededException` (package `io.mcpmesh.types`):
+
+```java
+import io.mcpmesh.spring.MeshCallContext;
+import io.mcpmesh.spring.MeshCallContext.CallingJob;
+import io.mcpmesh.types.MeshSupersededException;
+
+@MeshTool(capability = "record_charge")
+public Map<String, Object> recordCharge(
+    @Param("order_id") String orderId,
+    @Param("amount") double amount) {
+  CallingJob caller = MeshCallContext.callingJob();   // never null; fields nullable
+  long live = ledger.liveEpoch(orderId);              // the app's authoritative epoch
+  if (caller.isPresent() && caller.claimEpoch() != null && caller.claimEpoch() < live) {
+    // Stale executor — reject instead of applying the write.
+    throw new MeshSupersededException("stale epoch " + caller.claimEpoch());
+  }
+  ledger.upsert(orderId, amount);
+  return Map.of("order_id", orderId);
+}
+```
+
+The signal crosses the wire as a reserved `{"error":"claim_superseded"}`
+app envelope — the same `claim_superseded` vocabulary the registry uses to
+fence job writes. On the **calling** side, the injected mesh proxy
+recognizes that envelope and re-throws the same typed exception, so a
+superseded executor unwinds with **one** catch instead of string-matching an
+error marker after every mutating call:
+
+```java
+import io.mcpmesh.types.MeshSupersededException;
+
+try {
+  recordCharge(orderId, 42.0);   // injected mesh dependency
+  settleLedger(orderId);
+} catch (MeshSupersededException e) {
+  return;                        // superseded — unwind cleanly
+}
+```
+
+`MeshSupersededException` is distinct from a generic tool failure and from
+the `dependency_unavailable` refusal (an unresolved required dep, `meshctl
+man dependency-injection --java`) — it means specifically *you are running
+under a superseded claim*. It does **not** change delivery: jobs remain
+**at-least-once** and a fenced re-execution still runs under the new claim;
+the typed signal only lets the stale attempt bow out on its first rejected
+write rather than every downstream provider re-checking a string marker.
+
 ## Out-of-band inspection
 
 Three SDK-managed helper tools are auto-registered on every mesh

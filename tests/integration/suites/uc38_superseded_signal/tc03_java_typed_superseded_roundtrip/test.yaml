@@ -1,0 +1,171 @@
+# tc03 — typed supersession signal round-trips over the REAL JNI/HTTP transport
+# (issue #1278, Java). Modeled 1:1 on tc01 (Python), with uc23's Java build /
+# cold-start / budget conventions.
+#
+# Why Java gets its own real-transport TC even though the recognize "looks
+# wired": Java's EMIT path is DIFFERENT from Python/TS. Python/TS let fastmcp
+# auto-serialize a thrown error into the isError result; Java instead relies on
+# the framework MeshToolWrapper CATCHING MeshSupersededException and building the
+# reserved {"error":"claim_superseded"} envelope by hand. That wrapper-catch
+# emit (plus the ToolInvoker/McpHttpClient recognize on the consumer side) is
+# exactly the surface a mocked-boundary unit test cannot vouch for — this TC
+# drives it end-to-end over real HTTP.
+#
+# Topology (2 Java Spring Boot agents, all injected calls over real HTTP):
+#   java-signal-consumer --injected McpMeshTool proxy--> java-signal-provider
+#
+# What this proves (identical shape to tc01/tc02, Java carrier):
+#   1. EMIT + RECOGNIZE: provider throws MeshSupersededException; the wrapper
+#      emits the reserved envelope; the consumer's injected proxy recognizes it
+#      and re-throws the typed exception, so probeSuperseded reports
+#      outcome=superseded (reachable ONLY via catch (MeshSupersededException)).
+#   2. SINGLE-INVOKE: after ONE consumer probe the provider's reject-superseded
+#      counter must be exactly 1 (count==2 ⇒ fallback-transport double-invoke).
+#   3. NEGATIVE CONTROL: probeGeneric (a provider tool throwing a plain
+#      RuntimeException) must report outcome=generic, never superseded.
+#
+# NOTE (tool names): mesh's Java runtime derives the MCP tool name from the
+# camelCase METHOD name (e.g. uc02 greet/getInfo), so the calls below use
+# probeSuperseded / probeGeneric / getRejectCount. The ASSERTION shape is
+# identical to tc01/tc02; only the call names differ.
+#
+# Timing: liveness-only registration wait (issue #1193) plus a provider
+# status==healthy gate (Java Spring Boot cold-start is ~30s — the uc23 idiom);
+# the consumer's settle window (MCP_MESH_SETTLE_TIMEOUT=60) covers dependency
+# resolution — NO dep-resolution sleeps. Timeout budget sized for the WARM maven
+# cache, mirroring uc23's two-Java-agent TCs (360s there); the per-step
+# maven-install budgets (600s) are cold-cache step caps, not the warm sum:
+#   maven-install x2 (~30s warm) + 2 Spring Boot cold starts (~30s each) +
+#   health/register polls (~15s) + settle-covered calls (~10s) ≈ 145s warm; 420s
+#   gives generous slack for the double JVM boot without budgeting cold cache.
+
+name: "Typed supersession signal round-trips over real HTTP (Java)"
+description: "Provider throws MeshSupersededException (wrapper-catch emit); consumer's injected proxy recognizes the reserved claim_superseded envelope (outcome=superseded), provider invoked exactly once, and a generic provider error is NOT misclassified (outcome=generic)"
+tags:
+  - integration
+  - java
+  - tools
+  - superseded
+  - issue-1278
+  - slow
+timeout: 420
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/java-signal-provider /workspace/
+      cp -rL /uc-artifacts/java-signal-consumer /workspace/
+
+  - name: "Install provider deps"
+    handler: maven-install
+    path: /workspace/java-signal-provider
+    timeout: 600
+
+  - name: "Install consumer deps"
+    handler: maven-install
+    path: /workspace/java-signal-consumer
+    timeout: 600
+
+  # Start provider first. No registration wait before the consumer: the
+  # consumer's settle window covers dependency arrival order.
+  - name: "Start provider (port 9205)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start java-signal-provider --env MCP_MESH_HTTP_PORT=9205 -d
+    capture: start_provider
+
+  # Java Spring Boot cold-start is ~30s. Poll /agents until the provider is
+  # healthy so the consumer's first probe has a live target (uc23 idiom).
+  - name: "Wait for Java provider to be healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        STATUS=$(curl -s http://localhost:8000/agents | jq -r \
+          '.agents[] | select(.name=="java-signal-provider") | .status' 2>/dev/null)
+        if [ "$STATUS" = "healthy" ]; then
+          echo "provider healthy after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: provider not healthy within 120s (last status='$STATUS')"
+      meshctl logs java-signal-provider 2>&1 | tail -80 || true
+      exit 1
+    capture: provider_healthy
+    timeout: 150
+
+  - name: "Start consumer (port 9206)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start java-signal-consumer --env MCP_MESH_HTTP_PORT=9206 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+    capture: start_consumer
+
+  # Liveness only (issue #1193): both agents must APPEAR in the registry.
+  - routine: global.wait_for_agents_registered
+    params:
+      agents: "java-signal-provider java-signal-consumer"
+
+  # (1) EMIT + RECOGNIZE. meshctl call returns the MCP CallToolResult JSON; the
+  # probe returns a Map, parsed uniformly via content[0].text | fromjson.
+  - name: "Probe: consumer calls reject-superseded via injected proxy"
+    handler: shell
+    workdir: /workspace
+    command: meshctl call probeSuperseded '{}' 2>/dev/null
+    capture: probe_superseded
+    timeout: 90
+
+  # (2) SINGLE-INVOKE. Read the provider's real invocation counter.
+  - name: "Read provider invocation count"
+    handler: shell
+    workdir: /workspace
+    command: meshctl call getRejectCount '{}' 2>/dev/null
+    capture: reject_count
+    timeout: 60
+
+  # (3) NEGATIVE CONTROL. Same consumer, a provider tool that fails generically.
+  - name: "Control: consumer calls reject-generic via injected proxy"
+    handler: shell
+    workdir: /workspace
+    command: meshctl call probeGeneric '{}' 2>/dev/null
+    capture: probe_generic
+    timeout: 90
+
+assertions:
+  # IDIOM: equality lives INSIDE the jq filter so the interpolation yields a bare
+  # true/false (no '}' in the interpolation body); the envelope is parsed via the
+  # portable content[0].text | fromjson (structuredContent is Python-only).
+
+  # Gate: the Java provider came up healthy before the probes.
+  - expr: "${captured.provider_healthy} contains 'provider healthy'"
+    message: "the Java provider must reach status=healthy before the consumer probes it"
+
+  # (1) The typed signal was recognized over the real transport.
+  - expr: "${jq:captured.probe_superseded:(.content[0].text | fromjson | .outcome == \"superseded\")} == 'true'"
+    message: "consumer's injected proxy must recognize the reserved claim_superseded envelope and re-throw the typed exception (outcome=superseded) — a raw body or generic error would report 'generic'"
+  - expr: "${jq:captured.probe_superseded:(.content[0].text | fromjson | .outcome == \"generic\")} == 'false'"
+    message: "probeSuperseded must NOT fall into the generic branch — that would mean Java's wrapper-catch emit or the recognize path is dead on the real transport"
+  - expr: "${jq:captured.probe_superseded:(.content[0].text | fromjson | .detail | contains(\"stale epoch\"))} == 'true'"
+    message: "the MeshSupersededException detail must round-trip through the wire envelope"
+
+  # (2) The provider was invoked EXACTLY ONCE (no fallback-transport double-invoke).
+  - expr: "${jq:captured.reject_count:(.content[0].text | fromjson | .count == 1)} == 'true'"
+    message: "reject-superseded must be invoked exactly once — count==2 means the caller double-invoked via a fallback transport"
+
+  # (3) A generic provider error is NOT misclassified as superseded.
+  - expr: "${jq:captured.probe_generic:(.content[0].text | fromjson | .outcome == \"generic\")} == 'true'"
+    message: "a plain (non-envelope) provider error must classify as generic"
+  - expr: "${jq:captured.probe_generic:(.content[0].text | fromjson | .outcome == \"superseded\")} == 'false'"
+    message: "a generic provider error must NEVER be misclassified as superseded — the recognize path must be envelope-exact"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: meshctl stop 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

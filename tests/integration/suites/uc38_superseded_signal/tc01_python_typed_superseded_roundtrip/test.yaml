@@ -1,0 +1,136 @@
+# tc01 — typed supersession signal round-trips over the REAL HTTP transport
+# (issue #1278, Python — the reference runtime whose primary-transport recognize
+# was found DEAD because the unit tests mocked the converter boundary).
+#
+# Topology (2 Python agents, all injected calls over real HTTP):
+#   py-signal-consumer --injected proxy--> py-signal-provider
+#
+# What this proves (the emit->wire->recognize plumbing, NOT the epoch app logic):
+#   1. EMIT + RECOGNIZE: the provider raises mesh.SupersededError; it crosses the
+#      wire as the reserved {"error":"claim_superseded"} isError envelope; the
+#      consumer's INJECTED McpMeshTool proxy recognizes it and re-raises the
+#      typed error, so probe_superseded reports outcome=superseded. That marker
+#      is reachable ONLY via `except mesh.SupersededError` — a raw string body or
+#      a generic error would land in the generic branch instead.
+#   2. SINGLE-INVOKE: the provider counts each real invocation of
+#      reject-superseded. After ONE consumer probe the count must be exactly 1 —
+#      the Python real-transport bug double-invoked via a fallback transport, so
+#      count==2 would surface it.
+#   3. NEGATIVE CONTROL: probe_generic calls a provider tool that raises a plain
+#      (non-envelope) error. It must report outcome=generic, never superseded —
+#      proving the recognize path is envelope-exact and does not misclassify an
+#      arbitrary failure as supersession.
+#
+# Timing: liveness-only registration wait (issue #1193); the consumer's settle
+# window (MCP_MESH_SETTLE_TIMEOUT=60) covers dependency resolution — NO
+# dep-resolution sleeps. Timeout budget is sized for the WARM build cache:
+# step-budget arithmetic below is cold-cache headroom, not the warm sum.
+#   pip-install x2 (~10s warm) + 2 agent starts (~10s) + register poll
+#   (~10s typical, shared routine's deadline is longer) + settle-covered calls
+#   (~15s) ≈ 45s warm; 300s gives generous slack without budgeting the
+#   cold-cache worst case.
+
+name: "Typed supersession signal round-trips over real HTTP (Python)"
+description: "Provider raises mesh.SupersededError; consumer's injected proxy recognizes the reserved claim_superseded envelope (outcome=superseded), provider invoked exactly once, and a generic provider error is NOT misclassified (outcome=generic)"
+tags:
+  - integration
+  - python
+  - tools
+  - superseded
+  - issue-1278
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/py-signal-provider /workspace/
+      cp -rL /uc-artifacts/py-signal-consumer /workspace/
+
+  - name: "Install provider deps"
+    handler: pip-install
+    path: /workspace/py-signal-provider
+
+  - name: "Install consumer deps"
+    handler: pip-install
+    path: /workspace/py-signal-consumer
+
+  # Start provider first. No registration wait before the consumer: the
+  # consumer's settle window covers dependency arrival order.
+  - name: "Start provider (port 9201)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start py-signal-provider/main.py --env MCP_MESH_HTTP_PORT=9201 -d
+    capture: start_provider
+
+  - name: "Start consumer (port 9202)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start py-signal-consumer/main.py --env MCP_MESH_HTTP_PORT=9202 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+    capture: start_consumer
+
+  # Liveness only (issue #1193): both agents must APPEAR in the registry.
+  # Dependency resolution is covered by the settle window on the calls below.
+  - routine: global.wait_for_agents_registered
+    params:
+      agents: "py-signal-provider py-signal-consumer"
+
+  # (1) EMIT + RECOGNIZE. meshctl call returns the MCP CallToolResult JSON; the
+  # probe returns a JSON string, parsed uniformly via content[0].text | fromjson.
+  - name: "Probe: consumer calls reject-superseded via injected proxy"
+    handler: shell
+    workdir: /workspace
+    command: meshctl call probe_superseded '{}' 2>/dev/null
+    capture: probe_superseded
+    timeout: 90
+
+  # (2) SINGLE-INVOKE. Read the provider's real invocation counter.
+  - name: "Read provider invocation count"
+    handler: shell
+    workdir: /workspace
+    command: meshctl call get_reject_count '{}' 2>/dev/null
+    capture: reject_count
+    timeout: 60
+
+  # (3) NEGATIVE CONTROL. Same consumer, a provider tool that fails generically.
+  - name: "Control: consumer calls reject-generic via injected proxy"
+    handler: shell
+    workdir: /workspace
+    command: meshctl call probe_generic '{}' 2>/dev/null
+    capture: probe_generic
+    timeout: 90
+
+assertions:
+  # IDIOM: equality lives INSIDE the jq filter so the interpolation yields a bare
+  # true/false (no '}' in the interpolation body); the envelope is parsed via the
+  # portable content[0].text | fromjson (structuredContent is Python-only).
+
+  # (1) The typed signal was recognized over the real transport.
+  - expr: "${jq:captured.probe_superseded:(.content[0].text | fromjson | .outcome == \"superseded\")} == 'true'"
+    message: "consumer's injected proxy must recognize the reserved claim_superseded envelope and re-raise the typed error (outcome=superseded) — a raw body or generic error would report 'generic'"
+  - expr: "${jq:captured.probe_superseded:(.content[0].text | fromjson | .outcome == \"generic\")} == 'false'"
+    message: "probe_superseded must NOT fall into the generic branch — that would mean the real-transport recognize is dead (the exact primary-path bug this UC exists to catch)"
+  # The optional detail round-tripped through the envelope too.
+  - expr: "${jq:captured.probe_superseded:(.content[0].text | fromjson | .detail | contains(\"stale epoch\"))} == 'true'"
+    message: "the SupersededError detail must round-trip through the wire envelope"
+
+  # (2) The provider was invoked EXACTLY ONCE (no fallback-transport double-invoke).
+  - expr: "${jq:captured.reject_count:(.content[0].text | fromjson | .count == 1)} == 'true'"
+    message: "reject-superseded must be invoked exactly once — count==2 means the caller double-invoked via a fallback transport (the Python real-transport regression)"
+
+  # (3) A generic provider error is NOT misclassified as superseded.
+  - expr: "${jq:captured.probe_generic:(.content[0].text | fromjson | .outcome == \"generic\")} == 'true'"
+    message: "a plain (non-envelope) provider error must classify as generic"
+  - expr: "${jq:captured.probe_generic:(.content[0].text | fromjson | .outcome == \"superseded\")} == 'false'"
+    message: "a generic provider error must NEVER be misclassified as superseded — the recognize path must be envelope-exact"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: meshctl stop 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

@@ -1,0 +1,137 @@
+# tc02 — typed supersession signal round-trips over the REAL napi/HTTP transport
+# (issue #1278, TypeScript). Ports the Python tc01 pattern to prove the TS
+# proxy's recognize path over the real transport, not the mocked boundary.
+#
+# Topology (2 TS agents, all injected calls over real HTTP):
+#   ts-signal-consumer --injected proxy--> ts-signal-provider
+#
+# What this proves (identical to tc01, TypeScript carrier):
+#   1. EMIT + RECOGNIZE: the provider throws MeshSupersededError; it crosses the
+#      wire as the reserved {"error":"claim_superseded"} isError envelope; the
+#      consumer's injected proxy recognizes it and re-throws the typed error, so
+#      probe_superseded reports outcome=superseded (reachable ONLY via
+#      `e instanceof MeshSupersededError`).
+#   2. SINGLE-INVOKE: after ONE consumer probe the provider's reject-superseded
+#      counter must be exactly 1. The provider is pinned to a single tool-worker
+#      (MCP_MESH_TOOL_WORKERS=1, isolation still ON) so the module-level counter
+#      is shared across the body and the count tool — see the provider start step.
+#   3. NEGATIVE CONTROL: probe_generic (a provider tool throwing a plain
+#      UserError) must report outcome=generic, never superseded.
+#
+# Timing: liveness-only registration wait (issue #1193); the consumer's settle
+# window (MCP_MESH_SETTLE_TIMEOUT=60) covers dependency resolution — NO
+# dep-resolution sleeps. Timeout budget sized for the WARM npm cache:
+#   npm-install x2 (~20s warm) + 2 agent starts (~15s) + register poll (<=90s
+#   deadline, ~15s typical) + settle-covered calls (~15s) ≈ 65s warm; 300s gives
+#   generous slack without budgeting the cold-cache worst case.
+
+name: "Typed supersession signal round-trips over real HTTP (TypeScript)"
+description: "Provider throws MeshSupersededError; consumer's injected proxy recognizes the reserved claim_superseded envelope (outcome=superseded), provider invoked exactly once, and a generic provider error is NOT misclassified (outcome=generic)"
+tags:
+  - integration
+  - typescript
+  - tools
+  - superseded
+  - issue-1278
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/ts-signal-provider /workspace/
+      cp -rL /uc-artifacts/ts-signal-consumer /workspace/
+
+  - name: "Install provider deps"
+    handler: npm-install
+    path: /workspace/ts-signal-provider
+
+  - name: "Install consumer deps"
+    handler: npm-install
+    path: /workspace/ts-signal-consumer
+
+  # Start provider first. No registration wait before the consumer: the
+  # consumer's settle window covers dependency arrival order.
+  # MCP_MESH_TOOL_WORKERS=1 pins the provider to a SINGLE tool-isolation worker.
+  # Tool isolation stays ON (the default — the worker_threads boundary is still
+  # crossed, which is exactly the path the reserved envelope must survive), but
+  # with one worker BOTH reject_superseded and get_reject_count run in the same
+  # worker, so the module-level counter is shared and the count==1 single-invoke
+  # assertion is observable. Under the default multi-worker pool the counter is
+  # per-worker: get_reject_count could read a different worker's copy (0) than
+  # the one that ran the body — not a wire double-invoke, just an unobservable
+  # counter — so we pin the pool rather than trust cross-worker module state.
+  - name: "Start provider (port 9203, single tool worker)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start ts-signal-provider/src/index.ts --env MCP_MESH_HTTP_PORT=9203 --env MCP_MESH_TOOL_WORKERS=1 -d
+    capture: start_provider
+
+  - name: "Start consumer (port 9204)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start ts-signal-consumer/src/index.ts --env MCP_MESH_HTTP_PORT=9204 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+    capture: start_consumer
+
+  # Liveness only (issue #1193): both agents must APPEAR in the registry.
+  - routine: global.wait_for_agents_registered
+    params:
+      agents: "ts-signal-provider ts-signal-consumer"
+
+  # (1) EMIT + RECOGNIZE.
+  - name: "Probe: consumer calls reject-superseded via injected proxy"
+    handler: shell
+    workdir: /workspace
+    command: meshctl call probe_superseded '{}' 2>/dev/null
+    capture: probe_superseded
+    timeout: 90
+
+  # (2) SINGLE-INVOKE.
+  - name: "Read provider invocation count"
+    handler: shell
+    workdir: /workspace
+    command: meshctl call get_reject_count '{}' 2>/dev/null
+    capture: reject_count
+    timeout: 60
+
+  # (3) NEGATIVE CONTROL.
+  - name: "Control: consumer calls reject-generic via injected proxy"
+    handler: shell
+    workdir: /workspace
+    command: meshctl call probe_generic '{}' 2>/dev/null
+    capture: probe_generic
+    timeout: 90
+
+assertions:
+  # IDIOM: equality INSIDE the jq filter (bare true/false out, no '}' in the
+  # interpolation body); envelope parsed via the portable content[0].text |
+  # fromjson.
+
+  # (1) The typed signal was recognized over the real transport.
+  - expr: "${jq:captured.probe_superseded:(.content[0].text | fromjson | .outcome == \"superseded\")} == 'true'"
+    message: "consumer's injected proxy must recognize the reserved claim_superseded envelope and re-throw the typed error (outcome=superseded)"
+  - expr: "${jq:captured.probe_superseded:(.content[0].text | fromjson | .outcome == \"generic\")} == 'false'"
+    message: "probe_superseded must NOT fall into the generic branch — that would mean the real-transport recognize is dead"
+  - expr: "${jq:captured.probe_superseded:(.content[0].text | fromjson | .detail | contains(\"stale epoch\"))} == 'true'"
+    message: "the MeshSupersededError detail must round-trip through the wire envelope"
+
+  # (2) The provider was invoked EXACTLY ONCE.
+  - expr: "${jq:captured.reject_count:(.content[0].text | fromjson | .count == 1)} == 'true'"
+    message: "reject-superseded must be invoked exactly once — count==2 means a fallback-transport double-invoke"
+
+  # (3) A generic provider error is NOT misclassified as superseded.
+  - expr: "${jq:captured.probe_generic:(.content[0].text | fromjson | .outcome == \"generic\")} == 'true'"
+    message: "a plain (non-envelope) provider error must classify as generic"
+  - expr: "${jq:captured.probe_generic:(.content[0].text | fromjson | .outcome == \"superseded\")} == 'false'"
+    message: "a generic provider error must NEVER be misclassified as superseded — the recognize path must be envelope-exact"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: meshctl stop 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace
