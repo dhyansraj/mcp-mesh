@@ -280,14 +280,16 @@ func TestRegistryCountsDiscloseDownBuckets(t *testing.T) {
 	assert.NotContains(t, s, "2 unhealthy",
 		"a down instance that blocks nothing must not inflate the red unhealthy count")
 
-	// And the footer (orphaned down hidden, blocking promoted to a row).
+	// And the footer: both down instances are hidden in the healthy-only default
+	// (#1309 no longer promotes the blocking one to a visible row), disclosed as
+	// a neutral gray "down" count and surfaced with --all.
 	_, summary := collapseDefaultView(agents, view)
-	require.Equal(t, 1, summary.hiddenDownAgents, "only the orphaned down instance is hidden")
-	footer := formatListFooter(2, 1, summary)
-	assert.Contains(t, footer, colorGray+"1 inactive instance hidden",
-		"the hidden orphan is disclosed as gray inactive in the footer, not red 'agent down'")
+	require.Equal(t, 2, summary.hiddenDownAgents, "both down instances are hidden in the healthy-only default")
+	footer := formatListFooter(1, 1, summary)
+	assert.Contains(t, footer, colorGray+"2 down hidden",
+		"the hidden down instances are disclosed as gray 'down' in the footer, not a red alarm")
 	assert.NotContains(t, footer, colorRed,
-		"nothing in the footer is a genuine alarm: the blocking instance is a visible red row, not a footer count")
+		"nothing in the footer is a genuine alarm: down instances are surfaced with --all")
 }
 
 func TestCollapseDefaultView(t *testing.T) {
@@ -310,7 +312,10 @@ func TestCollapseDefaultView(t *testing.T) {
 			"a non-blocking down agent must be hidden and counted namelessly — `meshctl list | grep -q <name>` matching must imply a live agent")
 	})
 
-	t.Run("blocking down instance promoted to named row", func(t *testing.T) {
+	t.Run("blocking down instance hidden by default", func(t *testing.T) {
+		// #1309 reverts #1198: a down instance that explains a live agent's
+		// dependency gap is NOT promoted to a visible red row — the default view
+		// is strictly healthy-only. It is hidden and disclosed in the footer.
 		provider := testAgent("provider-solo", "provider", "unhealthy", base, nil)
 		provider.Tools = []ToolInfo{{Name: "date_service", Capability: "date_service"}}
 		consumer := testAgent("consumer-1", "consumer", "healthy", base, nil)
@@ -319,14 +324,15 @@ func TestCollapseDefaultView(t *testing.T) {
 		}
 		agents := []EnhancedAgent{provider, consumer}
 		view := computeSupersessionView(agents)
+		require.True(t, view.blocking["provider-solo"], "the provider is still recorded as blocking for the header count")
 
 		kept, summary := collapseDefaultView(agents, view)
 
-		require.Len(t, kept, 2)
-		keptIDs := []string{kept[0].ID, kept[1].ID}
-		assert.Contains(t, keptIDs, "provider-solo",
-			"down instance explaining a live dependency gap must stay visible as a named row")
-		assert.Equal(t, 0, summary.hiddenDownAgents)
+		require.Len(t, kept, 1)
+		assert.Equal(t, "consumer-1", kept[0].ID, "only the healthy consumer is shown")
+		assert.NotContains(t, []string{kept[0].ID}, "provider-solo",
+			"a blocking down instance is hidden from the healthy-only default view")
+		assert.Equal(t, 1, summary.hiddenDownAgents, "the blocking down instance is counted as hidden down")
 		assert.Equal(t, 0, summary.hiddenSuperseded)
 	})
 
@@ -379,36 +385,33 @@ func TestFormatListFooter(t *testing.T) {
 		assert.Equal(t, "7 agents (7 healthy)", footer)
 	})
 
-	t.Run("inactive and superseded clauses", func(t *testing.T) {
+	t.Run("down and superseded clauses", func(t *testing.T) {
 		footer := formatListFooter(3, 3, listDefaultSummary{hiddenSuperseded: 2, hiddenDownAgents: 1})
 		assert.Contains(t, footer, "3 agents (3 healthy)")
-		assert.Contains(t, footer, "1 inactive instance hidden (use --all)")
+		assert.Contains(t, footer, "1 down hidden (use --all)")
 		assert.Contains(t, footer, "2 superseded hidden")
-		// Orphaned non-blocking down instances block nothing, so they are a
-		// muted gray "inactive" disclosure rather than a red "agent down"
-		// alarm (issue #1198).
-		assert.Contains(t, footer, colorGray+"1 inactive instance hidden",
-			"a hidden non-blocking down instance is a neutral gray disclosure, not a red alarm")
+		// Hidden down instances are surfaced with --all, so they are a muted
+		// gray disclosure rather than a red alarm (issues #1198, #1309).
+		assert.Contains(t, footer, colorGray+"1 down hidden",
+			"a hidden down instance is a neutral gray disclosure, not a red alarm")
 		assert.NotContains(t, footer, colorRed,
 			"no clause in this footer is a genuine alarm, so nothing renders red")
-		assert.NotContains(t, footer, "agent down",
-			"the alarming 'agent down' wording is reserved; hidden orphans read as 'inactive'")
 		assert.Contains(t, footer, colorGray+"2 superseded hidden",
 			"the superseded clause is neutral gray")
 		assert.NotContains(t, footer, "superseded hidden (use --all)",
-			"--all hint is not repeated when the inactive clause already carries it")
+			"--all hint is not repeated when the down clause already carries it")
 	})
 
 	t.Run("superseded-only clause carries the --all hint", func(t *testing.T) {
 		footer := formatListFooter(7, 7, listDefaultSummary{hiddenSuperseded: 8})
 		assert.Contains(t, footer, "8 superseded hidden (use --all)")
-		assert.NotContains(t, footer, "inactive")
+		assert.NotContains(t, footer, "down hidden")
 	})
 
-	t.Run("plural inactive clause", func(t *testing.T) {
+	t.Run("plural down clause", func(t *testing.T) {
 		footer := formatListFooter(1, 1, listDefaultSummary{hiddenDownAgents: 2})
 		assert.Contains(t, footer, "1 agent (1 healthy)")
-		assert.Contains(t, footer, "2 inactive instances hidden (use --all)")
+		assert.Contains(t, footer, "2 down hidden (use --all)")
 		assert.NotContains(t, footer, colorRed)
 	})
 }
@@ -490,75 +493,154 @@ func TestFormatSupersededAnnotation(t *testing.T) {
 
 func boolPtr(b bool) *bool { return &b }
 
-// TestCountUnavailableCapabilities covers the nil/true/false tri-state of the
-// per-capability Available pointer. nil (older registries that don't report
-// availability) must be treated as available and never counted.
-func TestCountUnavailableCapabilities(t *testing.T) {
+// TestCapabilityAvailability covers the (available, total) computation feeding
+// the CAPS column (issue #1307): the nil/true/false tri-state of the
+// per-capability Available pointer (nil = available), and the __mesh_*
+// framework-synthetic exclusion from BOTH counts.
+func TestCapabilityAvailability(t *testing.T) {
 	agent := EnhancedAgent{
 		Tools: []ToolInfo{
-			{Name: "greet", Available: boolPtr(true)},
-			{Name: "forecast", Available: boolPtr(false), UnavailableReason: "required dep 'weather-api' unresolved"},
-			{Name: "legacy", Available: nil}, // registry didn't report -> available
-			{Name: "enrich", Available: boolPtr(false)},
+			{Name: "greet", FunctionName: "greet", Available: boolPtr(true)},
+			{Name: "forecast", FunctionName: "forecast", Available: boolPtr(false), UnavailableReason: "required dep 'weather-api' unresolved"},
+			{Name: "legacy", FunctionName: "legacy", Available: nil}, // registry didn't report -> available
+			{Name: "enrich", FunctionName: "enrich", Available: boolPtr(false)},
 		},
 	}
-	assert.Equal(t, 2, countUnavailableCapabilities(agent),
-		"only capabilities with Available==false count; nil is treated as available")
+	avail, total := capabilityAvailability(agent)
+	assert.Equal(t, 4, total, "all four user capabilities count toward the total")
+	assert.Equal(t, 2, avail,
+		"Available==false subtracts; nil (unreported) counts as available")
 
-	assert.Equal(t, 0, countUnavailableCapabilities(EnhancedAgent{
-		Tools: []ToolInfo{{Name: "a", Available: boolPtr(true)}, {Name: "b"}},
-	}), "an agent with no unavailable capabilities counts zero")
-}
-
-// TestFormatUnavailableAnnotation guards the compact per-row marker: empty when
-// nothing is unavailable, singular/plural wording otherwise, and always red so
-// it reads as an alarm even on a healthy (green) row.
-func TestFormatUnavailableAnnotation(t *testing.T) {
-	// All available -> no annotation.
-	assert.Empty(t, formatUnavailableAnnotation(EnhancedAgent{
-		Status: "healthy",
-		Tools:  []ToolInfo{{Name: "a", Available: boolPtr(true)}},
-	}))
-	// nil Available -> treated as available -> no annotation.
-	assert.Empty(t, formatUnavailableAnnotation(EnhancedAgent{
-		Status: "healthy",
-		Tools:  []ToolInfo{{Name: "a"}},
-	}))
-
-	one := formatUnavailableAnnotation(EnhancedAgent{
-		Status: "healthy",
-		Tools:  []ToolInfo{{Name: "a", Available: boolPtr(false)}},
-	})
-	assert.Contains(t, one, "(1 capability unavailable)")
-	assert.Contains(t, one, colorRed, "the marker must render red")
-
-	two := formatUnavailableAnnotation(EnhancedAgent{
-		Status: "healthy",
+	// __mesh_* synthetics are excluded from both counts, matching --tools hiding.
+	withFramework := EnhancedAgent{
 		Tools: []ToolInfo{
-			{Name: "a", Available: boolPtr(false)},
-			{Name: "b", Available: boolPtr(false)},
+			{Name: "greet", FunctionName: "greet", Available: boolPtr(true)},
+			{Name: "job_status", FunctionName: "__mesh_job_status", Available: boolPtr(false)},
+			{Name: "svc_deps", FunctionName: "__mesh_service_deps", Available: boolPtr(false)},
 		},
-	})
-	assert.Contains(t, two, "(2 capabilities unavailable)")
+	}
+	avail, total = capabilityAvailability(withFramework)
+	assert.Equal(t, 1, total, "framework __mesh_* synthetics are excluded from the total")
+	assert.Equal(t, 1, avail, "excluded synthetics never drag availability down")
+
+	// FunctionName empty -> falls back to Name for the framework check.
+	fallback := EnhancedAgent{
+		Tools: []ToolInfo{{Name: "__mesh_job_result", Available: boolPtr(false)}},
+	}
+	avail, total = capabilityAvailability(fallback)
+	assert.Equal(t, 0, total, "the __mesh_* Name fallback excludes the synthetic")
+	assert.Equal(t, 0, avail)
 }
 
-// TestFormatUnavailableAnnotation_SuppressedForUnhealthyAgent guards the
-// double-signal fix: the registry marks EVERY capability of an unhealthy agent
-// available:false (reason "agent unhealthy"), which is redundant with the row's
-// own red status. The annotation must therefore be suppressed on a non-live
-// agent even though its capabilities are technically unavailable.
-func TestFormatUnavailableAnnotation_SuppressedForUnhealthyAgent(t *testing.T) {
-	for _, status := range []string{"unhealthy", "", "unknown"} {
-		agent := EnhancedAgent{
-			Status: status,
-			Tools: []ToolInfo{
-				{Name: "a", Available: boolPtr(false), UnavailableReason: "agent unhealthy"},
-				{Name: "b", Available: boolPtr(false), UnavailableReason: "agent unhealthy"},
-			},
-		}
-		assert.Empty(t, formatUnavailableAnnotation(agent),
-			"unavailable annotation must be suppressed for non-live status %q", status)
+// TestFormatCapabilities guards the CAPS column value: green when every provided
+// capability is available, red the moment any is unavailable (available < total).
+func TestFormatCapabilities(t *testing.T) {
+	// Fully available -> green.
+	full := formatCapabilities(3, 3)
+	assert.Contains(t, full, "3/3")
+	assert.Contains(t, full, colorGreen)
+	assert.NotContains(t, full, colorRed)
+
+	// No capabilities -> green 0/0 (never a false alarm).
+	assert.Contains(t, formatCapabilities(0, 0), colorGreen)
+
+	// Degraded -> red.
+	degraded := formatCapabilities(2, 3)
+	assert.Contains(t, degraded, "2/3")
+	assert.Contains(t, degraded, colorRed, "any shortfall renders red")
+}
+
+// TestPrintAgentRow_CapsColumnReplacesTrailingText guards issue #1307: a healthy
+// agent with a broken capability renders a red CAPS available/total value and no
+// longer carries the trailing "(N capabilities unavailable)" free-text.
+func TestPrintAgentRow_CapsColumnReplacesTrailingText(t *testing.T) {
+	agent := testAgent("analyst-1", "analyst", "healthy", time.Now().Add(-time.Hour), nil)
+	agent.Runtime = "python"
+	agent.Endpoint = "http://localhost:9001"
+	agent.Tools = []ToolInfo{
+		{Name: "summarize", FunctionName: "summarize", Capability: "summarize", Available: boolPtr(true)},
+		{Name: "forecast", FunctionName: "forecast", Capability: "forecast", Available: boolPtr(false), UnavailableReason: "required dep unresolved"},
+		{Name: "job_status", FunctionName: "__mesh_job_status", Available: boolPtr(false)},
 	}
+	nameW, rtW, stW, tyW, epW := calculateColumnWidths([]EnhancedAgent{agent}, false)
+
+	out := captureStdout(t, func() {
+		printAgentRow(agent, nameW, rtW, stW, tyW, epW, false, false, false, "", false)
+	})
+
+	assert.Contains(t, out, colorRed+"1/2",
+		"CAPS shows available/total user capabilities (excluding __mesh_*) and reddens when degraded")
+	assert.NotContains(t, out, "capability unavailable",
+		"the trailing (N capability unavailable) free-text is gone — the CAPS column replaces it")
+	assert.NotContains(t, out, "capabilities unavailable")
+}
+
+// TestVerboseDetailsKeepsUnavailableReasons guards that #1307 only moved the
+// terse trailing count into the CAPS column — the per-capability reason detail
+// still renders under --verbose.
+func TestVerboseDetailsKeepsUnavailableReasons(t *testing.T) {
+	agent := testAgent("analyst-1", "analyst", "healthy", time.Now().Add(-time.Hour), nil)
+	agent.Tools = []ToolInfo{
+		{Name: "forecast", FunctionName: "forecast", Capability: "forecast",
+			Available: boolPtr(false), UnavailableReason: "required dep 'weather-api' unresolved"},
+	}
+
+	out := captureStdout(t, func() { printVerboseDetails([]EnhancedAgent{agent}) })
+
+	assert.Contains(t, out, "unavailable: required dep 'weather-api' unresolved",
+		"--verbose keeps the per-capability unavailable reason")
+}
+
+// TestOutputDockerComposeStyle_HeaderFooterConsistent is an end-to-end guard over
+// issue #1309: with a blocking down instance hidden from the healthy-only default
+// view, the footer's "N agents (N healthy)" claim never contradicts the rows on
+// screen (no red status row is rendered), and the down instance is disclosed as a
+// gray "down hidden" footer count rather than a red row.
+func TestOutputDockerComposeStyle_HeaderFooterConsistent(t *testing.T) {
+	base := time.Now().Add(-time.Hour)
+	provider := testAgent("provider-solo", "provider", "unhealthy", base, nil)
+	provider.Runtime = "python"
+	provider.Tools = []ToolInfo{{Name: "date_service", FunctionName: "date_service", Capability: "date_service"}}
+	consumer := testAgent("consumer-1", "consumer", "healthy", base, nil)
+	consumer.Runtime = "python"
+	consumer.DependencyResolutions = []DependencyResolution{{Capability: "date_service", Status: "unresolved"}}
+
+	agents := []EnhancedAgent{provider, consumer}
+	headerView := computeSupersessionView(agents)
+
+	t.Run("default view hides the blocking down row", func(t *testing.T) {
+		out := captureStdout(t, func() {
+			kept := agents
+			view := computeSupersessionView(kept)
+			collapsed, summary := collapseDefaultView(kept, view)
+			output := ListOutput{
+				Registry: RegistryStatus{Status: "running", HealthyCount: 1, UnhealthyCount: 1},
+				Agents:   collapsed,
+			}
+			require.NoError(t, outputDockerComposeStyle(output, headerView, view, summary, false, false, false, false))
+		})
+
+		assert.Contains(t, out, "CAPS", "the CAPS column header is present")
+		assert.Contains(t, out, "consumer-1", "the healthy agent is shown")
+		assert.NotContains(t, out, "provider-solo",
+			"the blocking down instance is hidden from the healthy-only default view")
+		assert.Contains(t, out, "1 agent (1 healthy)", "footer reports only the shown healthy agent")
+		assert.Contains(t, out, "1 down hidden (use --all)", "the hidden down instance is disclosed in gray")
+	})
+
+	t.Run("--all shows the down agent", func(t *testing.T) {
+		out := captureStdout(t, func() {
+			view := computeSupersessionView(agents)
+			output := ListOutput{
+				Registry: RegistryStatus{Status: "running", HealthyCount: 1, UnhealthyCount: 1},
+				Agents:   agents,
+			}
+			require.NoError(t, outputDockerComposeStyle(output, headerView, view, listDefaultSummary{}, true, false, false, false))
+		})
+
+		assert.Contains(t, out, "provider-solo", "--all surfaces the down instance")
+		assert.Contains(t, out, "consumer-1")
+	})
 }
 
 // TestFormatToolUnavailableMarker covers the bulk `--tools` table suffix: shown
@@ -624,8 +706,10 @@ func TestProcessAgentData_ParsesAvailability(t *testing.T) {
 		"required dep 'weather-api' unresolved (via analyst → enricher)",
 		forecast.UnavailableReason)
 
-	// And the derived aggregate the row marker uses.
-	assert.Equal(t, 1, countUnavailableCapabilities(agent))
+	// And the derived aggregate the CAPS column uses.
+	avail, total := capabilityAvailability(agent)
+	assert.Equal(t, 1, avail, "one of the two capabilities is available")
+	assert.Equal(t, 2, total, "both user capabilities count toward the total")
 }
 
 // --- RFC #1280 phase 4: service grouping (display-only) ---------------------

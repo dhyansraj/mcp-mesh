@@ -139,13 +139,13 @@ meshctl status --registry-url http://remote:8000
 
 Lists agents, tools, or canonical schemas depending on flags.
 
-By default the agent table shows healthy agents only. Instances superseded by
-a newer registration of the same agent (common with watch-driven restarts)
-collapse into a dimmed `(+N superseded)` annotation, and down agents are
-counted in the footer rather than shown as named rows — unless a down instance
-declares a capability a live agent is missing, in which case it appears as a
-red row to explain the dependency gap. `--json` keeps the healthy-only default
-for script compatibility.
+By default the agent table shows healthy (running) agents only. Instances
+superseded by a newer registration of the same agent (common with watch-driven
+restarts) collapse into a dimmed `(+N superseded)` annotation, and down agents
+are counted in the footer (`N down hidden (use --all)`) rather than shown as
+named rows. Use `--all` to see every instance, including unhealthy and
+superseded ones. `--json` keeps the healthy-only default for script
+compatibility.
 
 ```bash
 # Agents (default)
@@ -173,14 +173,24 @@ meshctl list --schemas --limit 20  # Last 20
 meshctl list --schemas --json      # Raw envelope from GET /schemas
 ```
 
+The agent table carries two resolution columns: `DEPS` (dependencies the agent
+consumes, `resolved/total`) and `CAPS` (capabilities the agent provides,
+`available/total`). Both turn red when short of their total. The `CAPS` total
+excludes the framework-internal `__mesh_*` synthetics:
+
+```
+NAME       RUNTIME  TYPE   STATUS   DEPS     CAPS  ENDPOINT               AGE   LAST SEEN
+------------------------------------------------------------------------------------------
+analyst    Python   Agent  healthy  1/1       1/2  http://localhost:9001  2h    5s
+greeter    Python   Agent  healthy  0/0       3/3  http://localhost:9002  2h    3s
+```
+
 **Capability availability.** When an agent is healthy but one of its
-capabilities has a broken `required` dependency chain, its row is flagged in
-red with `(N capabilities unavailable)`. `--verbose` expands each affected
+capabilities has a broken `required` dependency chain, that shortfall shows in
+its red `CAPS` column (`available/total`). `--verbose` expands each affected
 tool with its reason (`[unavailable: required dep '…' unresolved]`); the
 `--tools` table marks the row with a trailing red `unavailable`; and
-`--tools=<name>` prints an `Availability:` line naming the broken edge. The
-markers appear only on healthy agents — an unhealthy agent's capabilities are
-all unavailable by definition, so the row status already says so.
+`--tools=<name>` prints an `Availability:` line naming the broken edge.
 
 **Grouped service views (`--services`).** `meshctl list --services` renders one
 row per (capability, agent), with the SERVICE column derived from the
