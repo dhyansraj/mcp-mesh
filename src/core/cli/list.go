@@ -1343,6 +1343,9 @@ func printTableHeader(nameWidth, runtimeWidth, statusWidth, typeWidth, endpointW
 		// CAPS mirrors DEPS but for provided capabilities (issue #1307);
 		// right-aligned numeric field, so its header is right-aligned too.
 		fmt.Printf(" %8s", "CAPS")
+		// Extra gap so the right-aligned CAPS value doesn't sit flush against
+		// ENDPOINT.
+		fmt.Printf(" ")
 	}
 
 	// Always show endpoint in standard view, tools only in wide mode
@@ -1369,7 +1372,7 @@ func printTableHeader(nameWidth, runtimeWidth, statusWidth, typeWidth, endpointW
 func printTableSeparator(nameWidth, runtimeWidth, statusWidth, typeWidth, endpointWidth int, noDeps, wide, verbose bool) {
 	totalWidth := nameWidth + runtimeWidth + statusWidth + typeWidth + 13 // base width including TYPE and RUNTIME columns
 	if !noDeps {
-		totalWidth += 18 // DEPS (8+1) + CAPS (8+1)
+		totalWidth += 19 // DEPS (8+1) + CAPS (8+1) + extra gap before ENDPOINT (1)
 	}
 	// Always include endpoint width in standard view
 	totalWidth += endpointWidth + 1
@@ -1438,6 +1441,9 @@ func printAgentRow(agent EnhancedAgent, nameWidth, runtimeWidth, statusWidth, ty
 			capsPadding = 0
 		}
 		fmt.Printf(" %s%s", strings.Repeat(" ", capsPadding), capsStr)
+		// Extra gap so the right-aligned CAPS value doesn't sit flush against
+		// ENDPOINT (matches the header spacing).
+		fmt.Printf(" ")
 	}
 
 	// Endpoint column (always shown)
