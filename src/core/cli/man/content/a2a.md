@@ -7,7 +7,7 @@
 
 MCP Mesh implements the A2A v1.0 protocol on both sides of the wire:
 
-- **Producer** (Python only today): expose mesh tools as A2A skills via `@mesh.a2a` + `mesh.a2a.mount(app, ...)`. Auto-generates `/.well-known/agent.json` and the JSON-RPC entry route.
+- **Producer** (Python, Java, TypeScript): expose mesh tools as A2A skills — Python `@mesh.a2a` + `mesh.a2a.mount(app, ...)`, Java `@MeshA2A`, TypeScript `mesh.a2a.mount(app, ...)`. Auto-generates `/.well-known/agent.json` and the JSON-RPC entry route. Sync, long-running, and SSE surfaces in all three.
 - **Consumer** (Python, Java, TypeScript): bridge an external A2A skill into the mesh as a regular capability. Downstream callers consume it with no awareness of A2A.
 
 Cross-vendor failover, DDDI, health-driven rewiring, and long-running jobs all apply on top — without any changes to the A2A protocol itself. See `https://mcp-mesh.ai/a2a/` for the full guide with diagrams and architecture deep-dive.
@@ -96,7 +96,7 @@ public class DateConsumerAgentApplication {
 }
 ```
 
-## Producer (Python only)
+## Producer
 
 ```python
 import mesh
@@ -131,7 +131,7 @@ The user owns the FastAPI app AND the uvicorn lifecycle (no `@mesh.agent` decora
 
 A single Python process may NOT host both `@mesh.tool` capabilities and a `mesh.a2a.mount(...)` surface — the framework rejects mixed-mode at boot. Split into two agents (one provider, one A2A surface that depends on it).
 
-Java and TypeScript producer support is future work.
+The same producer surface ships in Java (`@MeshA2A`) and TypeScript (`mesh.a2a.mount(...)`), each with the identical sync / long-running / SSE behavior — see the respective SDK docs for the runtime-specific syntax.
 
 ## Consumer (Python / Java / TypeScript)
 

@@ -291,7 +291,7 @@ agent.addTool({
 
 Bearer auth is wired via `a2aConfig.auth = { tokenEnv: "UPSTREAM_TOKEN" }` when the upstream card requires it.
 
-A2A producer support in TypeScript is future work — only consumer is available today.
+TypeScript ships the A2A producer surface too via `mesh.a2a.mount(app, config, handler)` (sync, long-running, and SSE) — see `meshctl man a2a` for the producer guide.
 
 See `meshctl man a2a` for the full A2A protocol bridge guide.
 

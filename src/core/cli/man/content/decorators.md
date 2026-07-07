@@ -13,7 +13,7 @@ MCP Mesh provides decorators (Python), annotations (Java), and function wrappers
 | `@mesh.llm`          | Enable LLM-powered tools        |
 | `@mesh.llm_provider` | Create LLM provider (zero-code) |
 | `@mesh.route`        | FastAPI route with mesh DI      |
-| `@mesh.a2a`          | Expose mesh tools as A2A v1.0 skills (producer, Python only) |
+| `@mesh.a2a`          | Expose mesh tools as A2A v1.0 skills (producer; Java `@MeshA2A`, TypeScript `mesh.a2a.mount`) |
 | `@mesh.a2a_consumer` | Bridge an external A2A skill into the mesh as a capability   |
 
 ## Decorator Order (Critical!)
@@ -224,7 +224,7 @@ async def chat_endpoint(
 
 See `meshctl man api` for complete FastAPI integration guide.
 
-## @mesh.a2a (Producer — Python only)
+## @mesh.a2a (Producer)
 
 Expose mesh tools as A2A v1.0 skills via the `mesh.a2a.mount(...)` style. The user owns the FastAPI app AND the uvicorn lifecycle — no `@mesh.agent` decorator. The mount auto-generates the `/.well-known/agent.json` card and the JSON-RPC entry route.
 
@@ -260,7 +260,7 @@ The mount attaches both:
 
 **Note**: A single Python process may NOT host both `@mesh.tool` capabilities and a `mesh.a2a.mount(...)` surface — the framework rejects mixed-mode at boot. Split into two agents (one provider, one A2A surface that depends on it).
 
-Java and TypeScript producer support is future work.
+The same producer surface ships in Java (`@MeshA2A`) and TypeScript (`mesh.a2a.mount(...)`), each with the identical sync / long-running / SSE behavior.
 
 See `meshctl man a2a` for the full producer + bearer auth + skill-card guide.
 

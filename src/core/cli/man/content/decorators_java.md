@@ -411,7 +411,7 @@ public class DateConsumerAgentApplication {
 
 Bearer auth is wired via `@A2AConsumer(authBearerEnv = "UPSTREAM_TOKEN")` when the upstream card requires it.
 
-A2A producer support in Java is future work — only consumer is available today.
+Java ships the A2A producer surface too via the `@MeshA2A` annotation (sync, long-running, and SSE) — see `meshctl man a2a` for the producer guide.
 
 See `meshctl man a2a` for the full A2A protocol bridge guide.
 
