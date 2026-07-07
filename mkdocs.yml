@@ -223,6 +223,7 @@ nav:
       - concepts/index.md
       - Architecture & Design: concepts/architecture.md
       - "DDDI: Distributed Dynamic Dependency Injection": concepts/dddi.md
+      - Service Views: concepts/service-views.md
       - Registry: concepts/registry.md
       - Health & Discovery: concepts/health-discovery.md
       - Tag Matching: concepts/tag-matching.md
