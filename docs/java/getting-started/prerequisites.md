@@ -82,14 +82,14 @@ meshctl --version
 
 ```bash
 # 1. Scaffold a Java agent
-meshctl scaffold --name hello --agent-type basic --lang java
+meshctl scaffold --name hello --agent-type tool --lang java
 
 # 2. Run with meshctl (detects pom.xml, supports --debug/--watch)
 meshctl start hello/ --debug
 
 # 3. Test
 meshctl list
-meshctl call hello greeting --params '{"name": "World"}'
+meshctl call hello:greeting '{"name": "World"}'
 ```
 
 ## Docker Deployment

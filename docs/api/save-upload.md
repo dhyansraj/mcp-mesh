@@ -21,10 +21,20 @@ uri = await mesh.save_upload(upload, filename=None, mime_type=None)
 ### `mesh.save_upload_result()`
 
 ```python
-result = await mesh.save_upload_result(upload)
+result = await mesh.save_upload_result(upload, filename=None, mime_type=None)
+# result.uri, result.name, result.mime_type, result.size
 ```
 
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `upload` | `UploadFile` | Yes | FastAPI upload object |
+| `filename` | `str` | No | Override filename |
+| `mime_type` | `str` | No | Override MIME type |
+
 **Returns**: `MediaUpload(uri, name, mime_type, size)`.
+
+!!! note "Result type differs by runtime"
+    Python's result helper returns a `MediaUpload`; the TypeScript and Java helpers return a `MediaUploadResult`. The fields are equivalent (`uri`, `name`, `mime_type`/`mimeType`, `size`) — only the type name differs.
 
 ---
 

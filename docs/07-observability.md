@@ -1,255 +1,85 @@
 # Observability
 
-> Built-in tracing, dashboards, and monitoring - ready to use
+> Metrics and distributed traces across the mesh call graph — with a dashboard stack shipped in the box.
 
-## Overview
+## What the mesh emits
 
-MCP Mesh includes a complete observability stack:
+Every agent and the registry are instrumented out of the box. The mesh produces two kinds of telemetry:
 
-- **Redis** - Trace event collection from agents
-- **Tempo** - Distributed trace storage and querying
-- **Grafana** - Pre-configured dashboards
+- **Metrics** — agent health, request rates, and error rates, scraped in Prometheus format.
+- **Distributed traces** — OpenTelemetry spans stitched into a single trace that follows a request across the entire mesh call graph. When agent A calls agent B which calls agent C, all three spans land under one trace ID, so you see the full call tree, per-hop latency, and where a failure occurred.
 
-The data flows: **Agents → Redis → Registry → Tempo → Grafana**
+Traces are published by agents to a Redis stream, consumed and correlated by the registry, and exported over OTLP to a trace backend (Tempo). You never wire span propagation by hand — the mesh threads the trace context through every dependency call.
 
-## Quick Start
+## The shipped stack
 
-### With Helm (Recommended)
+MCP Mesh **ships** a ready-to-run observability stack — Prometheus (metrics), Tempo (trace storage), and Grafana (pre-built dashboards) — so you get dashboards without assembling anything:
 
-```bash
-# Deploy core with observability enabled (default)
-helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 3.0.0 \
-  --namespace mcp-mesh \
-  --set redis.enabled=true \
-  --set tempo.enabled=true \
-  --set grafana.enabled=true
+- **Kubernetes** — the `mcp-mesh-core` Helm chart deploys Redis, Tempo, and Grafana with tracing enabled by default. Disable with `--set tempo.enabled=false --set grafana.enabled=false`.
+- **Docker Compose** — the observability profile generates the same stack for local use.
 
-# Access Grafana
-kubectl port-forward svc/mcp-core-mcp-mesh-grafana 3000:3000 -n mcp-mesh
-open http://localhost:3000  # admin/admin
-```
+This page does not teach Grafana or Prometheus themselves — see the [Grafana](https://grafana.com/docs/) and [Prometheus](https://prometheus.io/docs/) docs for how to build panels and queries. The mesh's job is to emit the data and give you working dashboards on top of it.
 
-### With Docker Compose
+### Generate the stack
+
+If the `--observability` scaffold flag is available in your build:
 
 ```bash
-# Generate compose with observability
-meshctl scaffold --compose --observability -d ./agents
+# Emit a standalone observability compose file (Redis + Tempo + Grafana)
+meshctl scaffold --observability
 
-# Start
-docker-compose up -d
-
-# Access Grafana
-open http://localhost:3000
+docker compose -f docker-compose.observability.yml up -d
 ```
 
-## Architecture
+Combine with `--compose` (`meshctl scaffold --compose --observability`) to merge the stack into your main `docker-compose.yml` instead. Grafana comes up on `http://localhost:3000` (default `admin` / `admin`).
 
-```mermaid
-flowchart TB
-    subgraph DF["Data Flow"]
-        direction LR
-        A["Agent A<br/>Agent B<br/>Agent C"] -->|publish<br/>events| RS[Redis<br/>Stream]
-        RS -->|consume<br/>events| R[Registry]
-        R -->|export<br/>traces| T[Tempo]
-        G[Grafana] -->|query traces| T
-    end
-```
+## Enabling tracing
 
-## Configuration
-
-### Environment Variables
-
-**Registry (trace consumer):**
-
-| Variable                               | Default                        | Description                              |
-| -------------------------------------- | ------------------------------ | ---------------------------------------- |
-| `MCP_MESH_DISTRIBUTED_TRACING_ENABLED` | `false`                        | Enable tracing                           |
-| `REDIS_URL`                            | `redis://localhost:6379`       | Redis for trace events                   |
-| `TELEMETRY_ENDPOINT`                   | -                              | Tempo OTLP endpoint                      |
-| `TRACE_EXPORTER_TYPE`                  | `otlp`                         | Export format: `otlp`, `console`, `json` |
-
-**Agents (trace publishers):**
-
-| Variable                               | Default                  | Description                 |
-| -------------------------------------- | ------------------------ | --------------------------- |
-| `MCP_MESH_DISTRIBUTED_TRACING_ENABLED` | `false`                  | Enable trace publishing     |
-| `REDIS_URL`                            | `redis://localhost:6379` | Redis for publishing events |
-
-### Enable Tracing
-
-```yaml
-# In mcp-mesh-core values
-mcp-mesh-registry:
-  registry:
-    # Single Redis endpoint — session storage and trace streaming share it
-    redis:
-      enabled: true
-      host: "mcp-core-mcp-mesh-redis"
-      port: 6379
-    observability:
-      distributedTracing:
-        enabled: true
-      telemetryEndpoint: "mcp-core-mcp-mesh-tempo:4317"
-```
-
-## Troubleshooting
-
-### Step 1: Check if Agents are Publishing to Redis
+Tracing is off unless enabled. Set these on the registry and on each agent (they are trace publishers):
 
 ```bash
-# Check Redis stream exists and has events
-redis-cli XLEN mesh:trace
+# Turn on distributed tracing
+export MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
 
-# View recent events
-redis-cli XREVRANGE mesh:trace + - COUNT 5
+# Redis stream that carries trace spans from agents to the registry
+export REDIS_URL=redis://localhost:6379
 
-# Expected output: Events with trace_id, span_id, agent_name
+# Registry → Tempo OTLP export
+export TELEMETRY_ENDPOINT=localhost:4317
+export TELEMETRY_PROTOCOL=grpc          # grpc or http
+
+# Tempo HTTP query URL (used by the trace query surface)
+export TEMPO_URL=http://localhost:3200
 ```
 
-**If empty:**
+| Variable | Default | Description |
+| -------- | ------- | ----------- |
+| `MCP_MESH_DISTRIBUTED_TRACING_ENABLED` | `false` | Master switch for trace publishing and collection |
+| `REDIS_URL` | `redis://localhost:6379` | Redis stream for trace spans |
+| `TELEMETRY_ENDPOINT` | `localhost:4317` | OTLP endpoint the registry exports to (Tempo) |
+| `TELEMETRY_PROTOCOL` | `grpc` | OTLP protocol: `grpc` or `http` |
+| `TRACE_EXPORTER_TYPE` | `otlp` | Exporter: `otlp`, `console`, or `json` |
+| `TEMPO_URL` | `http://localhost:3200` | Tempo query URL for the trace API |
+| `MCP_MESH_TRACE_RETENTION` | `24h` | Redis `mesh:trace` stream retention (`0` disables trimming) |
 
-- Check `MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true` in agent env
-- Check agent can reach Redis: `curl http://agent:8080/health`
-- Check agent logs for "Tracing enabled" message
+See the [environment variables reference](environment-variables.md) for the full list.
 
-### Step 2: Check Registry Connection to Redis
+## Where traces surface
+
+Trace and telemetry endpoints are served by the **meshui service on port `3080`** — not the registry. The registry (port `8000`) collects and exports spans, but the query surface (`/api/trace/recent`, `/api/trace/agent-stats`) lives on meshui. Hitting the registry for those paths returns `404`.
+
+For quick debugging without a dashboard, the CLI reads the same traces:
 
 ```bash
-# Check registry can connect to Redis
-kubectl exec -it <registry-pod> -n mcp-mesh -- redis-cli -h mcp-core-mcp-mesh-redis ping
+# Attach a trace to any call and print its ID
+meshctl call my-agent:my_tool --trace
 
-# Check consumer group exists
-redis-cli XINFO GROUPS mesh:trace
-
-# Expected output: Consumer group "mcp-mesh-registry-processors" with consumers
+# Render the full call tree for a trace ID
+meshctl trace <trace-id>
 ```
 
-**If no consumer group:**
+## See also
 
-- Check `MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true` in registry env
-- Check `REDIS_URL` points to correct Redis service
-- Check registry logs for "Starting trace consumer" message
-
-### Step 3: Check Registry is Exporting to Tempo
-
-```bash
-# Check trace status endpoint
-kubectl port-forward svc/mcp-core-mcp-mesh-registry 8000:8000 -n mcp-mesh
-curl http://localhost:8000/trace/status | jq .
-
-# Expected output:
-# {
-#   "enabled": true,
-#   "consumer": { "status": "running" },
-#   "correlator": { "active_traces": N },
-#   "exporter": { "type": "otlp", "exported_traces": N }
-# }
-```
-
-**If exporter not working:**
-
-- Check `TELEMETRY_ENDPOINT` points to Tempo (e.g., `tempo:4317`)
-- Check Tempo is running: `kubectl get pods -l app.kubernetes.io/name=mcp-mesh-tempo`
-- Check registry logs for export errors
-
-### Step 4: Check Grafana Can Query Tempo
-
-```bash
-# Port-forward Tempo
-kubectl port-forward svc/mcp-core-mcp-mesh-tempo 3200:3200 -n mcp-mesh
-
-# Query traces directly from Tempo
-curl "http://localhost:3200/api/search?limit=5" | jq .
-
-# Expected output: List of traces
-```
-
-**If no traces in Tempo:**
-
-- Check Tempo is receiving data on port 4317 (OTLP gRPC)
-- Check Tempo logs: `kubectl logs -l app.kubernetes.io/name=mcp-mesh-tempo -n mcp-mesh`
-
-**In Grafana:**
-
-1. Go to Explore → Select "Tempo" datasource
-2. Search for traces
-3. If "No data", check datasource URL points to `http://mcp-core-mcp-mesh-tempo:3200`
-
-## Common Issues
-
-### No traces appearing anywhere
-
-```bash
-# Full diagnostic check
-echo "=== Redis Stream ==="
-redis-cli XLEN mesh:trace
-
-echo "=== Consumer Groups ==="
-redis-cli XINFO GROUPS mesh:trace
-
-echo "=== Registry Trace Status ==="
-curl -s http://localhost:8000/trace/status | jq .
-
-echo "=== Tempo Traces ==="
-curl -s "http://localhost:3200/api/search?limit=1" | jq .
-```
-
-### Traces in Redis but not in Tempo
-
-Registry is not consuming or exporting properly:
-
-```bash
-# Check registry logs
-kubectl logs -l app.kubernetes.io/name=mcp-mesh-registry -n mcp-mesh | grep -i trace
-
-# Check consumer lag (pending events)
-redis-cli XINFO GROUPS mesh:trace
-# Look for "lag" field - high lag means consumer is slow/stuck
-```
-
-### Traces in Tempo but not in Grafana
-
-Grafana datasource misconfigured:
-
-1. Go to Grafana → Configuration → Data Sources → Tempo
-2. Verify URL: `http://mcp-core-mcp-mesh-tempo:3200`
-3. Click "Save & Test"
-
-## Accessing Services
-
-```bash
-# Grafana (dashboards)
-kubectl port-forward svc/mcp-core-mcp-mesh-grafana 3000:3000 -n mcp-mesh
-# URL: http://localhost:3000 (admin/admin)
-
-# Tempo (trace API)
-kubectl port-forward svc/mcp-core-mcp-mesh-tempo 3200:3200 -n mcp-mesh
-# URL: http://localhost:3200/api/search
-
-# Registry (trace status)
-kubectl port-forward svc/mcp-core-mcp-mesh-registry 8000:8000 -n mcp-mesh
-# URL: http://localhost:8000/trace/status
-```
-
-## Disable Observability
-
-For minimal deployments:
-
-```yaml
-# mcp-mesh-core values
-redis:
-  enabled: false
-
-tempo:
-  enabled: false
-
-grafana:
-  enabled: false
-
-mcp-mesh-registry:
-  registry:
-    observability:
-      distributedTracing:
-        enabled: false
-```
+- [Dashboard](dashboard.md) — the meshui operations dashboard
+- [Environment Variables](environment-variables.md) — every tracing and telemetry knob
+- `meshctl man observability` — CLI tracing and the shipped stack

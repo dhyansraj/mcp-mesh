@@ -59,6 +59,10 @@ meshctl man <topic> --typescript --raw  # Get markdown output
 | LLM Integration | `meshctl man llm --typescript` | Build AI-powered agents |
 | Deployment | `meshctl man deployment --typescript` | Local, Docker, Kubernetes |
 
+## Long-running jobs
+
+Building durable, resumable work? MeshJobs cover durable cursors, supersession, and calling-job identity — see the language-tabbed [Jobs guide](../concepts/jobs.md).
+
 ## Next Steps
 
 <div class="grid-features">

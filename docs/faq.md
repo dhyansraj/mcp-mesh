@@ -154,6 +154,6 @@ This ensures that scaffolded agents (which use `main.py`) don't all write to `ma
 
 ## See Also
 
-- [Getting Started](01-getting-started.md) - Quick introduction to MCP Mesh
-- [Mesh Decorators](mesh-decorators.md) - Full decorator reference
-- [Troubleshooting](01-getting-started/troubleshooting.md) - Common issues and solutions
+- [Getting Started](tutorial/index.md) - Quick introduction to MCP Mesh
+- [Mesh Decorators](python/decorators.md) - Full decorator reference
+- [Troubleshooting](python/local-development/troubleshooting.md) - Common issues and solutions

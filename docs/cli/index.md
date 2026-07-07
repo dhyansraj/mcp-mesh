@@ -32,19 +32,24 @@ meshctl --version
 
 ## Commands
 
-| Command      | Description                       |
-| ------------ | --------------------------------- |
-| `start`      | Start agents with mesh runtime    |
-| `stop`       | Stop detached agents and registry |
-| `list`       | List running agents               |
-| `status`     | Show detailed agent status        |
-| `call`       | Call an MCP tool on an agent      |
-| `trace`      | Display distributed call trace    |
-| `logs`       | View agent logs (detached mode)   |
-| `scaffold`   | Generate new agent from template  |
-| `man`        | Show built-in documentation       |
-| `config`     | Manage meshctl configuration      |
-| `completion` | Generate shell autocompletion     |
+| Command      | Description                                     |
+| ------------ | ----------------------------------------------- |
+| `start`      | Start agents with mesh runtime                  |
+| `stop`       | Stop detached agents and registry               |
+| `list`       | List running agents                             |
+| `status`     | Show detailed agent status                      |
+| `call`       | Call an MCP tool on an agent                    |
+| `trace`      | Display distributed call trace                  |
+| `logs`       | View agent logs (detached mode)                 |
+| `audit`      | Inspect dependency-resolution decisions         |
+| `schema`     | Diff canonical schemas by content hash          |
+| `entity`     | Manage trusted entity CAs for registration      |
+| `job`        | Inspect and reclaim background jobs             |
+| `registry`   | Drain, resume, and inspect the registry         |
+| `scaffold`   | Generate new agent from template                |
+| `man`        | Show built-in documentation                     |
+| `config`     | Manage meshctl configuration                    |
+| `completion` | Generate shell autocompletion                   |
 
 ## Quick Reference
 
@@ -74,12 +79,20 @@ meshctl call weather-agent-7f3a:get_weather # Specific agent
 ```bash
 meshctl list                   # List healthy agents
 meshctl list --all             # Include unhealthy
+meshctl list --verbose         # Per-tool detail incl. unavailable-capability reasons
 meshctl list --tools           # List all tools
 meshctl list --tools=add       # Show tool schema
+meshctl list --show-framework  # Reveal hidden __mesh_* synthetic tools
 meshctl list --services        # Dot-namespaced capabilities grouped as services
 meshctl status                 # Show wiring details
 meshctl status my-agent        # Specific agent
 ```
+
+!!! note "Framework tools are hidden by default"
+    `--tools` hides the entire `__mesh_*` synthetic family (job, media, and other framework internals). Pass `--show-framework` to include them.
+
+!!! note "Capability availability"
+    When an agent is healthy but a capability has a broken `required` dependency chain, its `meshctl list` row is flagged in red with `(N capabilities unavailable)`. `--verbose` expands each affected tool with its reason (`[unavailable: required dep '…' unresolved]`), and the `--tools` table marks the row with a trailing red `unavailable`.
 
 ### Scaffold Agents
 
@@ -98,6 +111,7 @@ meshctl man --list              # List all topics
 meshctl man decorators          # Python decorators
 meshctl man decorators -t       # TypeScript version
 meshctl man deployment          # Deployment guide
+meshctl man upgrading           # Version upgrade guide
 ```
 
 ### Manage Background Agents
@@ -108,6 +122,27 @@ meshctl logs my-agent -f        # Follow logs
 meshctl stop my-agent           # Stop specific agent
 meshctl stop                    # Stop all + registry
 ```
+
+### Inspect Background Jobs
+
+```bash
+meshctl job status 01HXY...     # Full job state (claim_epoch, owner, lease)
+meshctl job status 01HXY... --json
+meshctl job reclaim 01HXY...    # Clear owner/lease so the job is claimable again
+```
+
+`meshctl job status` reads the registry row directly and surfaces the fencing/lease fields (`claim_epoch`, `owner`, `attempt_count`, `lease_expires_at`) used for post-incident forensics. `meshctl job reclaim` forces the lease-expiry path for one job — useful for fencing drills or evicting a job from a replica you are about to drain. Terminal jobs cannot be reclaimed.
+
+### Operate the Registry
+
+```bash
+meshctl registry drain --wait   # Stop new job claims; block until claims drain
+meshctl registry drain          # Enter drain mode without waiting
+meshctl registry status         # Show drain state and remaining live claims
+meshctl registry resume         # Resume normal dispatch (queued jobs claimable)
+```
+
+Drain mode makes registry upgrades/restarts safe: while draining, the registry stops handing out new job claims (queued jobs stay queued — no attempt is burned), but running jobs keep renewing their leases and complete normally, and new submissions are still accepted. `live_claims` counts non-terminal jobs that still have an owner. Drain state is in-memory only — restarting the registry clears it.
 
 ## Detailed Help
 

@@ -135,8 +135,11 @@ export MCP_MESH_REGISTRY_HOST=0.0.0.0
 export MCP_MESH_REGISTRY_PORT=8000
 
 # Health check settings
-export MCP_MESH_HEALTH_INTERVAL=30
-export MCP_MESH_HEALTH_TTL=90
+export MCP_MESH_HEALTH_INTERVAL=5      # Agent heartbeat cadence (seconds, default 5)
+
+# Registry-side: mark an agent unhealthy after N seconds of missed
+# heartbeats (default 20 = 4 missed heartbeats at the 5s cadence)
+export DEFAULT_TIMEOUT_THRESHOLD=20
 ```
 
 ### Docker Compose
@@ -144,12 +147,12 @@ export MCP_MESH_HEALTH_TTL=90
 ```yaml
 services:
   registry:
-    image: mcpmesh/registry:latest
+    image: ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-registry:latest
     ports:
       - "8000:8000"
     environment:
       - MCP_MESH_REGISTRY_HOST=0.0.0.0
-      - MCP_MESH_HEALTH_INTERVAL=30
+      - MCP_MESH_HEALTH_INTERVAL=5
 
   my-agent:
     build: ./my-agent
@@ -181,17 +184,25 @@ For production, run multiple registry instances:
 # docker-compose.yml
 services:
   registry-1:
-    image: mcpmesh/registry:latest
+    image: ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-registry:latest
     ports:
       - "8000:8000"
 
   registry-2:
-    image: mcpmesh/registry:latest
+    image: ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-registry:latest
     ports:
       - "8001:8000"
 
   # Load balancer in front
 ```
+
+> **Drain state is per-replica.** Each registry replica tracks its own
+> drain state on its admin port — draining one replica does not drain the
+> others, and a restart clears it. During a rolling upgrade you drain each
+> replica independently before rotating it; a naive load balancer in front
+> is not drain-aware on its own. See [Upgrading](../upgrading.md) for the
+> rolling-restart procedure and [Long-Running Jobs](jobs.md) for how
+> claims/leases survive replica rotation.
 
 ## Troubleshooting
 

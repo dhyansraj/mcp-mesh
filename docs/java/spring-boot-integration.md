@@ -47,7 +47,7 @@ MCP Mesh provides `@MeshRoute` and `@MeshInject` annotations for Spring Boot RES
 
 ## @MeshRoute Annotation
 
-Apply `@MeshRoute` to a `@RestController` method to declare mesh dependencies. Dependencies are injected as `McpMeshTool` parameters.
+Apply `@MeshRoute` to a `@RestController` method to declare mesh dependencies. Dependencies are injected as typed `McpMeshTool<T>` parameters.
 
 ### Parameter Name Matching (Recommended)
 
@@ -143,15 +143,14 @@ public ResponseEntity<Map<String, Object>> greetAlt(
         @RequestParam(defaultValue = "World") String name,
         HttpServletRequest request) {
 
-    McpMeshTool greeterTool = MeshRouteUtils.getDependency(request, "greeting");
+    McpMeshTool<Map<String, Object>> greeterTool = MeshRouteUtils.getDependency(request, "greeting");
 
     if (greeterTool == null || !greeterTool.isAvailable()) {
         return ResponseEntity.status(503)
             .body(Map.of("error", "Greeter service not available"));
     }
 
-    @SuppressWarnings("unchecked")
-    Map<String, Object> result = (Map<String, Object>) greeterTool.call(Map.of("name", name));
+    Map<String, Object> result = greeterTool.call(Map.of("name", name));
 
     return ResponseEntity.ok(Map.of("source", "mesh-agent", "result", result));
 }

@@ -19,13 +19,13 @@ sequenceDiagram
     participant A as Agent
     participant R as Registry
 
-    loop Every 30s (default)
+    loop Every 5s (default)
         A->>R: POST /heartbeat
         R->>R: Update TTL
         R->>A: 200 OK
     end
 
-    Note over R: If no heartbeat for 90s...
+    Note over R: If no heartbeat for ~20s (4 missed)...
     R->>R: Mark agent unhealthy
 ```
 
@@ -34,7 +34,7 @@ sequenceDiagram
 ```python
 @mesh.agent(
     name="my-agent",
-    health_interval=30,      # Heartbeat every 30s
+    health_interval=5,       # Heartbeat every 5s (default)
     auto_run_interval=10,    # Keep-alive every 10s
 )
 ```
@@ -42,7 +42,7 @@ sequenceDiagram
 ```typescript
 const agent = mesh(server, {
   name: "my-agent",
-  heartbeatInterval: 30, // Heartbeat every 30s
+  heartbeatInterval: 5, // Heartbeat every 5s (default)
 });
 ```
 
@@ -185,14 +185,15 @@ meshctl status --watch
 ### Environment Variables
 
 ```bash
-# Heartbeat interval (seconds)
-export MCP_MESH_HEALTH_INTERVAL=30
+# Heartbeat interval (seconds, default 5)
+export MCP_MESH_HEALTH_INTERVAL=5
 
 # Health check TTL (seconds)
 export MCP_MESH_HEALTH_CHECK_TTL=30
 
-# Agent timeout (mark unhealthy after)
-export MCP_MESH_AGENT_TIMEOUT=90
+# Registry-side: mark agent unhealthy after N seconds of missed
+# heartbeats (default 20 = 4 missed heartbeats at the 5s cadence)
+export DEFAULT_TIMEOUT_THRESHOLD=20
 ```
 
 ## Best Practices
@@ -226,11 +227,11 @@ async def my_function(optional_service: mesh.McpMeshTool = None):
 
 ### 3. Use Appropriate Intervals
 
-| Use Case          | Heartbeat | TTL |
-| ----------------- | --------- | --- |
-| Development       | 30s       | 90s |
-| Production        | 15s       | 45s |
-| High Availability | 10s       | 30s |
+| Use Case          | Heartbeat     | Timeout      |
+| ----------------- | ------------- | ------------ |
+| Development       | 5s (default)  | 20s (default) |
+| Production        | 5s            | 20s          |
+| High Availability | 2s            | 8s           |
 
 ## Troubleshooting
 

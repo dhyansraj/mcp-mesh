@@ -14,7 +14,7 @@
 
 ```bash
 meshctl call hello_mesh_simple                    # Call tool by name
-meshctl call add --params '{"a": 1, "b": 2}'     # With arguments
+meshctl call add '{"a": 1, "b": 2}'              # With arguments
 meshctl list --tools                              # List all available tools
 ```
 

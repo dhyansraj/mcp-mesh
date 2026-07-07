@@ -36,6 +36,7 @@ to understand the mechanism behind it.
 
     - [Architecture & Design](architecture.md)
     - [DDDI: Distributed Dynamic Dependency Injection](dddi.md)
+    - [Service Views](service-views.md)
     - [Registry](registry.md)
 
 -   :material-lan-connect:{ .lg .middle } **Discovery & matching**

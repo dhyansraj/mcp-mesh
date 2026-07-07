@@ -37,25 +37,21 @@ meshctl scaffold --name greeter --agent-type tool --lang typescript
 This creates `greeter/src/index.ts`:
 
 ```typescript
-import { mesh, MeshAgent } from "@mcpmesh/sdk";
+import { FastMCP, mesh } from "@mcpmesh/sdk";
+import { z } from "zod";
 
-const app = new MeshAgent({
-  name: "greeter",
-  version: "1.0.0",
-  httpPort: 8080,
+const server = new FastMCP({ name: "Greeter", version: "1.0.0" });
+const agent = mesh(server, { name: "greeter", httpPort: 8080 });
+
+agent.addTool({
+  name: "greet",
+  capability: "greeting",
+  description: "Greet a user by name",
+  parameters: z.object({ name: z.string() }),
+  execute: async ({ name }) => `Hello, ${name}!`,
 });
 
-app.tool(
-  mesh({
-    capability: "greeting",
-    description: "Greet a user by name",
-  }),
-  async ({ name }: { name: string }) => {
-    return `Hello, ${name}!`;
-  }
-);
-
-app.run();
+// Agent auto-starts — no explicit run() call needed
 ```
 
 ## 3. Install Dependencies and Run
@@ -71,7 +67,7 @@ meshctl start src/index.ts --debug
 
 ```bash
 # Terminal 3: Call the agent
-meshctl call greeter greeting --params '{"name": "World"}'
+meshctl call greeter:greeting '{"name": "World"}'
 # Output: Hello, World!
 
 # Or list running agents
@@ -89,33 +85,31 @@ meshctl scaffold --name assistant --agent-type tool --lang typescript --port 900
 Edit `assistant/src/index.ts`:
 
 ```typescript
-import { mesh, MeshAgent, McpMeshTool } from "@mcpmesh/sdk";
+import { FastMCP, mesh, McpMeshTool } from "@mcpmesh/sdk";
+import { z } from "zod";
 
-const app = new MeshAgent({
-  name: "assistant",
-  version: "1.0.0",
-  httpPort: 9001,
-});
+const server = new FastMCP({ name: "Assistant", version: "1.0.0" });
+const agent = mesh(server, { name: "assistant", httpPort: 9001 });
 
-app.tool(
-  mesh({
-    capability: "smart_greeting",
-    description: "Enhanced greeting with time",
-    dependencies: ["greeting"],  // Depend on greeter
-  }),
-  async (
-    { name }: { name: string },
-    { greeting }: { greeting: McpMeshTool | null }  // Injected!
+agent.addTool({
+  name: "smart_greet",
+  capability: "smart_greeting",
+  description: "Enhanced greeting with time",
+  dependencies: ["greeting"], // Depend on greeter
+  parameters: z.object({ name: z.string() }),
+  execute: async (
+    { name },
+    greeting: McpMeshTool | null = null, // Injected positionally!
   ) => {
     if (greeting) {
       const baseGreeting = await greeting({ name });
       return `${baseGreeting} Welcome to MCP Mesh!`;
     }
     return `Hello, ${name}! (greeter unavailable)`;
-  }
-);
+  },
+});
 
-app.run();
+// Agent auto-starts — no explicit run() call needed
 ```
 
 ```bash
@@ -125,7 +119,7 @@ npm install
 meshctl start src/index.ts --debug
 
 # Call the smart greeting
-meshctl call assistant smart_greeting --params '{"name": "Developer"}'
+meshctl call assistant:smart_greeting '{"name": "Developer"}'
 # Output: Hello, Developer! Welcome to MCP Mesh!
 ```
 

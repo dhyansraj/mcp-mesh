@@ -26,6 +26,9 @@ meshctl list --filter greeter
 
 # Show additional columns (endpoints, tool counts)
 meshctl list --wide
+
+# Group tools by their dotted-capability service prefix (RFC #1280)
+meshctl list --services
 ```
 
 Example output:
@@ -104,6 +107,7 @@ meshctl status --registry-url http://remote:8000
 | `meshctl list --all`     | List all agents     |
 | `meshctl list -t`        | List all tools      |
 | `meshctl list -t=<tool>` | Show tool details   |
+| `meshctl list --services` | Group tools by service |
 | `meshctl status`         | Show agent wiring   |
 | `meshctl status <agent>` | Show specific agent |
 

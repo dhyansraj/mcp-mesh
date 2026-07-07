@@ -65,8 +65,8 @@ agent.addTool({
     name: z.string(),
   }),
   execute: async (
-    { name },                          // Input parameters
-    { date_service }                   // Injected dependencies (nullable)
+    { name },                                  // Input parameters
+    date_service: McpMeshTool | null = null,   // Injected positionally (nullable)
   ) => {
     if (date_service) {
       const today = await date_service({});
@@ -77,7 +77,7 @@ agent.addTool({
 });
 ```
 
-**Note**: Dependencies are injected as the second parameter object, keyed by capability name. They may be `null` if unavailable.
+**Note**: Dependencies are injected **positionally** as `McpMeshTool | null` parameters after the first `args` parameter, in declaration order (`dependencies[0]`, `dependencies[1]`, ...). They may be `null` if unavailable.
 
 ### Dependency Injection Types
 
@@ -261,7 +261,7 @@ agent.addTool({
     a: z.number(),
     b: z.number(),
   }),
-  execute: async ({ operation, a, b }, { audit_log }) => {
+  execute: async ({ operation, a, b }, audit_log: McpMeshTool | null = null) => {
     const result = operation === "add" ? a + b : a - b;
     if (audit_log) {
       await audit_log({ operation, a, b, result });

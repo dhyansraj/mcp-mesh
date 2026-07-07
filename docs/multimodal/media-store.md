@@ -7,7 +7,7 @@ Two backends are available:
 | Backend             | Best For                    | URI Format                                   |
 | ------------------- | --------------------------- | -------------------------------------------- |
 | **Local** (default) | Development, single-machine | `file:///tmp/mcp-mesh-media/media/chart.png` |
-| **S3**              | Production, multi-agent     | `s3://mcp-mesh-media/media/chart.png`        |
+| **S3**              | Production, multi-agent     | `s3://my-media-bucket/media/chart.png`       |
 
 ## Local Filesystem (Default)
 
@@ -31,7 +31,7 @@ For production deployments with MinIO, AWS S3, or any S3-compatible service:
 
     ```bash
     export MCP_MESH_MEDIA_STORAGE=s3
-    export MCP_MESH_MEDIA_STORAGE_BUCKET=mcp-mesh-media
+    export MCP_MESH_MEDIA_STORAGE_BUCKET=my-media-bucket     # required for s3 — no default
     export MCP_MESH_MEDIA_STORAGE_ENDPOINT=http://minio:9000  # omit for AWS
     export MCP_MESH_MEDIA_STORAGE_PREFIX=media/
     # Standard AWS credentials
@@ -45,7 +45,7 @@ For production deployments with MinIO, AWS S3, or any S3-compatible service:
     mesh:
       media:
         storage: s3
-        storageBucket: mcp-mesh-media
+        storageBucket: my-media-bucket   # required for s3 — no default
         storageEndpoint: http://minio:9000
         storagePrefix: media/
     ```
@@ -87,13 +87,19 @@ For production deployments with MinIO, AWS S3, or any S3-compatible service:
 
 ## Environment Variables
 
-| Variable                          | Default               | Description                |
-| --------------------------------- | --------------------- | -------------------------- |
-| `MCP_MESH_MEDIA_STORAGE`          | `local`               | Backend: `local` or `s3`   |
-| `MCP_MESH_MEDIA_STORAGE_PATH`     | `/tmp/mcp-mesh-media` | Local filesystem base path |
-| `MCP_MESH_MEDIA_STORAGE_BUCKET`   | `mcp-mesh-media`      | S3 bucket name             |
-| `MCP_MESH_MEDIA_STORAGE_ENDPOINT` | _(none)_              | S3-compatible endpoint URL |
-| `MCP_MESH_MEDIA_STORAGE_PREFIX`   | `media/`              | Key/directory prefix       |
+| Variable                          | Default                   | Description                                        |
+| --------------------------------- | ------------------------- | -------------------------------------------------- |
+| `MCP_MESH_MEDIA_STORAGE`          | `local`                   | Backend: `local` or `s3`                           |
+| `MCP_MESH_MEDIA_STORAGE_PATH`     | `/tmp/mcp-mesh-media`     | Local filesystem base path                         |
+| `MCP_MESH_MEDIA_STORAGE_BUCKET`   | _(required for s3 — no default)_ | S3 bucket name — must be set when backend is `s3`  |
+| `MCP_MESH_MEDIA_STORAGE_ENDPOINT` | _(none)_                  | S3-compatible endpoint URL                         |
+| `MCP_MESH_MEDIA_STORAGE_PREFIX`   | `media/`                  | Key/directory prefix                               |
+| `MCP_MESH_MEDIA_STORAGE_VALIDATE` | `false`                   | When `true`, run a `head_bucket` probe at startup  |
+| `AWS_ACCESS_KEY_ID`               | _(none)_                  | S3 access key (or use an IAM role)                 |
+| `AWS_SECRET_ACCESS_KEY`           | _(none)_                  | S3 secret key (or use an IAM role)                 |
+
+!!! warning "S3 fails fast at startup"
+    There is **no default bucket**. When `MCP_MESH_MEDIA_STORAGE=s3`, the agent fails fast at construction: a missing `boto3` raises `RuntimeError`, and an unset `MCP_MESH_MEDIA_STORAGE_BUCKET` raises `ValueError` (a silent default would let a typo produce confusing 404s at first use). Set `MCP_MESH_MEDIA_STORAGE_VALIDATE=true` to additionally run an inexpensive `head_bucket` probe that confirms credentials and bucket reachability before the agent starts serving traffic — it is opt-in so CI/local-dev environments without real AWS credentials keep working.
 
 ## Distributed Deployment
 
@@ -129,7 +135,7 @@ services:
     entrypoint: >
       /bin/sh -c "
       mc alias set local http://minio:9000 minioadmin minioadmin;
-      mc mb local/mcp-mesh-media --ignore-existing;
+      mc mb local/my-media-bucket --ignore-existing;
       "
 ```
 
@@ -142,7 +148,7 @@ env:
   - name: MCP_MESH_MEDIA_STORAGE
     value: "s3"
   - name: MCP_MESH_MEDIA_STORAGE_BUCKET
-    value: "mcp-mesh-media"
+    value: "my-media-bucket"
   - name: MCP_MESH_MEDIA_STORAGE_ENDPOINT
     value: "http://minio:9000"
   - name: AWS_ACCESS_KEY_ID
