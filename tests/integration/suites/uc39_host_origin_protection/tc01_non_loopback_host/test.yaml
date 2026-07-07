@@ -1,0 +1,155 @@
+# tc01_non_loopback_host — a consumer's cross-agent /mcp call must succeed when
+# the provider is advertised on a NON-loopback host (issue #1312).
+#
+# WHY THIS UC EXISTS
+# tsuite k8s mode co-locates a test's agents as OS processes in ONE pod and they
+# address each other over loopback: with no MCP_MESH_HTTP_HOST set, the
+# advertised http_host resolves to localhost, so every /mcp call carries
+# `Host: localhost`, which FastMCP's DNS-rebinding guard (host_origin_protection)
+# ALWAYS allows. That is exactly why #1312 — which 421s any NON-localhost Host —
+# slipped every existing suite.
+#
+# This TC deliberately starts host-provider with MCP_MESH_HTTP_HOST set to a
+# NON-loopback but pod-reachable host (the pod's own primary IP from
+# `hostname -i`, with an /etc/hosts alias fallback). The provider still BINDS
+# 0.0.0.0 (binding host is independent of the advertised host), so the address
+# is reachable; but the ADVERTISED endpoint is non-loopback. When host-consumer
+# resolves host_probe and calls it, its httpx request to the provider's /mcp
+# endpoint carries `Host: <non-loopback>` — the precise real-k8s (Service-DNS)
+# condition.
+#
+# REGRESSION GUARD
+#   * On THIS branch (fix present: host_app built with host_origin_protection=
+#     False) the downstream /mcp call succeeds and consume_host_probe returns
+#     {"provider_result": {"ok": true}} — asserted below.
+#   * On a pre-#1312 build the guard 421s that call, `await probe()` raises, and
+#     the tool never returns provider_result — the success assertion fails.
+#
+# MEANINGFULNESS GUARD
+# A dedicated step extracts the provider's ADVERTISED endpoint from
+# `meshctl list --json` and asserts its host is NOT localhost / 127.0.0.1. If
+# the host injection silently fell back to loopback, THIS assertion fails first,
+# so the test can never pass by accidentally exercising the trivial localhost
+# path.
+
+name: "Host-origin protection: non-loopback advertised host cross-agent call (Python)"
+description: "Provider advertised on a non-loopback pod host; consumer's /mcp call (Host: non-loopback) must succeed — guards #1312 FastMCP DNS-rebinding 421"
+tags:
+  - integration
+  - python
+  - registry
+  - host-origin
+  - issue-1312
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/host-provider /workspace/
+      cp -rL /uc-artifacts/host-consumer /workspace/
+
+  - name: "Install host-provider deps"
+    handler: pip-install
+    path: /workspace/host-provider
+
+  - name: "Install host-consumer deps"
+    handler: pip-install
+    path: /workspace/host-consumer
+
+  # Resolve a NON-loopback but pod-reachable host and start the provider
+  # advertising it. The env value is computed IN-SHELL so there is no
+  # cross-step interpolation of the host string. Primary: the pod's own
+  # primary IP (`hostname -i`). Fallback (empty / loopback IP): an /etc/hosts
+  # alias that maps a non-localhost name onto 127.0.0.1 — still a non-localhost
+  # Host header for the guard, still reachable because the agent binds 0.0.0.0.
+  - name: "Start host-provider on a non-loopback advertised host (port 9201)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      HOST_IP=$(hostname -i 2>/dev/null | awk '{print $1}')
+      if [ -z "$HOST_IP" ] || echo "$HOST_IP" | grep -Eq '^(127\.|::1$|localhost$)'; then
+        echo "hostname -i unusable ('$HOST_IP'); using /etc/hosts alias fallback"
+        echo "127.0.0.1 mesh-nonloopback.test" >> /etc/hosts
+        HOST_IP="mesh-nonloopback.test"
+      fi
+      echo "ADVERTISED_HOST=$HOST_IP"
+      meshctl start host-provider/main.py \
+        --env MCP_MESH_HTTP_PORT=9201 \
+        --env MCP_MESH_HTTP_HOST=$HOST_IP \
+        -d
+    capture: provider_start
+
+  - name: "Start host-consumer (port 9202)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start host-consumer/main.py \
+        --env MCP_MESH_HTTP_PORT=9202 \
+        --env MCP_MESH_SETTLE_TIMEOUT=60 \
+        -d
+    capture: consumer_start
+
+  # Liveness only (issue #1193): both agents must APPEAR in meshctl list.
+  # Dependency resolution is covered by the consumer's settle window at call
+  # time — do NOT gate on "1/1" here.
+  - routine: global.wait_for_agents_registered
+    params:
+      agents: "host-provider host-consumer"
+
+  # MEANINGFULNESS GUARD: prove the provider actually advertised a non-loopback
+  # endpoint (not a silent localhost fallback). This is the host string the
+  # consumer's /mcp call will carry as its Host header.
+  - name: "Capture provider advertised endpoint"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl list --json 2>/dev/null | python -c "import sys, json; d = json.load(sys.stdin); e = [a.get('endpoint','') for a in d.get('agents', []) if a.get('name') == 'host-provider']; print('PROVIDER_ENDPOINT=' + (e[0] if e else 'MISSING'))"
+    capture: provider_endpoint
+
+  # Invoke the consumer's tool. Its first mesh call blocks on the settle window
+  # until host_probe resolves, then makes the load-bearing cross-agent /mcp call
+  # to the non-loopback provider. `|| true` so a downstream failure surfaces as
+  # a clear assertion miss (below) rather than an opaque step failure.
+  - name: "Call consumer tool (cross-agent /mcp to non-loopback host)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call consume_host_probe '{}' 2>&1 || true
+    capture: call_result
+    timeout: 150
+
+assertions:
+  # The provider start step resolved a concrete advertised host.
+  - expr: "${captured.provider_start} contains 'ADVERTISED_HOST='"
+    message: "provider start step must resolve and echo the advertised host it was given"
+
+  # MEANINGFULNESS: the advertised endpoint must be a real non-loopback host.
+  # If either of these fails, the test silently fell back to localhost and would
+  # prove nothing — so these gate the whole scenario.
+  - expr: "${captured.provider_endpoint} contains 'PROVIDER_ENDPOINT=http://'"
+    message: "host-provider must be registered with an http endpoint"
+  - expr: "${captured.provider_endpoint} not contains 'localhost'"
+    message: "MEANINGFULNESS: advertised host must NOT be localhost — else the /mcp Host guard is never exercised"
+  - expr: "${captured.provider_endpoint} not contains '127.0.0.1'"
+    message: "MEANINGFULNESS: advertised host must NOT be 127.0.0.1 — else the /mcp Host guard is never exercised"
+
+  # REGRESSION GUARD: the cross-agent call over a non-loopback Host succeeded and
+  # returned the provider's result verbatim. A pre-#1312 421 makes await probe()
+  # raise, so provider_result is never produced.
+  - expr: "${captured.call_result} contains 'provider_result'"
+    message: "consumer's cross-agent /mcp call must succeed and return the provider result — a #1312 regression 421s this call"
+  - expr: "${captured.call_result} icontains 'ok'"
+    message: "provider result {\"ok\": true} must round-trip back through the consumer"
+  - expr: "${captured.call_result} not contains '421'"
+    message: "no 421 — FastMCP's DNS-rebinding guard must accept the non-loopback Host (host_origin_protection=False, #1312)"
+  - expr: "${captured.call_result} not contains 'proxy is None'"
+    message: "host_probe dependency must have resolved before the call"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

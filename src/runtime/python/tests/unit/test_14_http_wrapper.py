@@ -42,9 +42,11 @@ class TestHttpMcpWrapperInitialization:
 
         wrapper = HttpMcpWrapper(mock_fastmcp_server)
 
-        # Verify stateless HTTP app was created
+        # Verify stateless HTTP app was created with the #1312 Host-guard override
         mock_fastmcp_server.http_app.assert_called_once_with(
-            stateless_http=True, transport="streamable-http"
+            stateless_http=True,
+            transport="streamable-http",
+            host_origin_protection=False,
         )
         assert wrapper._mcp_app == mock_fastmcp_app
         assert wrapper._lifespan == mock_lifespan
@@ -66,12 +68,14 @@ class TestHttpMcpWrapperInitialization:
 
         # Verify both calls were made
         assert mock_fastmcp_server.http_app.call_count == 2
-        # First call with stateless params
+        # First call with stateless params + #1312 Host-guard override
         mock_fastmcp_server.http_app.assert_any_call(
-            stateless_http=True, transport="streamable-http"
+            stateless_http=True,
+            transport="streamable-http",
+            host_origin_protection=False,
         )
-        # Second call without params (fallback)
-        mock_fastmcp_server.http_app.assert_any_call()
+        # Second call (fallback) still carries the #1312 override
+        mock_fastmcp_server.http_app.assert_any_call(host_origin_protection=False)
 
         assert wrapper._mcp_app == mock_fastmcp_app
         assert wrapper._lifespan == mock_lifespan

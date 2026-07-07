@@ -67,8 +67,12 @@ dependencies = [
     "click>=8.1.0",
     "rich>=13.0.0",
     "typer>=0.9.0",
-    "mcp>=1.26.0,<2.0.0",
-    "fastmcp>=3.0.0,<4.0.0",
+    # Pinned exact (#1312): an upstream FastMCP default-flip enabling
+    # DNS-rebinding Host validation drifted in on rebuild and broke every
+    # k8s Service-DNS /mcp call with 421. Loose ranges hid it. Follow-up:
+    # add a full transitive lockfile.
+    "mcp==1.28.1",
+    "fastmcp==3.4.3",
     "litellm>=1.80.5,!=1.82.7,!=1.82.8",
     "anthropic>=0.77",
     "openai>=1.60",

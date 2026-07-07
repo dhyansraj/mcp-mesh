@@ -1,0 +1,18 @@
+# UC-level routines for uc39_host_origin_protection (issue #1312).
+#
+# This UC deliberately advertises a provider on a NON-loopback host so a
+# consumer's cross-agent /mcp call carries a non-localhost Host header —
+# reproducing the real-k8s (Service-DNS) condition that FastMCP's
+# DNS-rebinding guard would 421 pre-#1312. All other suites co-locate agents
+# on loopback (Host: localhost), which the guard always allows, so #1312
+# slipped every existing suite.
+
+routines:
+  # Stop everything started by this test (agents + registry).
+  stop_all:
+    description: "Stop all mesh processes started by this test"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: meshctl stop 2>/dev/null || true
+        ignore_errors: true
