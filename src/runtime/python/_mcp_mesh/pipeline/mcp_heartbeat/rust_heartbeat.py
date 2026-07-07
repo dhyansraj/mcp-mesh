@@ -761,6 +761,34 @@ async def _handle_dependency_change(
             current_agent_id and agent_id and current_agent_id == agent_id
         )
 
+        # Idempotency guard (issue #1314): the Rust core re-emits
+        # ``dependency_available`` for believed-delivered edges on an
+        # independent wall-clock tick to self-heal dropped applies. If the
+        # incoming resolution is identical to what is already wired, rebuilding
+        # the proxy would churn proxies + connection pools for nothing. Skip.
+        #
+        # ``agent_id`` is part of the signature so this composes with #1315: an
+        # agent_id-only change still rebuilds (self-dependency proxy-kind
+        # selection above keys off agent_id), while an unchanged reconcile
+        # re-emit carries the same agent_id and is correctly skipped.
+        # ``kwargs_config`` is normalized to a sorted JSON string so equal-but-
+        # not-identical dicts compare equal.
+        applied_signature = (
+            endpoint,
+            function_name,
+            json.dumps(kwargs_config, sort_keys=True, default=str),
+            agent_id,
+        )
+        if (
+            injector.get_applied_dependency_signature(dep_key)
+            == applied_signature
+        ):
+            logger.debug(
+                f"Dependency {dep_key} unchanged (idempotent re-emit); "
+                f"skipping proxy rebuild"
+            )
+            return
+
         if is_self_dependency:
             from ...engine.self_dependency_proxy import SelfDependencyProxy
 
@@ -784,6 +812,7 @@ async def _handle_dependency_change(
             )
 
         await injector.register_dependency(dep_key, proxy)
+        injector.set_applied_dependency_signature(dep_key, applied_signature)
         logger.info(f"Registered dependency: {dep_key}")
         return
 

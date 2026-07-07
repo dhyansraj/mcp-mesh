@@ -54,6 +54,27 @@ public class MeshToolWrapperRegistry {
 
     private final McpMeshToolProxyFactory proxyFactory;
 
+    // compositeKey (funcId:dep_N) → last-applied resolution signature.
+    // Idempotency guard (#1314): the Rust core re-emits dependency_available
+    // for every believed-delivered edge on an independent ~10s tick to
+    // self-heal dropped applies. Those re-emits carry an identical resolution;
+    // skipping them here avoids re-resolving the return type, re-fetching the
+    // proxy, and rewriting the wrapper's injected slot (which re-counts the
+    // settle latch) every 10s for a no-op.
+    private final Map<String, DepSignature> lastAppliedByKey = new ConcurrentHashMap<>();
+
+    /**
+     * Per-slot last-applied resolution identity.
+     *
+     * <p>Includes {@code agentId} so the guard composes with #1315: an
+     * agent_id-only change is a genuine update (different signature → applies),
+     * while an unchanged reconcile re-emit carries the same agentId → skip.
+     * {@code kwargs} is not part of the signature because it is not threaded to
+     * this layer on {@link MeshEvent} today; if it becomes available it should
+     * be added here. Record → value-based equals over all components.
+     */
+    private record DepSignature(String endpoint, String functionName, String agentId) {}
+
     public MeshToolWrapperRegistry(McpMeshToolProxyFactory proxyFactory) {
         this.proxyFactory = proxyFactory;
     }
@@ -224,6 +245,28 @@ public class MeshToolWrapperRegistry {
      * @param functionName The function name at the endpoint
      */
     public void updateDependency(String compositeKey, String endpoint, String functionName) {
+        updateDependency(compositeKey, endpoint, functionName, null);
+    }
+
+    /**
+     * Update a McpMeshTool dependency using composite key.
+     *
+     * <p>Idempotency guard (#1314): the Rust core re-emits
+     * {@code dependency_available} for every believed-delivered edge on an
+     * independent ~10s tick to self-heal dropped applies. When the incoming
+     * resolution equals what is already wired for this slot
+     * {@code (endpoint, functionName, agentId)} the apply is a no-op — skip it
+     * so the proxy is not re-fetched and the wrapper slot is not rewritten. A
+     * genuine change (different endpoint/function/agentId) still applies exactly
+     * as before.
+     *
+     * @param compositeKey The composite key (funcId:dep_N)
+     * @param endpoint     The resolved endpoint URL
+     * @param functionName The function name at the endpoint
+     * @param agentId      The providing agent id (part of the idempotency
+     *                     signature; may be {@code null})
+     */
+    public void updateDependency(String compositeKey, String endpoint, String functionName, String agentId) {
         int depIndex = parseKeyIndex(compositeKey, DEP_SEPARATOR);
         if (depIndex < 0) {
             log.warn("Invalid composite key format (missing {}): {}", DEP_SEPARATOR, compositeKey);
@@ -237,6 +280,15 @@ public class MeshToolWrapperRegistry {
             return;
         }
 
+        // Idempotency guard (#1314): skip a re-emit that carries the identical
+        // resolution already wired into this slot.
+        DepSignature incoming = new DepSignature(endpoint, functionName, agentId);
+        if (incoming.equals(lastAppliedByKey.get(compositeKey))) {
+            log.debug("Skipping idempotent dependency apply {} for {} → {}:{} (agentId={})",
+                depIndex, funcId, endpoint, functionName, agentId);
+            return;
+        }
+
         // Get the expected return type for this dependency (from McpMeshTool<T>)
         Type returnType = wrapper.getDependencyReturnType(depIndex);
 
@@ -246,8 +298,10 @@ public class MeshToolWrapperRegistry {
         // Update wrapper's dependency array
         wrapper.updateDependency(depIndex, proxy);
 
-        log.debug("Updated dependency {} for {} → {}:{} (returnType={})",
-            depIndex, funcId, endpoint, functionName, returnType);
+        lastAppliedByKey.put(compositeKey, incoming);
+
+        log.debug("Updated dependency {} for {} → {}:{} (returnType={}, agentId={})",
+            depIndex, funcId, endpoint, functionName, returnType, agentId);
     }
 
     /**
@@ -260,6 +314,10 @@ public class MeshToolWrapperRegistry {
         if (depIndex < 0) {
             return;
         }
+
+        // Clear the idempotency signature (#1314) so a later re-add of the same
+        // endpoint/function/agentId is treated as a genuine change and re-wires.
+        lastAppliedByKey.remove(compositeKey);
 
         String funcId = parseKeyFuncId(compositeKey, DEP_SEPARATOR);
         MeshToolWrapper wrapper = resolveWrapper(funcId);

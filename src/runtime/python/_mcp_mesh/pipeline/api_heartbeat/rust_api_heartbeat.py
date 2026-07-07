@@ -275,7 +275,18 @@ async def _handle_api_dependency_change(
     )
 
     from ...engine.decorator_registry import DecoratorRegistry
+    from ...engine.dependency_injector import get_global_injector
     from ...engine.unified_mcp_proxy import EnhancedUnifiedMCPProxy
+
+    # Idempotency guard (issue #1314): the Rust core re-emits
+    # ``dependency_available`` for believed-delivered edges on an independent
+    # wall-clock tick to self-heal dropped applies. The API/route path pulls
+    # from that same reconciling core, so without a guard @mesh.route gateways
+    # would churn proxies + connection pools every tick. We reuse the shared
+    # global DependencyInjector's signature store; the API path wires route
+    # wrappers directly (no injector registration) so keys are namespaced
+    # ``api:{route_id}:dep_{N}`` to avoid colliding with MCP dep keys.
+    injector = get_global_injector()
 
     parsed_producer_kwargs: dict = {}
     if producer_kwargs:
@@ -315,11 +326,22 @@ async def _handle_api_dependency_change(
                 if dep_cap == capability:
                     # Set to None to indicate unavailable
                     wrapper._mesh_update_dependency(dep_index, None)
+                    # Clear the last-applied signature so a later re-add of the
+                    # same resolution rebuilds (issue #1314).
+                    injector.clear_applied_dependency_signature(
+                        f"api:{route_id}:dep_{dep_index}"
+                    )
                     logger.info(
                         f"Cleared dependency '{capability}' at index {dep_index} "
                         f"for route '{route_id}'"
                     )
         return
+
+    # Normalize producer kwargs to a stable string so equal-but-not-identical
+    # dicts compare equal in the idempotency signature (issue #1314).
+    normalized_kwargs = json.dumps(
+        dict(parsed_producer_kwargs), sort_keys=True, default=str
+    )
 
     # Dependency is available - update all route wrappers that need it
     for route_id, route_info in route_wrappers.items():
@@ -332,6 +354,29 @@ async def _handle_api_dependency_change(
         # Find which dependency index(es) match this capability
         for dep_index, dep_cap in enumerate(dependencies):
             if dep_cap == capability:
+                # Idempotency guard (issue #1314): skip rebuilding the proxy
+                # when the incoming resolution is identical to what is already
+                # wired for this route slot. ``agent_id`` is part of the
+                # signature so it composes with #1315 (an agent_id-only change
+                # still rebuilds, since self-dependency proxy-kind selection
+                # below keys off agent_id).
+                sig_key = f"api:{route_id}:dep_{dep_index}"
+                applied_signature = (
+                    endpoint,
+                    function_name,
+                    normalized_kwargs,
+                    agent_id,
+                )
+                if (
+                    injector.get_applied_dependency_signature(sig_key)
+                    == applied_signature
+                ):
+                    logger.debug(
+                        f"Dependency '{capability}' for route '{route_id}' "
+                        f"unchanged (idempotent re-emit); skipping proxy rebuild"
+                    )
+                    continue
+
                 # Check for self-dependency (rare for API services but handle it)
                 current_service_id = context.get("service_id") or context.get(
                     "agent_id"
@@ -389,6 +434,9 @@ async def _handle_api_dependency_change(
 
                 # Update the route wrapper
                 wrapper._mesh_update_dependency(dep_index, proxy)
+                injector.set_applied_dependency_signature(
+                    sig_key, applied_signature
+                )
                 logger.info(
                     f"Updated dependency '{capability}' at index {dep_index} "
                     f"for route '{route_id}' -> {endpoint}/{function_name}"
