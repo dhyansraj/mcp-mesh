@@ -1,0 +1,181 @@
+# Test Case: Provider Move -> Consumer Re-wire (WITHOUT restart)
+#
+# Proves the dependency re-wire invariant (#1314/#1315) end-to-end on real
+# natives: when a provider MOVES (re-registers at a NEW endpoint), a running
+# consumer re-wires its injected proxy to the new endpoint on its own — the
+# consumer process is started ONCE and NEVER restarted.
+#
+# The failure this test catches: the SDK apply-path idempotency guard (skip
+# proxy rebuild when endpoint/function/kwargs/agent_id are unchanged)
+# OVER-SKIPPING a genuine change. Here the provider's agent_id is pinned
+# (MCP_MESH_AGENT_ID) so ONLY the endpoint (port) changes on the move — the
+# precise case where a guard that forgot to compare the endpoint would keep
+# the consumer wired to the OLD port.
+#
+# Instance fingerprint = the port. Provider's rewire_probe returns its own
+# MCP_MESH_HTTP_PORT; consumer's which_provider returns that verbatim. So the
+# consumer's result literally reports WHICH provider instance answered:
+#   - baseline: 3040 (v1)
+#   - after move: 3041 (v2)   <-- the assertion that fails on over-skip
+
+name: "Provider Move Re-wire (no consumer restart)"
+description: "Moved provider (new endpoint, same agent_id) must re-wire a running consumer without restarting it"
+tags:
+  - rewire
+  - reconcile
+  - dependency_injection
+  - python
+  - integration
+timeout: 360
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: "cp -r /artifacts/* /workspace/"
+
+  # --- Bring up provider v1 (port 3040) with a PINNED agent_id ---------------
+  - name: "Start provider v1 on port 3040 (pinned agent_id)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start rewire-provider/main.py --env MCP_MESH_HTTP_PORT=3040 --env MCP_MESH_AGENT_ID=rewire-provider-pinned -d"
+    capture: start_provider_v1
+
+  # --- Bring up the consumer ONCE (port 3042) --------------------------------
+  # MCP_MESH_SETTLE_TIMEOUT=60: first call held until the rewire_probe
+  # dependency resolves (settle window, PR #1200) — no dep-resolution polling.
+  - name: "Start consumer on port 3042 (started ONCE, never restarted)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start rewire-consumer/main.py --env MCP_MESH_HTTP_PORT=3042 --env MCP_MESH_SETTLE_TIMEOUT=60 -d 2>&1 || echo 'START_FAILED'"
+    capture: start_consumer
+
+  - name: "Wait for provider and consumer to register (liveness only)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for rewire-provider and rewire-consumer to register..."
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' || true)
+        if echo "$AGENTS" | grep -q "rewire-provider" && echo "$AGENTS" | grep -q "rewire-consumer"; then
+          echo "Both agents registered after ~${i}s"
+          meshctl list
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: agents did not register within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_registered
+    timeout: 90
+
+  # --- Baseline: consumer is wired to v1 (must report 3040) ------------------
+  - name: "Baseline call: which provider answers? (expect 3040)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call which_provider '{}' 2>&1 || echo 'CALL_FAILED'"
+    capture: baseline_result
+    timeout: 90
+
+  # --- MOVE the provider: stop v1, start v2 on a DIFFERENT port (3041) --------
+  # Same pinned agent_id => only the endpoint changes. Consumer is untouched.
+  - name: "Move provider: stop v1 (by registered name)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl stop rewire-provider 2>&1 || echo 'STOP_FAILED'"
+    capture: stop_v1
+
+  - name: "Brief settle after stopping v1"
+    handler: wait
+    seconds: 3
+
+  - name: "Move provider: start v2 on port 3041 (same pinned agent_id)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start rewire-provider/main.py --env MCP_MESH_HTTP_PORT=3041 --env MCP_MESH_AGENT_ID=rewire-provider-pinned -d 2>&1 || echo 'START_V2_FAILED'"
+    capture: start_provider_v2
+
+  # --- Poll (do NOT restart the consumer) until it re-wires to v2 (3041) ------
+  # Generous headroom for: v1 health-flip/eviction + v2 registration + the
+  # ~10s reconcile tick + the consumer's re-resolution/apply. Transient call
+  # errors during the flip are tolerated; we keep polling.
+  - name: "Poll consumer until it re-wires to moved provider (expect 3041)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Polling which_provider for re-wire to port 3041 (consumer NOT restarted)..."
+      LAST=""
+      for i in $(seq 1 60); do
+        RES=$(meshctl call which_provider '{}' 2>&1 || true)
+        LAST="$RES"
+        echo "attempt $i: $RES"
+        if echo "$RES" | grep -q "3041"; then
+          echo "RE-WIRED to v2 after ~$((i*2))s"
+          break
+        fi
+        sleep 2
+      done
+      echo "LAST_POLL_RESULT: $LAST"
+    capture: rewire_poll
+    timeout: 180
+
+  # --- Post-move verdict call: must now report 3041 --------------------------
+  - name: "Post-move call: which provider answers now? (expect 3041)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call which_provider '{}' 2>&1 || echo 'CALL_FAILED'"
+    capture: postmove_result
+    timeout: 90
+
+  # --- Diagnostics (captured for the report if the guard over-skips) ---------
+  - name: "Diagnostic: consumer logs (resolution/apply state)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl logs rewire-consumer 2>&1 | tail -60 || echo 'NO_CONSUMER_LOGS'"
+    capture: consumer_logs
+
+  - name: "Diagnostic: agent list after move"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list 2>&1 || true"
+    capture: list_after_move
+
+  - name: "Stop all agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+
+assertions:
+  # Both registered
+  - expr: "${captured.wait_registered} contains 'rewire-provider'"
+    message: "rewire-provider should register"
+  - expr: "${captured.wait_registered} contains 'rewire-consumer'"
+    message: "rewire-consumer should register"
+
+  # Baseline: wired to v1 (3040), definitely not the future port
+  - expr: "${captured.baseline_result} contains '3040'"
+    message: "BASELINE: consumer should be wired to provider v1 on port 3040"
+  - expr: "${captured.baseline_result} not contains '3041'"
+    message: "BASELINE: consumer must not already report the not-yet-started v2 port 3041"
+
+  # THE re-wire invariant: after the provider moved to 3041 (same agent_id,
+  # new endpoint), the never-restarted consumer must reach the NEW endpoint.
+  # If this reports 3040, the idempotency guard OVER-SKIPPED the endpoint change.
+  - expr: "${captured.postmove_result} contains '3041'"
+    message: "RE-WIRE: after the move, consumer must reach v2 on port 3041 (over-skip if still 3040)"
+  - expr: "${captured.postmove_result} not contains '3040'"
+    message: "RE-WIRE: consumer must NOT still be wired to the old endpoint 3040"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace
