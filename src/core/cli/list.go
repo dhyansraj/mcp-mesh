@@ -41,14 +41,16 @@ func NewListCommand() *cobra.Command {
 Shows agent status, dependency resolution, uptime, and endpoint information
 in a docker-compose-style format for easy monitoring.
 
-By default the table shows healthy agents only. Instances superseded by a
-newer registration of the same agent (common with watch-driven restarts)
+By default the table shows healthy (running) agents only. Instances superseded
+by a newer registration of the same agent (common with watch-driven restarts)
 collapse into a dimmed "(+N superseded)" annotation, and down agents are
-reported as a footer count rather than a named row — unless a down instance
-declares a capability that a live agent is missing, in which case it appears
-as a red row to explain the dependency gap. Use --all to see every instance
-(unhealthy instances are purged after MCP_MESH_RETENTION, default 1h).
-With --json, output keeps the healthy-only default for script compatibility.
+reported as a footer count ("N down hidden (use --all)") rather than a named
+row. The DEPS column shows dependencies consumed (resolved/total) and the CAPS
+column shows capabilities provided (available/total); both turn red when short
+of their total. Use --all to see every instance including unhealthy and
+superseded ones (unhealthy instances are purged after MCP_MESH_RETENTION,
+default 1h). With --json, output keeps the healthy-only default for script
+compatibility.
 
 Examples:
   meshctl list                                    # Healthy agents (down agents counted in the footer)
@@ -372,13 +374,12 @@ func runListCommand(cmd *cobra.Command, args []string) error {
 
 	view := computeSupersessionView(output.Agents)
 
-	// Default view (no --all): healthy rows only, preserving the readiness
-	// contract that `meshctl list | grep -q <name>` matching implies a live
-	// agent. Superseded instances collapse into the (+N superseded)
-	// annotation; genuinely-down agents are reported as a nameless footer
-	// count — except a down instance declaring a capability some live agent
-	// is missing, which stays visible as a named red row because it explains
-	// the dependency gap (and readiness greps are failing anyway).
+	// Default view (no --all): healthy rows only (#1309), preserving the
+	// readiness contract that `meshctl list | grep -q <name>` matching implies
+	// a live agent. Superseded instances collapse into the (+N superseded)
+	// annotation; all down agents (including one declaring a capability some
+	// live agent is missing) are hidden and reported as a nameless footer
+	// count, and surfaced with `--all`.
 	var summary listDefaultSummary
 	if !showAll {
 		output.Agents, summary = collapseDefaultView(output.Agents, view)
@@ -1201,67 +1202,57 @@ func formatSupersededAnnotation(count int) string {
 	return fmt.Sprintf(" %s(+%d superseded)%s", colorGray, count, colorReset)
 }
 
-// countUnavailableCapabilities returns the number of the agent's capabilities
-// the registry has marked unavailable (issue #1249). A nil Available pointer
-// means the registry didn't report availability (older versions) and is
-// treated as available, so it never contributes to the count.
-func countUnavailableCapabilities(agent EnhancedAgent) int {
-	n := 0
+// capabilityAvailability returns the (available, total) count of capabilities
+// the agent PROVIDES, feeding the CAPS column (issue #1307). total excludes the
+// framework-internal __mesh_* synthetics — the SAME predicate (on the same
+// function-name key with a Name fallback) `--tools` uses to hide them (#1290),
+// so CAPS counts only user-facing capabilities. A capability is available when
+// the registry reports Available true OR doesn't report it at all (nil, older
+// registries) — so a registry without the #1258 field reads as fully available
+// and never produces a spurious degraded marker.
+func capabilityAvailability(agent EnhancedAgent) (available, total int) {
 	for _, tool := range agent.Tools {
-		if tool.Available != nil && !*tool.Available {
-			n++
+		funcName := tool.FunctionName
+		if funcName == "" {
+			funcName = tool.Name
+		}
+		if isFrameworkInternalTool(funcName) {
+			continue
+		}
+		total++
+		if tool.Available == nil || *tool.Available {
+			available++
 		}
 	}
-	return n
+	return available, total
 }
 
-// formatUnavailableAnnotation renders the red per-row marker flagging a healthy
-// agent that nonetheless owns one or more unavailable capabilities (issue
-// #1249) — e.g. " (1 capability unavailable)". This is the compact signal that
-// some capability's required dependency chain is broken; the per-capability
-// reason is shown by `meshctl list --verbose` and `--tools=<name>`. Empty when
-// the agent has no unavailable capabilities.
-//
-// Suppressed for a non-live agent: the registry marks EVERY capability of an
-// unhealthy agent available:false with reason "agent unhealthy", which is fully
-// redundant with the row's own red status. The capability-level signal is only
-// interesting on a live agent, where it reveals a broken required-dependency
-// chain the agent status alone wouldn't explain.
-func formatUnavailableAnnotation(agent EnhancedAgent) string {
-	if !isLiveStatus(agent.Status) {
-		return ""
+// formatCapabilities renders the CAPS column value "available/total" (issue
+// #1307), mirroring formatDependencies: green when every provided capability is
+// available, red when any is unavailable (available < total).
+func formatCapabilities(available, total int) string {
+	color := colorGreen
+	if available < total {
+		color = colorRed
 	}
-	n := countUnavailableCapabilities(agent)
-	if n <= 0 {
-		return ""
-	}
-	return fmt.Sprintf(" %s(%d capabilit%s unavailable)%s",
-		colorRed, n, pluralY(n), colorReset)
-}
-
-// pluralY returns the correct suffix for "capabilit(y|ies)".
-func pluralY(n int) string {
-	if n == 1 {
-		return "y"
-	}
-	return "ies"
+	return fmt.Sprintf("%s%d/%d%s", color, available, total, colorReset)
 }
 
 // formatListFooter renders the summary line printed after the default table,
-// e.g. "3 agents (3 healthy) - 1 inactive instance hidden (use --all) - 2 superseded hidden".
+// e.g. "3 agents (3 healthy) - 1 down hidden (use --all) - 2 superseded hidden".
 // displayed and healthy count distinct declared agent names among the rendered
-// rows. The hidden down agents counted here are orphaned non-blocking instances
-// (a genuinely blocking down instance is promoted to a visible red row by
-// collapseDefaultView and never reaches this count), so they block nothing and
-// are disclosed in neutral gray as "inactive" pending retention purge rather
-// than as a red "agent down" alarm. The superseded clause is likewise gray, and
+// rows. The hidden down agents counted here are every non-live instance the
+// healthy-only default view suppresses (#1309) — orphaned stale instances as
+// well as a down instance that declares a capability a live agent depends on.
+// They are disclosed in neutral gray as "down" rather than as a red alarm, and
+// surfaced with `--all`. The superseded clause is likewise gray, and
 // "(use --all)" rides on whichever hidden clause appears first. Clauses are
 // omitted when zero.
 func formatListFooter(displayed, healthy int, summary listDefaultSummary) string {
 	footer := fmt.Sprintf("%d agent%s (%d healthy)", displayed, pluralS(displayed), healthy)
 	if summary.hiddenDownAgents > 0 {
-		footer += fmt.Sprintf(" - %s%d inactive instance%s hidden (use --all)%s",
-			colorGray, summary.hiddenDownAgents, pluralS(summary.hiddenDownAgents), colorReset)
+		footer += fmt.Sprintf(" - %s%d down hidden (use --all)%s",
+			colorGray, summary.hiddenDownAgents, colorReset)
 	}
 	if summary.hiddenSuperseded > 0 {
 		clause := fmt.Sprintf("%d superseded hidden", summary.hiddenSuperseded)
@@ -1349,6 +1340,12 @@ func printTableHeader(nameWidth, runtimeWidth, statusWidth, typeWidth, endpointW
 
 	if !noDeps {
 		fmt.Printf(" %-8s", "DEPS")
+		// CAPS mirrors DEPS but for provided capabilities (issue #1307);
+		// right-aligned numeric field, so its header is right-aligned too.
+		fmt.Printf(" %8s", "CAPS")
+		// Extra gap so the right-aligned CAPS value doesn't sit flush against
+		// ENDPOINT.
+		fmt.Printf(" ")
 	}
 
 	// Always show endpoint in standard view, tools only in wide mode
@@ -1375,7 +1372,7 @@ func printTableHeader(nameWidth, runtimeWidth, statusWidth, typeWidth, endpointW
 func printTableSeparator(nameWidth, runtimeWidth, statusWidth, typeWidth, endpointWidth int, noDeps, wide, verbose bool) {
 	totalWidth := nameWidth + runtimeWidth + statusWidth + typeWidth + 13 // base width including TYPE and RUNTIME columns
 	if !noDeps {
-		totalWidth += 9
+		totalWidth += 19 // DEPS (8+1) + CAPS (8+1) + extra gap before ENDPOINT (1)
 	}
 	// Always include endpoint width in standard view
 	totalWidth += endpointWidth + 1
@@ -1433,6 +1430,20 @@ func printAgentRow(agent EnhancedAgent, nameWidth, runtimeWidth, statusWidth, ty
 		if padding > 0 {
 			fmt.Printf("%s", strings.Repeat(" ", padding))
 		}
+
+		// Capabilities column (issue #1307): available/total provided
+		// capabilities, right-aligned in an 8-char field, red when degraded.
+		capsAvail, capsTotal := capabilityAvailability(agent)
+		capsStr := formatCapabilities(capsAvail, capsTotal)
+		capsVisualLen := len(fmt.Sprintf("%d/%d", capsAvail, capsTotal))
+		capsPadding := 8 - capsVisualLen
+		if capsPadding < 0 {
+			capsPadding = 0
+		}
+		fmt.Printf(" %s%s", strings.Repeat(" ", capsPadding), capsStr)
+		// Extra gap so the right-aligned CAPS value doesn't sit flush against
+		// ENDPOINT (matches the header spacing).
+		fmt.Printf(" ")
 	}
 
 	// Endpoint column (always shown)
@@ -1459,13 +1470,6 @@ func printAgentRow(agent EnhancedAgent, nameWidth, runtimeWidth, statusWidth, ty
 	// Superseded annotation (pre-colored, includes leading space)
 	if annotation != "" {
 		fmt.Printf("%s", annotation)
-	}
-
-	// Unavailable-capability annotation (issue #1249): flags a live agent whose
-	// capability chain is broken. Rendered even for healthy rows, since a
-	// capability can be unavailable while its owning agent is perfectly healthy.
-	if ua := formatUnavailableAnnotation(agent); ua != "" {
-		fmt.Printf("%s", ua)
 	}
 
 	fmt.Println()
@@ -1991,24 +1995,27 @@ type listDefaultSummary struct {
 	// hiddenSuperseded is the number of superseded instances dropped.
 	hiddenSuperseded int
 	// hiddenDownAgents is the number of distinct declared names hidden
-	// because they are down (not live, not superseded, not blocking).
+	// because they are down (not live, not superseded). Includes blocking
+	// down instances, which are no longer promoted to visible rows (#1309).
 	hiddenDownAgents int
 }
 
 // collapseDefaultView reduces the agent list to the rows shown by the default
-// table (issue #1195): live instances plus down instances that explain a live
-// agent's unresolved dependency (view.blocking). Everything else is hidden and
-// counted in the returned summary — superseded instances per instance, other
-// down agents per distinct declared name — preserving the readiness-check
-// contract that a name appearing in default output implies a live agent
-// (unless it explains a dependency gap).
+// table (issues #1195, #1309): live instances only. Everything non-live is
+// hidden and counted in the returned summary — superseded instances per
+// instance, all other down agents (including a down instance that explains a
+// live agent's dependency gap) per distinct declared name — preserving the
+// readiness-check contract that a name appearing in default output implies a
+// live agent. A blocking down instance is NOT promoted to a visible red row
+// (#1309 reverted #1198's promotion); it is disclosed in the footer's hidden
+// down count and surfaced with `--all`, keeping the default view healthy-only.
 func collapseDefaultView(agents []EnhancedAgent, view supersessionView) ([]EnhancedAgent, listDefaultSummary) {
 	var kept []EnhancedAgent
 	var summary listDefaultSummary
 	downNames := make(map[string]bool)
 	for _, agent := range agents {
 		switch {
-		case isLiveStatus(agent.Status) || view.blocking[agent.ID]:
+		case isLiveStatus(agent.Status):
 			kept = append(kept, agent)
 		case view.superseded[agent.ID]:
 			summary.hiddenSuperseded++
