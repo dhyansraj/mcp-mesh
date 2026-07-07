@@ -197,7 +197,8 @@ public class MeshEventProcessor implements SmartLifecycle {
                 wrapperRegistry.updateDependency(
                     compositeKey,
                     event.getEndpoint(),
-                    event.getFunctionName()
+                    event.getFunctionName(),
+                    event.getAgentId()
                 );
             } else {
                 wrapperRegistry.markDependencyUnavailable(compositeKey);

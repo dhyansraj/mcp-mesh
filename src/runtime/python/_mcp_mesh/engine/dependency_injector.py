@@ -1118,6 +1118,12 @@ class DependencyInjector:
         self._dependency_mapping: dict[str, set[str]] = (
             {}
         )  # dep_name -> set of function_ids
+        # Last-applied resolution signature per dependency key (issue #1314).
+        # The Rust core re-emits ``dependency_available`` for believed-delivered
+        # edges on an independent wall-clock tick to self-heal dropped applies.
+        # We record the signature of what was last wired so an identical
+        # re-emit can be skipped without churning proxies + connection pools.
+        self._applied_dep_signatures: dict[str, Any] = {}
         self._lock = asyncio.Lock()
 
         # LLM agent injector for MeshLlmAgent parameters
@@ -1189,6 +1195,9 @@ class DependencyInjector:
         """
         async with self._lock:
             logger.info(f"🗑️ INJECTOR: Unregistering dependency: {name}")
+            # Idempotency guard (issue #1314): drop the last-applied signature so
+            # a later re-add of the same resolution rebuilds instead of skipping.
+            self._applied_dep_signatures.pop(name, None)
             if name in self._dependencies:
                 del self._dependencies[name]
                 logger.info(f"🗑️ INJECTOR: Removed {name} from dependencies registry")
@@ -1238,6 +1247,29 @@ class DependencyInjector:
     def get_dependency(self, name: str) -> Any | None:
         """Get current instance of a dependency."""
         return self._dependencies.get(name)
+
+    def get_applied_dependency_signature(self, name: str) -> Any | None:
+        """Return the last-applied resolution signature for ``name`` (#1314).
+
+        Callers on the dependency-apply path compare the incoming resolution's
+        signature against this to skip rebuilding a proxy that is already wired
+        identically (the Rust core re-emits believed-delivered edges on a
+        wall-clock tick). Returns ``None`` when nothing is currently applied.
+        """
+        return self._applied_dep_signatures.get(name)
+
+    def set_applied_dependency_signature(self, name: str, signature: Any) -> None:
+        """Record the resolution signature just wired for ``name`` (#1314)."""
+        self._applied_dep_signatures[name] = signature
+
+    def clear_applied_dependency_signature(self, name: str) -> None:
+        """Drop the last-applied signature for ``name`` (#1314).
+
+        Used by consumer paths that wire dependencies without going through
+        ``unregister_dependency`` (e.g. the API/route path, which updates route
+        wrappers directly) so a later re-add of the same resolution rebuilds.
+        """
+        self._applied_dep_signatures.pop(name, None)
 
     def find_original_function(self, function_name: str) -> Any | None:
         """Find the original function by name from wrapper registry or decorator registry.

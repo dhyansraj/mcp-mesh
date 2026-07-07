@@ -60,8 +60,33 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
         this.returnType = returnType;
     }
 
-    void updateEndpoint(String endpoint, String functionName) {
-        endpointRef.set(new EndpointInfo(endpoint, functionName, true));
+    /**
+     * Repoint this proxy at {@code endpoint}:{@code functionName}, marking it
+     * available.
+     *
+     * <p>Idempotency guard (#1314): the Rust core self-heals dropped applies by
+     * re-emitting {@code dependency_available} for every believed-delivered edge
+     * on an independent ~10s wall-clock tick. Those re-emits carry the SAME
+     * resolution, so short-circuit when the incoming {@link EndpointInfo} equals
+     * the current one — no atomic repoint, no downstream churn on this shared
+     * per-capability handle (the {@code @MeshRoute} funnel and the injector both
+     * drive this method). {@code EndpointInfo} is a record, so its {@code equals}
+     * is value-based over {@code (endpoint, functionName, available)}; that's the
+     * full identity available at this layer (agentId is not threaded to the proxy
+     * — the endpoint already uniquely identifies the providing agent here, and
+     * agentId-level de-duplication lives in
+     * {@link MeshToolWrapperRegistry#updateDependency}).
+     *
+     * @return {@code true} if the endpoint actually changed, {@code false} on a
+     *         no-op idempotent re-apply
+     */
+    boolean updateEndpoint(String endpoint, String functionName) {
+        EndpointInfo next = new EndpointInfo(endpoint, functionName, true);
+        if (next.equals(endpointRef.get())) {
+            return false;
+        }
+        endpointRef.set(next);
+        return true;
     }
 
     void markUnavailable() {

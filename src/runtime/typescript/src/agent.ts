@@ -198,6 +198,37 @@ function scheduleAutoStart(): void {
   });
 }
 
+// #1314: canonical JSON so that value-equal-but-reference-distinct objects
+// (e.g. re-parsed kwargs on a reconcile re-emit) hash identically. Object keys
+// are emitted in sorted order recursively; arrays keep their order.
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? "null";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(",")}]`;
+  }
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys
+    .map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`)
+    .join(",")}}`;
+}
+
+// #1314: the resolution signature actually wired for a dependency edge. Two
+// applies with the same signature produce an identical proxy, so the second is
+// a no-op we can skip. `agentId` is included so this composes with #1315: an
+// agent_id-only change still rebuilds, while an unchanged reconcile re-emit
+// (same agentId) is skipped.
+export function depSignature(
+  endpoint: string,
+  functionName: string,
+  kwargs: unknown,
+  agentId: string
+): string {
+  return stableStringify([endpoint, functionName, kwargs, agentId]);
+}
+
 /**
  * MeshAgent wraps a FastMCP server with MCP Mesh capabilities.
  *
@@ -261,6 +292,15 @@ export class MeshAgent {
    * different tags/settings without overwriting each other.
    */
   private resolvedDeps: Map<string, McpMeshTool> = new Map();
+
+  // #1314: last-applied resolution signature per depKey. The Rust core
+  // re-emits `dependency_available` for every believed-delivered edge on an
+  // independent ~10s wall-clock tick (self-heals dropped applies). Without a
+  // guard the SDK would rebuild every proxy on each tick. We record the
+  // signature (endpoint, functionName, kwargs, agentId) actually wired for a
+  // depKey and skip the rebuild when an incoming apply carries the same one.
+  // Cleared on the unavailable/removal path so a later re-add rebuilds.
+  private appliedDepSignatures: Map<string, string> = new Map();
 
   // True when this MeshAgent is constructed inside a worker_threads Worker.
   // In worker mode addTool() only stashes execute fns and skips all FastMCP /
@@ -2446,8 +2486,18 @@ export class MeshAgent {
       const kwargs = meta?.dependencyKwargs?.[depIndex];
 
       const depKey = `${requestingFunction}:dep_${depIndex}`;
+
+      // #1314 idempotency guard: the Rust core re-emits dependency_available
+      // for believed-delivered edges on a ~10s tick. If the incoming
+      // resolution matches what is already wired, skip the rebuild entirely.
+      const signature = depSignature(endpoint, functionName, kwargs, agentId);
+      if (this.appliedDepSignatures.get(depKey) === signature) {
+        return;
+      }
+
       const proxy = createProxy(endpoint, capability, functionName, kwargs);
       this.resolvedDeps.set(depKey, proxy);
+      this.appliedDepSignatures.set(depKey, signature);
       // Settling-window grace (#1193): wake any settling call waiting on
       // this dependency AFTER the proxy is stored so the woken call
       // re-reads a real proxy.
@@ -2469,8 +2519,14 @@ export class MeshAgent {
         if (dep.capability === capability) {
           const kwargs = meta.dependencyKwargs?.[idx];
           const depKey = `${toolName}:dep_${idx}`;
+          // #1314 idempotency guard (see position-info path above).
+          const signature = depSignature(endpoint, functionName, kwargs, agentId);
+          if (this.appliedDepSignatures.get(depKey) === signature) {
+            return;
+          }
           const proxy = createProxy(endpoint, capability, functionName, kwargs);
           this.resolvedDeps.set(depKey, proxy);
+          this.appliedDepSignatures.set(depKey, signature);
           getSettleState().markResolved(depKey);
           matchCount++;
         }
@@ -2495,6 +2551,8 @@ export class MeshAgent {
     if (requestingFunction !== undefined && depIndex !== undefined) {
       const depKey = `${requestingFunction}:dep_${depIndex}`;
       this.resolvedDeps.delete(depKey);
+      // #1314: drop the applied signature so a later re-add rebuilds.
+      this.appliedDepSignatures.delete(depKey);
 
       console.log(
         `Dependency unavailable: ${capability} (tool: ${requestingFunction}, index: ${depIndex})`
@@ -2511,6 +2569,8 @@ export class MeshAgent {
         if (dep.capability === capability) {
           const depKey = `${toolName}:dep_${idx}`;
           this.resolvedDeps.delete(depKey);
+          // #1314: drop the applied signature so a later re-add rebuilds.
+          this.appliedDepSignatures.delete(depKey);
           removeCount++;
         }
       });

@@ -47,6 +47,7 @@ import {
 } from "./config.js";
 import { RouteRegistry, type RouteMetadata } from "./route.js";
 import { createProxy } from "./proxy.js";
+import { depSignature } from "./agent.js";
 import { initTracing, type AgentMetadata } from "./tracing.js";
 import { getTlsConfigCached, prepareTls, cleanupTls } from "./tls-config.js";
 import { A2AProducerRegistry } from "./a2a/producer/registry.js";
@@ -111,6 +112,15 @@ class ApiRuntime {
   private starting = false;
   private scheduledStart = false;
   private shutdownRequested = false;
+  /**
+   * #1314: last-applied resolution signature per depKey
+   * (`${requestingFunction}:dep_${depIndex}`). The napi core re-emits
+   * `dependency_available` for believed-delivered edges on an independent
+   * ~10s tick; without this guard every @mesh.route / Express gateway agent
+   * would rebuild its proxies each tick. Skip the rebuild when an incoming
+   * apply matches the wired signature; cleared on the removal path.
+   */
+  private appliedDepSignatures: Map<string, string> = new Map();
   /**
    * Memoized in-flight (or completed) teardown. `shutdown()` is
    * idempotent: the first caller creates this promise and every later
@@ -457,8 +467,17 @@ class ApiRuntime {
       const route = registry.getRoute(requestingFunction);
       const kwargs = route?.dependencyKwargs?.[depIndex];
 
+      // #1314 idempotency guard: skip the rebuild when the core's ~10s
+      // reconcile re-emit matches what is already wired for this edge.
+      const depKey = `${requestingFunction}:dep_${depIndex}`;
+      const signature = depSignature(endpoint, functionName, kwargs, agentId);
+      if (this.appliedDepSignatures.get(depKey) === signature) {
+        return;
+      }
+
       const proxy = createProxy(endpoint, capability, functionName, kwargs);
       registry.setDependency(requestingFunction, depIndex, proxy);
+      this.appliedDepSignatures.set(depKey, signature);
 
       console.log(
         `Dependency available: ${capability} at ${endpoint} (route: ${requestingFunction}, agent: ${agentId})`
@@ -472,8 +491,15 @@ class ApiRuntime {
       route.dependencies.forEach((dep, idx) => {
         if (dep.capability === capability) {
           const kwargs = route.dependencyKwargs?.[idx];
+          // #1314 idempotency guard (see position-info path above).
+          const depKey = `${route.routeId}:dep_${idx}`;
+          const signature = depSignature(endpoint, functionName, kwargs, agentId);
+          if (this.appliedDepSignatures.get(depKey) === signature) {
+            return;
+          }
           const proxy = createProxy(endpoint, capability, functionName, kwargs);
           registry.setDependency(route.routeId, idx, proxy);
+          this.appliedDepSignatures.set(depKey, signature);
           matchCount++;
         }
       });
@@ -496,6 +522,8 @@ class ApiRuntime {
     // If we have position info, use it directly
     if (requestingFunction !== undefined && depIndex !== undefined) {
       registry.removeDependency(requestingFunction, depIndex);
+      // #1314: drop the applied signature so a later re-add rebuilds.
+      this.appliedDepSignatures.delete(`${requestingFunction}:dep_${depIndex}`);
       console.log(`Dependency unavailable: ${capability} (route: ${requestingFunction})`);
       return;
     }
@@ -506,6 +534,8 @@ class ApiRuntime {
       route.dependencies.forEach((dep, idx) => {
         if (dep.capability === capability) {
           registry.removeDependency(route.routeId, idx);
+          // #1314: drop the applied signature so a later re-add rebuilds.
+          this.appliedDepSignatures.delete(`${route.routeId}:dep_${idx}`);
           removeCount++;
         }
       });
