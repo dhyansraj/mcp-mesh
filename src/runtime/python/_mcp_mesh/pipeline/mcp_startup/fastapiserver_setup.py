@@ -609,7 +609,10 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
             if hasattr(server_instance, "http_app") and callable(
                 server_instance.http_app
             ):
-                fastmcp_app = server_instance.http_app()
+                # Disable FastMCP's DNS-rebinding Host/Origin guard (#1312):
+                # the localhost-only default rejects k8s Service-DNS Host
+                # headers with 421. Internal mesh traffic, guard not needed.
+                fastmcp_app = server_instance.http_app(host_origin_protection=False)
                 # Mount at /mcp path for MCP protocol access
                 mount_path = "/mcp"
                 app.mount(mount_path, fastmcp_app)

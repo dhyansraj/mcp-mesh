@@ -1702,8 +1702,14 @@ def agent(
                             fastmcp_server.http_app
                         ):
                             try:
+                                # Disable FastMCP's DNS-rebinding Host/Origin
+                                # guard (#1312): its localhost-only default
+                                # rejects k8s Service-DNS Host headers with 421.
+                                # Internal mesh traffic, so the guard is unwanted.
                                 fastmcp_http_app = fastmcp_server.http_app(
-                                    stateless_http=True, transport="streamable-http"
+                                    stateless_http=True,
+                                    transport="streamable-http",
+                                    host_origin_protection=False,
                                 )
                                 if hasattr(fastmcp_http_app, "lifespan"):
                                     fastmcp_lifespan = fastmcp_http_app.lifespan

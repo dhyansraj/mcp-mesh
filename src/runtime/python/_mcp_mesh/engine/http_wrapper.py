@@ -154,8 +154,15 @@ class HttpMcpWrapper:
             try:
                 # Create FastMCP HTTP app with stateless transport
                 logger.debug("🔍 Creating FastMCP HTTP app with stateless transport")
+                # Disable FastMCP's DNS-rebinding Host/Origin guard (#1312):
+                # it defaults to localhost-only allowed_hosts and rejects
+                # server-to-server calls whose Host is the k8s Service DNS name
+                # with 421 Misdirected Request. Mesh is an internal service
+                # mesh, so the browser DNS-rebinding threat model does not apply.
                 self._mcp_app = mcp_server.http_app(
-                    stateless_http=True, transport="streamable-http"
+                    stateless_http=True,
+                    transport="streamable-http",
+                    host_origin_protection=False,
                 )
                 logger.debug(f"✅ Created FastMCP app: {type(self._mcp_app)}")
                 if hasattr(self._mcp_app, "lifespan"):
@@ -166,7 +173,8 @@ class HttpMcpWrapper:
                 # Try without stateless_http parameter
                 try:
                     logger.debug("🔄 Trying FastMCP HTTP app without stateless_http")
-                    self._mcp_app = mcp_server.http_app()
+                    # Keep the #1312 Host-guard override on the fallback path too.
+                    self._mcp_app = mcp_server.http_app(host_origin_protection=False)
                     if hasattr(self._mcp_app, "lifespan"):
                         self._lifespan = self._mcp_app.lifespan
                         logger.debug("✅ Got FastMCP lifespan (fallback)")
