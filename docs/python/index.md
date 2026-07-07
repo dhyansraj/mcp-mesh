@@ -60,6 +60,10 @@ meshctl man <topic> --raw       # Get markdown output (LLM-friendly)
 | LLM Integration | `meshctl man llm` | Build AI-powered agents |
 | Deployment | `meshctl man deployment` | Local, Docker, Kubernetes |
 
+## Long-running jobs
+
+Building durable, resumable work? MeshJobs cover durable cursors, supersession, and calling-job identity — see the language-tabbed [Jobs guide](../concepts/jobs.md).
+
 ## Next Steps
 
 <div class="grid-features">

@@ -258,5 +258,6 @@ Injected proxies abstract away the communication protocol. Today they use MCP ov
 - [Dependency Injection (TypeScript)](../typescript/dependency-injection.md) — DDDI with mesh functions
 - [Dependency Injection (Java)](../java/dependency-injection.md) — DDDI with Spring Boot annotations
 - [Architecture & Design](architecture.md) — How the registry and heartbeat system power DDDI
+- [Service Views](service-views.md) — Grouping related capability dependencies into one typed consumer-owned facade
 - [Health & Discovery](health-discovery.md) — The heartbeat protocol behind hot-swappable dependencies
 - [Tag Matching](tag-matching.md) — How capability and tag scoring drives dependency resolution

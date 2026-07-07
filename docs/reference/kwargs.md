@@ -249,6 +249,38 @@ For the precise passthrough surface per adapter, see the
 Any kwarg outside the passthrough + handled sets emits a once-per-key WARN —
 useful diagnostic surface for callers debugging cross-vendor passthrough.
 
+## Dependency kwargs (proxy configuration)
+
+`model_params` above tunes the LLM *call*. A separate kwarg surface,
+`dependency_kwargs`, tunes the *proxy* for each resolved dependency — timeouts,
+retries, session affinity, and headers. It is a per-dependency map on
+`@mesh.tool`, keyed by dependency (capability) name:
+
+```python
+@mesh.tool(
+    dependencies=["slow_service"],
+    dependency_kwargs={
+        "slow_service": {
+            "timeout": 60,            # request timeout (seconds)
+            "session_required": True, # require session affinity
+        }
+    },
+)
+async def my_tool(slow_service: mesh.McpMeshTool = None): ...
+```
+
+| Kwarg | Type | Default | Purpose |
+| --- | --- | :---: | --- |
+| `timeout` | int | 30 | Per-request timeout in seconds. |
+| `retry_count` | int | 0 | Retry attempts on failure. |
+| `streaming` | bool | False | Enable streaming responses. |
+| `session_required` | bool | False | Require session affinity (sticky routing). |
+| `auth_required` | bool | False | Require authentication on the call. |
+| `custom_headers` | dict | {} | Additional HTTP headers forwarded to the provider. |
+
+See [Dependency Injection](../python/dependency-injection.md#proxy-configuration)
+and `meshctl man proxies` for the full options table.
+
 ## See also
 
 - [Environment Variables](../environment-variables.md) - configure provider API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`) and runtime overrides (`MESH_LLM_MODEL`, `MESH_LLM_MAX_ITERATIONS`).

@@ -153,7 +153,7 @@ Separate admin APIs from the agent-facing port for defense in depth:
 MCP_MESH_ADMIN_PORT=8001 mcp-mesh-registry
 ```
 
-[:material-arrow-right: Security Guide](meshctl-cli.md){ .md-button } — Run `meshctl man security` for the full security reference.
+[:material-arrow-right: CLI Reference](cli/index.md){ .md-button } — Run `meshctl man cli` for the full command reference.
 
 ---
 

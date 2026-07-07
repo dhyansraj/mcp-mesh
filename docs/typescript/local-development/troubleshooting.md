@@ -91,10 +91,10 @@ Agents auto-assign ports by default. If you've hardcoded ports:
 
 ```typescript
 // Don't do this for local dev
-const agent = mesh(server, { name: "my-agent", port: 8080 }); // Conflicts!
+const agent = mesh(server, { name: "my-agent", httpPort: 8080 }); // Conflicts!
 
 // Do this instead - let mesh assign ports
-const agent = mesh(server, { name: "my-agent", port: 0 }); // Auto-assign
+const agent = mesh(server, { name: "my-agent", httpPort: 0 }); // Auto-assign
 ```
 
 ## Tool Call Issues

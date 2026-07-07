@@ -282,5 +282,5 @@ Every requirement is handled. The provider selector has two tag groups — Claud
 
 Ready to build your first agent?
 
-[Get Started in 5 Minutes](../01-getting-started.md){ .md-button .md-button--primary }
-[View Architecture](../architecture-and-design.md){ .md-button }
+[Get Started in 5 Minutes](../tutorial/index.md){ .md-button .md-button--primary }
+[View Architecture](../concepts/architecture.md){ .md-button }

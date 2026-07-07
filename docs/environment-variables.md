@@ -1245,7 +1245,7 @@ Now that you understand environment configuration:
 
 1. **[Local Development](./02-local-development.md)** - Professional development workflows
 2. **[Production Deployment](./03-docker-deployment.md)** - Container orchestration
-3. **[Mesh Decorators](./mesh-decorators.md)** - @mesh.tool, @mesh.llm decorators
+3. **[Mesh Decorators](./python/decorators.md)** - @mesh.tool, @mesh.llm decorators
 
 ---
 

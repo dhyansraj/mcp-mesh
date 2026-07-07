@@ -80,7 +80,7 @@ Pass any LiteLLM parameter in the decorator as defaults:
     temperature=0.7,
     top_p=0.9,
 )
-def assist(ctx, llm = None):
+def assist(ctx, llm: mesh.MeshLlmAgent = None):
     # Uses decorator defaults
     return llm("Help the user")
 
@@ -126,7 +126,7 @@ Override provider's default model at the consumer:
     provider={"capability": "llm", "tags": ["+claude"]},
     model="anthropic/claude-haiku",  # Override provider default
 )
-def fast_assist(ctx, llm = None):
+def fast_assist(ctx, llm: mesh.MeshLlmAgent = None):
     return llm("Quick response needed")
 ```
 

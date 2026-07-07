@@ -196,7 +196,7 @@ Capabilities support semantic versioning:
 def api_v2(): ...
 ```
 
-Consumers can specify version constraints (coming soon):
+Consumers can specify version constraints:
 
 ```python
 dependencies=[{"capability": "api_client", "version": ">=2.0.0"}]

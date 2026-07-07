@@ -25,9 +25,9 @@ The MCP Mesh Java SDK provides an annotation-based API for building distributed 
 ```xml
 <!-- Add to your pom.xml -->
 <dependency>
-    <groupId>io.mcpmesh</groupId>
-    <artifactId>mcp-mesh</artifactId>
-    <version>LATEST</version>
+    <groupId>io.mcp-mesh</groupId>
+    <artifactId>mcp-mesh-spring-boot-starter</artifactId>
+    <version>3.0.0</version>
 </dependency>
 ```
 
@@ -65,6 +65,10 @@ meshctl man <topic> --java --raw  # Get markdown output (LLM-friendly)
 | Dependency Injection | `meshctl man di --java` | How DI works |
 | LLM Integration | `meshctl man llm --java` | Build AI-powered agents |
 | Deployment | `meshctl man deployment --java` | Local, Docker, Kubernetes |
+
+## Long-running jobs
+
+Building durable, resumable work? MeshJobs cover durable cursors, supersession, and calling-job identity — see the language-tabbed [Jobs guide](../concepts/jobs.md).
 
 ## Next Steps
 

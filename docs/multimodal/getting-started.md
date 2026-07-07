@@ -127,10 +127,10 @@ A user uploads a photo of a restaurant receipt via HTTP POST. An LLM agent extra
 ```bash
 # Upload a receipt photo
 curl -X POST http://localhost:8080/upload -F "file=@receipt.jpg"
-# Returns: {"uri": "s3://mesh-media/abc123.jpg"}
+# Returns: {"uri": "s3://your-media-bucket/abc123.jpg"}
 
 # Ask the LLM to analyze it
-meshctl call receipt-analyzer analyze --params '{"image_uri": "s3://mesh-media/abc123.jpg"}'
+meshctl call receipt-analyzer analyze --params '{"image_uri": "s3://your-media-bucket/abc123.jpg"}'
 # Returns: {"items": [{"name": "Burger", "price": 12.99}, ...]}
 ```
 
@@ -289,7 +289,7 @@ The LLM calls `make_chart`, gets back a `resource_link`, and the SDK auto-resolv
 
 ```bash
 meshctl call analyst analyze --params '{"question": "Chart Q3 revenue by region"}'
-# Returns: {"answer": "Here is the Q3 revenue chart...", "chart_url": "s3://mesh-media/chart-xxx.png"}
+# Returns: {"answer": "Here is the Q3 revenue chart...", "chart_url": "s3://your-media-bucket/chart-xxx.png"}
 ```
 
 ---

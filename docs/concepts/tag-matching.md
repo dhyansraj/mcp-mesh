@@ -117,11 +117,12 @@ Scoring:
 
 ## Tie Breaking
 
-When multiple providers have the same score:
+The resolver's tiebreaker is `HighestScoreThenVersion`: candidates are
+sorted by tag-match score (descending) first, then — among candidates with
+the same score — by highest semver version.
 
-1. **Version** - Higher version wins
-2. **Registration time** - Earlier wins
-3. **Random** - If still tied
+1. **Score** - Highest tag-match score wins
+2. **Version** - Among equal scores, higher semver wins
 
 ## Combining with Versions
 

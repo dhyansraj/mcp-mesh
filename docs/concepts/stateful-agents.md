@@ -431,18 +431,28 @@ posted, not on the next boundary.
 A long-running job needs a clean termination story. There are two cases:
 
 - **Consumer cancels** via `JobProxy.cancel(reason)`. The owner replica
-  receives the cancel signal and (today) raises `CancelledError` into
-  the running handler. Once #1032 lands, handlers that subscribe to
-  events will see a synthetic `{"type":"cancelled","reason":...}`
-  event instead, which they can handle inline rather than via
-  exception. Either way: persist final state to the state agent in a
-  `finally` block before the handler exits.
+  receives the cancel signal and raises `CancelledError` into the running
+  handler. Handlers that subscribe to events also see a synthetic
+  `{"type":"cancelled","reason":...}` event injected into the log just
+  before the cancel token fires (grace window tuned by
+  `MCP_MESH_CANCEL_EVENT_GRACE_MS`), which they can handle inline rather
+  than via exception — see
+  [Synthetic cancel event](jobs.md#synthetic-cancel-event). Either way:
+  persist final state to the state agent in a `finally` block before the
+  handler exits.
 - **Replica shutdown** (SIGTERM during pod eviction / deployment
   rollout). The runtime's lifespan exit phase fires (fix shipped in
   #1029 — the exit phase is now honored on SIGTERM rather than skipped),
   any registered cleanup runs, and the registry sees the agent
   disappear. In-flight jobs become orphans and reroute to a peer
-  within ~5 seconds.
+  within ~5 seconds. On reroute the new owner can resume from the last
+  durable checkpoint rather than restart from zero — opt in with
+  `resume_cursor` — and the superseded execution is fenced so its late
+  writes to a state agent are rejected rather than silently racing the
+  new owner. See
+  [`resume_cursor` — durable cursor resume](jobs.md#resume_cursor-durable-cursor-resume-opt-in)
+  and [Typed errors / `SupersededError`](jobs.md#typed-errors) on the
+  Jobs page.
 
 The contract for the handler body:
 

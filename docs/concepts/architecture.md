@@ -140,8 +140,8 @@ When multiple providers exist, tags determine selection:
 Agents send regular heartbeats to the registry:
 
 ```
-Agent → Registry: heartbeat (every 30s default)
-Registry: Update agent status, TTL
+Agent → Registry: heartbeat (every 5s default)
+Registry: Update agent status, TTL (marks unhealthy after ~20s / 4 missed)
 ```
 
 ### Topology Updates
@@ -254,3 +254,6 @@ See [Multimodal documentation](../multimodal/getting-started.md) for usage guide
 - [Tag Matching](tag-matching.md) - Selection algorithm
 - [Schema Matching](schema-matching.md) - Per-shape disambiguator
 - [Audit Trail](audit.md) - Replay resolver decisions
+- [Long-Running Jobs](jobs.md) - MeshJob substrate
+- [Streaming](streaming.md) - Progress and streamed results
+- [Service Views](service-views.md) - Curated capability slices

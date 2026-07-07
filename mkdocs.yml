@@ -223,6 +223,7 @@ nav:
       - concepts/index.md
       - Architecture & Design: concepts/architecture.md
       - "DDDI: Distributed Dynamic Dependency Injection": concepts/dddi.md
+      - Service Views: concepts/service-views.md
       - Registry: concepts/registry.md
       - Health & Discovery: concepts/health-discovery.md
       - Tag Matching: concepts/tag-matching.md
@@ -232,15 +233,14 @@ nav:
       - Long-Running Jobs: concepts/jobs.md
       - Stateful Agents: concepts/stateful-agents.md
       - In-Process State (Escape Hatch): concepts/in-process-state.md
-
-  - Multimodal:
-      - Getting Started: multimodal/getting-started.md
-      - Web Uploads: multimodal/web-uploads.md
-      - Returning Media: multimodal/returning-media.md
-      - LLM Media Input: multimodal/llm-media-input.md
-      - MediaParam: multimodal/media-param.md
-      - Provider Support: multimodal/provider-support.md
-      - Storage Configuration: multimodal/media-store.md
+      - Multimodal:
+          - Getting Started: multimodal/getting-started.md
+          - Web Uploads: multimodal/web-uploads.md
+          - Returning Media: multimodal/returning-media.md
+          - LLM Media Input: multimodal/llm-media-input.md
+          - MediaParam: multimodal/media-param.md
+          - Provider Support: multimodal/provider-support.md
+          - Storage Configuration: multimodal/media-store.md
 
   - A2A:
       - Overview: a2a/overview.md

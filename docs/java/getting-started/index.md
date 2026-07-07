@@ -98,12 +98,11 @@ Create `pom.xml`:
 ## 4. Build and Run
 
 ```bash
-# Option A: Run directly with Maven
-cd greeter
+# Option A: Run directly with Maven (from your project directory)
 mvn spring-boot:run
 
-# Option B: Use meshctl (auto-detects pom.xml)
-meshctl start examples/java/basic-tool-agent --debug
+# Option B: Use meshctl (auto-detects the pom.xml in the current directory)
+meshctl start . --debug
 ```
 
 `meshctl start` can start Java agents by pointing at a directory containing a `pom.xml`, a `.java` file, or a `.jar` file. For Maven projects, it runs `mvn spring-boot:run -q` under the hood.
@@ -112,7 +111,7 @@ meshctl start examples/java/basic-tool-agent --debug
 
 ```bash
 # Terminal 3: Call the agent
-meshctl call greeter greeting --params '{"name": "World"}'
+meshctl call greeter:greeting '{"name": "World"}'
 # Output: {"message": "Hello, World!"}
 
 # List running agents
@@ -121,7 +120,7 @@ meshctl list
 
 ## 6. Add a Dependency
 
-Create a second agent that depends on the greeter:
+Create a second agent that depends on the greeter. Put it in its own project directory (a sibling of the greeter project, with its own `pom.xml`):
 
 ```java
 package com.example.assistant;
@@ -159,11 +158,11 @@ public class AssistantAgentApplication {
 ```
 
 ```bash
-# Start the assistant
-meshctl start examples/java/dependency-agent --debug
+# Start the assistant (from the assistant project directory)
+meshctl start . --debug
 
 # Call the smart greeting
-meshctl call assistant smart_greeting --params '{"name": "Developer"}'
+meshctl call assistant:smart_greeting '{"name": "Developer"}'
 # Output: {"message": "Hello, Developer! Welcome to MCP Mesh!"}
 ```
 

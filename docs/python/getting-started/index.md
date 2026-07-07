@@ -75,7 +75,7 @@ meshctl start greeter/main.py --debug
 
 ```bash
 # Terminal 3: Call the agent
-meshctl call greeter greeting --params '{"name": "World"}'
+meshctl call greeter:greeting '{"name": "World"}'
 # Output: Hello, World!
 
 # Or list running agents
@@ -126,7 +126,7 @@ class AssistantAgent:
 meshctl start assistant/main.py --debug
 
 # Call the smart greeting
-meshctl call assistant smart_greeting --params '{"name": "Developer"}'
+meshctl call assistant:smart_greeting '{"name": "Developer"}'
 # Output: Hello, Developer! Welcome to MCP Mesh!
 ```
 

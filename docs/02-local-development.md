@@ -549,4 +549,4 @@ meshctl status
 
 - [Docker Deployment](03-docker-deployment.md) - Package and deploy your agents
 - [Kubernetes Deployment](04-kubernetes-basics.md) - Scale to production
-- [Mesh Decorators Reference](mesh-decorators.md) - All decorator options
+- [Mesh Decorators Reference](python/decorators.md) - All decorator options
