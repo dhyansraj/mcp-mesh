@@ -44,7 +44,7 @@ so CI/local-dev environments without real AWS creds keep working).
 ## Uploading Media
 
 ```python
-from mcp_mesh import mesh
+import mesh
 
 uri = await mesh.upload_media(png_bytes, "chart.png", "image/png")
 ```
