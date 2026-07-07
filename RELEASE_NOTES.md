@@ -1,6 +1,36 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.0.0...HEAD)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.0.1...HEAD)
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.0.0...v3.0.1)
+
+## v3.0.1 (2026-07-07)
+
+A patch that fixes a Kubernetes regression in v3.0.0 and hardens dependency re-wire plus the `meshctl list` view.
+
+v3.0.0 was a consolidation-and-modernization release that claimed no breaking changes; that claim was wrong for Kubernetes deployments running Python providers, which hit a FastMCP host-validation `421 Misdirected Request` on every cross-pod call. v3.0.1 fixes that regression, pins the Python transport dependencies so it can't silently recur, makes a running consumer self-heal a stale dependency edge without a manual restart, and cleans up the `meshctl list` default view. All changes are internal hardening of existing contracts — no API, declaration-syntax, or wire changes.
+
+### 🩹 Kubernetes: Python providers reachable by Service DNS (#1313)
+
+Python mesh providers addressed by a non-localhost `Host` — a Kubernetes Service DNS name — were rejecting every `/mcp` call with **`421 Misdirected Request`**, breaking all cross-pod tool and LLM-provider calls to Python providers in Kubernetes (a `localhost` / `127.0.0.1` `Host` still returned `200`, which is why local development never surfaced it). The cause was a recent transitive `mcp`/`fastmcp` default flip to `enable_dns_rebinding_protection=True` with a localhost-only `allowed_hosts`: mesh built its Streamable-HTTP app without configuring transport security and inherited the localhost-only guard. This was **not an intentional bump** — the Python pins were unchanged loose ranges (`fastmcp>=3.0.0,<4`, `mcp>=1.26.0,<2`) with no lockfile, so a rebuild simply resolved a newer release where the security default had already changed. The fix sets **`host_origin_protection=False`** at all four `FastMCP.http_app(...)` call sites — mesh is an internal service mesh addressed by Service DNS, so the DNS-rebinding browser threat model does not apply to server-to-server calls — and **pins `fastmcp==3.4.3` / `mcp==1.28.1`** in both pyproject files so an upstream security-default flip can no longer land silently on a rebuild. A regression test proves a served app now accepts a non-localhost `Host` (`200`, not `421`), with the negative proving the default guard would `421`. Affects Python providers only.
+
+### 🔁 Dependency re-wire hardening — never restart a consumer (#1316)
+
+A running consumer no longer needs a manual restart to pick up a topology change. The pipeline records a dependency edge as *delivered* on enqueue rather than on apply, and the mitigating reconcile that re-drives believed-delivered edges ran only inside the full-heartbeat path — which fires on a registry topology signal, never on a wall clock — so a downstream apply-drop under a subsequently stable topology could leave a consumer wired to an old provider indefinitely. The reconcile is now also driven from an independent ~10s clock tick (cancellation-safe, `MissedTickBehavior::Skip`, sharing the existing throttle so the two drivers never double-fire), so any stale edge self-heals within the interval regardless of cause. Each SDK apply path is made **idempotent** — it skips rebuilding a proxy when the incoming resolution equals what is already wired (keyed on `endpoint`/`function`/`kwargs`/`agent_id`) — so the periodic re-emit is free in steady state and rebuilds only a genuinely stale edge, across both the mcp and `@mesh.route`/api consumer paths in all three runtimes. Finally, `agent_id` is added to the dependency diff gate so an in-place provider restart (same endpoint, fresh UUID) is now detected as a change. The reconcile deliberately does not tick during a registry-down window (retain-on-disconnect holds), and no per-consumer notification/ack state is introduced.
+
+### 🩺 `meshctl list`: healthy-only default + CAPS column (#1317)
+
+The default `meshctl list` view is healthy-only again. A prior change had promoted a "blocking" down instance to a red row in the default table, which could make the per-instance header and per-name footer counts contradict what was on screen (`8 agents (8 healthy)` printed above a visible unhealthy row). The default view now keeps only live rows; down and blocking-down instances join the hidden `N down hidden (use --all)` footer, making the counts self-consistent by construction (`--all` and the JSON default are unchanged). A new **`CAPS`** column, parallel to `DEPS`, shows `available/total` provided capabilities — right-aligned and red when `available < total` — excluding the synthetic `__mesh_*` family from the total and treating nil/older registries as available (no spurious markers). It replaces the trailing `(N capabilities unavailable)` free text on the default rows; per-capability reasons stay in `--verbose`.
+
+### 📚 Docs (#1311, #1318)
+
+One consolidated pass over the mkdocs site (net −14,072 / +342 lines): 19 orphan and duplicate pages pruned — including six AI-generated observability deep-dives that taught Prometheus/Grafana rather than mesh's own offering — the Service Views concept page (RFC #1280) added and wired into the Concepts nav, Multimodal folded into Concepts, and site-wide staleness corrected (the heartbeat interval was documented as 30s/90s but the real defaults are **5s / 20s**, a TypeScript quickstart taught a nonexistent `new MeshAgent`/`app.tool` API, and a fictional multimodal S3 bucket default was removed). Separately, stale `meshctl man` claims were fixed (#1318): A2A producers are supported in Java (`@MeshA2A`) and TypeScript (`mesh.a2a.mount`) today with sync/long-running/SSE parity — not "future work" — and a `media.md` example is corrected to the canonical `import mesh`.
+
+### ⚠️ Notes
+
+- **No breaking changes and no coordinated upgrade is required — but Kubernetes deployments running Python providers on v3.0.0 are affected.** They hit the FastMCP host-validation `421 Misdirected Request` on every cross-pod call; v3.0.1 fixes it, so upgrade the Python runtime images. This corrects the v3.0.0 "no breaking changes" line for Kubernetes Python deployments.
+- **`fastmcp` and `mcp` are now exact-pinned** (`fastmcp==3.4.3` / `mcp==1.28.1`) for reproducible Python images; a full transitive lockfile is a noted follow-up.
+- **The re-wire fix removes a manual step:** restarting a consumer after a topology change is no longer necessary — a stale dependency edge self-heals within the reconcile interval.
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.8.2...v3.0.0)
 

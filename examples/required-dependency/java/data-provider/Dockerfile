@@ -1,5 +1,5 @@
 # Dockerfile for data-provider MCP Mesh agent (Java/Spring Boot)
-FROM mcpmesh/java-runtime:3.0.0
+FROM mcpmesh/java-runtime:3.0.1
 
 WORKDIR /app
 
