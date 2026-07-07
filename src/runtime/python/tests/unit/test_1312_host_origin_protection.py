@@ -15,9 +15,15 @@ not apply — so it builds every served FastMCP app with
   while the same app with protection left on returns 421 (proving the fix
   matters). Skipped on FastMCP versions whose ``http_app`` predates the
   ``host_origin_protection`` kwarg.
-* structural: ``HttpMcpWrapper`` actually passes ``host_origin_protection=False``
-  to ``http_app`` — meaningful on any FastMCP version, so it still guards the
-  wiring even before the version pin takes effect.
+* structural: every mesh site that builds a served FastMCP app actually passes
+  ``host_origin_protection=False`` to ``http_app`` — meaningful on any FastMCP
+  version, so it still guards the wiring even before the version pin takes
+  effect. All THREE override sites are guarded here:
+  ``HttpMcpWrapper`` (engine), ``FastAPIServerSetupStep._mount_fastmcp_server``
+  (pipeline mount), and the ``@mesh.agent`` auto-run lifespan extraction in
+  ``mesh.decorators``. The assertions check the effective call kwarg
+  (``host_origin_protection=False``), not any shared-constant name, so they
+  guard behavior regardless of how the override is centralized internally.
 """
 
 import inspect
@@ -104,6 +110,67 @@ def test_1312_http_wrapper_passes_override():
     mock_server.http_app.return_value = MagicMock()
 
     HttpMcpWrapper(mock_server)
+
+    mock_server.http_app.assert_called_once()
+    assert mock_server.http_app.call_args.kwargs.get("host_origin_protection") is False
+
+
+def test_1312_mount_fastmcp_server_passes_override():
+    """Structural guard: FastAPIServerSetupStep._mount_fastmcp_server must call
+    http_app with host_origin_protection=False."""
+    from unittest.mock import MagicMock
+
+    from _mcp_mesh.pipeline.mcp_startup.fastapiserver_setup import (
+        FastAPIServerSetupStep,
+    )
+
+    step = FastAPIServerSetupStep()
+
+    mock_app = MagicMock()  # the FastAPI app that gets .mount(...)
+    mock_server = MagicMock()  # the FastMCP server instance
+    mock_server.http_app.return_value = MagicMock()
+
+    step._mount_fastmcp_server(mock_app, "test-server", mock_server)
+
+    mock_server.http_app.assert_called_once()
+    assert mock_server.http_app.call_args.kwargs.get("host_origin_protection") is False
+
+
+def test_1312_agent_autorun_lifespan_extraction_passes_override(monkeypatch):
+    """Structural guard: the @mesh.agent auto-run lifespan extraction in
+    mesh.decorators must call the FastMCP server's http_app with
+    host_origin_protection=False."""
+    import sys
+    import types
+    from unittest.mock import MagicMock, patch
+
+    import mesh.decorators as decorators
+
+    # The suite-wide conftest forces MCP_MESH_AUTO_RUN=false; the extraction
+    # path only runs under auto-run, so re-enable it for this test.
+    monkeypatch.setenv("MCP_MESH_AUTO_RUN", "true")
+
+    # The extraction path looks up ``sys.modules[target.__module__].app`` and
+    # calls ``app.http_app(...)``. Stage a fake module + FastMCP server.
+    fake_module_name = "_test_1312_fake_agent_module"
+    fake_module = types.ModuleType(fake_module_name)
+    mock_server = MagicMock()
+    mock_server.http_app.return_value = MagicMock()
+    fake_module.app = mock_server
+    sys.modules[fake_module_name] = fake_module
+
+    def target():
+        return None
+
+    target.__module__ = fake_module_name
+
+    try:
+        # Neutralize the actual server start so the decorator returns after the
+        # extraction we care about (uvicorn/TLS are out of scope for this test).
+        with patch.object(decorators, "_start_uvicorn_immediately"):
+            decorators.agent(name="test-1312-agent", auto_run=True)(target)
+    finally:
+        sys.modules.pop(fake_module_name, None)
 
     mock_server.http_app.assert_called_once()
     assert mock_server.http_app.call_args.kwargs.get("host_origin_protection") is False

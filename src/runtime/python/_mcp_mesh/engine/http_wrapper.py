@@ -15,6 +15,7 @@ from typing import Any, Optional
 import httpx
 from fastmcp import FastMCP
 
+from ..shared.fastmcp_transport import FASTMCP_TRANSPORT_SECURITY_KWARGS
 from ..shared.logging_config import configure_logging
 
 # Ensure logging is configured
@@ -162,7 +163,7 @@ class HttpMcpWrapper:
                 self._mcp_app = mcp_server.http_app(
                     stateless_http=True,
                     transport="streamable-http",
-                    host_origin_protection=False,
+                    **FASTMCP_TRANSPORT_SECURITY_KWARGS,
                 )
                 logger.debug(f"✅ Created FastMCP app: {type(self._mcp_app)}")
                 if hasattr(self._mcp_app, "lifespan"):
@@ -174,7 +175,9 @@ class HttpMcpWrapper:
                 try:
                     logger.debug("🔄 Trying FastMCP HTTP app without stateless_http")
                     # Keep the #1312 Host-guard override on the fallback path too.
-                    self._mcp_app = mcp_server.http_app(host_origin_protection=False)
+                    self._mcp_app = mcp_server.http_app(
+                        **FASTMCP_TRANSPORT_SECURITY_KWARGS
+                    )
                     if hasattr(self._mcp_app, "lifespan"):
                         self._lifespan = self._mcp_app.lifespan
                         logger.debug("✅ Got FastMCP lifespan (fallback)")
