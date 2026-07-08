@@ -10,13 +10,13 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * RFC #1280 phase-1 (bean path) proxy strategy for
- * {@link McpMeshServiceInvocationHandler}: each view method resolves to
+ * {@link MeshServiceInvocationHandler}: each view method resolves to
  * {@link MeshDependencyInjector}'s SHARED per-capability proxy. The proxy is
  * stable (the injector mutates its endpoint in place on rebind), so it is cached
  * per method. Settle waits key on the capability name — the same key space the
  * injector's {@code updateToolDependency.markResolved} counts down.
  */
-class InjectorViewProxyBinding implements McpMeshServiceInvocationHandler.ViewProxyBinding {
+class InjectorViewProxyBinding implements MeshServiceInvocationHandler.ViewProxyBinding {
 
     private final ConfigurableListableBeanFactory beanFactory;
     private final AtomicReference<MeshDependencyInjector> injectorRef;
@@ -29,13 +29,13 @@ class InjectorViewProxyBinding implements McpMeshServiceInvocationHandler.ViewPr
     }
 
     @Override
-    public McpMeshTool<?> proxyFor(McpMeshServiceRegistrar.ServiceMethodBinding binding) {
+    public McpMeshTool<?> proxyFor(MeshServiceRegistrar.ServiceMethodBinding binding) {
         return proxyCache.computeIfAbsent(binding.method(), m ->
             injector().getToolProxy(binding.capability(), binding.resolvedProxyType()));
     }
 
     @Override
-    public String settleKey(McpMeshServiceRegistrar.ServiceMethodBinding binding) {
+    public String settleKey(MeshServiceRegistrar.ServiceMethodBinding binding) {
         return binding.capability();
     }
 

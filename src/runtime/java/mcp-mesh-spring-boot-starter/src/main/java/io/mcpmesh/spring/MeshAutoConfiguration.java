@@ -486,7 +486,7 @@ public class MeshAutoConfiguration {
             ObjectProvider<MeshRouteRegistry> routeRegistryProvider,
             ObjectProvider<MeshA2ARegistry> a2aRegistryProvider,
             A2AConsumerBeanPostProcessor a2aConsumerBeanPostProcessor,
-            ObjectProvider<McpMeshServiceRegistrar> serviceRegistrarProvider) {
+            ObjectProvider<MeshServiceRegistrar> serviceRegistrarProvider) {
         return new MeshAgentSpecFinalizer(() -> finalizeAgentSpec(runtime.getAgentSpec(),
             toolRegistry, llmRegistry, objectMapper, routeRegistryProvider,
             a2aRegistryProvider, a2aConsumerBeanPostProcessor, serviceRegistrarProvider));
@@ -529,7 +529,7 @@ public class MeshAutoConfiguration {
     }
 
     /**
-     * RFC #1280: register a JDK-proxy facade bean per {@link io.mcpmesh.McpMeshService}
+     * RFC #1280: register a JDK-proxy facade bean per {@link io.mcpmesh.MeshService}
      * service-view interface so consumers can {@code @Autowired} the typed view
      * and have each method delegate to its own per-capability proxy. Like
      * {@link #meshDependsOnBeanRegistrar} this runs as a
@@ -539,8 +539,8 @@ public class MeshAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(name = "mcpMeshServiceRegistrar")
-    public static McpMeshServiceRegistrar mcpMeshServiceRegistrar() {
-        return new McpMeshServiceRegistrar();
+    public static MeshServiceRegistrar mcpMeshServiceRegistrar() {
+        return new MeshServiceRegistrar();
     }
 
     /**
@@ -875,7 +875,7 @@ public class MeshAutoConfiguration {
             ObjectProvider<MeshRouteRegistry> routeRegistryProvider,
             ObjectProvider<MeshA2ARegistry> a2aRegistryProvider,
             A2AConsumerBeanPostProcessor a2aConsumerBeanPostProcessor,
-            ObjectProvider<McpMeshServiceRegistrar> serviceRegistrarProvider) {
+            ObjectProvider<MeshServiceRegistrar> serviceRegistrarProvider) {
 
         // Helper tools (MeshJob substrate) and LLM provider handlers are
         // registered eagerly in meshRuntime() — see the comment there. By
@@ -920,28 +920,28 @@ public class MeshAutoConfiguration {
         // all four sources — see collectKnownCapabilities().
         addMeshDependsOnDependencies(allTools, routeRegistryProvider);
 
-        // RFC #1280: 5th dependency source — @McpMeshService service views.
+        // RFC #1280: 5th dependency source — @MeshService service views.
         // Folded LAST so each view method dedupes against every earlier source
         // (@MeshTool / @MeshRoute / @MeshA2A / @MeshDependsOn) and runs through
         // the same cross-source required-wins promotion.
-        addMcpMeshServiceDependencies(allTools, serviceRegistrarProvider, routeRegistryProvider,
+        addMeshServiceDependencies(allTools, serviceRegistrarProvider, routeRegistryProvider,
             a2aRegistryProvider);
 
         if (consumerOnly) {
             MeshRouteRegistry routeRegistry = routeRegistryProvider.getIfAvailable();
             boolean hasRoutes = routeRegistry != null && routeRegistry.hasRoutes();
-            // A @McpMeshService view is a valid mesh consumer surface (#12): an
+            // A @MeshService view is a valid mesh consumer surface (#12): an
             // app whose ONLY mesh surface is a service view should start as a
             // consumer without a declared agent name, exactly like a route-only
             // app. hasServiceViews is folded into the gate AND the error message.
-            McpMeshServiceRegistrar serviceRegistrar = serviceRegistrarProvider.getIfAvailable();
+            MeshServiceRegistrar serviceRegistrar = serviceRegistrarProvider.getIfAvailable();
             boolean hasServiceViews = serviceRegistrar != null
                 && !serviceRegistrar.discoveredServices().isEmpty();
             if (!hasRoutes && !hasServiceViews) {
                 throw new IllegalStateException(
                     "Agent name is required for a producer agent. Set MCP_MESH_AGENT_NAME, "
                         + "mesh.agent.name, or @MeshAgent(name=...) — or expose a @MeshRoute / "
-                        + "@McpMeshService consumer surface to run name-less as a mesh consumer.");
+                        + "@MeshService consumer surface to run name-less as a mesh consumer.");
             }
             log.info("Consumer-only mode confirmed: {} route/service consumer surface(s) registered",
                 allTools.size());
@@ -1159,13 +1159,13 @@ public class MeshAutoConfiguration {
     }
 
     /**
-     * RFC #1280: expand every {@link io.mcpmesh.McpMeshService} service view's
+     * RFC #1280: expand every {@link io.mcpmesh.MeshService} service view's
      * abstract methods into wire dependency edges under a synthetic
      * {@code __mesh_service_deps} tool. Each method is an ordinary capability
      * dependency — zero wire/registry changes — so the group is a purely
      * consumer-local typed view while the capability remains the atom.
      *
-     * <p>Determinism is a hard requirement: {@link McpMeshServiceRegistrar#discoveredServices()}
+     * <p>Determinism is a hard requirement: {@link MeshServiceRegistrar#discoveredServices()}
      * returns views sorted by interface name and each view's bindings are
      * pre-sorted by method name/signature, so the emitted dependency order is
      * reproducible regardless of {@link Class#getMethods()} JVM ordering.
@@ -1176,15 +1176,15 @@ public class MeshAutoConfiguration {
      * view method still promotes the surviving edge (AgentSpec + route-registry
      * perimeter) to required.
      */
-    private void addMcpMeshServiceDependencies(List<AgentSpec.ToolSpec> tools,
-            ObjectProvider<McpMeshServiceRegistrar> serviceRegistrarProvider,
+    private void addMeshServiceDependencies(List<AgentSpec.ToolSpec> tools,
+            ObjectProvider<MeshServiceRegistrar> serviceRegistrarProvider,
             ObjectProvider<MeshRouteRegistry> routeRegistryProvider,
             ObjectProvider<MeshA2ARegistry> a2aRegistryProvider) {
-        McpMeshServiceRegistrar registrar = serviceRegistrarProvider.getIfAvailable();
+        MeshServiceRegistrar registrar = serviceRegistrarProvider.getIfAvailable();
         if (registrar == null) {
             return;
         }
-        List<McpMeshServiceRegistrar.ServiceViewMetadata> views = registrar.discoveredServices();
+        List<MeshServiceRegistrar.ServiceViewMetadata> views = registrar.discoveredServices();
         if (views.isEmpty()) {
             return;
         }
@@ -1209,8 +1209,8 @@ public class MeshAutoConfiguration {
         var jsonMapper = JsonMapper.builder().build();
         boolean clusterStrict = io.mcpmesh.spring.MeshSchemaSupport.clusterStrictEnabled();
 
-        for (McpMeshServiceRegistrar.ServiceViewMetadata view : views) {
-            for (McpMeshServiceRegistrar.ServiceMethodBinding binding : view.bindings()) {
+        for (MeshServiceRegistrar.ServiceViewMetadata view : views) {
+            for (MeshServiceRegistrar.ServiceMethodBinding binding : view.bindings()) {
                 String capability = binding.capability();
 
                 // #6: self-produced capability takes the soft-fail path FIRST —
@@ -1219,7 +1219,7 @@ public class MeshAutoConfiguration {
                 // skip. Ordered ahead of the cross-source conflict check so a
                 // self-produced capability is never turned into a boot-fail.
                 if (producerCapabilities.contains(capability)) {
-                    log.warn("@McpMeshService method {}.{} binds capability '{}' produced by this "
+                    log.warn("@MeshService method {}.{} binds capability '{}' produced by this "
                             + "agent — the method will never resolve; call the local bean directly.",
                         view.iface().getName(), binding.method().getName(), capability);
                     settleState.markResolved(capability);
@@ -1236,7 +1236,7 @@ public class MeshAutoConfiguration {
                         && viewType != otherType) {
                     throw new IllegalStateException(String.format(
                         "Capability '%s' is bound with conflicting resolved types across sources: "
-                            + "%s (@McpMeshService %s.%s) vs %s (another injector-backed source "
+                            + "%s (@MeshService %s.%s) vs %s (another injector-backed source "
                             + "expectedType). Align the types or split into separate capabilities.",
                         capability, viewType.getName(), view.iface().getName(),
                         binding.method().getName(), otherType.getName()));
@@ -1256,14 +1256,14 @@ public class MeshAutoConfiguration {
                             upgraded = true;
                         }
                         if (upgraded) {
-                            log.info("@McpMeshService capability '{}' on {} already declared by another "
+                            log.info("@MeshService capability '{}' on {} already declared by another "
                                     + "source — upgrading the deduped dependency to required=true "
                                     + "(required wins across sources)",
                                 capability, view.iface().getName());
                             continue;
                         }
                     }
-                    log.debug("@McpMeshService capability '{}' on {} already declared by another source — skipping",
+                    log.debug("@MeshService capability '{}' on {} already declared by another source — skipping",
                         capability, view.iface().getName());
                     continue;
                 }
@@ -1299,14 +1299,14 @@ public class MeshAutoConfiguration {
         }
 
         tools.add(syntheticDepsTool(SERVICE_DEPS_TOOL,
-            "Synthetic tool for @McpMeshService dependency resolution", deps));
-        log.info("Added {} @McpMeshService dependencies to agent registration", deps.size());
+            "Synthetic tool for @MeshService dependency resolution", deps));
+        log.info("Added {} @MeshService dependencies to agent registration", deps.size());
     }
 
     /**
      * Capabilities this agent PRODUCES via a real {@code @MeshTool} (function
      * name not carrying the {@code __mesh_} synthetic/helper prefix). Used by
-     * {@link #addMcpMeshServiceDependencies} to detect self-produced view edges.
+     * {@link #addMeshServiceDependencies} to detect self-produced view edges.
      */
     private static Set<String> collectProducerCapabilities(List<AgentSpec.ToolSpec> tools) {
         Set<String> producers = new LinkedHashSet<>();

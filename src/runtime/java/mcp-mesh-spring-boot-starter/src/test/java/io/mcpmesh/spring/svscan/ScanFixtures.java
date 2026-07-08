@@ -1,6 +1,6 @@
 package io.mcpmesh.spring.svscan;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshService;
 import io.mcpmesh.Param;
 import io.mcpmesh.Selector;
 
@@ -14,13 +14,13 @@ public final class ScanFixtures {
     private ScanFixtures() {
     }
 
-    @McpMeshService
+    @MeshService
     public interface ScanParent {
         @Selector(capability = "scan.p")
         String p(@Param("id") String id);
     }
 
     public interface ScanChild extends ScanParent {
-        // Inherits @McpMeshService — must NOT be auto-discovered as a bean view.
+        // Inherits @MeshService — must NOT be auto-discovered as a bean view.
     }
 }

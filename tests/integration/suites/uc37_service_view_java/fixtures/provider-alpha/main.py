@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """uc37 provider-alpha — self-identifying provider of view-cap-alpha (RFC #1280).
 
-One of THREE independent providers backing a single Java @McpMeshService
+One of THREE independent providers backing a single Java @MeshService
 view: each view method must resolve to a DIFFERENT provider agent. The
 payload names both the agent and the capability so the consumer's report
 tool can prove per-method binding (agent identity AND capability routing).

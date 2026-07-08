@@ -1,6 +1,6 @@
 package com.example.serviceview;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshService;
 import io.mcpmesh.Selector;
 
 import java.util.Map;
@@ -15,7 +15,7 @@ import java.util.Map;
  * {@code __mesh_service_deps} capability and the tool-boundary refusal
  * contract exercised by tc03.
  */
-@McpMeshService
+@MeshService
 public interface ReportService {
 
     @Selector(capability = "view-cap-alpha")

@@ -1,6 +1,6 @@
 package io.mcpmesh.spring.svself;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshService;
 import io.mcpmesh.Selector;
 
 /**
@@ -13,7 +13,7 @@ public final class SelfViews {
     private SelfViews() {
     }
 
-    @McpMeshService
+    @MeshService
     public interface SelfView {
         @Selector(capability = "self.produced")
         String get();

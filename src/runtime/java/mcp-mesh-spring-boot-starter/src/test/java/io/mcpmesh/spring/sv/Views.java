@@ -1,6 +1,6 @@
 package io.mcpmesh.spring.sv;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshService;
 import io.mcpmesh.Param;
 import io.mcpmesh.Selector;
 
@@ -9,7 +9,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Flow;
 
 /**
- * Valid {@link McpMeshService} fixtures for the RFC #1280 integration tests.
+ * Valid {@link MeshService} fixtures for the RFC #1280 integration tests.
  *
  * <p>All views live in this single package so a test can scope classpath
  * discovery to {@code io.mcpmesh.spring.sv} via {@code AutoConfigurationPackages}.
@@ -39,7 +39,7 @@ public final class Views {
      * multi-{@code @Param}), every return mode (sync, async, stream), a
      * {@code default} method, and mixed required/optional edges.
      */
-    @McpMeshService
+    @MeshService
     public interface LlmService {
 
         @Selector(capability = "llm.chat", tags = {"+gpt"})
@@ -70,7 +70,7 @@ public final class Views {
      * Determinism view: methods declared reverse-alphabetically so the test can
      * assert the expanded dependency order is sorted by method name regardless.
      */
-    @McpMeshService
+    @MeshService
     public interface DeterminismService {
 
         @Selector(capability = "det.zeta")
@@ -84,7 +84,7 @@ public final class Views {
     }
 
     /** Floor view: {@code minAvailable=2} over four optional methods (one async). */
-    @McpMeshService(minAvailable = 2)
+    @MeshService(minAvailable = 2)
     public interface FloorService {
 
         @Selector(capability = "floor.a")
@@ -101,7 +101,7 @@ public final class Views {
     }
 
     /** Wire-serialization view: one required + one optional edge. */
-    @McpMeshService
+    @MeshService
     public interface WireService {
 
         @Selector(capability = "wire.req", required = true)
@@ -116,7 +116,7 @@ public final class Views {
      * pair it with an optional {@code @MeshDependsOn} on the same capability and
      * assert required wins across sources.
      */
-    @McpMeshService
+    @MeshService
     public interface RequiredWinsService {
 
         @Selector(capability = "rw_cap", required = true)

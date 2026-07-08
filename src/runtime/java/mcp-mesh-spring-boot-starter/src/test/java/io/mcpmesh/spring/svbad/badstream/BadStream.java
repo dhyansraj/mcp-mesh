@@ -1,6 +1,6 @@
 package io.mcpmesh.spring.svbad.badstream;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshService;
 import io.mcpmesh.Selector;
 
 import java.util.concurrent.Flow;
@@ -11,7 +11,7 @@ public final class BadStream {
     private BadStream() {
     }
 
-    @McpMeshService
+    @MeshService
     public interface BadStreamService {
         @Selector(capability = "bs.cap")
         Flow.Publisher<Integer> get();

@@ -1,6 +1,6 @@
 # media-gateway
 
-The consumer in the [`@McpMeshService` service-view example](../README.md).
+The consumer in the [`@MeshService` service-view example](../README.md).
 Declares one typed `MediaService` interface aggregating three capabilities and
 exposes two tools that fan a request out across all three view methods — each
 served by a different provider agent — demonstrating BOTH consumption styles:
@@ -18,7 +18,7 @@ A Java/Spring Boot MCP Mesh agent. `MediaService` is a consumer-owned service
 view:
 
 ```java
-@McpMeshService
+@MeshService
 public interface MediaService {
     @Selector(capability = "media.caption", required = true) CaptionResult    caption(CaptionRequest req);
     @Selector(capability = "media.thumbnail")                ThumbnailResult  thumbnail(ThumbnailRequest req);
@@ -67,7 +67,7 @@ media-gateway/
 ├── Dockerfile
 ├── helm-values.yaml
 └── src/main/java/com/example/mediagateway/
-    ├── MediaService.java            # the @McpMeshService service view
+    ├── MediaService.java            # the @MeshService service view
     └── MediaGatewayApplication.java # the agent + process_media tool
 ```
 

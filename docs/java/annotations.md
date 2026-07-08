@@ -20,7 +20,7 @@ MCP Mesh provides annotations that transform regular Spring Boot methods into me
 | `@MeshTool`        | Register capability with DI               |
 | `@Param`           | Document tool parameters                  |
 | `@Selector`        | Capability/tag selection for dependencies |
-| `@McpMeshService`  | Typed service-view interface over several capabilities |
+| `@MeshService`  | Typed service-view interface over several capabilities |
 | `@MeshLlm`         | Enable LLM-powered tools                  |
 | `@MeshLlmProvider` | Create zero-code LLM provider             |
 | `@MeshRoute`       | REST endpoint with mesh DI                |
@@ -129,14 +129,14 @@ Specifies capability and tag selection for dependencies, LLM providers, and filt
 
 \*Required for dependencies; optional for LLM tool filters.
 
-`@Selector` is also used at the **method level** inside an `@McpMeshService` interface, where each abstract method carries one `@Selector` to bind its capability (see below).
+`@Selector` is also used at the **method level** inside an `@MeshService` interface, where each abstract method carries one `@Selector` to bind its capability (see below).
 
-## @McpMeshService
+## @MeshService
 
 Aggregates several capabilities behind one typed **consumer service view**. Annotate an **interface** of abstract methods, each binding one capability via a method-level `@Selector`; consume it as an `@Autowired` facade bean or a `@MeshTool` parameter.
 
 ```java
-@McpMeshService
+@MeshService
 public interface MediaService {
     @Selector(capability = "media.caption", required = true) CaptionResult    caption(CaptionRequest req);
     @Selector(capability = "media.thumbnail")                ThumbnailResult  thumbnail(ThumbnailRequest req);
@@ -164,7 +164,7 @@ public ThumbnailResult thumbnail(ThumbnailRequest req) { ... }  // → capabilit
 | -------------- | -------- | -------------------------------------------------------------------------- |
 | `minAvailable` | No       | Consumer-view availability floor; below it every facade call fails with `MeshServiceUnavailableException` — synchronous methods throw, `CompletableFuture` methods return a failed future (default `0`) |
 
-For the full semantics — param-mapping rules, return types, `required`/optional behavior, the availability floor, and both consumption styles — see the [Dependency Injection](dependency-injection.md#service-views-with-mcpmeshservice) guide.
+For the full semantics — param-mapping rules, return types, `required`/optional behavior, the availability floor, and both consumption styles — see the [Dependency Injection](dependency-injection.md#service-views-with-meshservice) guide.
 
 ## @MeshLlm
 

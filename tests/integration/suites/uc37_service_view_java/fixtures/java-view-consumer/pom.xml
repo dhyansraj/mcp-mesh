@@ -10,7 +10,7 @@
     <packaging>jar</packaging>
 
     <name>JavaViewConsumer Agent</name>
-    <description>uc37 consumer proving RFC #1280 @McpMeshService service views end-to-end</description>
+    <description>uc37 consumer proving RFC #1280 @MeshService service views end-to-end</description>
 
     <parent>
         <groupId>org.springframework.boot</groupId>

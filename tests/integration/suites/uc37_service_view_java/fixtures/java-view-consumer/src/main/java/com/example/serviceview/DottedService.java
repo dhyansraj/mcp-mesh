@@ -1,6 +1,6 @@
 package com.example.serviceview;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshService;
 import io.mcpmesh.Selector;
 
 import java.util.Map;
@@ -19,7 +19,7 @@ import java.util.Map;
  * {@code __mesh_service_deps} synthetic (5 bean-path edges total — see
  * tc04/tc07's dependency arithmetic).
  */
-@McpMeshService
+@MeshService
 public interface DottedService {
 
     @Selector(capability = "svc.alpha")

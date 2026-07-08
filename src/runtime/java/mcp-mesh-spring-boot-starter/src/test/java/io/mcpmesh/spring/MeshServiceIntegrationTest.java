@@ -9,7 +9,7 @@ import io.mcpmesh.spring.web.MeshRouteAutoConfiguration;
 import io.mcpmesh.types.McpMeshTool;
 import io.mcpmesh.types.MeshServiceUnavailableException;
 import io.mcpmesh.types.MeshToolUnavailableException;
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshService;
 import io.mcpmesh.MeshAgent;
 import io.mcpmesh.MeshTool;
 import io.mcpmesh.Param;
@@ -38,7 +38,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.entry;
 
 /**
- * RFC #1280 (Phase 1): {@link io.mcpmesh.McpMeshService} service views. A
+ * RFC #1280 (Phase 1): {@link io.mcpmesh.MeshService} service views. A
  * consumer-owned typed interface whose abstract methods each bind one capability
  * via {@link io.mcpmesh.Selector}; a facade bean is registered per interface and
  * each method delegates to its own per-capability proxy.
@@ -48,8 +48,8 @@ import static org.assertj.core.api.Assertions.entry;
  * classpath-scanning scoped to {@link AutoConfigurationPackages}, so each test
  * registers the fixture base package via an initializer.
  */
-@DisplayName("RFC #1280 — @McpMeshService service views")
-class McpMeshServiceIntegrationTest {
+@DisplayName("RFC #1280 — @MeshService service views")
+class MeshServiceIntegrationTest {
 
     private static final ObjectMapper MAPPER = MeshObjectMappers.create();
 
@@ -645,8 +645,8 @@ class McpMeshServiceIntegrationTest {
         });
     }
 
-    // #1320: @McpMeshService("prefix") on a CLASS (producer sugar) was removed.
-    @McpMeshService("media")
+    // #1320: @MeshService("prefix") on a CLASS (producer sugar) was removed.
+    @MeshService("media")
     public static class RemovedProducer {
         public String caption(@Param("text") String text) {
             return "cap:" + text;
@@ -663,7 +663,7 @@ class McpMeshServiceIntegrationTest {
     }
 
     @Test
-    @DisplayName("#1320: a @McpMeshService(\"prefix\") producer class boot-fails (sugar removed)")
+    @DisplayName("#1320: a @MeshService(\"prefix\") producer class boot-fails (sugar removed)")
     void producerSugarRemovedBootFails() {
         runnerFor("io.mcpmesh.spring.sv", RemovedProducerConfig.class).run(context -> {
             assertThat(context).hasFailed();
@@ -997,7 +997,7 @@ class McpMeshServiceIntegrationTest {
     }
 
     @Test
-    @DisplayName("HIGH-1a: a sub-interface inheriting @McpMeshService is NOT auto-discovered as a bean view")
+    @DisplayName("HIGH-1a: a sub-interface inheriting @MeshService is NOT auto-discovered as a bean view")
     void subInterfaceInheritedAnnotationNotScanned() {
         runnerFor("io.mcpmesh.spring.svscan", PlainAgentConfig.class).run(context -> {
             assertThat(context).hasNotFailed();

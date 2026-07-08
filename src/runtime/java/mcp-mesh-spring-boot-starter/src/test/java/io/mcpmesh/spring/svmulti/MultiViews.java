@@ -1,6 +1,6 @@
 package io.mcpmesh.spring.svmulti;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshService;
 import io.mcpmesh.Selector;
 
 /**
@@ -13,13 +13,13 @@ public final class MultiViews {
     private MultiViews() {
     }
 
-    @McpMeshService
+    @MeshService
     public interface ZuluView {
         @Selector(capability = "mv.zulu")
         String zulu();
     }
 
-    @McpMeshService
+    @MeshService
     public interface AlphaView {
         @Selector(capability = "mv.alpha")
         String alpha();

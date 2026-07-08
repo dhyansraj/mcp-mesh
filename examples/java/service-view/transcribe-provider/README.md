@@ -1,6 +1,6 @@
 # transcribe-provider
 
-Provider C in the [`@McpMeshService` service-view example](../README.md). Publishes
+Provider C in the [`@MeshService` service-view example](../README.md). Publishes
 the `media.transcribe` capability, bound by the OPTIONAL
 `MediaService.transcribe(...)` view method in the `media-gateway` consumer.
 

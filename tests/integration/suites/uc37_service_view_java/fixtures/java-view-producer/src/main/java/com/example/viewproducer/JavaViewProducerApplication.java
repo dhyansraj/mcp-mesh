@@ -15,7 +15,7 @@ import java.util.Map;
  * uc37 fixture — publishes DOT-SEPARATED capability names ({@code svc.alpha},
  * {@code svc.bravo}) as ordinary mesh tools. Each capability name is declared
  * EXPLICITLY on {@code @MeshTool(capability = "svc.alpha")} — the producer-side
- * {@code @McpMeshService("prefix")} sugar was removed (#1320), so the dotted
+ * {@code @MeshService("prefix")} sugar was removed (#1320), so the dotted
  * contract is owned by the annotation, not derived from the Java method name.
  *
  * <p>This agent is the consumer-view tests' unchanged provider (tc10/tc11 bind

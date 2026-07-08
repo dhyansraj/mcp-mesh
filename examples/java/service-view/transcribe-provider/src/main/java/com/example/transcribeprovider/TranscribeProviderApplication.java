@@ -7,7 +7,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 /**
- * TranscribeProvider - one leaf of the {@code @McpMeshService} service-view demo.
+ * TranscribeProvider - one leaf of the {@code @MeshService} service-view demo.
  *
  * <p>Agent bootstrap only. The capability is published by
  * {@link MediaTranscribeService}, whose {@code transcribe(...)} method carries

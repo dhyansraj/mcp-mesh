@@ -1,6 +1,6 @@
 package io.mcpmesh.spring.svtool;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshService;
 import io.mcpmesh.Param;
 import io.mcpmesh.Selector;
 
@@ -13,7 +13,7 @@ public final class ToolViews {
     private ToolViews() {
     }
 
-    @McpMeshService
+    @MeshService
     public interface CoexistView {
         @Selector(capability = "coexist.one")
         String one(@Param("id") String id);

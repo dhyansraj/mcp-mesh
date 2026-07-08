@@ -1,6 +1,6 @@
 package io.mcpmesh.spring;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshService;
 import io.mcpmesh.Param;
 import io.mcpmesh.types.McpMeshTool;
 import io.mcpmesh.types.MeshToolUnavailableException;
@@ -18,34 +18,34 @@ import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 
 /**
- * RFC #1280 phase 2: shared support for using a {@link McpMeshService} interface
+ * RFC #1280 phase 2: shared support for using a {@link MeshService} interface
  * as a {@code @MeshTool} PARAMETER. One view parameter expands to N ordinary
  * dependency edges ON THAT TOOL, positionally paired AFTER the explicit
  * {@code @Selector} deps — the same pairing precedent as the MeshJob
  * type-detected slot.
  *
  * <p>Detection + the interface→bindings analysis are shared with the phase-1
- * bean path via {@link McpMeshServiceRegistrar#analyze(Class)}: the same
+ * bean path via {@link MeshServiceRegistrar#analyze(Class)}: the same
  * bridge/synthetic filtering, {@link org.springframework.core.ResolvableType}
  * resolution, diamond dedupe, and param/return validation apply.
  */
-final class McpMeshServiceToolSupport {
+final class MeshServiceToolSupport {
 
-    private McpMeshServiceToolSupport() {
+    private MeshServiceToolSupport() {
     }
 
     /** A {@code @MeshTool} parameter that is a service-view facade. */
-    record ViewParamInfo(int position, McpMeshServiceRegistrar.ServiceViewMetadata view) {
+    record ViewParamInfo(int position, MeshServiceRegistrar.ServiceViewMetadata view) {
     }
 
     /**
-     * Whether {@code type} is an interface carrying {@link McpMeshService} —
+     * Whether {@code type} is an interface carrying {@link MeshService} —
      * directly OR inherited from a super-interface (RFC #1280 phase-2 cleanup
      * 7a: sub-interface views). Classes are the producer path, never a view.
      */
     static boolean isServiceView(Class<?> type) {
         return type.isInterface()
-            && AnnotationUtils.findAnnotation(type, McpMeshService.class) != null;
+            && AnnotationUtils.findAnnotation(type, MeshService.class) != null;
     }
 
     /**
@@ -64,11 +64,11 @@ final class McpMeshServiceToolSupport {
             }
             if (params[i].isAnnotationPresent(Param.class)) {
                 throw new IllegalStateException(String.format(
-                    "@MeshTool method %s of %s: @McpMeshService view parameter #%d (%s) must NOT "
+                    "@MeshTool method %s of %s: @MeshService view parameter #%d (%s) must NOT "
                         + "carry @Param — a service-view parameter is injected, not an MCP input.",
                     method.getName(), method.getDeclaringClass().getName(), i, type.getSimpleName()));
             }
-            views.add(new ViewParamInfo(i, McpMeshServiceRegistrar.analyze(type)));
+            views.add(new ViewParamInfo(i, MeshServiceRegistrar.analyze(type)));
         }
         return views;
     }
@@ -76,17 +76,17 @@ final class McpMeshServiceToolSupport {
     /**
      * Build the JDK-proxy facade for a view parameter, backed by the wrapper's
      * per-method slot array (phase-2 proxy strategy). Reuses
-     * {@link McpMeshServiceInvocationHandler} — floor / param / return / dispatch
+     * {@link MeshServiceInvocationHandler} — floor / param / return / dispatch
      * logic is identical to the bean path.
      */
-    static Object buildFacade(McpMeshServiceRegistrar.ServiceViewMetadata view,
-                              McpMeshServiceInvocationHandler.ViewProxyBinding proxyBinding,
+    static Object buildFacade(MeshServiceRegistrar.ServiceViewMetadata view,
+                              MeshServiceInvocationHandler.ViewProxyBinding proxyBinding,
                               ObjectMapper objectMapper) {
         Class<?> iface = view.iface();
         return Proxy.newProxyInstance(
             iface.getClassLoader(),
             new Class<?>[] {iface},
-            new McpMeshServiceInvocationHandler(
+            new MeshServiceInvocationHandler(
                 iface, view.minAvailable(), view.bindings(), proxyBinding, objectMapper));
     }
 
@@ -98,7 +98,7 @@ final class McpMeshServiceToolSupport {
      * sentinel is returned so the handler's floor/dispatch logic is uniform.
      */
     static final class WrapperSlotViewProxyBinding
-            implements McpMeshServiceInvocationHandler.ViewProxyBinding {
+            implements MeshServiceInvocationHandler.ViewProxyBinding {
 
         @SuppressWarnings("rawtypes")
         private final AtomicReferenceArray<McpMeshTool> proxies;
@@ -112,26 +112,26 @@ final class McpMeshServiceToolSupport {
                 Map<Method, Integer> methodToLocal,
                 int[] localToDeclaredIndex,
                 String funcId,
-                List<McpMeshServiceRegistrar.ServiceMethodBinding> bindings) {
+                List<MeshServiceRegistrar.ServiceMethodBinding> bindings) {
             this.proxies = proxies;
             this.methodToLocal = methodToLocal;
             this.localToDeclaredIndex = localToDeclaredIndex;
             this.funcId = funcId;
             this.sentinels = new McpMeshTool<?>[bindings.size()];
-            for (McpMeshServiceRegistrar.ServiceMethodBinding b : bindings) {
+            for (MeshServiceRegistrar.ServiceMethodBinding b : bindings) {
                 this.sentinels[methodToLocal.get(b.method())] = new UnavailableMeshTool(b.capability());
             }
         }
 
         @Override
-        public McpMeshTool<?> proxyFor(McpMeshServiceRegistrar.ServiceMethodBinding binding) {
+        public McpMeshTool<?> proxyFor(MeshServiceRegistrar.ServiceMethodBinding binding) {
             int local = methodToLocal.get(binding.method());
             McpMeshTool<?> proxy = proxies.get(local);
             return proxy != null ? proxy : sentinels[local];
         }
 
         @Override
-        public String settleKey(McpMeshServiceRegistrar.ServiceMethodBinding binding) {
+        public String settleKey(MeshServiceRegistrar.ServiceMethodBinding binding) {
             int local = methodToLocal.get(binding.method());
             return MeshToolWrapperRegistry.buildDependencyKey(funcId, localToDeclaredIndex[local]);
         }

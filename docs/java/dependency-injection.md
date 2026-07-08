@@ -115,7 +115,7 @@ public class HolidayChecker {
 | `@MeshTool` method needing remote helpers | `@MeshTool(dependencies = @Selector(...))` + parameter injection |
 | `@RestController` handler method | `@MeshRoute(dependencies = {...})` + `@MeshInject` parameter |
 | `@Service` / `@Component` / `Filter` / `@Scheduled` / any other Spring bean | **`@MeshDependsOn` + `@Qualifier`** |
-| Several capabilities behind one typed facade | **`@McpMeshService` interface + `@Autowired`** |
+| Several capabilities behind one typed facade | **`@MeshService` interface + `@Autowired`** |
 
 `@MeshDependsOn` and `@MeshInject`/`@MeshRoute` are complementary — same heartbeat-driven proxy lifecycle, same auto-rewiring on topology change, same `isAvailable()` semantics. Pick the surface that matches where you need the dependency. If the same capability shows up via multiple sources the framework deduplicates: a single proxy and a single registry entry per capability name.
 
@@ -154,14 +154,14 @@ If you omit `expectedType` and the `@Qualifier`-injected field is declared as `M
 
 Only the last shape is a real gap. If your factory method declares a supertype return, either narrow the declared return type to the concrete class, or place `@MeshDependsOn` on the supertype itself (or on the `@Configuration` class).
 
-## Service Views with `@McpMeshService`
+## Service Views with `@MeshService`
 
-A **service view** aggregates several capability dependencies behind one typed interface. Annotate an interface with `@McpMeshService`; each abstract method binds one capability via a method-level `@Selector`. Spring auto-discovers the interface and injects a facade bean (named by the decapitalized interface name) that you `@Autowired` and call directly.
+A **service view** aggregates several capability dependencies behind one typed interface. Annotate an interface with `@MeshService`; each abstract method binds one capability via a method-level `@Selector`. Spring auto-discovers the interface and injects a facade bean (named by the decapitalized interface name) that you `@Autowired` and call directly.
 
 The differentiator: **each method delegates to its own per-capability resolved proxy**, so different methods can resolve to different provider agents and rebind independently as the topology changes. The group is a typed view; the capability remains the atom. Nothing group-shaped crosses the wire — every method expands into an ordinary dependency edge with `required`/`tags`/`version`/settle semantics identical to a `@MeshDependsOn` dependency. A view over N capabilities therefore shows as **N separate dependencies** in `meshctl list`, not one.
 
 ```java
-@McpMeshService
+@MeshService
 public interface MediaService {
     @Selector(capability = "media.caption", required = true) CaptionResult    caption(CaptionRequest req);
     @Selector(capability = "media.thumbnail")                ThumbnailResult  thumbnail(ThumbnailRequest req);
@@ -218,7 +218,7 @@ public class MediaGatewayApplication {
 A method taking several arguments must name each one with `@Param` — the single-record shorthand only applies when there is exactly one unannotated POJO/record parameter:
 
 ```java
-@McpMeshService
+@MeshService
 public interface SessionService {
     // 2+ params → each carries @Param; they become the target tool's named args
     @Selector(capability = "session_state.record_question_score", required = true)
@@ -252,7 +252,7 @@ The same interface can be used both ways at once — autowired as a bean **and**
 
 ### Views and `@MeshRoute`
 
-A `@McpMeshService` view interface is a **tool-parameter / bean-only** surface: used as a `@MeshRoute` handler parameter it is **rejected** at boot (a view facade cannot become a route perimeter). A route consumes a specific capability via `@MeshInject` instead — including a single dotted capability that a view would otherwise group. Declare the capability in the route's `dependencies = {}` and inject its proxy by name:
+A `@MeshService` view interface is a **tool-parameter / bean-only** surface: used as a `@MeshRoute` handler parameter it is **rejected** at boot (a view facade cannot become a route perimeter). A route consumes a specific capability via `@MeshInject` instead — including a single dotted capability that a view would otherwise group. Declare the capability in the route's `dependencies = {}` and inject its proxy by name:
 
 ```java
 @MeshRoute(dependencies = {
@@ -278,7 +278,7 @@ public ResponseEntity<Map<String, Object>> score(
 !!! note "One difference when injected as a bean"
     An autowired view facade is class-level, so the framework cannot know which `@MeshTool` methods call it and does **not** add a pre-invoke structured `dependency_unavailable` refusal to those tools — a call to a required-but-unresolved view method simply throws `MeshToolUnavailableException`, surfacing as an ordinary tool error. To get the pre-invoke structured refusal for a capability, either declare it as a `@MeshTool` dependency slot (`dependencies = @Selector(...)`), or pass the view as a `@MeshTool` parameter (see [Views as tool parameters](#views-as-tool-parameters) above) — the view's edges become tool-declared and its `required` methods join that tool's guard.
 
-The optional `@McpMeshService(minAvailable = N)` adds a consumer-local availability floor: when fewer than `N` of the view's methods currently resolve, **every** facade call fails with `MeshServiceUnavailableException` — synchronous methods throw, `CompletableFuture` methods return a failed future (settle-grace-aware). The default `0` means no floor — each method soft- or hard-fails per its own `required` flag.
+The optional `@MeshService(minAvailable = N)` adds a consumer-local availability floor: when fewer than `N` of the view's methods currently resolve, **every** facade call fails with `MeshServiceUnavailableException` — synchronous methods throw, `CompletableFuture` methods return a failed future (settle-grace-aware). The default `0` means no floor — each method soft- or hard-fails per its own `required` flag.
 
 A service view is **consumer-local**, not a shared contract: two consumers may aggregate the same capabilities differently, and there is no group versioning or interface-level availability summary. Each method resolves independently.
 
@@ -305,7 +305,7 @@ public class MediaProvider {
 - `meshctl list --services` groups the dotted names for display by the segments before the last dot; there is no separate service record behind the grouping.
 
 !!! note "Discovery caveat"
-    An auto-registered facade **bean** requires `@McpMeshService` directly on the interface. An interface that only *inherits* `@McpMeshService` from a super-interface is still usable as a `@MeshTool` view parameter, but is not auto-discovered as a bean.
+    An auto-registered facade **bean** requires `@MeshService` directly on the interface. An interface that only *inherits* `@MeshService` from a super-interface is still usable as a `@MeshTool` view parameter, but is not auto-discovered as a bean.
 
 ## `McpMeshTool<T>` API Reference
 

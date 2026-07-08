@@ -1,6 +1,6 @@
 package io.mcpmesh.spring.svxsrc;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshService;
 import io.mcpmesh.Selector;
 
 /**
@@ -19,7 +19,7 @@ public final class XsrcViews {
     public record TypeY(int y) {
     }
 
-    @McpMeshService
+    @MeshService
     public interface XsrcView {
         @Selector(capability = "xs.cap")
         TypeX get();

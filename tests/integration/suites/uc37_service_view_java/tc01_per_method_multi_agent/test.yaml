@@ -1,5 +1,5 @@
 # tc01_per_method_multi_agent — THE service-view differentiator (RFC #1280):
-# one Java @McpMeshService interface whose three methods resolve to three
+# one Java @MeshService interface whose three methods resolve to three
 # DIFFERENT provider agents.
 #
 # Topology: three independent Python providers (view-cap-alpha/bravo/charlie)
@@ -23,7 +23,7 @@
 # mvn spring-boot:run start.
 
 name: "Service views: per-method resolution to three different provider agents (Java)"
-description: "Java @McpMeshService with 3 methods -> 3 Python providers: view_report proves each method is served by its own agent with its own capability payload"
+description: "Java @MeshService with 3 methods -> 3 Python providers: view_report proves each method is served by its own agent with its own capability payload"
 tags:
   - integration
   - java

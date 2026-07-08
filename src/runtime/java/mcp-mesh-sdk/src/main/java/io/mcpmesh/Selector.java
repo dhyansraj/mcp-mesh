@@ -11,7 +11,7 @@ import java.lang.annotation.Target;
  * <p>Used in {@link MeshTool#dependencies()}, {@link MeshLlm#providerSelector()},
  * and {@link MeshLlm#filter()} to specify which capabilities to resolve.
  *
- * <p>Also usable directly on an abstract method of a {@link McpMeshService}
+ * <p>Also usable directly on an abstract method of a {@link MeshService}
  * interface (service views): the method binds the one capability named here,
  * and calling it delegates to that capability's resolved proxy. The nested
  * member usage inside the annotations above remains valid.

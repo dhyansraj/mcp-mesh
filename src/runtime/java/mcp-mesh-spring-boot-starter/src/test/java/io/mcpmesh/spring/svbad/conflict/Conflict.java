@@ -1,6 +1,6 @@
 package io.mcpmesh.spring.svbad.conflict;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshService;
 import io.mcpmesh.Selector;
 
 /**
@@ -18,14 +18,14 @@ public final class Conflict {
     public record TypeY(int y) {
     }
 
-    @McpMeshService
+    @MeshService
     public interface ConflictAService {
 
         @Selector(capability = "cc.cap")
         TypeX m();
     }
 
-    @McpMeshService
+    @MeshService
     public interface ConflictBService {
 
         @Selector(capability = "cc.cap")

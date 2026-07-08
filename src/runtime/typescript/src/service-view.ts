@@ -8,7 +8,7 @@
  * methods delegate to each edge's own resolved proxy — so different methods may
  * bind different provider agents and rebind independently as topology changes.
  * There are NO wire or registry changes: every method is an ordinary dependency
- * edge. This mirrors the Java runtime (`@McpMeshService`) so the cross-runtime
+ * edge. This mirrors the Java runtime (`@MeshService`) so the cross-runtime
  * contract (integration suite uc37) holds identically.
  *
  * A service view is purely consumer-local: there is no group versioning and no

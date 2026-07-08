@@ -91,6 +91,14 @@ var guideRegistry = map[string]*Guide{
 		HasTypeScriptVariant: true,
 		HasJavaVariant:       true,
 	},
+	"service-views": {
+		Name:                 "service-views",
+		Aliases:              []string{"service-view", "views", "view", "serviceview"},
+		Title:                "Service Views",
+		Description:          "Typed aggregation of dot-namespaced capabilities — when to use a view vs per-capability injection",
+		HasTypeScriptVariant: true,
+		HasJavaVariant:       true,
+	},
 	"health": {
 		Name:                 "health",
 		Aliases:              []string{"health-checks", "heartbeat"},
@@ -344,7 +352,7 @@ func ListGuides() []*Guide {
 	order := []string{
 		"quickstart", "prerequisites", "tutorial", "overview", "capabilities", "tags",
 		"schema-matching", "decorators",
-		"dependency-injection", "audit", "streaming", "jobs", "a2a", "health", "registry", "llm", "media", "multimodal",
+		"dependency-injection", "service-views", "audit", "streaming", "jobs", "a2a", "health", "registry", "llm", "media", "multimodal",
 		"proxies", "api", "environment", "kwargs", "deployment", "observability", "headers",
 		"testing", "scaffold", "cli", "security", "upgrading",
 	}

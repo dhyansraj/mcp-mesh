@@ -7,7 +7,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 /**
- * CaptionProvider - one leaf of the {@code @McpMeshService} service-view demo.
+ * CaptionProvider - one leaf of the {@code @MeshService} service-view demo.
  *
  * <p>Agent bootstrap only. The capability itself is published by
  * {@link MediaCaptionService}: its {@code caption(...)} method carries
