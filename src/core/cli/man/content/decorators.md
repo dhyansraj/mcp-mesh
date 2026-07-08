@@ -120,9 +120,7 @@ Producer tools can opt out of strict schema verdicts via `output_schema_strict=F
 
 ## @mesh.service
 
-Aggregates capabilities behind a typed view, or — with a prefix — publishes a class's methods as tools (RFC #1280).
-
-**Consumer view** — a class of `async` `@mesh.selector` stubs, injected as a `@mesh.tool` parameter:
+Aggregates several dotted capabilities behind a typed **consumer view** (RFC #1280). Decorate a class of `async` `@mesh.selector` stubs and inject it as a `@mesh.tool` parameter:
 
 ```python
 @mesh.service                       # or @mesh.service(min_available=2)
@@ -137,16 +135,15 @@ async def process_media(req: dict, media: MediaService = None):
     return await media.caption({"text": req["text"]})
 ```
 
-**Producer** — a prefixed class whose real methods publish as `prefix.<method>`:
+The capabilities a view binds are ordinary dotted tools — each declared explicitly on its provider with `@mesh.tool(capability="media.caption")`:
 
 ```python
-@mesh.service("media")              # publishes media.caption, media.thumbnail
-class MediaTools:
-    async def caption(self, args: dict) -> dict: ...
-    async def thumbnail(self, args: dict) -> dict: ...
+@app.tool()
+@mesh.tool(capability="media.caption")
+async def caption(args: dict) -> dict: ...
 ```
 
-Each view method is an ordinary dependency edge and each producer method an ordinary tool — both show as `N` entries in `meshctl list`. `required` view edges get the pre-invoke `dependency_unavailable` refusal; `min_available` (consumer-only) adds a floor. For the full semantics see `meshctl man dependency-injection`.
+Each view method is an ordinary dependency edge and each dotted capability an ordinary tool — both show as `N` entries in `meshctl list`. `required` view edges get the pre-invoke `dependency_unavailable` refusal; `min_available` (consumer-only) adds a floor. For the full semantics see `meshctl man dependency-injection`.
 
 ## @mesh.llm
 

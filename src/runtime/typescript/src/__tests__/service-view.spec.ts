@@ -10,14 +10,15 @@
  *    rebinds independently. The flat edge array is what ships / settles /
  *    resolves — zero wire change; a view-free tool is byte-identical.
  *
- *  - PRODUCER SUGAR: `agent.addService("prefix", { ... })` publishes each entry
- *    (name-sorted) as an ordinary tool with capability `prefix.<method>`.
+ *  - PRODUCER SUGAR (`agent.addService`) was REMOVED in v3.1.0 (issue #1320);
+ *    the method survives only as a throwing stub asserted below.
  *
  * Covers: expansion order (explicit + view + explicit; multi-view; name-sort),
  * settle keys per edge, payload carries N edges with required flags, facade
  * delegation + rebinding, required refusal (direct + job flavors), the
  * minAvailable floor (below/at, settle-aware wait), unresolved optional method
- * error, all validation throws, producer addService, and serviceView-in-route.
+ * error, all validation throws, the addService removal stub, and
+ * serviceView-in-route.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { z } from "zod";
@@ -962,133 +963,19 @@ describe("view method schema matching (#547 parity)", () => {
   });
 });
 
-describe("addService producer sugar", () => {
-  it("publishes N tools name-sorted with capability prefix.method", () => {
-    const fastmcp = makeFastMCPStub();
-    const agent = newAgent(fastmcp);
-    agent.addService("media", {
-      // Out of order to prove name-sorting.
-      thumbnail: async () => ({ url: "u" }),
-      caption: async (args: { text: string }) => ({ caption: args.text }),
-    });
-    // Registered in NAME-SORTED order: caption, then thumbnail.
-    const names = fastmcp.addTool.mock.calls.map(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (c: any[]) => c[0].name,
-    );
-    expect(names).toEqual(["media.caption", "media.thumbnail"]);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect((agent as any).tools.get("media.caption").capability).toBe(
-      "media.caption",
-    );
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect((agent as any).tools.get("media.thumbnail").capability).toBe(
-      "media.thumbnail",
-    );
-  });
-
-  it("object form carries addTool passthrough (tags/version/description)", () => {
-    const fastmcp = makeFastMCPStub();
-    const agent = newAgent(fastmcp);
-    agent.addService("svc", {
-      m: {
-        execute: async () => "ok",
-        tags: ["fast"],
-        version: "2.1.0",
-        description: "does m",
-        parameters: z.object({ x: z.number() }),
-      },
-    });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const meta = (agent as any).tools.get("svc.m");
-    expect(meta.tags).toEqual(["fast"]);
-    expect(meta.version).toBe("2.1.0");
-    expect(meta.description).toBe("does m");
-  });
-
-  it("function shorthand works and runs through the wrapped execute", async () => {
-    const fastmcp = makeFastMCPStub();
-    const agent = newAgent(fastmcp);
-    agent.addService("svc", {
-      echo: async (args: { v: string }) => ({ echoed: args.v }),
-    });
-    const execute = captureExecute(fastmcp);
-    expect(await execute({ v: "hi" })).toBe(JSON.stringify({ echoed: "hi" }));
-  });
-
-  it("rejects an invalid prefix", () => {
-    const fastmcp = makeFastMCPStub();
-    const agent = newAgent(fastmcp);
-    expect(() =>
-      agent.addService("1bad", { m: async () => "x" }),
-    ).toThrow(/not a valid capability name/);
-    expect(() =>
-      agent.addService("", { m: async () => "x" }),
-    ).toThrow(/non-empty capability prefix/);
-  });
-
-  it("rejects a method whose derived capability is invalid", () => {
-    const fastmcp = makeFastMCPStub();
-    const agent = newAgent(fastmcp);
-    expect(() =>
-      agent.addService("svc", { "bad name": async () => "x" }),
-    ).toThrow(/is not a valid capability name/);
-  });
-
-  it("rejects a serviceView passed as a producer method", () => {
-    const fastmcp = makeFastMCPStub();
-    const agent = newAgent(fastmcp);
-    const View = serviceView({ methods: { a: "svc.a" } });
-    expect(() =>
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      agent.addService("svc", { a: View as any }),
-    ).toThrow(/is a mesh.serviceView/);
-  });
-
-  it("rejects a method that is neither a function nor an execute object", () => {
+describe("addService producer sugar removed (#1320)", () => {
+  it("throws a fast-fail, actionable error pointing to addTool", () => {
     const fastmcp = makeFastMCPStub();
     const agent = newAgent(fastmcp);
     expect(() =>
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      agent.addService("svc", { a: { tags: ["x"] } as any }),
-    ).toThrow(/must be an execute function/);
-  });
-
-  it("accepts dotted prefixes (segment-wise grammar)", () => {
-    const fastmcp = makeFastMCPStub();
-    const agent = newAgent(fastmcp);
-    agent.addService("acme.media", { caption: async () => "c" });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect((agent as any).tools.get("acme.media.caption").capability).toBe(
-      "acme.media.caption",
-    );
-  });
-
-  it("is atomic: an invalid method mid-map registers NOTHING (item 7)", () => {
-    const fastmcp = makeFastMCPStub();
-    const agent = newAgent(fastmcp);
+      (agent as any).addService("media", { caption: async () => "c" }),
+    ).toThrow(/removed in v3\.1\.0/);
     expect(() =>
-      agent.addService("svc", {
-        good: async () => "ok",
-        "bad name": async () => "x", // invalid derived capability
-      }),
-    ).toThrow(/is not a valid capability name/);
-    // 'svc.good' must NOT have been registered — validation runs before any addTool.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (agent as any).addService("media", { caption: async () => "c" }),
+    ).toThrow(/addTool/);
+    // Nothing gets registered — the stub throws before any addTool call.
     expect(fastmcp.addTool).not.toHaveBeenCalled();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect((agent as any).tools.has("svc.good")).toBe(false);
-  });
-
-  it("throws when a derived capability collides with an existing tool (item 9)", () => {
-    const fastmcp = makeFastMCPStub();
-    const agent = newAgent(fastmcp);
-    agent.addTool({
-      name: "svc.caption",
-      parameters: z.object({}),
-      execute: async () => "existing",
-    });
-    expect(() =>
-      agent.addService("svc", { caption: async () => "new" }),
-    ).toThrow(/already registered/);
   });
 });

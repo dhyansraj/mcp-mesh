@@ -299,22 +299,24 @@ A facade call takes one `dict` that becomes the target tool's named arguments, a
 - **Testing:** passing your own facade object for the view parameter skips the pre-invoke refusal and settle wait for that view — mock the facade directly in unit tests.
 - Views are a **tool-parameter** surface only: a view in `@mesh.route` boot-fails, and an undecorated subclass of a view is not a view (decorate the class directly).
 
-### Publishing a service (producer side)
+### Publishing the dotted capabilities a view binds
 
-Give `@mesh.service` a **prefix** and the class becomes a producer: each public method (a real `async` implementation) publishes as an ordinary tool with capability `prefix.<method>`.
+A view is consumer-side only — it aggregates capabilities, it does not publish them. The dotted capabilities it binds are ordinary tools, each declared explicitly on its provider with a dot-namespaced `capability`:
 
 ```python
-@mesh.service("media")              # publishes media.caption, media.thumbnail
-class MediaTools:
-    async def caption(self, args: dict) -> dict:
-        return {"caption": f"a scene: {args['text']}"}
-    async def thumbnail(self, args: dict) -> dict:
-        return {"uri": f"thumb://{args['asset_id']}"}
+@app.tool()
+@mesh.tool(capability="media.caption")
+async def caption(args: dict) -> dict:
+    return {"caption": f"a scene: {args['text']}"}
+
+
+@app.tool()
+@mesh.tool(capability="media.thumbnail")
+async def thumbnail(args: dict) -> dict:
+    return {"uri": f"thumb://{args['asset_id']}"}
 ```
 
-- Methods publish **name-sorted** under dotted tool names; underscore-prefixed methods are skipped.
-- A method carrying its own `@mesh.tool` **wins** (keeps its declared capability/tags/version).
-- The class must be **zero-arg constructible** (instantiated once at decoration time to publish bound methods); the `prefix` is segment-validated against the dotted-capability grammar. A `@mesh.selector` inside a prefixed class is a **mixed-roles boot-fail**, and `min_available` is consumer-only.
+Each dotted `capability` is segment-validated against the dotted-capability grammar and resolves independently, so `media.caption` and `media.thumbnail` can live on the same agent or on separate ones. `meshctl list --services` groups them for display by the segments before the last dot.
 
 ## Proxy Configuration
 

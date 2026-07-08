@@ -1,1 +1,0 @@
-# uc37 py-svc-producer deps. mesh + fastmcp come from the runtime image.

@@ -86,11 +86,9 @@ agent.addTool({
 | `McpMeshTool`  | Tool calls via proxy                   |
 | `null`          | Dependency unavailable                 |
 
-## mesh.serviceView() / agent.addService()
+## mesh.serviceView()
 
-Service views aggregate capabilities behind one typed facade, or publish a group of tools under a dotted prefix (RFC #1280).
-
-**Consumer** — one `dependencies` entry expanding to N edges, injected as a facade argument:
+`mesh.serviceView({ methods })` aggregates several dotted capabilities behind one typed **consumer** facade (RFC #1280) — one `dependencies` entry expanding to N edges, injected as a facade argument:
 
 ```ts
 const Media = mesh.serviceView({
@@ -109,12 +107,14 @@ agent.addTool({
 });
 ```
 
-**Producer** — publish methods as `prefix.<method>` tools:
+The capabilities a view binds are ordinary dotted tools — each declared explicitly on its provider with a dot-namespaced `capability`:
 
 ```ts
-agent.addService("media", {
-  caption: async (args) => ({ caption: `a scene: ${args.text}` }),
-  thumbnail: async (args) => ({ uri: `thumb://${args.id}` }),
+agent.addTool({
+  name: "caption",
+  capability: "media.caption",
+  parameters: z.object({ text: z.string() }),
+  execute: async ({ text }) => ({ caption: `a scene: ${text}` }),
 });
 ```
 

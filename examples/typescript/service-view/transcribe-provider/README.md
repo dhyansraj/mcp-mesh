@@ -4,9 +4,8 @@ Provider C (optional edge) in the [service-view example](../README.md).
 
 ## Overview
 
-A TypeScript MCP Mesh agent. Publishes the `media.transcribe` capability via **producer
-sugar**: `agent.addService("media", { ... })` publishes one method as the dotted
-capability `media.transcribe` — no per-method `addTool`.
+A TypeScript MCP Mesh agent. Publishes the `media.transcribe` capability by
+declaring it **explicitly**: `agent.addTool({ capability: "media.transcribe", ... })`.
 
 The `media.*` capability + its parameters match the Java and Python providers
 exactly, so gateways in ANY runtime are interchangeable.

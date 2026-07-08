@@ -96,15 +96,6 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
     private final List<ServiceViewMetadata> discovered = new CopyOnWriteArrayList<>();
 
     /**
-     * Directly-annotated {@code @McpMeshService} CLASS names found by the SAME
-     * scan pass that discovers view interfaces (RFC #1280 phase-3 review, item
-     * 3): producer candidates. A late {@link org.springframework.beans.factory.SmartInitializingSingleton}
-     * WARNs for any of these the {@link MeshToolBeanPostProcessor} did NOT
-     * actually see as a bean — ground-truth comparison, no false positives.
-     */
-    private final List<String> annotatedProducerClasses = new CopyOnWriteArrayList<>();
-
-    /**
      * The validated views discovered in this context, sorted by interface name
      * for a deterministic dependency-expansion order.
      */
@@ -112,11 +103,6 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
         List<ServiceViewMetadata> copy = new ArrayList<>(discovered);
         copy.sort(Comparator.comparing(v -> v.iface().getName()));
         return copy;
-    }
-
-    /** Directly-annotated @McpMeshService class names found during scanning. */
-    public List<String> discoveredProducerClasses() {
-        return List.copyOf(annotatedProducerClasses);
     }
 
     @Override
@@ -147,10 +133,6 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
         // route / @MeshDependsOn is idempotent.
         MeshSettleState settleState = MeshSettleState.getInstance();
 
-        // ONE scan pass handles both roles (RFC #1280 phase-3 review, item 3):
-        // directly-annotated INTERFACES become bean views here; directly-annotated
-        // CLASSES are collected as producer candidates for the late non-bean WARN.
-        //
         // Scanned bean views require @McpMeshService DIRECTLY on the interface.
         // Deliberate rule: a sub-interface that only INHERITS the annotation is
         // NOT co-discovered — co-discovery would always pull in the annotated
@@ -200,9 +182,9 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
                     continue;
                 }
                 if (!type.isInterface()) {
-                    // Producer CLASS candidate — record for the late non-bean
-                    // WARN (item 3); publication itself is the post-processor's job.
-                    annotatedProducerClasses.add(className);
+                    // A @McpMeshService CLASS is not a consumer service view. The
+                    // producer-sugar sweep was removed (#1320); MeshToolBeanPostProcessor
+                    // fast-fails a non-blank prefix on a class. Nothing to register here.
                     continue;
                 }
 

@@ -263,21 +263,28 @@ The view slot expands **in place** (name-sorted), so its edges keep contiguous i
 - A view **forces inline execution** — per-tool worker isolation is disabled for a view-bearing tool, with a warning logged at registration when `MCP_MESH_TOOL_WORKERS>1`.
 - Views are a **tool-parameter** surface only: a `mesh.serviceView(...)` in `mesh.route(...)` or `mesh.a2a.mount(...)` dependencies is rejected.
 
-### Publishing a service (producer side)
+### Publishing the dotted capabilities a view binds
 
-`agent.addService("prefix", { ... })` publishes each entry as an ordinary tool with capability `prefix.<method>` (name-sorted). An entry is a bare `execute` function or an object carrying `execute` plus `addTool` passthrough (`tags`, `description`, …); `name`/`capability` are derived and must not be supplied.
+A view is consumer-side only — it aggregates capabilities, it does not publish them. The dotted capabilities it binds are ordinary tools, each declared explicitly on its provider with a dot-namespaced `capability`:
 
 ```ts
-agent.addService("media", {
-  caption: async (args) => ({ caption: `a scene: ${args.text}` }),
-  thumbnail: {
-    execute: async (args) => ({ uri: `thumb://${args.id}` }),
-    tags: ["fast"],
-  },
+agent.addTool({
+  name: "caption",
+  capability: "media.caption",
+  parameters: z.object({ text: z.string() }),
+  execute: async ({ text }) => ({ caption: `a scene: ${text}` }),
+});
+
+agent.addTool({
+  name: "thumbnail",
+  capability: "media.thumbnail",
+  tags: ["fast"],
+  parameters: z.object({ id: z.string() }),
+  execute: async ({ id }) => ({ uri: `thumb://${id}` }),
 });
 ```
 
-The `prefix` is segment-validated against the dotted-capability grammar — the SDK's only capability-name check, mirroring the registry contract. A derived name that collides with an existing tool throws.
+Each dotted `capability` is segment-validated against the dotted-capability grammar and resolves independently, so `media.caption` and `media.thumbnail` can live on the same agent or on separate ones. `meshctl list --services` groups them for display by the segments before the last dot.
 
 ## Proxy Configuration
 

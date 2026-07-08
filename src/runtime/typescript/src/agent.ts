@@ -35,13 +35,10 @@ import type {
 } from "./types.js";
 import {
   expandDependencies,
-  isServiceView,
   MeshServiceUnavailableError,
   CAPABILITY_NAME_PATTERN,
-  defaultProducerParams,
   type DepSlot,
   type MeshServiceFacadeMethod,
-  type ServiceProducerMethod,
 } from "./service-view.js";
 import {
   resolveConfig,
@@ -439,7 +436,7 @@ export class MeshAgent {
     // is checked; dependency capability names are deliberately left unvalidated
     // (they are unvalidated in the Go registry and every runtime), so checking
     // them here would be stricter than the contract, not parity. Reuses the
-    // same CAPABILITY_NAME_PATTERN that addService applies to synthesized names.
+    // same CAPABILITY_NAME_PATTERN shared with the service-view grammar.
     const producedCapability = def.capability ?? toolName;
     if (!CAPABILITY_NAME_PATTERN.test(producedCapability)) {
       throw new Error(
@@ -1331,130 +1328,25 @@ export class MeshAgent {
   }
 
   /**
-   * RFC #1280 producer sugar: publish each entry of `methods` as an ordinary
-   * mesh tool with capability `prefix.<method>`, routed through the SAME
-   * `addTool` machinery (schemas, heartbeat, DI, duplicate handling all fall
-   * out). Entries are registered NAME-SORTED for deterministic registration.
+   * REMOVED in v3.1.0 (issue #1320): the `addService(prefix, methods)` producer
+   * sugar derived the wire capability from the method name — coupling the
+   * cross-runtime contract to a language identifier — and could not express
+   * tags/version/dependencies. Declare each tool explicitly with
+   * {@link MeshAgent.addTool} using an explicit dotted `capability`. Kept as a
+   * throwing stub so the call fails fast with an actionable message instead of
+   * "addService is not a function".
    *
-   * Each entry is either a bare execute function (shorthand) or an object
-   * `{ execute, parameters?, tags?, version?, description?, dependencies?, ... }`
-   * carrying any `addTool` passthrough (but NOT `name`/`capability` — those are
-   * derived). A method with no `parameters` gets a permissive passthrough schema.
-   *
-   * The prefix AND every derived capability are validated against the segment-
-   * wise dotted grammar (kept in lockstep with the Go registry validator —
-   * src/core/registry/validation.go). addTool applies the same grammar to its
-   * produced capability (#1293 item 6), so both surfaces validate a PRODUCED
-   * capability name before it reaches the registry; dependency capability names
-   * remain the registry's authority.
-   *
-   * @example
-   * ```typescript
-   * agent.addService("media", {
-   *   caption: async (args) => ({ caption: `...${args.text}` }),
-   *   thumbnail: { execute: async (args) => ({ url: "..." }), tags: ["fast"] },
-   * });
-   * // → tools/capabilities "media.caption" and "media.thumbnail"
-   * ```
+   * The CONSUMER view — `mesh.serviceView({ methods })` — is unaffected.
    */
-  addService(
-    prefix: string,
-    methods: Record<string, ServiceProducerMethod>,
-  ): this {
-    if (typeof prefix !== "string" || prefix.trim() === "") {
-      throw new Error(
-        "addService: a non-empty capability prefix is required " +
-          '(e.g. addService("media", { ... })).',
-      );
-    }
-    if (!CAPABILITY_NAME_PATTERN.test(prefix)) {
-      throw new Error(
-        `addService: prefix '${prefix}' is not a valid capability name — each ` +
-          `dot-separated segment must start with a letter and contain only ` +
-          `letters, digits, '_' or '-' (cross-ref src/core/registry/validation.go).`,
-      );
-    }
-    if (methods == null || typeof methods !== "object") {
-      throw new Error(
-        `addService("${prefix}", ...): methods must be an object mapping ` +
-          `method names to producer functions/definitions.`,
-      );
-    }
-    const names = Object.keys(methods).sort();
-    if (names.length === 0) {
-      throw new Error(
-        `addService("${prefix}", ...): at least one method is required.`,
-      );
-    }
-
-    // Pass 1 — validate EVERY derived name/entry before registering any tool so
-    // an invalid method mid-map is atomic (registers nothing). Also rejects a
-    // derived capability that collides with an already-registered tool (scoped
-    // to addService: addTool's own last-wins behavior for hand-written tools is
-    // unchanged).
-    const prepared: Array<{
-      capability: string;
-      def: import("./service-view.js").ServiceProducerMethodObject;
-    }> = [];
-    for (const method of names) {
-      const capability = `${prefix}.${method}`;
-      // Validate the FULL derived capability, not just the prefix: a method
-      // name may contain characters ('$', unicode, ...) the grammar rejects.
-      if (!CAPABILITY_NAME_PATTERN.test(capability)) {
-        throw new Error(
-          `addService("${prefix}", ...): method '${method}' derives capability ` +
-            `'${capability}', which is not a valid capability name (each ` +
-            `dot-separated segment must start with a letter and contain only ` +
-            `letters, digits, '_' or '-'). Rename the method.`,
-        );
-      }
-      if (this.tools.has(capability)) {
-        throw new Error(
-          `addService("${prefix}", ...): method '${method}' derives tool/` +
-            `capability '${capability}', which is already registered. Rename ` +
-            `the method or the conflicting tool.`,
-        );
-      }
-      const entry = methods[method];
-      // Guard: a service-view value here is the consumer surface used in the
-      // wrong role (producer). Fail loud.
-      if (isServiceView(entry)) {
-        throw new Error(
-          `addService("${prefix}", ...): method '${method}' is a ` +
-            `mesh.serviceView(...) — that is a CONSUMER view, not a producer ` +
-            `method. Provide an execute function or { execute, ... } object.`,
-        );
-      }
-      let def: import("./service-view.js").ServiceProducerMethodObject;
-      if (typeof entry === "function") {
-        def = { execute: entry as MeshToolDef["execute"] };
-      } else if (
-        entry != null &&
-        typeof entry === "object" &&
-        typeof (entry as { execute?: unknown }).execute === "function"
-      ) {
-        def = entry as import("./service-view.js").ServiceProducerMethodObject;
-      } else {
-        throw new Error(
-          `addService("${prefix}", ...): method '${method}' must be an execute ` +
-            `function or an object with an execute function.`,
-        );
-      }
-      prepared.push({ capability, def });
-    }
-
-    // Pass 2 — register through the existing addTool machinery. Derived name ===
-    // derived capability for deterministic uniqueness.
-    for (const { capability, def } of prepared) {
-      this.addTool({
-        ...(def as object),
-        name: capability,
-        capability,
-        parameters: def.parameters ?? defaultProducerParams(),
-        execute: def.execute,
-      } as MeshToolDef);
-    }
-    return this;
+  addService(..._args: unknown[]): never {
+    throw new Error(
+      'agent.addService(prefix) producer sugar was removed in v3.1.0 — it ' +
+        "derived the wire capability from the method name (coupling the " +
+        "cross-runtime contract to a language identifier) and could not express " +
+        "tags/version/dependencies. Declare each tool explicitly with " +
+        'agent.addTool({ capability: "prefix.method", ... }). See ' +
+        "https://github.com/dhyansraj/mcp-mesh/issues/1320",
+    );
   }
 
   /**

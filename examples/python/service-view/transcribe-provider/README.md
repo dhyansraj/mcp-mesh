@@ -4,9 +4,9 @@ Provider C (optional edge) in the [`@mesh.service` service-view example](../READ
 
 ## Overview
 
-A Python MCP Mesh agent. Publishes the `media.transcribe` capability via **producer sugar**:
-the `@mesh.service("media")` class exposes one public async method, so the mesh
-publishes it as the dotted capability `media.transcribe` — no per-method `@mesh.tool`.
+A Python MCP Mesh agent. Publishes the `media.transcribe` capability with an
+explicit `@mesh.tool(capability="media.transcribe")` — the dotted wire capability
+is declared deliberately, never derived from the Python method name.
 
 The `media.*` capability + its parameters match the Java and TypeScript
 providers exactly, so gateways in ANY runtime are interchangeable.
@@ -39,7 +39,7 @@ The agent will start on port 8122 by default. Override with the
 
 ```text
 transcribe-provider/
-├── main.py            # agent bootstrap + @mesh.service("media") producer
+├── main.py            # agent bootstrap + @mesh.tool(capability="media.transcribe")
 ├── requirements.txt
 ├── Dockerfile
 ├── helm-values.yaml

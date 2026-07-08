@@ -9,10 +9,9 @@ the `media.caption` capability, bound by `MediaService.caption(...)` in the
 A Java/Spring Boot MCP Mesh agent. Turns an asset id + source text into a
 deterministic caption.
 
-The capability is published with producer sugar: `MediaCaptionService` is a
-`@Component` annotated `@McpMeshService("media")`, so its public `caption(...)`
-method is exposed as the dotted capability `media.caption` — no per-method
-`@MeshTool` required.
+The capability is published by an ordinary `@Component`: `MediaCaptionService`'s
+`caption(...)` method carries `@MeshTool(capability = "media.caption")`, so the
+dotted capability name is declared explicitly on the annotation.
 
 ## Getting Started
 
@@ -45,7 +44,7 @@ caption-provider/
 ├── helm-values.yaml
 └── src/main/java/com/example/captionprovider/
     ├── CaptionProviderApplication.java  # agent bootstrap
-    └── MediaCaptionService.java         # @McpMeshService("media") producer bean
+    └── MediaCaptionService.java         # @MeshTool(capability = "media.caption")
 ```
 
 ## Docker

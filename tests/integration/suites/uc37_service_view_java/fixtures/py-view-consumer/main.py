@@ -3,7 +3,7 @@
 (RFC #1280 cross-runtime seam, tc10).
 
 The ``SvcView`` view binds the dotted svc.* capabilities published by
-java-view-producer's ``@McpMeshService("svc")`` sugar. ``bravo`` carries
+java-view-producer as explicit ``@MeshTool`` dotted capabilities. ``bravo`` carries
 ``required=True``: because a Python view is a TOOL-PARAMETER surface, its
 edges are ordinary tool dependency slots, so the required edge participates
 in the issue #1273 pre-invoke guard — calling ``py_view_report`` while

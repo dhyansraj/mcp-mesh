@@ -21,30 +21,30 @@ changes. The group is a typed view; the capability remains the atom.
 Each provider publishes ONE slice of the shared, dotted `media.*` namespace, and
 the consumer aggregates all three behind one typed interface.
 
-## Producer side: publish a service, not N tools
+## Producer side: publish dotted capabilities explicitly
 
-Each provider is a producer-sugar bean: a class annotated
-`@McpMeshService("media")` publishes each of its public methods as a mesh tool
-under the capability `media.<methodName>` — no per-method `@MeshTool` needed.
+Each provider is an ordinary `@Component` whose method declares its dotted
+capability directly on `@MeshTool(capability = "media.<name>")`:
 
 ```java
 @Component
-@McpMeshService("media")            // prefix is entirely user-chosen; nothing is hard-coded in the mesh
 public class MediaCaptionService {
-    public CaptionResult caption(@Param("assetId") String assetId,   // → capability "media.caption"
+    @MeshTool(capability = "media.caption")            // the dotted name is declared, not derived
+    public CaptionResult caption(@Param("assetId") String assetId,
                                  @Param("text") String text) { ... }
 }
 ```
 
 - **Dotted capability names are first-class** across the stack — registry,
   Python, and Java validators all accept segment-wise names like `media.caption`.
-  The published capability is simply `prefix + "." + methodName`.
-- **The prefix is yours.** `"media"` carries no special meaning; pick any
-  segment-wise name (e.g. `"media.v2"`). The three agents here all use `"media"`,
-  so together they populate one namespace from three independent processes.
-- **Methods are published name-sorted**, and an explicit `@MeshTool` on a method
-  still WINS — reach for it only when a method needs custom `tags`, `version`, or
-  `description`; the sugar intentionally uses annotation defaults otherwise.
+- **The name is yours.** `"media"` carries no special meaning; pick any
+  segment-wise name (e.g. `"media.v2"`). The three agents here all publish into
+  `media.*`, so together they populate one namespace from three independent
+  processes.
+- **The `@MeshTool` owns the contract.** Because the wire capability is declared
+  on the annotation rather than derived from the Java method name, it is
+  decoupled from the language identifier and can carry `tags`, `version`, and
+  `dependencies` when needed.
 
 The consumer declares one interface aggregating all three capabilities:
 
@@ -62,9 +62,9 @@ registers a facade bean named `mediaService`. The gateway `@Autowired`s it and
 calls the methods directly — no manual proxy wiring. `caption` is `required`;
 `thumbnail` and `transcribe` are optional.
 
-> Note the symmetry: the same `@McpMeshService` annotation marks a producer
-> (on a `@Component` CLASS, with a prefix) and a consumer view (on an INTERFACE,
-> no prefix). A blank prefix is valid only on the interface form.
+> `@McpMeshService` is a CONSUMER-side annotation: it marks a service-view
+> INTERFACE. Providers publish ordinary `@MeshTool`s — dotted capability names
+> and all.
 
 ## What it demonstrates
 

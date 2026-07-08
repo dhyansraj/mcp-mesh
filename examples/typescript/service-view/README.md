@@ -1,4 +1,4 @@
-# Service View Example — `mesh.serviceView` / `agent.addService` (RFC #1280, TypeScript)
+# Service View Example — `mesh.serviceView` (RFC #1280, TypeScript)
 
 **Three methods, three different provider agents, one typed interface.**
 
@@ -23,29 +23,34 @@ that capability's own resolved proxy — so different methods resolve to
 | `transcribe-provider` | 8132 | `media.transcribe` | Provider C — transcribes an asset      |
 | `media-gateway`       | 8133 | `process_media`    | Consumer — one service view            |
 
-## Producer side: publish a service, not N tools
+## Producer side: publish each dotted capability explicitly
 
-Each provider calls `agent.addService("media", { ... })`, which publishes each
-entry as a mesh tool under the capability `media.<method>` — no per-method
-`addTool` needed.
+Each provider declares its dotted capability with an ordinary
+`agent.addTool({ capability: "media.<method>", ... })`.
 
 ```ts
-agent.addService("media", {          // "media" prefix is user-chosen; nothing is hard-coded
-  caption: async (args: { assetId: string; text: string }) => ({   // → capability "media.caption"
-    assetId: args.assetId,
-    caption: `A scene showing ${args.text.trim().toLowerCase()}.`,
-    provider: "caption-provider",
-  }),
+agent.addTool({
+  name: "caption",
+  capability: "media.caption",   // dotted name is user-chosen; nothing is hard-coded
+  parameters: z.object({ assetId: z.string(), text: z.string() }),
+  execute: async (args) => {
+    const { assetId, text } = args as { assetId: string; text: string };
+    return {
+      assetId,
+      caption: `A scene showing ${text.trim().toLowerCase()}.`,
+      provider: "caption-provider",
+    };
+  },
 });
 ```
 
 - **Dotted capability names are first-class** across the stack — the
   registry and the Java/Python/TypeScript runtimes all accept segment-wise names
-  like `media.caption`. The published capability is `prefix.<method>`.
-- **The prefix is yours.** All three agents use `"media"`, so together they
-  populate one namespace from three independent processes.
-- Entries are published **name-sorted**; the object form
-  (`{ execute, tags, version, parameters }`) lets a method carry custom metadata.
+  like `media.caption`.
+- **The namespace is yours.** All three agents publish under `media.*`, so
+  together they populate one namespace from three independent processes.
+- Declaring each tool explicitly lets it carry its own `tags`, `version`, and
+  `dependencies` — a producer-side capability is just a normal mesh tool.
 
 ## Consumer side: one typed view
 

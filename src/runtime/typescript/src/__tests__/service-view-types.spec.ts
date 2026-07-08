@@ -45,21 +45,6 @@ function _documentedConsumerIdiom(): void {
   });
 }
 
-// ── Producer sugar idiom, verbatim. ──────────────────────────────────────────
-function _documentedProducerIdiom(): void {
-  const server = {} as unknown as import("fastmcp").FastMCP;
-  const agent = mesh(server, { name: "producer", httpPort: 0 });
-
-  agent.addService("media", {
-    caption: async (args: { text: string }) => ({ caption: args.text }),
-    thumbnail: {
-      execute: async (args: { assetId: string }) => ({ url: args.assetId }),
-      tags: ["fast"],
-      description: "thumbnail",
-    },
-  });
-}
-
 // ── The facade type maps each method key to a callable (compile-time only). ───
 type _MediaFacade = MeshServiceFacade<
   ReturnType<
@@ -69,9 +54,8 @@ type _MediaFacade = MeshServiceFacade<
 const _facadeMethodIsCallable: _MediaFacade["caption"] = async () => undefined;
 
 describe("service-view documented idiom compiles under strict", () => {
-  it("type-checks the consumer + producer idioms (compile-only)", () => {
+  it("type-checks the consumer idiom (compile-only)", () => {
     expect(typeof _documentedConsumerIdiom).toBe("function");
-    expect(typeof _documentedProducerIdiom).toBe("function");
     expect(typeof _facadeMethodIsCallable).toBe("function");
   });
 });

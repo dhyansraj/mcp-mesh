@@ -1,10 +1,9 @@
 /**
  * thumbnail-provider — MCP Mesh agent (TypeScript).
  *
- * Publishes `media.thumbnail` via producer sugar (RFC #1280):
- * `agent.addService("media", { thumbnail })` publishes the `thumbnail` entry as
- * the dotted capability `media.thumbnail` — a second slice of the shared
- * `media.*` namespace, served by a DIFFERENT agent than caption/transcribe.
+ * Publishes the dotted capability `media.thumbnail`, declared EXPLICITLY via
+ * `agent.addTool({ capability, ... })` — a second slice of the shared `media.*`
+ * namespace, served by a DIFFERENT agent than caption/transcribe.
  *
  * Cross-runtime: parameter names (`assetId`, `width`) and the capability match
  * the Java and Python providers, so any-runtime gateways are interchangeable.
@@ -29,26 +28,23 @@ const agent = mesh(server, {
   description: "Publishes media.thumbnail into the shared media.* namespace",
 });
 
-agent.addService("media", {
-  // Object form: a Zod schema documents + validates the tool's inputs at
-  // runtime (addService forwards `parameters` to the underlying addTool). The
-  // object-form execute types its args as `unknown`, so narrow after validation.
-  thumbnail: {
-    parameters: z.object({
-      assetId: z.string().describe("Media asset identifier"),
-      width: z.number().int().positive().describe("Requested thumbnail width in pixels"),
-    }),
-    execute: async (args) => {
-      const { assetId, width } = args as { assetId: string; width: number };
-      const w = width && width > 0 ? width : 128;
-      const h = Math.max(1, Math.floor((w * 9) / 16));
-      return {
-        assetId,
-        uri: `thumb://${assetId}?w=${w}&h=${h}`,
-        size: `${w}x${h}`,
-        provider: "thumbnail-provider",
-      };
-    },
+agent.addTool({
+  name: "thumbnail",
+  capability: "media.thumbnail",
+  parameters: z.object({
+    assetId: z.string().describe("Media asset identifier"),
+    width: z.number().int().positive().describe("Requested thumbnail width in pixels"),
+  }),
+  execute: async (args) => {
+    const { assetId, width } = args as { assetId: string; width: number };
+    const w = width && width > 0 ? width : 128;
+    const h = Math.max(1, Math.floor((w * 9) / 16));
+    return {
+      assetId,
+      uri: `thumb://${assetId}?w=${w}&h=${h}`,
+      size: `${w}x${h}`,
+      provider: "thumbnail-provider",
+    };
   },
 });
 

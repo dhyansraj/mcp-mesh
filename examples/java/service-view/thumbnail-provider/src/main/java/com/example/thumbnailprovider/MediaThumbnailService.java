@@ -1,18 +1,15 @@
 package com.example.thumbnailprovider;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshTool;
 import io.mcpmesh.Param;
 import org.springframework.stereotype.Component;
 
 /**
- * Producer-sugar bean (RFC #1280 phase 3): {@code @McpMeshService("media")}
- * publishes each public method as {@code media.<methodName>}. This bean's single
- * public method {@code thumbnail} publishes the dotted capability
- * {@code media.thumbnail} — a second slice of the same {@code media.*} namespace
- * served by a different agent.
+ * Publishes the dotted capability {@code media.thumbnail} — a second slice of
+ * the shared {@code media.*} namespace, served by a different agent. The
+ * capability name is declared EXPLICITLY on the {@code @MeshTool}.
  */
 @Component
-@McpMeshService("media")
 public class MediaThumbnailService {
 
     /**
@@ -22,6 +19,7 @@ public class MediaThumbnailService {
      * @param width   requested thumbnail width in pixels
      * @return a thumbnail record, tagged with this provider's name
      */
+    @MeshTool(capability = "media.thumbnail")
     public ThumbnailResult thumbnail(
         @Param(value = "assetId", description = "Media asset identifier") String assetId,
         @Param(value = "width", description = "Requested thumbnail width in pixels") int width

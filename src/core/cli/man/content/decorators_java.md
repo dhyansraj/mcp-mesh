@@ -185,14 +185,7 @@ Specifies capability and tag selection for dependencies, LLM providers, and filt
 
 ## @McpMeshService
 
-Aggregates several capabilities behind one typed **service view**, and — on a class — publishes a bean's methods as capabilities. Where you put it decides the role:
-
-| Placement | Role |
-| --------- | ---- |
-| On an **interface** (`@McpMeshService`) | Consumer **service view** — each abstract method binds one capability via a method-level `@Selector`; consumed as an `@Autowired` facade bean or a `@MeshTool` parameter |
-| On a **Spring bean class** (`@McpMeshService("prefix")`) | Producer sugar — publishes each eligible public method as capability `prefix.<methodName>` |
-
-**As a consumer view (interface):**
+Aggregates several capabilities behind one typed **consumer service view**. Annotate an **interface** of abstract methods, each binding one capability via a method-level `@Selector`; consume it as an `@Autowired` facade bean or a `@MeshTool` parameter.
 
 ```java
 @McpMeshService
@@ -209,25 +202,21 @@ Each method expands into an ordinary dependency edge, so a view over N capabilit
 public Result process(@Param("id") String id, MediaService media) { ... }  // view param → per-method edges
 ```
 
-**As a producer (class):**
+The capabilities a view binds are ordinary dotted tools — each declared explicitly on its provider with a dot-namespaced `@MeshTool(capability = ...)`:
 
 ```java
-@Component
-@McpMeshService("media")
-public class MediaProvider {
-    public CaptionResult   caption(CaptionRequest req)     { ... }  // → capability "media.caption"
-    public ThumbnailResult thumbnail(ThumbnailRequest req) { ... }  // → capability "media.thumbnail"
-}
+@MeshTool(capability = "media.caption")
+public CaptionResult caption(CaptionRequest req) { ... }  // → capability "media.caption"
+
+@MeshTool(capability = "media.thumbnail")
+public ThumbnailResult thumbnail(ThumbnailRequest req) { ... }  // → capability "media.thumbnail"
 ```
 
-Public instance methods declared on the class are published name-sorted; a method carrying its own `@MeshTool` wins (use it for a custom capability/tags/version). Overloads boot-fail.
+| Attribute      | Required | Description                                                                 |
+| -------------- | -------- | -------------------------------------------------------------------------- |
+| `minAvailable` | No       | Consumer-view availability floor; below it every facade call fails with `MeshServiceUnavailableException` — synchronous methods throw, `CompletableFuture` methods return a failed future (default `0`) |
 
-| Attribute      | Required   | Description                                                                 |
-| -------------- | ---------- | -------------------------------------------------------------------------- |
-| `value`        | On a class | Capability prefix for producer publishing (segment-validated); omit on a consumer interface |
-| `minAvailable` | No         | Consumer-view availability floor; below it every facade call fails with `MeshServiceUnavailableException` — synchronous methods throw, `CompletableFuture` methods return a failed future (default `0`). Ignored (WARN) on a producer class |
-
-For the full semantics — param-mapping rules, return types, `required`/optional behavior, the availability floor, both consumption styles, and producer publishing — see `meshctl man dependency-injection --java`.
+For the full semantics — param-mapping rules, return types, `required`/optional behavior, the availability floor, and both consumption styles — see `meshctl man dependency-injection --java`.
 
 ## @MeshLlm
 

@@ -1,8 +1,8 @@
 # tc10_py_view_consumer — RFC #1280 cross-runtime consumer parity (PYTHON):
 # a @mesh.service view in a PYTHON consumer binds the DOTTED svc.*
-# capabilities published by the JAVA producer's @McpMeshService("svc") sugar,
-# and the required-edge refusal envelope is byte-compatible with the Java
-# tool-param path (tc06).
+# capabilities published by the JAVA producer's explicit @MeshTool dotted
+# capabilities, and the required-edge refusal envelope is byte-compatible with
+# the Java tool-param path (tc06).
 #
 # Topology: java-view-producer (svc.alpha + svc.bravo) + py-view-consumer
 # whose SvcView binds both (bravo required=True) and whose py_view_report

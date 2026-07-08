@@ -1,13 +1,10 @@
 """
 RFC #1280 service views — Python runtime.
 
-Two related roles depending on the decorated class (mirrors the Java
-``@McpMeshService`` contract; uc37 is the cross-runtime seam):
-
-CONSUMER VIEW (no prefix) — a typed aggregation of ordinary capability
-dependencies. Every public method carries ``@mesh.selector(...)`` and is a
-stub whose body is never executed; the framework injects a facade whose
-methods delegate to each capability's own resolved proxy::
+CONSUMER VIEW — a typed aggregation of ordinary capability dependencies. Every
+public method carries ``@mesh.selector(...)`` and is a stub whose body is never
+executed; the framework injects a facade whose methods delegate to each
+capability's own resolved proxy::
 
     @mesh.service                       # or @mesh.service(min_available=2)
     class MediaService:
@@ -21,19 +18,14 @@ methods delegate to each capability's own resolved proxy::
                       media: MediaService = None):
         cap = await media.caption({"text": req["text"]})
 
-PRODUCER SUGAR (prefix argument) — each public method of the class becomes an
-ordinary mesh tool with capability ``prefix.<method>``, published through the
-existing ``@mesh.tool`` machinery::
+Every public method of the view must carry ``@mesh.selector``. ``min_available``
+declares an availability floor for the view.
 
-    @mesh.service("media")              # publishes media.caption, media.thumbnail
-    class MediaTools:
-        async def caption(self, args: dict) -> dict:
-            return {...}
-
-Disambiguation: a prefix present → producer (methods must be real
-implementations; any ``@mesh.selector`` inside → boot-fail "mixed roles"); no
-prefix → consumer view (every public method must carry ``@mesh.selector``).
-``min_available`` is only valid on a consumer view.
+The producer-side ``@mesh.service("prefix")`` sugar was REMOVED in v3.1.0 (issue
+#1320): it derived the wire capability from the method name, coupling the
+cross-runtime contract to a language identifier, and could not express
+tags/version/dependencies. Declare each tool explicitly with
+``@mesh.tool(capability="prefix.method")`` instead.
 """
 
 import logging
@@ -103,8 +95,8 @@ class ServiceViewMeta:
 
 def _validate_capability_segmented(capability: str, context: str) -> None:
     """Reuse the pydantic ``AgentCapability`` name validator (RFC #1280 v3
-    dotted rule) so views/producers accept exactly what the registry does —
-    no duplicated regex.
+    dotted rule) so views accept exactly what the registry does — no
+    duplicated regex.
     """
     from pydantic import ValidationError
 
@@ -433,225 +425,37 @@ def _attach_pydantic_schema(cls) -> None:
     cls.__get_pydantic_core_schema__ = classmethod(__get_pydantic_core_schema__)
 
 
-def _build_producer(cls, prefix: str, min_available: int):
-    """Publish each public method of a prefixed class as a mesh tool."""
-    if min_available:
-        raise ValueError(
-            f"@mesh.service producer '{cls.__name__}': min_available is only "
-            f"valid on a consumer view (no prefix), not on a producer class."
-        )
-    if not prefix or not str(prefix).strip():
-        raise ValueError(
-            f"@mesh.service producer '{cls.__name__}': prefix must not be blank."
-        )
-    _validate_capability_segmented(prefix, f"@mesh.service producer '{cls.__name__}' prefix")
-
-    method_names = _public_methods(cls)
-
-    # Mixed-roles guard: a producer method must be a real implementation, not
-    # a selector stub.
-    for name in method_names:
-        if getattr(getattr(cls, name), SELECTOR_ATTR, None) is not None:
-            raise ValueError(
-                f"@mesh.service producer '{cls.__name__}' (prefix '{prefix}'): "
-                f"method '{name}' carries @mesh.selector — a prefixed class is a "
-                f"producer (methods are implementations), not a consumer view. "
-                f"Remove the prefix to make it a view, or remove @mesh.selector."
-            )
-
-    from . import decorators
-
-    # Instantiate ONCE at decoration time (bound methods are what get
-    # published). Producers must be zero-arg constructible; surface a
-    # constructor failure with a message naming @mesh.service and the class
-    # rather than a bare traceback from deep in the decorator.
-    try:
-        instance = cls()
-    except Exception as e:
-        raise ValueError(
-            f"@mesh.service producer '{cls.__name__}' (prefix '{prefix}'): "
-            f"failed to instantiate the class — producer classes must be "
-            f"zero-arg constructible (the sugar instantiates once at "
-            f"decoration time to publish bound methods). Constructor raised: "
-            f"{e!r}"
-        ) from e
-
-    for name in method_names:
-        member = getattr(cls, name)
-        own_meta = getattr(member, "_mesh_tool_metadata", None)
-        bound = getattr(instance, name)
-        if own_meta is not None:
-            # A method carrying its own @mesh.tool WINS: it keeps its declared
-            # capability (NOT the prefix sugar). But that @mesh.tool ran on the
-            # UNBOUND method during class-body evaluation, so `self` leaked into
-            # the FastMCP schema and it registered under the bare method name.
-            # Re-publish the BOUND method with the user's original metadata so
-            # `self` is gone and the registry key is unique per capability.
-            _republish_tool_wins(name, bound, own_meta, cls)
-            continue
-
-        capability = f"{prefix}.{name}"
-        _validate_capability_segmented(
-            capability, f"@mesh.service producer '{cls.__name__}' method '{name}'"
-        )
-        published = _wrap_bound(bound)
-        # Unique, deterministic, cross-runtime-consistent identity: the dotted
-        # capability itself (Java sugar uses the capability as the tool name;
-        # FastMCP accepts dots). DecoratorRegistry keys on __name__, so two
-        # producer classes sharing a method name (get/list/status) no longer
-        # silently clobber each other.
-        published.__name__ = capability
-        published.__qualname__ = capability
-        # Stamp the serving mark on ``published`` BEFORE @mesh.tool decorates
-        # it: the DI wrapper (and its untyped single-parameter analysis) is
-        # created inside that decoration, and the analyzer reads this marked
-        # callable directly — so the mark must already be present to suppress
-        # the false-positive DI warning on the ``args: dict`` input param.
-        _mark_for_serving(published, capability)
-        wrapper = decorators.tool(capability=capability)(published)
-        _mark_for_serving(wrapper, capability)
-
-    return cls
-
-
-def _mark_for_serving(wrapper, capability: str) -> None:
-    """Flag a sugar/tool-wins-published wrapper so the startup pipeline attaches
-    it to the SERVED FastMCP server.
-
-    Unlike an ordinary tool (where the user stacks ``@app.tool()`` +
-    ``@mesh.tool()`` — the former SERVES, the latter WIRES), producer sugar
-    applies ``@mesh.tool`` programmatically and the user never touches the
-    FastMCP server. The DI wrapper lands in DecoratorRegistry (→ heartbeat/wire)
-    but NOT on the served FastMCP instance, so tools/list wouldn't show it and
-    tools/call would 'Unknown tool'. ``ServiceViewProducerServingStep`` reads
-    this marker after FastMCP discovery and registers the wrapper on the server
-    — the same late-bind pattern the MeshJob helper tools use.
-    """
-    try:
-        wrapper._mesh_service_served_name = capability
-    except (AttributeError, TypeError):
-        logger.debug(
-            "@mesh.service: could not mark '%s' for FastMCP serving", capability
-        )
-
-
-def _wrap_bound(bound):
-    """Wrap a bound method in a plain function @mesh.tool can decorate.
-
-    Bound methods are read-only (no attribute assignment); the wrapper gives a
-    clean module-level-style callable. ``functools.wraps`` preserves
-    ``__annotations__`` / ``__doc__`` / ``__wrapped__`` so signature analysis
-    (``self`` already excluded on the bound method) and schema extraction
-    resolve exactly as for a hand-written tool.
-    """
-    import functools
-    import inspect
-
-    if inspect.isasyncgenfunction(bound):
-        # Streaming producer method (``async def ... -> Stream[str]: yield``).
-        # The wrapper MUST itself be an async-generator function so the stream
-        # detection (``inspect.isasyncgenfunction``) and dispatch treat it as a
-        # stream directly, rather than relying on the wraps-carried annotation +
-        # the stream wrapper's non-asyncgen fallback.
-        @functools.wraps(bound)
-        async def published(*args, __bound=bound, **kwargs):
-            async for _item in __bound(*args, **kwargs):
-                yield _item
-
-    elif inspect.iscoroutinefunction(bound):
-
-        @functools.wraps(bound)
-        async def published(*args, __bound=bound, **kwargs):
-            return await __bound(*args, **kwargs)
-
-    else:
-
-        @functools.wraps(bound)
-        def published(*args, __bound=bound, **kwargs):
-            return __bound(*args, **kwargs)
-
-    return published
-
-
-def _republish_tool_wins(method_name: str, bound, own_meta: dict, cls) -> None:
-    """Re-publish a tool-wins producer method as its BOUND form.
-
-    The user's ``@mesh.tool`` decorated the unbound method (``self`` in the
-    signature, registered under the bare name). Reconstruct the exact
-    ``@mesh.tool`` call from the stored metadata onto the bound method so the
-    schema has no ``self`` and the registry key is unique per capability.
-    """
-    from . import decorators
-
-    capability = own_meta.get("capability")
-    # Drop the stale unbound registration (keyed by the bare method __name__).
-    from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
-
-    DecoratorRegistry.unregister_mesh_tool(method_name)
-
-    published = _wrap_bound(bound)
-    # Unique identity: the user's own capability if set, else the bare name.
-    published.__name__ = capability or method_name
-    published.__qualname__ = published.__name__
-    # Stamp the serving mark before @mesh.tool runs so it's visible to the DI
-    # analyzer inside the decoration (see _build_producer for the rationale).
-    _mark_for_serving(published, published.__name__)
-
-    # Reconstruct the tool() call from the standard fields; forward any extra
-    # metadata (vendor kwargs) verbatim. ``retry_on`` is stored as a tuple
-    # (``()`` when unset) but tool() rejects a non-None retry_on with task=False
-    # — normalize empty → None.
-    _standard = {
-        "capability",
-        "tags",
-        "version",
-        "dependencies",
-        "description",
-        "output_schema_strict",
-        "task",
-        "retry_on",
-    }
-    extra = {
-        k: v
-        for k, v in own_meta.items()
-        if k not in _standard and k not in ("stream_type", "function_name")
-    }
-    retry_on = own_meta.get("retry_on") or None
-    wrapper = decorators.tool(
-        capability=capability,
-        tags=own_meta.get("tags"),
-        version=own_meta.get("version", "1.0.0"),
-        dependencies=own_meta.get("dependencies"),
-        description=own_meta.get("description"),
-        output_schema_strict=own_meta.get("output_schema_strict", True),
-        task=own_meta.get("task", False),
-        retry_on=retry_on,
-        **extra,
-    )(published)
-    _mark_for_serving(wrapper, published.__name__)
+def _producer_sugar_removed_message(prefix: str) -> str:
+    return (
+        "@mesh.service(prefix) producer sugar was removed in v3.1.0 — it derived "
+        "the wire capability from the method name (coupling the cross-runtime "
+        "contract to a language identifier) and could not express "
+        "tags/version/dependencies. Declare each tool explicitly: "
+        f'@mesh.tool(capability="{prefix}.{{method}}"). '
+        "See https://github.com/dhyansraj/mcp-mesh/issues/1320"
+    )
 
 
 def service(arg=None, *, min_available: int = 0):
-    """RFC #1280 ``@mesh.service`` — consumer view or producer sugar.
+    """RFC #1280 ``@mesh.service`` — typed consumer view.
 
     Forms::
 
         @mesh.service                    # consumer view
         @mesh.service()                  # consumer view
         @mesh.service(min_available=2)   # consumer view with availability floor
-        @mesh.service("media")           # producer sugar (publishes media.<method>)
     """
     # Bare @mesh.service (class passed directly) → consumer view.
     if isinstance(arg, type):
         return _build_consumer_view(arg, min_available)
 
-    prefix = arg  # str (producer) or None (consumer view)
+    prefix = arg  # str (removed producer sugar) or None (consumer view)
 
     def decorator(cls):
         if not isinstance(cls, type):
             raise ValueError("@mesh.service must decorate a class")
         if prefix is not None:
-            return _build_producer(cls, prefix, min_available)
+            raise ValueError(_producer_sugar_removed_message(prefix))
         return _build_consumer_view(cls, min_available)
 
     return decorator

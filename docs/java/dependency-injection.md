@@ -215,6 +215,24 @@ public class MediaGatewayApplication {
 - Parameters follow the `@MeshTool` convention: **0 params** → no-arg call; **exactly 1 unannotated POJO/record param** → that object becomes the params (scalars still need `@Param`); **2+ params** → each needs `@Param("name")`.
 - Return `T` (synchronous), `CompletableFuture<T>` (async), or `java.util.concurrent.Flow.Publisher<String>` (streaming).
 
+A method taking several arguments must name each one with `@Param` — the single-record shorthand only applies when there is exactly one unannotated POJO/record parameter:
+
+```java
+@McpMeshService
+public interface SessionService {
+    // 2+ params → each carries @Param; they become the target tool's named args
+    @Selector(capability = "session_state.record_question_score", required = true)
+    Map<String, Object> recordQuestionScore(
+            @Param("sessionId") String sessionId,
+            @Param("questionId") String questionId,
+            @Param("score") int score);
+
+    // exactly one unannotated record → the record becomes the params
+    @Selector(capability = "session_state.summary")
+    SessionSummary summary(SummaryRequest req);
+}
+```
+
 ### Views as tool parameters
 
 A view can also be consumed as a `@MeshTool` method **parameter** instead of an autowired bean. The view's methods then become dependency edges **on that tool** — declared after the tool's explicit `@Selector` deps, name-sorted per view, and in parameter order when a method takes several views — so the tool's dep count in `meshctl list` includes them. A view parameter must **not** carry `@Param`.
@@ -232,6 +250,27 @@ public Result processMedia(
 
 The same interface can be used both ways at once — autowired as a bean **and** passed as a tool parameter. The two consumption styles resolve independently (each dependency event feeds both the tool's wrapper slot and the shared bean facade), but shared capabilities register as a **single** wire edge: the tool-declared edge wins, and the bean path's synthetic carrier only registers capabilities not already declared elsewhere — so `meshctl list` shows N edges, not 2N. `minAvailable` still applies at the facade. Crucially, a `required = true` view method now participates in **that tool's** pre-invoke guard: if the edge is unresolved the tool returns the structured `dependency_unavailable` refusal before the handler runs, on both the direct and claim paths — exactly like a tool-declared `@Selector` dependency.
 
+### Views and `@MeshRoute`
+
+A `@McpMeshService` view interface is a **tool-parameter / bean-only** surface: used as a `@MeshRoute` handler parameter it is **rejected** at boot (a view facade cannot become a route perimeter). A route consumes a specific capability via `@MeshInject` instead — including a single dotted capability that a view would otherwise group. Declare the capability in the route's `dependencies = {}` and inject its proxy by name:
+
+```java
+@MeshRoute(dependencies = {
+    @MeshDependency(capability = "session_state.record_question_score", required = true)
+})
+@PostMapping("/score")
+public ResponseEntity<Map<String, Object>> score(
+        @RequestBody ScoreRequest body,
+        @MeshInject("session_state.record_question_score") McpMeshTool<Map<String, Object>> recordScore) {
+    return ResponseEntity.ok(recordScore.call(Map.of(
+        "sessionId", body.sessionId(),
+        "questionId", body.questionId(),
+        "score", body.score())));
+}
+```
+
+`@MeshDependency.required()` **defaults to `false`** — set `required = true` to get the pre-invoke `503 dependency_unavailable` perimeter guard before your handler runs (after the settle window). Left at the default, an unresolved dotted capability injects an unavailable proxy and the route falls through to your own `isAvailable()` handling.
+
 ### Required, optional, and the availability floor
 
 `required = true` on a view method behaves like a class-level `@MeshDependsOn` required dependency (see [Required Dependencies](#required-dependencies) below): it participates in cross-source required-wins dedupe, flips the registry-side availability of that capability's carrier when unresolved (visible in `meshctl list` and the registry API), and promotes any matching route-perimeter 503 guard. An optional method whose provider is down throws `MeshToolUnavailableException` on **that call only**; catch it for graceful degradation while the rest of the view keeps working.
@@ -243,27 +282,27 @@ The optional `@McpMeshService(minAvailable = N)` adds a consumer-local availabil
 
 A service view is **consumer-local**, not a shared contract: two consumers may aggregate the same capabilities differently, and there is no group versioning or interface-level availability summary. Each method resolves independently.
 
-### Publishing a service (producer side)
+### Publishing the dotted capabilities a view binds
 
-The same annotation works on the **provider** side too. Put class-level `@McpMeshService("prefix")` on a Spring bean and each eligible public method is published as an ordinary mesh tool under the capability `prefix.<methodName>` — pure sugar over writing one `@MeshTool` per method.
+A view is consumer-side only — it aggregates capabilities, it does not publish them. The dotted capabilities it binds are ordinary mesh tools, each declared explicitly on its provider with a dot-namespaced `@MeshTool(capability = ...)`:
 
 ```java
 @Component
-@McpMeshService("media")
 public class MediaProvider {
-    public CaptionResult   caption(CaptionRequest req)     { ... }   // → capability "media.caption"
-    public ThumbnailResult thumbnail(ThumbnailRequest req) { ... }   // → capability "media.thumbnail"
+    @MeshTool(capability = "media.caption")
+    public CaptionResult caption(CaptionRequest req) { ... }              // → capability "media.caption"
 
-    @MeshTool(capability = "transcribe_gpu", tags = {"gpu"})          // custom name — @MeshTool overrides the prefix.<method> derivation
-    public TranscriptResult transcribe(TranscribeRequest req) { ... }
+    @MeshTool(capability = "media.thumbnail")
+    public ThumbnailResult thumbnail(ThumbnailRequest req) { ... }        // → capability "media.thumbnail"
+
+    @MeshTool(capability = "media.transcribe", tags = {"gpu"})
+    public TranscriptResult transcribe(TranscribeRequest req) { ... }     // → capability "media.transcribe"
 }
 ```
 
-- The `prefix` is entirely yours, segment-validated at boot (each dot-separated segment `^[a-zA-Z][a-zA-Z0-9_-]*$`, e.g. `media` or `media.v2`). The blank default `@McpMeshService` marks a consumer view and boot-fails on a producer class.
-- Methods publish in **name-sorted** order. Only **public, instance** methods **declared on the class itself** are published — non-public, `static`, `Object`, and inherited-from-superclass methods are skipped.
-- An **explicit `@MeshTool`** on a method wins — use it whenever a method needs a custom capability, tags, version, or description; producer sugar synthesizes none of those.
-- **Overloaded** public methods collide on `prefix.<name>` and boot-fail: rename one, make one non-public, or give one an explicit `@MeshTool`.
-- `minAvailable` is a consumer-view attribute; on a producer class it logs a WARN and is ignored. A `@McpMeshService` class that Spring doesn't manage as a bean WARNs during startup, after bean initialization, and publishes nothing.
+- Each dotted `capability` is segment-validated at boot (each dot-separated segment `^[a-zA-Z][a-zA-Z0-9_-]*$`, e.g. `media.caption` or `media.v2.caption`) and resolves independently, so the three methods above can live on one bean or spread across several agents.
+- Every published capability carries its own `@MeshTool` — declare each one's tags, version, description, and `outputType` where you need them.
+- `meshctl list --services` groups the dotted names for display by the segments before the last dot; there is no separate service record behind the grouping.
 
 !!! note "Discovery caveat"
     An auto-registered facade **bean** requires `@McpMeshService` directly on the interface. An interface that only *inherits* `@McpMeshService` from a super-interface is still usable as a `@MeshTool` view parameter, but is not auto-discovered as a bean.

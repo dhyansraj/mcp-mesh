@@ -10,10 +10,9 @@ this agent to see the gateway degrade gracefully.
 A Java/Spring Boot MCP Mesh agent. Turns an asset id + width into a deterministic
 thumbnail descriptor.
 
-The capability is published with producer sugar: `MediaThumbnailService` is a
-`@Component` annotated `@McpMeshService("media")`, so its public `thumbnail(...)`
-method is exposed as the dotted capability `media.thumbnail` — no per-method
-`@MeshTool` required.
+The capability is published by an ordinary `@Component`: `MediaThumbnailService`'s
+`thumbnail(...)` method carries `@MeshTool(capability = "media.thumbnail")`, so
+the dotted capability name is declared explicitly on the annotation.
 
 ## Getting Started
 
@@ -46,7 +45,7 @@ thumbnail-provider/
 ├── helm-values.yaml
 └── src/main/java/com/example/thumbnailprovider/
     ├── ThumbnailProviderApplication.java  # agent bootstrap
-    └── MediaThumbnailService.java         # @McpMeshService("media") producer bean
+    └── MediaThumbnailService.java         # @MeshTool(capability = "media.thumbnail")
 ```
 
 ## Docker

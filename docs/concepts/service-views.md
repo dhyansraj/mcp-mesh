@@ -91,6 +91,8 @@ each method delegates to its own per-capability resolved proxy
 
 Because the expansion is byte-identical to hand-written edges, the registry, the wire protocol, and the resolution algorithm are all unchanged. If the same capability is declared both loosely and through a view, the required-wins dedupe collapses them to a single edge — the view never double-registers.
 
+A legacy union capability (e.g. `session_state`) and its dotted successors (`session_state.record_question_score`, `session_state.*`) are independent capabilities as far as the registry is concerned — one agent can publish and another can consume both at once. That makes an incremental migration painless: stand up the dotted tools alongside the union capability, move consumers over method by method, and retire the union capability once nothing binds it.
+
 ## Binds on all four constructs
 
 A view method is a full dependency declaration, so it binds on the same four constructs the resolver applies to any edge — method by method:
@@ -104,9 +106,9 @@ A view method is a full dependency declaration, so it binds on the same four con
 
 One method can pin `+fast` and `>=2.0.0`; the next can require a specific output schema; a third can take whatever provider is healthy. See [Tag Matching](tag-matching.md) and [Schema Matching](schema-matching.md) for how those two disambiguators work.
 
-## Three roles
+## Two roles
 
-A service view shows up in three places. This page stays at the mechanism level — the exact signatures live in the SDK guides.
+A service view shows up in two places. This page stays at the mechanism level — the exact signatures live in the SDK guides.
 
 ### 1. Consumer facade
 
@@ -116,41 +118,9 @@ The declaration above. In Python a class of `@mesh.selector` async stubs decorat
 - [Dependency Injection (Java)](../java/dependency-injection.md#service-views-with-mcpmeshservice)
 - [Dependency Injection (TypeScript)](../typescript/dependency-injection.md#service-views-rfc-1280)
 
-### 2. Producer sugar
+The capabilities a view binds are ordinary dotted tools, each declared explicitly on its provider — `@mesh.tool(capability="media.caption")` (Python), `agent.addTool({ capability: "media.caption", ... })` (TypeScript), or `@MeshTool(capability = "media.caption")` (Java). The capability-name grammar is dot-namespacing-aware: a name is one or more dot-separated `^[a-zA-Z][a-zA-Z0-9_-]*$` segments, validated identically in the registry and every SDK.
 
-The **same** decorator with a **prefix** flips the class to the producer side: every eligible public method publishes as an ordinary tool under the capability `prefix.<method>`.
-
-=== "Python"
-
-    ```python
-    @mesh.service("media")              # publishes media.caption, media.thumbnail
-    class MediaTools:
-        async def caption(self, args: dict) -> dict: ...
-        async def thumbnail(self, args: dict) -> dict: ...
-    ```
-
-=== "TypeScript"
-
-    ```typescript
-    agent.addService("media", {         // publishes media.caption, media.thumbnail
-      caption: async (args) => ({ /* ... */ }),
-      thumbnail: async (args) => ({ /* ... */ }),
-    });
-    ```
-
-=== "Java"
-
-    ```java
-    @McpMeshService("media")            // publishes media.caption, media.thumbnail
-    public class MediaTools {
-        public Map<String, Object> caption(Map<String, Object> args) { /* ... */ }
-        public Map<String, Object> thumbnail(Map<String, Object> args) { /* ... */ }
-    }
-    ```
-
-This is pure sugar over writing one producer tool per method — the published capabilities are ordinary tools, and a method carrying its own explicit tool declaration wins over the generated one. The capability-name grammar is dot-namespacing-aware: a name is one or more dot-separated `^[a-zA-Z][a-zA-Z0-9_-]*$` segments, validated identically in the registry and every SDK.
-
-### 3. Discovery
+### 2. Discovery
 
 Because dotted capabilities carry their grouping in the name, `meshctl list --services` renders them as grouped services — **the group is the segments before the last dot** (`media.caption` and `media.thumbnail` group under `media`). This is display-only, derived entirely from the name; there is no service record behind it.
 
@@ -205,13 +175,15 @@ Independently of per-method `required`, a view accepts an optional availability 
 
 ## Relationship to DDDI
 
-Service views sit directly on top of the injection primitive: each method is one DDDI edge, resolved, injected, and hot-swapped exactly like a loose dependency. The view adds typed grouping and a producer/discovery vocabulary on top — it does not change how resolution works. See [DDDI](dddi.md) for the underlying model.
+Service views sit directly on top of the injection primitive: each method is one DDDI edge, resolved, injected, and hot-swapped exactly like a loose dependency. The view adds typed grouping and a discovery vocabulary on top — it does not change how resolution works. See [DDDI](dddi.md) for the underlying model.
+
+Calling a facade method (or any dotted capability) threads calling-job identity / `MeshCallContext` exactly like an ordinary tool call — a view is a lens, not a proxy hop, so the downstream fence sees the same caller it would for a loose dependency edge.
 
 ## See Also
 
 - [DDDI](dddi.md) — the injection primitive every view method rides on
 - [Tag Matching](tag-matching.md) — per-method preference scoring
 - [Schema Matching](schema-matching.md) — per-method output-shape disambiguation
-- [Dependency Injection (Python)](../python/dependency-injection.md#service-views-rfc-1280) — `@mesh.service` syntax and producer sugar
+- [Dependency Injection (Python)](../python/dependency-injection.md#service-views-rfc-1280) — `@mesh.service` syntax
 - [Annotations (Java)](../java/annotations.md#mcpmeshservice) — `@McpMeshService` reference
-- [Dependency Injection (TypeScript)](../typescript/dependency-injection.md#service-views-rfc-1280) — `mesh.serviceView()` and `agent.addService()`
+- [Dependency Injection (TypeScript)](../typescript/dependency-injection.md#service-views-rfc-1280) — `mesh.serviceView()`

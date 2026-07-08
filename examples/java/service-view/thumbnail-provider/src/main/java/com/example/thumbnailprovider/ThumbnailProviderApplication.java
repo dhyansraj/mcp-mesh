@@ -9,9 +9,9 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 /**
  * ThumbnailProvider - one leaf of the {@code @McpMeshService} service-view demo.
  *
- * <p>Agent bootstrap only. The capability is published by the producer-sugar
- * bean {@link MediaThumbnailService}, whose {@code thumbnail(...)} method becomes
- * the dotted capability {@code media.thumbnail}. The {@code media-gateway}
+ * <p>Agent bootstrap only. The capability is published by
+ * {@link MediaThumbnailService}, whose {@code thumbnail(...)} method carries
+ * {@code @MeshTool(capability = "media.thumbnail")}. The {@code media-gateway}
  * consumer binds it through the OPTIONAL {@code MediaService.thumbnail(...)} view
  * method — stop this agent and the gateway degrades gracefully while
  * {@code media.caption} and {@code media.transcribe} keep working.

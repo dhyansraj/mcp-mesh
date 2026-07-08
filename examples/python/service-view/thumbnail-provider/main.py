@@ -2,10 +2,10 @@
 """
 thumbnail-provider - MCP Mesh Agent
 
-Publishes ``media.thumbnail`` via producer sugar (RFC #1280): a class decorated
-``@mesh.service("media")`` publishes its public ``thumbnail`` method as the
-dotted capability ``media.thumbnail`` — a second slice of the shared ``media.*``
-namespace, served by a DIFFERENT agent than caption/transcribe.
+Publishes ``media.thumbnail`` — a second slice of the shared ``media.*``
+namespace, served by a DIFFERENT agent than caption/transcribe. The tool
+declares its dotted wire capability explicitly with
+``@mesh.tool(capability="media.thumbnail")``.
 
 Cross-runtime note: parameter names (``assetId``, ``width``) match the Java and
 TypeScript providers, so any-runtime gateways are interchangeable.
@@ -19,20 +19,21 @@ from fastmcp import FastMCP
 app = FastMCP("Thumbnail Provider Service")
 
 
-@mesh.service("media")
-class MediaThumbnailService:
-    """Producer sugar: publishes ``media.thumbnail``."""
+@app.tool()
+@mesh.tool(capability="media.thumbnail")
+async def thumbnail(assetId: str, width: int) -> dict:
+    """Generate a deterministic thumbnail descriptor for a media asset.
 
-    async def thumbnail(self, assetId: str, width: int) -> dict:
-        """Generate a deterministic thumbnail descriptor for a media asset."""
-        w = width if width and width > 0 else 128
-        h = max(1, w * 9 // 16)
-        return {
-            "assetId": assetId,
-            "uri": f"thumb://{assetId}?w={w}&h={h}",
-            "size": f"{w}x{h}",
-            "provider": "thumbnail-provider",
-        }
+    Published under the dotted capability ``media.thumbnail``.
+    """
+    w = width if width and width > 0 else 128
+    h = max(1, w * 9 // 16)
+    return {
+        "assetId": assetId,
+        "uri": f"thumb://{assetId}?w={w}&h={h}",
+        "size": f"{w}x{h}",
+        "provider": "thumbnail-provider",
+    }
 
 
 @mesh.agent(
