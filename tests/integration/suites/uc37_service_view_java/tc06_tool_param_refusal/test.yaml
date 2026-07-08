@@ -1,4 +1,4 @@
-# tc06_tool_param_refusal — RFC #1280 PHASE 2: a @McpMeshService view as a
+# tc06_tool_param_refusal — RFC #1280 PHASE 2: a @MeshService view as a
 # @MeshTool METHOD PARAMETER. The CONTRAST case to tc03: because the view's
 # methods become dependency edges ON THE TOOL ITSELF, the REQUIRED
 # tp-cap-charlie edge participates in the issue #1273 pre-invoke guard, and

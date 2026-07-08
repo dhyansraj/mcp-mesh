@@ -1,4 +1,4 @@
-# UC-level routines for uc37_service_view_java (RFC #1280 @McpMeshService).
+# UC-level routines for uc37_service_view_java (RFC #1280 @MeshService).
 #
 # Availability transitions in this UC ride the registry's DEFAULT health
 # debounce (~3 missed heartbeats, ~15-25s) plus one consumer heartbeat —

@@ -37,21 +37,21 @@ public class MeshToolRegistry {
      */
     public void registerTool(Object bean, Method method, MeshTool annotation) {
         registerTool(bean, method, annotation,
-            McpMeshServiceToolSupport.analyzeViewParams(method));
+            MeshServiceToolSupport.analyzeViewParams(method));
     }
 
     /**
      * RFC #1280 phase 2 (item 7b): overload taking pre-computed view params so
      * {@link MeshToolBeanPostProcessor} analyzes each method's
-     * {@code @McpMeshService} parameters exactly ONCE and hands the result to
+     * {@code @MeshService} parameters exactly ONCE and hands the result to
      * both the wrapper and this registry (killing the phase-2 double-derivation).
      *
-     * @param viewParams the method's {@code @McpMeshService} view params;
+     * @param viewParams the method's {@code @MeshService} view params;
      *                   callers pass {@link List#of()} when there are none
      *                   (never {@code null})
      */
     public void registerTool(Object bean, Method method, MeshTool annotation,
-            List<McpMeshServiceToolSupport.ViewParamInfo> viewParams) {
+            List<MeshServiceToolSupport.ViewParamInfo> viewParams) {
         Objects.requireNonNull(viewParams, "viewParams must not be null (pass List.of() when none)");
         String capability = annotation.capability();
 
@@ -461,16 +461,16 @@ public class MeshToolRegistry {
 
     /**
      * RFC #1280 phase 2: the tool's full declared dependency list = explicit
-     * {@code @Selector} deps FIRST, then each {@code @McpMeshService} view
+     * {@code @Selector} deps FIRST, then each {@code @MeshService} view
      * parameter's method edges (parameter order, method-name order). This order
      * MUST match {@link MeshToolWrapper}'s declared-index space so the Rust
      * core's {@code funcId:dep_N} resolution events land on the right slot.
      */
     private List<DependencyInfo> extractAllDependencies(MeshTool annotation,
-            List<McpMeshServiceToolSupport.ViewParamInfo> viewParams) {
+            List<MeshServiceToolSupport.ViewParamInfo> viewParams) {
         List<DependencyInfo> deps = extractDependencies(annotation.dependencies());
-        for (McpMeshServiceToolSupport.ViewParamInfo vp : viewParams) {
-            for (McpMeshServiceRegistrar.ServiceMethodBinding b : vp.view().bindings()) {
+        for (MeshServiceToolSupport.ViewParamInfo vp : viewParams) {
+            for (MeshServiceRegistrar.ServiceMethodBinding b : vp.view().bindings()) {
                 deps.add(new DependencyInfo(
                     b.capability(),
                     Arrays.asList(b.tags()),

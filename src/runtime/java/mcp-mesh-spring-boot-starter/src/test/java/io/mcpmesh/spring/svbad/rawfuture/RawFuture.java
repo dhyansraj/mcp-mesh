@@ -1,6 +1,6 @@
 package io.mcpmesh.spring.svbad.rawfuture;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshService;
 import io.mcpmesh.Selector;
 
 import java.util.concurrent.CompletableFuture;
@@ -11,7 +11,7 @@ public final class RawFuture {
     private RawFuture() {
     }
 
-    @McpMeshService
+    @MeshService
     public interface RawFutureService {
         @SuppressWarnings("rawtypes")
         @Selector(capability = "rf.cap")

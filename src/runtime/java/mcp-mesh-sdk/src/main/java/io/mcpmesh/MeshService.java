@@ -23,7 +23,7 @@ import java.lang.annotation.Target;
  *
  * <h2>Example</h2>
  * <pre>{@code
- * @McpMeshService
+ * @MeshService
  * public interface LlmService {
  *     @Selector(capability = "llm.chat",   tags = {"+gpt"})                     ChatResult   chat(ChatRequest req);
  *     @Selector(capability = "llm.vision", tags = {"+claude"}, required = true) VisionResult vision(VisionRequest req);
@@ -35,7 +35,7 @@ import java.lang.annotation.Target;
  * directly. A Spring bean (named by the decapitalized simple interface name) is
  * registered automatically.
  *
- * <p><b>Scanning rule:</b> a scanned bean view requires {@code @McpMeshService}
+ * <p><b>Scanning rule:</b> a scanned bean view requires {@code @MeshService}
  * <i>directly</i> on the interface. An interface that only INHERITS the
  * annotation from a super-interface is NOT auto-discovered as a bean view
  * (co-discovering it would always pull in the annotated parent too — duplicate
@@ -65,7 +65,7 @@ import java.lang.annotation.Target;
  * method resolves independently.
  *
  * <p><b>Removed in 3.1:</b> the producer-on-class form
- * ({@code @McpMeshService("prefix")} on a {@code @Component} class, which
+ * ({@code @MeshService("prefix")} on a {@code @Component} class, which
  * published {@code prefix.<methodName>} tools) was withdrawn — it derived the
  * wire capability from the method name, coupling the cross-runtime contract to a
  * language identifier, and could not express tags/version/dependencies. Using
@@ -75,7 +75,7 @@ import java.lang.annotation.Target;
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
 @Documented
-public @interface McpMeshService {
+public @interface MeshService {
 
     /**
      * The capability-name prefix.

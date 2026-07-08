@@ -1,6 +1,6 @@
 package io.mcpmesh.spring;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshService;
 import io.mcpmesh.Param;
 import io.mcpmesh.SchemaMode;
 import io.mcpmesh.Selector;
@@ -50,7 +50,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * RFC #1280 (Phase 1): discovers consumer-owned <b>service view</b> interfaces
- * annotated with {@link McpMeshService} and registers one JDK-proxy bean per
+ * annotated with {@link MeshService} and registers one JDK-proxy bean per
  * interface. Each abstract method binds a single capability via a method-level
  * {@link Selector} and delegates to that capability's own resolved
  * {@link io.mcpmesh.types.McpMeshTool} proxy — so different methods may resolve
@@ -70,9 +70,9 @@ import java.util.concurrent.atomic.AtomicReference;
  * registered them), discovery is skipped with a WARN — same resilience posture
  * as the sibling registrar's non-{@code ConfigurableListableBeanFactory} guard.
  */
-public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProcessor {
+public class MeshServiceRegistrar implements BeanDefinitionRegistryPostProcessor {
 
-    private static final Logger log = LoggerFactory.getLogger(McpMeshServiceRegistrar.class);
+    private static final Logger log = LoggerFactory.getLogger(MeshServiceRegistrar.class);
 
     /** Non-object-convertible reference types the single-POJO param rule rejects. */
     private static final Set<Class<?>> SCALAR_LIKE = Set.of(
@@ -87,7 +87,7 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
 
     /**
      * Views discovered + validated in {@link #postProcessBeanDefinitionRegistry}.
-     * Read later by {@code MeshAutoConfiguration.addMcpMeshServiceDependencies}
+     * Read later by {@code MeshAutoConfiguration.addMeshServiceDependencies}
      * to expand each method into a wire dependency edge. This is the
      * registrar-instance holder the auto-config reads (the registrar IS a bean),
      * so each application context gets its own fresh view set — no JVM-static
@@ -109,11 +109,11 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
     public void postProcessBeanDefinitionRegistry(BeanDefinitionRegistry registry) throws BeansException {
         if (!(registry instanceof ConfigurableListableBeanFactory beanFactory)) {
             log.debug("BeanDefinitionRegistry is not a ConfigurableListableBeanFactory ({}); "
-                + "skipping @McpMeshService discovery", registry.getClass().getName());
+                + "skipping @MeshService discovery", registry.getClass().getName());
             return;
         }
         if (!AutoConfigurationPackages.has(beanFactory)) {
-            log.warn("No @AutoConfigurationPackages registered — skipping @McpMeshService discovery. "
+            log.warn("No @AutoConfigurationPackages registered — skipping @MeshService discovery. "
                 + "Service views require a @SpringBootApplication (or @AutoConfigurationPackage) "
                 + "to establish the base packages to scan.");
             return;
@@ -133,7 +133,7 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
         // route / @MeshDependsOn is idempotent.
         MeshSettleState settleState = MeshSettleState.getInstance();
 
-        // Scanned bean views require @McpMeshService DIRECTLY on the interface.
+        // Scanned bean views require @MeshService DIRECTLY on the interface.
         // Deliberate rule: a sub-interface that only INHERITS the annotation is
         // NOT co-discovered — co-discovery would always pull in the annotated
         // parent too (duplicate facades, parent-type injection ambiguity,
@@ -151,7 +151,7 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
                         && !beanDefinition.getMetadata().isAnnotation();
                 }
             };
-        scanner.addIncludeFilter(new AnnotationTypeFilter(McpMeshService.class, false, false));
+        scanner.addIncludeFilter(new AnnotationTypeFilter(MeshService.class, false, false));
         scanner.setResourceLoader(new PathMatchingResourcePatternResolver(classLoader));
 
         // Cross-view conflicting-type detection: a capability bound by two view
@@ -171,18 +171,18 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
                 try {
                     type = ClassUtils.forName(className, classLoader);
                 } catch (Throwable t) {
-                    log.warn("Failed to load @McpMeshService candidate {} — skipping: {}",
+                    log.warn("Failed to load @MeshService candidate {} — skipping: {}",
                         className, t.getMessage());
                     continue;
                 }
                 // DIRECT annotation only (getAnnotation, not findAnnotation): a
-                // sub-interface inheriting @McpMeshService is not a scanned view.
-                McpMeshService annotation = type.getAnnotation(McpMeshService.class);
+                // sub-interface inheriting @MeshService is not a scanned view.
+                MeshService annotation = type.getAnnotation(MeshService.class);
                 if (annotation == null) {
                     continue;
                 }
                 if (!type.isInterface()) {
-                    // A @McpMeshService CLASS is not a consumer service view. The
+                    // A @MeshService CLASS is not a consumer service view. The
                     // producer-sugar sweep was removed (#1320); MeshToolBeanPostProcessor
                     // fast-fails a non-blank prefix on a class. Nothing to register here.
                     continue;
@@ -204,7 +204,7 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
 
                 String beanName = Introspector.decapitalize(type.getSimpleName());
                 if (registry.containsBeanDefinition(beanName) || beanFactory.containsSingleton(beanName)) {
-                    log.error("Cannot register @McpMeshService facade bean for '{}' — bean name '{}' "
+                    log.error("Cannot register @MeshService facade bean for '{}' — bean name '{}' "
                             + "already in use by a user-owned bean. Rename the interface OR the "
                             + "conflicting bean. The service view will not be injectable.",
                         type.getName(), beanName);
@@ -220,7 +220,7 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
             }
         }
         if (registered > 0 || conflicts > 0) {
-            log.info("@McpMeshService: registered {} service-view facade bean(s) "
+            log.info("@MeshService: registered {} service-view facade bean(s) "
                 + "(skipped {} due to name conflict)", registered, conflicts);
         }
     }
@@ -236,7 +236,7 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
         return Proxy.newProxyInstance(
             iface.getClassLoader(),
             new Class<?>[] {iface},
-            new McpMeshServiceInvocationHandler(
+            new MeshServiceInvocationHandler(
                 iface, metadata.minAvailable(), metadata.bindings(),
                 new InjectorViewProxyBinding(beanFactory, injectorRef), objectMapper));
     }
@@ -244,17 +244,17 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
     /**
      * Reusable interface→bindings analysis (RFC #1280 phase 2). Both the
      * class-level bean path ({@link #postProcessBeanDefinitionRegistry}) and the
-     * {@code @MeshTool} view-parameter path ({@link McpMeshServiceToolSupport})
+     * {@code @MeshTool} view-parameter path ({@link MeshServiceToolSupport})
      * call this so the bridge/synthetic filtering, {@link ResolvableType}
      * resolution, diamond dedupe, and per-method param/return validation are
      * defined exactly once. Uses a fresh conflicting-type map (a single view is
      * self-contained); the scanning path uses the shared-map overload to detect
      * conflicts across DIFFERENT discovered views.
      *
-     * @param iface an interface annotated {@link McpMeshService}
+     * @param iface an interface annotated {@link MeshService}
      */
     static ServiceViewMetadata analyze(Class<?> iface) {
-        McpMeshService annotation = AnnotationUtils.findAnnotation(iface, McpMeshService.class);
+        MeshService annotation = AnnotationUtils.findAnnotation(iface, MeshService.class);
         return buildMetadata(iface, annotation, new LinkedHashMap<>());
     }
 
@@ -264,7 +264,7 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
      * {@link Class#getMethods()} order is NOT guaranteed by the JVM, and the
      * downstream wire-dependency expansion must be reproducible.
      */
-    static ServiceViewMetadata buildMetadata(Class<?> iface, McpMeshService annotation,
+    static ServiceViewMetadata buildMetadata(Class<?> iface, MeshService annotation,
                                               Map<String, CapabilityBinding> capabilityTypes) {
         List<Method> methods = collectViewMethods(iface);
 
@@ -273,14 +273,14 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
             Selector selector = method.getAnnotation(Selector.class);
             if (selector == null) {
                 throw new IllegalStateException(String.format(
-                    "@McpMeshService interface %s: abstract method '%s' must be annotated with "
+                    "@MeshService interface %s: abstract method '%s' must be annotated with "
                         + "@Selector (each service-view method binds exactly one capability).",
                     iface.getName(), method.getName()));
             }
             String capability = selector.capability();
             if (capability == null || capability.isBlank()) {
                 throw new IllegalStateException(String.format(
-                    "@McpMeshService interface %s: method '%s' has @Selector with an empty "
+                    "@MeshService interface %s: method '%s' has @Selector with an empty "
                         + "capability.", iface.getName(), method.getName()));
             }
 
@@ -318,7 +318,7 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
             } else if (incoming != Object.class && prior.rawType() != Object.class
                     && prior.rawType() != incoming) {
                 throw new IllegalStateException(String.format(
-                    "Capability '%s' is bound by @McpMeshService methods with conflicting resolved "
+                    "Capability '%s' is bound by @MeshService methods with conflicting resolved "
                         + "types: %s (%s.%s) vs %s (%s.%s). Align the return types or split into "
                         + "separate capabilities.",
                     capability,
@@ -337,17 +337,17 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
         int minAvailable = annotation.minAvailable();
         if (minAvailable < 0) {
             throw new IllegalStateException(String.format(
-                "@McpMeshService interface %s: minAvailable must be >= 0 (got %d).",
+                "@MeshService interface %s: minAvailable must be >= 0 (got %d).",
                 iface.getName(), minAvailable));
         }
         if (minAvailable > bindings.size()) {
             throw new IllegalStateException(String.format(
-                "@McpMeshService interface %s: minAvailable=%d exceeds the number of "
+                "@MeshService interface %s: minAvailable=%d exceeds the number of "
                     + "dependency-bound methods (%d) — the floor can never be satisfied.",
                 iface.getName(), minAvailable, bindings.size()));
         }
         if (bindings.isEmpty()) {
-            log.warn("@McpMeshService interface {} declares no abstract methods — "
+            log.warn("@MeshService interface {} declares no abstract methods — "
                 + "the facade bean is a no-op view.", iface.getName());
         }
         return new ServiceViewMetadata(iface, minAvailable, List.copyOf(bindings));
@@ -382,7 +382,7 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
             if (existingSel != null && incomingSel != null
                     && !selectorsEquivalent(existingSel, incomingSel)) {
                 throw new IllegalStateException(String.format(
-                    "@McpMeshService interface %s: diamond-inherited method '%s' carries "
+                    "@MeshService interface %s: diamond-inherited method '%s' carries "
                         + "conflicting @Selector metadata across super-interfaces. Declare a single "
                         + "consistent @Selector for this method.",
                     iface.getName(), method.getName()));
@@ -404,7 +404,7 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
             }
         }
         List<Method> methods = new ArrayList<>(bySignature.values());
-        methods.sort(Comparator.comparing(Method::getName).thenComparing(McpMeshServiceRegistrar::signatureKey));
+        methods.sort(Comparator.comparing(Method::getName).thenComparing(MeshServiceRegistrar::signatureKey));
         return methods;
     }
 
@@ -444,7 +444,7 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
             Class<?> argRaw = arg.resolve();
             if (arg == ResolvableType.NONE || argRaw == null) {
                 throw new IllegalStateException(String.format(
-                    "@McpMeshService interface %s: method '%s' returns a raw CompletableFuture — "
+                    "@MeshService interface %s: method '%s' returns a raw CompletableFuture — "
                         + "declare CompletableFuture<T> with a concrete result type.",
                     iface.getName(), method.getName()));
             }
@@ -454,7 +454,7 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
         // subclasses) is unsupported — the async contract is CompletableFuture<T>.
         if (Future.class.isAssignableFrom(raw) || CompletionStage.class.isAssignableFrom(raw)) {
             throw new IllegalStateException(String.format(
-                "@McpMeshService interface %s: method '%s' returns %s — async view methods must "
+                "@MeshService interface %s: method '%s' returns %s — async view methods must "
                     + "return CompletableFuture<T>.",
                 iface.getName(), method.getName(), raw.getName()));
         }
@@ -462,7 +462,7 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
             Class<?> chunk = returnType.getGeneric(0).resolve();
             if (chunk != String.class) {
                 throw new IllegalStateException(String.format(
-                    "@McpMeshService interface %s: method '%s' returns Flow.Publisher<%s> — "
+                    "@MeshService interface %s: method '%s' returns Flow.Publisher<%s> — "
                         + "streaming views must return Flow.Publisher<String>.",
                     iface.getName(), method.getName(),
                     chunk == null ? "?" : chunk.getSimpleName()));
@@ -489,7 +489,7 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
             Class<?> paramType = ResolvableType.forMethodParameter(method, 0, iface).resolve(Object.class);
             if (!isObjectConvertible(paramType)) {
                 throw new IllegalStateException(String.format(
-                    "@McpMeshService interface %s: method '%s' single unannotated parameter of type "
+                    "@MeshService interface %s: method '%s' single unannotated parameter of type "
                         + "%s cannot be converted to a params object — single unannotated parameters "
                         + "must be a POJO/record; use @Param for scalar parameters.",
                     iface.getName(), method.getName(), paramType.getName()));
@@ -502,7 +502,7 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
             Param param = params[i].getAnnotation(Param.class);
             if (param == null || param.value().isBlank()) {
                 throw new IllegalStateException(String.format(
-                    "@McpMeshService interface %s: method '%s' has %d parameters, so every "
+                    "@MeshService interface %s: method '%s' has %d parameters, so every "
                         + "parameter must carry @Param(\"name\") (parameter #%d does not). Use a "
                         + "single POJO parameter for object-style calls, or annotate all params.",
                     iface.getName(), method.getName(), params.length, i));
@@ -510,7 +510,7 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
             // Duplicate @Param names would silently overwrite in the params map.
             if (!seenNames.add(param.value())) {
                 throw new IllegalStateException(String.format(
-                    "@McpMeshService interface %s: method '%s' declares duplicate @Param name "
+                    "@MeshService interface %s: method '%s' declares duplicate @Param name "
                         + "'%s' (parameter #%d) — every parameter name must be unique.",
                     iface.getName(), method.getName(), param.value(), i));
             }
@@ -586,8 +586,8 @@ public class McpMeshServiceRegistrar implements BeanDefinitionRegistryPostProces
     /**
      * A single validated view method → capability binding. Carries both the
      * call-time delegation metadata (used by
-     * {@link McpMeshServiceInvocationHandler}) and the wire-expansion metadata
-     * (used by {@code MeshAutoConfiguration.addMcpMeshServiceDependencies}).
+     * {@link MeshServiceInvocationHandler}) and the wire-expansion metadata
+     * (used by {@code MeshAutoConfiguration.addMeshServiceDependencies}).
      */
     public record ServiceMethodBinding(
         Method method,

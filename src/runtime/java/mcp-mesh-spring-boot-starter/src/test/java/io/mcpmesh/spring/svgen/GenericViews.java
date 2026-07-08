@@ -1,6 +1,6 @@
 package io.mcpmesh.spring.svgen;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshService;
 import io.mcpmesh.Selector;
 
 /**
@@ -21,7 +21,7 @@ public final class GenericViews {
         T get();
     }
 
-    @McpMeshService
+    @MeshService
     public interface GenericView extends Base<Item> {
     }
 
@@ -30,7 +30,7 @@ public final class GenericViews {
         Object thing();
     }
 
-    @McpMeshService
+    @MeshService
     public interface CovView extends CovBase {
         @Override
         @Selector(capability = "cov.thing")
@@ -48,7 +48,7 @@ public final class GenericViews {
         String x();
     }
 
-    @McpMeshService
+    @MeshService
     public interface DiamondView extends DiamondA, DiamondB {
     }
 
@@ -68,7 +68,7 @@ public final class GenericViews {
         String mixed();
     }
 
-    @McpMeshService
+    @MeshService
     public interface MixedDiamondView extends AnnotatedSide, PlainSide {
     }
 }

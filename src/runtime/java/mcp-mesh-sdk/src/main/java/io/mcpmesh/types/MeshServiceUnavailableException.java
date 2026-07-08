@@ -1,7 +1,7 @@
 package io.mcpmesh.types;
 
 /**
- * Thrown when a {@link io.mcpmesh.McpMeshService} view is below its declared
+ * Thrown when a {@link io.mcpmesh.MeshService} view is below its declared
  * availability floor ({@code minAvailable}).
  *
  * <p>When fewer than {@code minAvailable} of the view's methods currently

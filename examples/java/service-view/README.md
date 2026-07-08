@@ -1,4 +1,4 @@
-# Service View Example — `@McpMeshService` (RFC #1280)
+# Service View Example — `@MeshService` (RFC #1280)
 
 **Three methods, three different provider agents, one typed interface.**
 
@@ -49,7 +49,7 @@ public class MediaCaptionService {
 The consumer declares one interface aggregating all three capabilities:
 
 ```java
-@McpMeshService
+@MeshService
 public interface MediaService {
     @Selector(capability = "media.caption", required = true) CaptionResult    caption(CaptionRequest req);
     @Selector(capability = "media.thumbnail")                ThumbnailResult  thumbnail(ThumbnailRequest req);
@@ -62,7 +62,7 @@ registers a facade bean named `mediaService`. The gateway `@Autowired`s it and
 calls the methods directly — no manual proxy wiring. `caption` is `required`;
 `thumbnail` and `transcribe` are optional.
 
-> `@McpMeshService` is a CONSUMER-side annotation: it marks a service-view
+> `@MeshService` is a CONSUMER-side annotation: it marks a service-view
 > INTERFACE. Providers publish ordinary `@MeshTool`s — dotted capability names
 > and all.
 
@@ -129,7 +129,7 @@ mid-handler.
   otherwise every param needs `@Param("name")`.
 - Return `T` (sync), `CompletableFuture<T>` (async), or
   `Flow.Publisher<String>` (streaming).
-- Optional `@McpMeshService(minAvailable = N)` adds an availability floor: below
+- Optional `@MeshService(minAvailable = N)` adds an availability floor: below
   `N` resolvable methods, every facade call throws
   `MeshServiceUnavailableException`.
 

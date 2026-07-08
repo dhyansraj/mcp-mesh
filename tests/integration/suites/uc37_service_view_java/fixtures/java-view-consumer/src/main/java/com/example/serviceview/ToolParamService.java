@@ -1,6 +1,6 @@
 package com.example.serviceview;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshService;
 import io.mcpmesh.Selector;
 
 import java.util.Map;
@@ -28,7 +28,7 @@ import java.util.Map;
  * (tc07 asserts both; see JavaViewConsumerApplication's javadoc for the
  * current dependency arithmetic).
  */
-@McpMeshService
+@MeshService
 public interface ToolParamService {
 
     @Selector(capability = "tp-cap-alpha")

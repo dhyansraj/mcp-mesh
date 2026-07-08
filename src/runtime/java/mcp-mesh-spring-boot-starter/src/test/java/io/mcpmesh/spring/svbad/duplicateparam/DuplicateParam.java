@@ -1,6 +1,6 @@
 package io.mcpmesh.spring.svbad.duplicateparam;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshService;
 import io.mcpmesh.Param;
 import io.mcpmesh.Selector;
 
@@ -10,7 +10,7 @@ public final class DuplicateParam {
     private DuplicateParam() {
     }
 
-    @McpMeshService
+    @MeshService
     public interface DuplicateParamService {
         @Selector(capability = "dp.cap")
         String get(@Param("id") String a, @Param("id") String b);

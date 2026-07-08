@@ -1,6 +1,6 @@
 package io.mcpmesh.spring.svbad.selector;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshService;
 import io.mcpmesh.Selector;
 
 /** Boot-fail fixture: an abstract view method with no {@code @Selector}. */
@@ -9,7 +9,7 @@ public final class BadSelector {
     private BadSelector() {
     }
 
-    @McpMeshService
+    @MeshService
     public interface MissingSelectorService {
 
         @Selector(capability = "ok.cap")

@@ -1,6 +1,6 @@
 package io.mcpmesh.spring.svbad.params;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshService;
 import io.mcpmesh.Param;
 import io.mcpmesh.Selector;
 
@@ -13,7 +13,7 @@ public final class BadParams {
     private BadParams() {
     }
 
-    @McpMeshService
+    @MeshService
     public interface MixedParamsService {
 
         @Selector(capability = "bp.cap")

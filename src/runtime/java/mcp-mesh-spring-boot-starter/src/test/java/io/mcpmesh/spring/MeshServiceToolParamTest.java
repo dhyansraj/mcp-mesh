@@ -1,6 +1,6 @@
 package io.mcpmesh.spring;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshService;
 import io.mcpmesh.MeshJob;
 import io.mcpmesh.MeshTool;
 import io.mcpmesh.Param;
@@ -26,20 +26,20 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * RFC #1280 phase 2: {@link McpMeshService} interface as a {@code @MeshTool}
+ * RFC #1280 phase 2: {@link MeshService} interface as a {@code @MeshTool}
  * PARAMETER. One view param expands to N ordinary dependency edges ON THAT
  * TOOL, positionally paired AFTER the explicit {@code @Selector} deps.
  *
  * <p>Unit-tests the below-FFI machinery directly (wrapper construction +
  * updateDependency + invoke), mirroring {@link MeshToolWrapperRequiredDepGuardTest}.
  */
-class McpMeshServiceToolParamTest {
+class MeshServiceToolParamTest {
 
     private static final ObjectMapper MAPPER = MeshObjectMappers.create();
 
     // ---- Fixtures -----------------------------------------------------------
 
-    @McpMeshService
+    @MeshService
     public interface MediaService {
         @Selector(capability = "media.caption")
         String caption(@Param("id") String id);
@@ -98,7 +98,7 @@ class McpMeshServiceToolParamTest {
         MeshToolWrapper w = new MeshToolWrapper(
             "MediaProcessor.processMedia", "process_media", "test", bean, m,
             List.of("audit_log"), JsonMapper.builder().build(), false, null,
-            McpMeshServiceToolSupport.analyzeViewParams(m));
+            MeshServiceToolSupport.analyzeViewParams(m));
         w.setDependencyRequired(List.of(false)); // audit_log optional
         return w;
     }
@@ -164,7 +164,7 @@ class McpMeshServiceToolParamTest {
         MeshToolWrapper w = new MeshToolWrapper(
             "SkewProcessor.skew", "skew_tool", "test", bean, m,
             List.of("job_cap", "db_cap"), JsonMapper.builder().build(), true, null,
-            McpMeshServiceToolSupport.analyzeViewParams(m));
+            MeshServiceToolSupport.analyzeViewParams(m));
 
         // Declared list: job_cap(0), db_cap(1), then view edges 2..4.
         assertEquals(List.of("job_cap", "db_cap", "media.caption", "media.thumbnail", "media.transcribe"),
@@ -187,7 +187,7 @@ class McpMeshServiceToolParamTest {
 
     // ---- Required view edge → pre-invoke refusal ----------------------------
 
-    @McpMeshService
+    @MeshService
     public interface ReqView {
         @Selector(capability = "req.a", required = true)
         String a(@Param("id") String id);
@@ -214,7 +214,7 @@ class McpMeshServiceToolParamTest {
         MeshToolWrapper w = new MeshToolWrapper(
             "ReqProcessor.run", "req_tool", "test", bean, m,
             List.of(), JsonMapper.builder().build(), false, null,
-            McpMeshServiceToolSupport.analyzeViewParams(m));
+            MeshServiceToolSupport.analyzeViewParams(m));
         w.setDependencyRequired(List.of());
         return w;
     }
@@ -242,7 +242,7 @@ class McpMeshServiceToolParamTest {
 
     // ---- minAvailable floor via a tool view param ---------------------------
 
-    @McpMeshService(minAvailable = 2)
+    @MeshService(minAvailable = 2)
     public interface FloorView {
         @Selector(capability = "fl.a") String a(@Param("id") String id);
         @Selector(capability = "fl.b") String b(@Param("id") String id);
@@ -263,7 +263,7 @@ class McpMeshServiceToolParamTest {
         MeshToolWrapper w = new MeshToolWrapper(
             "FloorProcessor.run", "floor_tool", "test", bean, m,
             List.of(), JsonMapper.builder().build(), false, null,
-            McpMeshServiceToolSupport.analyzeViewParams(m));
+            MeshServiceToolSupport.analyzeViewParams(m));
         w.setDependencyRequired(List.of());
 
         // Below floor (0/3) → the facade method throws the service-level error,
@@ -295,7 +295,7 @@ class McpMeshServiceToolParamTest {
     void paramOnViewParam_bootFails() throws Exception {
         Method m = BadViewParamBean.class.getMethod("run", String.class, MediaService.class);
         IllegalStateException ex = assertThrows(IllegalStateException.class,
-            () -> McpMeshServiceToolSupport.analyzeViewParams(m));
+            () -> MeshServiceToolSupport.analyzeViewParams(m));
         assertTrue(ex.getMessage().contains("must NOT carry"), ex.getMessage());
     }
 
@@ -328,19 +328,19 @@ class McpMeshServiceToolParamTest {
 
     // ---- MED-1: near-miss view params → dedicated boot-fail ------------------
 
-    @McpMeshService
+    @MeshService
     public static class AnnotatedClassView {
-        // A CLASS annotated @McpMeshService — not a valid service view.
+        // A CLASS annotated @MeshService — not a valid service view.
     }
 
-    @McpMeshService
+    @MeshService
     public interface AnnotatedBaseView {
         @Selector(capability = "base.x")
         String x(@Param("id") String id);
     }
 
     public interface SubView extends AnnotatedBaseView {
-        // Inherits @McpMeshService but does NOT carry it directly.
+        // Inherits @MeshService but does NOT carry it directly.
     }
 
     public static class ClassParamBean {
@@ -361,20 +361,20 @@ class McpMeshServiceToolParamTest {
                                               List<String> explicit) {
         return new MeshToolWrapper(funcId, cap, "test", bean, m, explicit,
             JsonMapper.builder().build(), false, null,
-            McpMeshServiceToolSupport.analyzeViewParams(m));
+            MeshServiceToolSupport.analyzeViewParams(m));
     }
 
     @Test
     void nearMiss_classAnnotatedAsView_rewordedBootFail() throws Exception {
-        // A CLASS annotated @McpMeshService is the producer path, NOT a valid
+        // A CLASS annotated @MeshService is the producer path, NOT a valid
         // view param — the reworded message points that out.
         Method m = ClassParamBean.class.getMethod("run", String.class, AnnotatedClassView.class);
         IllegalStateException ex = assertThrows(IllegalStateException.class,
             () -> wrapperFor(new ClassParamBean(), "ClassParamBean.run", "cp_tool", m, List.of()));
-        assertTrue(ex.getMessage().contains("view parameters must be @McpMeshService interfaces"),
+        assertTrue(ex.getMessage().contains("view parameters must be @MeshService interfaces"),
             ex.getMessage());
         assertTrue(ex.getMessage().contains("publishes methods as tools (producer side)"), ex.getMessage());
-        assertTrue(ex.getMessage().contains("carries or inherits @McpMeshService but is not an interface"),
+        assertTrue(ex.getMessage().contains("carries or inherits @MeshService but is not an interface"),
             ex.getMessage());
         assertTrue(ex.getMessage().contains(ClassParamBean.class.getName()), ex.getMessage());
         assertTrue(ex.getMessage().contains(AnnotatedClassView.class.getName()),
@@ -383,7 +383,7 @@ class McpMeshServiceToolParamTest {
 
     @Test
     void subInterfaceInheritsAnnotation_isAValidViewParam() throws Exception {
-        // Phase-2 cleanup 7a: a sub-interface that INHERITS @McpMeshService is a
+        // Phase-2 cleanup 7a: a sub-interface that INHERITS @MeshService is a
         // valid view param — its inherited method edge is published on the tool.
         SubIfaceParamBean bean = new SubIfaceParamBean();
         Method m = SubIfaceParamBean.class.getMethod("run", String.class, SubView.class);
@@ -397,7 +397,7 @@ class McpMeshServiceToolParamTest {
     public record GItem(String id) {
     }
 
-    @McpMeshService
+    @MeshService
     public interface GenBase<T> {
         @Selector(capability = "gen.item")
         T get(@Param("id") String id);
@@ -430,7 +430,7 @@ class McpMeshServiceToolParamTest {
     public record CY(int y) {
     }
 
-    @McpMeshService
+    @MeshService
     public interface TwoConcreteView {
         @Selector(capability = "cc")
         CX a(@Param("id") String id);
@@ -450,12 +450,12 @@ class McpMeshServiceToolParamTest {
     void twoDifferentConcreteTypesForSameCapability_bootFails() throws Exception {
         Method m = TwoConcreteBean.class.getMethod("run", String.class, TwoConcreteView.class);
         IllegalStateException ex = assertThrows(IllegalStateException.class,
-            () -> McpMeshServiceToolSupport.analyzeViewParams(m));
+            () -> MeshServiceToolSupport.analyzeViewParams(m));
         assertTrue(ex.getMessage().contains("conflicting resolved"), ex.getMessage());
         assertTrue(ex.getMessage().contains("cc"), ex.getMessage());
     }
 
-    @McpMeshService
+    @MeshService
     public interface GrandP {
         @Selector(capability = "gp.x")
         String x(@Param("id") String id);
@@ -481,13 +481,13 @@ class McpMeshServiceToolParamTest {
         assertEquals(List.of("gp.x"), w.getDependencyNames());
     }
 
-    @McpMeshService
+    @MeshService
     public interface D1 {
         @Selector(capability = "d.x")
         String x(@Param("id") String id);
     }
 
-    @McpMeshService
+    @MeshService
     public interface D2 {
         @Selector(capability = "d.y")
         String y(@Param("id") String id);
@@ -559,7 +559,7 @@ class McpMeshServiceToolParamTest {
 
     // ---- MED-4: two view params + explicit dep — offset arithmetic ----------
 
-    @McpMeshService
+    @MeshService
     public interface AudioService {
         @Selector(capability = "audio.x") String x(@Param("id") String id);
         @Selector(capability = "audio.y") String y(@Param("id") String id);
@@ -610,7 +610,7 @@ class McpMeshServiceToolParamTest {
 
     // ---- MED-5: duplicate capability between explicit dep and view edge ------
 
-    @McpMeshService
+    @MeshService
     public interface AuditView {
         @Selector(capability = "audit_log") String log(@Param("id") String id);
     }
@@ -646,14 +646,14 @@ class McpMeshServiceToolParamTest {
     @Test
     void beanAndToolStrategies_operateIndependently() throws Exception {
         // Bean-path facade (injector strategy) for MediaService, unresolved.
-        McpMeshServiceRegistrar.ServiceViewMetadata meta =
-            McpMeshServiceRegistrar.analyze(MediaService.class);
+        MeshServiceRegistrar.ServiceViewMetadata meta =
+            MeshServiceRegistrar.analyze(MediaService.class);
         AtomicReference<MeshDependencyInjector> injectorRef =
             new AtomicReference<>(new MeshDependencyInjector());
         MediaService beanFacade = (MediaService) Proxy.newProxyInstance(
             MediaService.class.getClassLoader(),
             new Class<?>[] {MediaService.class},
-            new McpMeshServiceInvocationHandler(MediaService.class, meta.minAvailable(),
+            new MeshServiceInvocationHandler(MediaService.class, meta.minAvailable(),
                 meta.bindings(), new InjectorViewProxyBinding(null, injectorRef), MAPPER));
         assertThrows(MeshToolUnavailableException.class, () -> beanFacade.caption("x"),
             "bean-path facade starts unresolved");

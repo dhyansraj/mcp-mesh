@@ -1,6 +1,6 @@
 package io.mcpmesh.spring.svconsumer;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshService;
 import io.mcpmesh.Selector;
 
 /**
@@ -12,7 +12,7 @@ public final class ConsumerViews {
     private ConsumerViews() {
     }
 
-    @McpMeshService
+    @MeshService
     public interface ConsumerView {
         @Selector(capability = "consumer.only")
         String fetch();

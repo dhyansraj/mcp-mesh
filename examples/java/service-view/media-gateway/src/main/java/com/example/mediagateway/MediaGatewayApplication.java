@@ -13,7 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * MediaGateway - the consumer in the {@code @McpMeshService} service-view demo.
+ * MediaGateway - the consumer in the {@code @MeshService} service-view demo.
  *
  * <p>Demonstrates BOTH ways to consume a service view, side by side, over the
  * same {@link #combine} fan-out logic:

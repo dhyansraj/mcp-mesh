@@ -14,7 +14,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * uc37 fixture — Java consumer proving RFC #1280 {@code @McpMeshService}
+ * uc37 fixture — Java consumer proving RFC #1280 {@code @MeshService}
  * service views end-to-end.
  *
  * <p>Four views are discovered from this package:
@@ -88,7 +88,7 @@ import java.util.Map;
 @MeshAgent(
     name = "java-view-consumer",
     version = "1.0.0",
-    description = "uc37 consumer proving RFC #1280 @McpMeshService service views",
+    description = "uc37 consumer proving RFC #1280 @MeshService service views",
     port = 9201
 )
 @SpringBootApplication

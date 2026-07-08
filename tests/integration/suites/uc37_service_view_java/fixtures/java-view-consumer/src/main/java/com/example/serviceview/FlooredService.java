@@ -1,6 +1,6 @@
 package com.example.serviceview;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshService;
 import io.mcpmesh.Selector;
 
 import java.util.Map;
@@ -16,7 +16,7 @@ import java.util.Map;
  * resolved type ({@code Map}), exercising the cross-view shared-capability
  * dedupe: the wire registration must still expand to exactly 3 dependencies.
  */
-@McpMeshService(minAvailable = 2)
+@MeshService(minAvailable = 2)
 public interface FlooredService {
 
     @Selector(capability = "view-cap-alpha")

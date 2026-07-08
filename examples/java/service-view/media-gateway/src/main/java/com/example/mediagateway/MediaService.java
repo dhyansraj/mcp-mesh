@@ -1,6 +1,6 @@
 package com.example.mediagateway;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshService;
 import io.mcpmesh.Selector;
 
 /**
@@ -26,7 +26,7 @@ import io.mcpmesh.Selector;
  * throws {@link io.mcpmesh.types.MeshToolUnavailableException} when its provider
  * is absent, which the gateway catches for graceful degradation.
  */
-@McpMeshService
+@MeshService
 public interface MediaService {
 
     @Selector(capability = "media.caption", required = true)

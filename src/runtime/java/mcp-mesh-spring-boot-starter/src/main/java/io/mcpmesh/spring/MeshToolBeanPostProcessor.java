@@ -1,7 +1,7 @@
 package io.mcpmesh.spring;
 
 import tools.jackson.databind.ObjectMapper;
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshService;
 import io.mcpmesh.MeshTool;
 import io.mcpmesh.Selector;
 import org.slf4j.Logger;
@@ -128,10 +128,10 @@ public class MeshToolBeanPostProcessor implements BeanPostProcessor, Ordered {
                     "remove resumeCursor or set task = true.");
             }
 
-            // RFC #1280 phase 2 (item 7b): analyze @McpMeshService view params
+            // RFC #1280 phase 2 (item 7b): analyze @MeshService view params
             // ONCE and hand the result to both the registry and the wrapper.
-            List<McpMeshServiceToolSupport.ViewParamInfo> viewParams =
-                McpMeshServiceToolSupport.analyzeViewParams(method);
+            List<MeshServiceToolSupport.ViewParamInfo> viewParams =
+                MeshServiceToolSupport.analyzeViewParams(method);
 
             // Register with legacy registry (for agent spec generation)
             registry.registerTool(bean, method, annotation, viewParams);
@@ -140,7 +140,7 @@ public class MeshToolBeanPostProcessor implements BeanPostProcessor, Ordered {
             createAndRegisterWrapper(bean, targetClass, method, annotation, viewParams);
         });
 
-        // Issue #1320: the @McpMeshService("prefix") producer sugar — a class
+        // Issue #1320: the @MeshService("prefix") producer sugar — a class
         // that published each method as "<prefix>.<methodName>" — was withdrawn.
         // The annotation TYPE is shared with the consumer service-view form (on
         // an INTERFACE), so it stays; but producer usage (non-blank value() on a
@@ -148,17 +148,17 @@ public class MeshToolBeanPostProcessor implements BeanPostProcessor, Ordered {
         // USER class first (ClassUtils.getUserClass strips a CGLIB $$-enhanced
         // subclass; a no-op for JDK proxy classes). Use the DIRECT class
         // annotation (getAnnotation), NOT findAnnotation: a consumer facade bean
-        // is a JDK proxy whose CLASS implements a @McpMeshService INTERFACE —
+        // is a JDK proxy whose CLASS implements a @MeshService INTERFACE —
         // findAnnotation would see that inherited annotation and mis-classify the
-        // consumer facade. A producer carried @McpMeshService directly on its
+        // consumer facade. A producer carried @MeshService directly on its
         // @Component class (proxy classes carry no declared annotations).
         Class<?> userClass = ClassUtils.getUserClass(targetClass);
-        McpMeshService service = userClass.getAnnotation(McpMeshService.class);
+        MeshService service = userClass.getAnnotation(MeshService.class);
         if (service != null && !userClass.isInterface()
                 && service.value() != null && !service.value().isBlank()) {
             String prefix = service.value();
             throw new IllegalStateException(
-                "@McpMeshService(\"" + prefix + "\") producer sugar was removed in v3.1.0 — "
+                "@MeshService(\"" + prefix + "\") producer sugar was removed in v3.1.0 — "
                 + "it derived the wire capability from the method name (coupling the cross-runtime "
                 + "contract to a language identifier) and could not express tags/version/dependencies. "
                 + "Declare each tool explicitly with @MeshTool(capability=\"" + prefix + ".<method>\"). "
@@ -316,7 +316,7 @@ public class MeshToolBeanPostProcessor implements BeanPostProcessor, Ordered {
             Class<?> targetClass,
             Method method,
             MeshTool annotation,
-            List<McpMeshServiceToolSupport.ViewParamInfo> viewParams) {
+            List<MeshServiceToolSupport.ViewParamInfo> viewParams) {
 
         // Generate funcId: "com.example.ClassName.methodName"
         String funcId = targetClass.getName() + "." + method.getName();

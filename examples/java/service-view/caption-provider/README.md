@@ -1,6 +1,6 @@
 # caption-provider
 
-Provider A in the [`@McpMeshService` service-view example](../README.md). Publishes
+Provider A in the [`@MeshService` service-view example](../README.md). Publishes
 the `media.caption` capability, bound by `MediaService.caption(...)` in the
 `media-gateway` consumer.
 

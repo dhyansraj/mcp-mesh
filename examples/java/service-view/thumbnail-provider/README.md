@@ -1,6 +1,6 @@
 # thumbnail-provider
 
-Provider B in the [`@McpMeshService` service-view example](../README.md). Publishes
+Provider B in the [`@MeshService` service-view example](../README.md). Publishes
 the `media.thumbnail` capability, bound by the OPTIONAL
 `MediaService.thumbnail(...)` view method in the `media-gateway` consumer — stop
 this agent to see the gateway degrade gracefully.

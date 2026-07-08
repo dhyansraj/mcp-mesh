@@ -18,7 +18,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * {@link InvocationHandler} backing a {@link io.mcpmesh.McpMeshService} view
+ * {@link InvocationHandler} backing a {@link io.mcpmesh.MeshService} view
  * proxy (RFC #1280). Each abstract method delegates to its own per-capability
  * {@link McpMeshTool} proxy resolved from the shared {@link MeshDependencyInjector}
  * — so different methods may bind different provider agents and rebind
@@ -38,9 +38,9 @@ import java.util.concurrent.atomic.AtomicReference;
  * {@link Object} methods ({@code toString}/{@code hashCode}/{@code equals}) are
  * handled conventionally.
  */
-class McpMeshServiceInvocationHandler implements InvocationHandler {
+class MeshServiceInvocationHandler implements InvocationHandler {
 
-    private static final Logger log = LoggerFactory.getLogger(McpMeshServiceInvocationHandler.class);
+    private static final Logger log = LoggerFactory.getLogger(MeshServiceInvocationHandler.class);
 
     /**
      * Pluggable per-method proxy + settle-key lookup — the ONLY difference
@@ -58,15 +58,15 @@ class McpMeshServiceInvocationHandler implements InvocationHandler {
      */
     interface ViewProxyBinding {
         /** Non-null proxy for the binding's method (unresolved → an unavailable sentinel). */
-        McpMeshTool<?> proxyFor(McpMeshServiceRegistrar.ServiceMethodBinding binding);
+        McpMeshTool<?> proxyFor(MeshServiceRegistrar.ServiceMethodBinding binding);
 
         /** Settle-wait key for the binding's capability (capability name or funcId:dep_N). */
-        String settleKey(McpMeshServiceRegistrar.ServiceMethodBinding binding);
+        String settleKey(MeshServiceRegistrar.ServiceMethodBinding binding);
     }
 
     private final String serviceName;
     private final int minAvailable;
-    private final Map<Method, McpMeshServiceRegistrar.ServiceMethodBinding> bindings;
+    private final Map<Method, MeshServiceRegistrar.ServiceMethodBinding> bindings;
     private final ViewProxyBinding proxyBinding;
     private final ObjectMapper objectMapper;
 
@@ -77,7 +77,7 @@ class McpMeshServiceInvocationHandler implements InvocationHandler {
      * {@code equals} misses. Resolved by name + parameter types, cached so the
      * reflective fallback costs once per Method.
      */
-    private final Map<Method, McpMeshServiceRegistrar.ServiceMethodBinding> resolvedBindings =
+    private final Map<Method, MeshServiceRegistrar.ServiceMethodBinding> resolvedBindings =
         new ConcurrentHashMap<>();
 
     /**
@@ -87,18 +87,18 @@ class McpMeshServiceInvocationHandler implements InvocationHandler {
      */
     private final AtomicReference<Boolean> belowFloor = new AtomicReference<>();
 
-    McpMeshServiceInvocationHandler(
+    MeshServiceInvocationHandler(
             Class<?> iface,
             int minAvailable,
-            List<McpMeshServiceRegistrar.ServiceMethodBinding> bindingList,
+            List<MeshServiceRegistrar.ServiceMethodBinding> bindingList,
             ViewProxyBinding proxyBinding,
             ObjectMapper objectMapper) {
         this.serviceName = iface.getSimpleName();
         this.minAvailable = minAvailable;
         this.proxyBinding = proxyBinding;
         this.objectMapper = objectMapper;
-        Map<Method, McpMeshServiceRegistrar.ServiceMethodBinding> map = new LinkedHashMap<>();
-        for (McpMeshServiceRegistrar.ServiceMethodBinding b : bindingList) {
+        Map<Method, MeshServiceRegistrar.ServiceMethodBinding> map = new LinkedHashMap<>();
+        for (MeshServiceRegistrar.ServiceMethodBinding b : bindingList) {
             map.put(b.method(), b);
         }
         this.bindings = map;
@@ -124,7 +124,7 @@ class McpMeshServiceInvocationHandler implements InvocationHandler {
             return InvocationHandler.invokeDefault(proxy, method, args);
         }
 
-        McpMeshServiceRegistrar.ServiceMethodBinding binding = resolveBinding(method);
+        MeshServiceRegistrar.ServiceMethodBinding binding = resolveBinding(method);
         if (binding == null) {
             // Genuinely unknown method (not just a super-interface dispatch of a
             // covariant override — that is resolved by name + parameter types).
@@ -141,8 +141,8 @@ class McpMeshServiceInvocationHandler implements InvocationHandler {
         // With no floor (minAvailable == 0) enforceFloor is a no-op — there is
         // nothing to wait on — so we delegate directly (callAsync is already
         // async) and avoid an extra thread hop.
-        if (binding.returnMode() == McpMeshServiceRegistrar.ReturnMode.ASYNC && minAvailable > 0) {
-            McpMeshServiceRegistrar.ServiceMethodBinding b = binding;
+        if (binding.returnMode() == MeshServiceRegistrar.ReturnMode.ASYNC && minAvailable > 0) {
+            MeshServiceRegistrar.ServiceMethodBinding b = binding;
             return CompletableFuture
                 .supplyAsync(io.mcpmesh.spring.tracing.TraceContext.wrapSupplier(() -> {
                     enforceFloor();
@@ -162,13 +162,13 @@ class McpMeshServiceInvocationHandler implements InvocationHandler {
      * misses (the super {@link Method} is dispatched) and is resolved by name +
      * parameter types, cached so the reflective fallback runs once per Method.
      */
-    private McpMeshServiceRegistrar.ServiceMethodBinding resolveBinding(Method method) {
-        McpMeshServiceRegistrar.ServiceMethodBinding direct = bindings.get(method);
+    private MeshServiceRegistrar.ServiceMethodBinding resolveBinding(Method method) {
+        MeshServiceRegistrar.ServiceMethodBinding direct = bindings.get(method);
         if (direct != null) {
             return direct;
         }
         return resolvedBindings.computeIfAbsent(method, m -> {
-            for (McpMeshServiceRegistrar.ServiceMethodBinding b : bindings.values()) {
+            for (MeshServiceRegistrar.ServiceMethodBinding b : bindings.values()) {
                 Method bound = b.method();
                 if (bound.getName().equals(m.getName())
                         && Arrays.equals(bound.getParameterTypes(), m.getParameterTypes())) {
@@ -201,7 +201,7 @@ class McpMeshServiceInvocationHandler implements InvocationHandler {
         MeshSettleState settle = MeshSettleState.getInstance();
         boolean settled = settle.isSettled();
         int available = 0;
-        for (McpMeshServiceRegistrar.ServiceMethodBinding b : bindings.values()) {
+        for (MeshServiceRegistrar.ServiceMethodBinding b : bindings.values()) {
             if (available >= minAvailable) {
                 break;
             }
@@ -238,7 +238,7 @@ class McpMeshServiceInvocationHandler implements InvocationHandler {
 
     private int countAvailable() {
         int available = 0;
-        for (McpMeshServiceRegistrar.ServiceMethodBinding b : bindings.values()) {
+        for (MeshServiceRegistrar.ServiceMethodBinding b : bindings.values()) {
             if (proxyFor(b).isAvailable()) {
                 available++;
             }
@@ -247,16 +247,16 @@ class McpMeshServiceInvocationHandler implements InvocationHandler {
     }
 
     /** Resolve the per-method proxy via the pluggable strategy (never null). */
-    private McpMeshTool<?> proxyFor(McpMeshServiceRegistrar.ServiceMethodBinding binding) {
+    private McpMeshTool<?> proxyFor(MeshServiceRegistrar.ServiceMethodBinding binding) {
         return proxyBinding.proxyFor(binding);
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private Object delegate(McpMeshServiceRegistrar.ServiceMethodBinding binding,
+    private Object delegate(MeshServiceRegistrar.ServiceMethodBinding binding,
                             McpMeshTool<?> tool, Object[] args) {
-        if (binding.paramMode() == McpMeshServiceRegistrar.ParamMode.SINGLE_POJO
+        if (binding.paramMode() == MeshServiceRegistrar.ParamMode.SINGLE_POJO
                 && (args == null || args[0] == null)) {
-            throw new IllegalArgumentException("@McpMeshService " + serviceName + "."
+            throw new IllegalArgumentException("@MeshService " + serviceName + "."
                 + binding.method().getName() + " single-object parameter must not be null");
         }
         McpMeshTool raw = tool;
@@ -280,7 +280,7 @@ class McpMeshServiceInvocationHandler implements InvocationHandler {
     }
 
     private Map<String, Object> buildParamMap(
-            McpMeshServiceRegistrar.ServiceMethodBinding binding, Object[] args) {
+            MeshServiceRegistrar.ServiceMethodBinding binding, Object[] args) {
         // LinkedHashMap: preserve declared parameter order (deterministic wire
         // payload), mirroring the @MeshTool param-map assembly.
         Map<String, Object> params = new LinkedHashMap<>();
@@ -309,6 +309,6 @@ class McpMeshServiceInvocationHandler implements InvocationHandler {
         } catch (RuntimeException e) {
             counts = "?/" + bindings.size();
         }
-        return "McpMeshService[" + serviceName + ", " + counts + " available]";
+        return "MeshService[" + serviceName + ", " + counts + " available]";
     }
 }
