@@ -94,4 +94,4 @@ public String analyze(
 
 ## See Also
 
-- [MediaParam Guide](../multimodal/media-param.md) -- Usage patterns and multi-agent flow
+- [MediaParam Guide](../concepts/multimodal.md#mediaparam) -- Usage patterns and multi-agent flow

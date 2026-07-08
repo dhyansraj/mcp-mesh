@@ -94,5 +94,5 @@ Backend selected by `MCP_MESH_MEDIA_STORAGE` environment variable (`local` or `s
 
 ## See Also
 
-- [MediaStore Configuration](../multimodal/media-store.md) -- Full setup guide
+- [MediaStore Configuration](../concepts/multimodal.md#storage-configuration) -- Full setup guide
 - [Environment Variables](../environment-variables.md) -- All config options

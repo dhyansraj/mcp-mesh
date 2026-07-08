@@ -149,7 +149,7 @@ Pass media directly to LLM agents:
 result = await llm("Analyze this image", media=["file:///tmp/photo.png"])
 ```
 
-See the [Multimodal Guide](../../multimodal/getting-started.md) for full documentation.
+See the [Multimodal Guide](../../concepts/multimodal.md#getting-started) for full documentation.
 
 ## Next Steps
 

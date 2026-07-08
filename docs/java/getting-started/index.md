@@ -180,7 +180,7 @@ public ResourceLink generateChart(
 }
 ```
 
-See the [Multimodal Guide](../../multimodal/getting-started.md) for full documentation.
+See the [Multimodal Guide](../../concepts/multimodal.md#getting-started) for full documentation.
 
 ## Next Steps
 

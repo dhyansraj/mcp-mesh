@@ -23,6 +23,16 @@ Use it alongside the other sections:
 Concepts is what you reach for when something works (or doesn't) and you want
 to understand the mechanism behind it.
 
+The pages are ordered as a discovery arc. Start with the **foundation** —
+[Architecture](architecture.md) and [DDDI](dddi.md) — then the **capability
+model** that resolution is built on (tag and schema matching, service views).
+From there the **control plane** (the registry, health and discovery) shows how
+the mesh wires itself together, followed by **what agents do** with it — routes,
+LLM agents, streaming, jobs, and multimodal. The arc closes with **state**
+(stateful agents and the in-process escape hatch) and **operations** (the audit
+trail). You can read any page on its own, but front-to-back it builds from
+primitives to surfaces to operations.
+
 ## Sections
 
 <div class="grid cards" markdown>
