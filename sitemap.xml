@@ -157,7 +157,19 @@
          <lastmod>2026-07-08</lastmod>
     </url>
     <url>
+         <loc>https://mcp-mesh.ai/concepts/llm/</loc>
+         <lastmod>2026-07-08</lastmod>
+    </url>
+    <url>
+         <loc>https://mcp-mesh.ai/concepts/multimodal/</loc>
+         <lastmod>2026-07-08</lastmod>
+    </url>
+    <url>
          <loc>https://mcp-mesh.ai/concepts/registry/</loc>
+         <lastmod>2026-07-08</lastmod>
+    </url>
+    <url>
+         <loc>https://mcp-mesh.ai/concepts/routes/</loc>
          <lastmod>2026-07-08</lastmod>
     </url>
     <url>
@@ -242,34 +254,6 @@
     </url>
     <url>
          <loc>https://mcp-mesh.ai/java/local-development/troubleshooting/</loc>
-         <lastmod>2026-07-08</lastmod>
-    </url>
-    <url>
-         <loc>https://mcp-mesh.ai/multimodal/getting-started/</loc>
-         <lastmod>2026-07-08</lastmod>
-    </url>
-    <url>
-         <loc>https://mcp-mesh.ai/multimodal/llm-media-input/</loc>
-         <lastmod>2026-07-08</lastmod>
-    </url>
-    <url>
-         <loc>https://mcp-mesh.ai/multimodal/media-param/</loc>
-         <lastmod>2026-07-08</lastmod>
-    </url>
-    <url>
-         <loc>https://mcp-mesh.ai/multimodal/media-store/</loc>
-         <lastmod>2026-07-08</lastmod>
-    </url>
-    <url>
-         <loc>https://mcp-mesh.ai/multimodal/provider-support/</loc>
-         <lastmod>2026-07-08</lastmod>
-    </url>
-    <url>
-         <loc>https://mcp-mesh.ai/multimodal/returning-media/</loc>
-         <lastmod>2026-07-08</lastmod>
-    </url>
-    <url>
-         <loc>https://mcp-mesh.ai/multimodal/web-uploads/</loc>
          <lastmod>2026-07-08</lastmod>
     </url>
     <url>
