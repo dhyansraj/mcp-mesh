@@ -544,38 +544,6 @@ public class MeshAutoConfiguration {
     }
 
     /**
-     * RFC #1280 phase-3 review (item 2): WARN for a {@code @McpMeshService}
-     * producer CLASS that was scanned but NEVER seen as a bean (so its methods
-     * are silently unpublished). Runs as a {@link SmartInitializingSingleton} so
-     * the comparison is against GROUND TRUTH — the classes
-     * {@link MeshToolBeanPostProcessor} actually processed as beans by the time
-     * every singleton exists — eliminating the false positive a bean-definition
-     * scan hits for {@code @Bean} factory methods that declare an interface /
-     * supertype return type.
-     */
-    @Bean
-    @ConditionalOnMissingBean(name = "mcpMeshServiceProducerWarner")
-    public SmartInitializingSingleton mcpMeshServiceProducerWarner(
-            ObjectProvider<McpMeshServiceRegistrar> registrarProvider,
-            ObjectProvider<MeshToolBeanPostProcessor> beanPostProcessorProvider) {
-        return () -> {
-            McpMeshServiceRegistrar registrar = registrarProvider.getIfAvailable();
-            MeshToolBeanPostProcessor bpp = beanPostProcessorProvider.getIfAvailable();
-            if (registrar == null || bpp == null) {
-                return;
-            }
-            Set<String> published = bpp.seenProducerClassNames();
-            for (String className : registrar.discoveredProducerClasses()) {
-                if (!published.contains(className)) {
-                    log.warn("@McpMeshService class {} is not a Spring bean — its methods will NOT be "
-                            + "published. Annotate it @Component (or register it as a @Bean) to publish "
-                            + "its methods as tools.", className);
-                }
-            }
-        };
-    }
-
-    /**
      * Late-phase complement to {@link #meshDependsOnBeanRegistrar}: walks the
      * fully-built {@link AgentSpec} and registers a singleton
      * {@link McpMeshTool} bean for every capability declared by any of the

@@ -10,7 +10,7 @@
     <packaging>jar</packaging>
 
     <name>JavaViewProducer Agent</name>
-    <description>uc37 producer proving RFC #1280 phase-3 @McpMeshService("prefix") sugar + dotted capability names</description>
+    <description>uc37 producer of svc.* dotted capabilities via explicit @MeshTool</description>
 
     <parent>
         <groupId>org.springframework.boot</groupId>

@@ -4,9 +4,8 @@ Provider B (optional edge — stop it to see graceful degradation) in the [servi
 
 ## Overview
 
-A TypeScript MCP Mesh agent. Publishes the `media.thumbnail` capability via **producer
-sugar**: `agent.addService("media", { ... })` publishes one method as the dotted
-capability `media.thumbnail` — no per-method `addTool`.
+A TypeScript MCP Mesh agent. Publishes the `media.thumbnail` capability by
+declaring it **explicitly**: `agent.addTool({ capability: "media.thumbnail", ... })`.
 
 The `media.*` capability + its parameters match the Java and Python providers
 exactly, so gateways in ANY runtime are interchangeable.

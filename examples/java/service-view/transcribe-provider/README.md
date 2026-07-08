@@ -9,10 +9,9 @@ the `media.transcribe` capability, bound by the OPTIONAL
 A Java/Spring Boot MCP Mesh agent. Turns an asset id + source text into a
 deterministic transcript.
 
-The capability is published with producer sugar: `MediaTranscribeService` is a
-`@Component` annotated `@McpMeshService("media")`, so its public `transcribe(...)`
-method is exposed as the dotted capability `media.transcribe` — no per-method
-`@MeshTool` required.
+The capability is published by an ordinary `@Component`: `MediaTranscribeService`'s
+`transcribe(...)` method carries `@MeshTool(capability = "media.transcribe")`, so
+the dotted capability name is declared explicitly on the annotation.
 
 ## Getting Started
 
@@ -45,7 +44,7 @@ transcribe-provider/
 ├── helm-values.yaml
 └── src/main/java/com/example/transcribeprovider/
     ├── TranscribeProviderApplication.java  # agent bootstrap
-    └── MediaTranscribeService.java         # @McpMeshService("media") producer bean
+    └── MediaTranscribeService.java         # @MeshTool(capability = "media.transcribe")
 ```
 
 ## Docker

@@ -1,4 +1,4 @@
-# uc37 java-view-producer configuration (RFC #1280 phase-3 producer sugar)
+# uc37 java-view-producer configuration (RFC #1280 phase-3 explicit dotted capabilities)
 
 spring:
   application:

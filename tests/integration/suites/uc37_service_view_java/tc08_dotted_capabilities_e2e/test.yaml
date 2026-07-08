@@ -1,15 +1,17 @@
-# tc08_producer_sugar_dotted — RFC #1280 PHASE 3 end-to-end: producer sugar
-# (@McpMeshService("svc") on a bean class publishes each public method as
-# capability "svc.<method>") AND the first DOTTED capability names ever to
-# traverse a real cluster registration (the Go registry validator was widened
-# to dot-separated segments — src/core/registry/validation.go — but no dotted
-# name had crossed the wire before this TC).
+# tc08_dotted_capabilities_e2e — RFC #1280 PHASE 3 end-to-end: EXPLICIT
+# dotted-capability names (java-view-producer declares svc.alpha + svc.bravo
+# directly via @MeshTool(capability="svc.<method>")) AND the first DOTTED
+# capability names ever to traverse a real cluster registration (the Go
+# registry validator was widened to dot-separated segments —
+# src/core/registry/validation.go — but no dotted name had crossed the wire
+# before this TC).
 #
-# Topology: java-view-producer (publishes svc.alpha + svc.bravo via the
-# sugar) + java-view-consumer (DottedService view binds both, surfaced by the
-# view_dotted tool). No Python providers — both agents are Java, and the
-# consumer's other views (view-cap-*, tp-cap-*) stay deliberately unresolved:
-# they are OPTIONAL or belong to other carriers and must not interfere.
+# Topology: java-view-producer (publishes svc.alpha + svc.bravo as explicit
+# @MeshTool dotted capabilities) + java-view-consumer (DottedService view
+# binds both, surfaced by the view_dotted tool). No Python providers — both
+# agents are Java, and the consumer's other views (view-cap-*, tp-cap-*) stay
+# deliberately unresolved: they are OPTIONAL or belong to other carriers and
+# must not interfere.
 #
 # Design guarantees under test:
 #   1. VALIDATOR WIDENING E2E: the registry ACCEPTS the dotted registration —
@@ -17,8 +19,8 @@
 #      svc.alpha and svc.bravo (a validator rejection would 4xx the
 #      registration and the agent would never appear).
 #   2. Dotted names through the CLI call path: `meshctl call svc.alpha` (the
-#      capability-name fallback resolution) reaches the sugar-published tool
-#      and returns the self-identifying payload.
+#      capability-name fallback resolution) reaches the explicitly-declared
+#      tool and returns the self-identifying payload.
 #   3. Dotted names through dependency resolution + the view facade:
 #      view_dotted reports BOTH methods served by java-view-producer with the
 #      correct dotted capability payloads (svc.alpha / svc.bravo).
@@ -37,8 +39,8 @@
 # slack to 2400. Heavier than the uc23 two-install convention (300-600) on
 # purpose: those rely on warm caches; the checklist flagged that reliance.
 
-name: "Service views phase 3: producer sugar publishes dotted svc.* capabilities end-to-end (Java)"
-description: "java-view-producer registers dotted svc.alpha/svc.bravo (widened validator e2e), meshctl call svc.alpha answers, view_dotted reports both methods served by the producer, consumer total_dependencies=8"
+name: "Service views phase 3: explicit dotted svc.* capabilities end-to-end (Java)"
+description: "java-view-producer registers dotted svc.alpha/svc.bravo (widened validator e2e) via explicit @MeshTool, meshctl call svc.alpha answers, view_dotted reports both methods served by the producer, consumer total_dependencies=8"
 tags:
   - integration
   - java
@@ -160,7 +162,7 @@ assertions:
 
   # Guarantee 2: the dotted name resolves through the CLI call path
   - expr: "${captured.direct_dotted_call} contains 'DOTTED_DIRECT_CALL_OK=1'"
-    message: "meshctl call svc.alpha must reach the sugar-published tool and return the producer's self-identifying payload"
+    message: "meshctl call svc.alpha must reach the explicitly-declared tool and return the producer's self-identifying payload"
 
   # Guarantee 3: the dotted names resolve through the view facade
   - expr: "${captured.dotted_view_report} contains 'DOTTED_VIEW_BOUND=1'"

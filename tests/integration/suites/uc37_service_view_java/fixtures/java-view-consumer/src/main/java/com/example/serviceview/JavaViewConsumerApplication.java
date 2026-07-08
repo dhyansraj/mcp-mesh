@@ -27,7 +27,8 @@ import java.util.Map;
  *       required), consumed as a {@code @MeshTool} METHOD PARAMETER
  *       (RFC #1280 phase 2) by {@code view_tool_param}.</li>
  *   <li>{@link DottedService} — two OPTIONAL DOTTED svc.* capabilities
- *       published by java-view-producer's phase-3 producer sugar (tc08).</li>
+ *       published by java-view-producer as explicit {@code @MeshTool} dotted
+ *       capabilities (tc08).</li>
  * </ul>
  *
  * <p>Registration carries TWO dependency surfaces: the bean-path views expand
@@ -79,8 +80,9 @@ import java.util.Map;
  *       refusal BEFORE this body runs (tc06) — the exact envelope the
  *       class-level {@code view_critical} path above does NOT get (tc03).</li>
  *   <li>{@code view_dotted} — RFC #1280 PHASE 3: reports the DOTTED svc.*
- *       capabilities served by java-view-producer's producer sugar through
- *       the {@link DottedService} bean-path view (tc08).</li>
+ *       capabilities served by java-view-producer's explicit {@code @MeshTool}
+ *       dotted capabilities through the {@link DottedService} bean-path view
+ *       (tc08).</li>
  * </ul>
  */
 @MeshAgent(
@@ -167,14 +169,14 @@ public class JavaViewConsumerApplication {
 
         /**
          * RFC #1280 phase 3 entry point (tc08): reports the DOTTED svc.*
-         * capabilities published by java-view-producer's
-         * {@code @McpMeshService("svc")} producer sugar, consumed through the
+         * capabilities published by java-view-producer as explicit
+         * {@code @MeshTool} dotted capabilities, consumed through the
          * bean-path {@link DottedService} view. Same flat report shape as
          * {@code view_report}.
          */
         @MeshTool(
             capability = "view_dotted",
-            description = "Call both DottedService view methods (svc.* producer-sugar capabilities) and report which agent served each")
+            description = "Call both DottedService view methods (svc.* dotted capabilities) and report which agent served each")
         public Map<String, Object> dottedReport() {
             Map<String, Object> out = new LinkedHashMap<>();
             reportOne(out, "alpha", dottedService::alpha);

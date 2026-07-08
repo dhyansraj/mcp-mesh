@@ -9,11 +9,9 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 /**
  * CaptionProvider - one leaf of the {@code @McpMeshService} service-view demo.
  *
- * <p>Agent bootstrap only. The capability itself is published by the
- * producer-sugar bean {@link MediaCaptionService}: a class annotated
- * {@code @McpMeshService("media")} publishes each public method as
- * {@code media.<methodName>}, so its {@code caption(...)} method becomes the
- * dotted capability {@code media.caption} — one slice of the shared
+ * <p>Agent bootstrap only. The capability itself is published by
+ * {@link MediaCaptionService}: its {@code caption(...)} method carries
+ * {@code @MeshTool(capability = "media.caption")} — one slice of the shared
  * {@code media.*} namespace that {@code thumbnail-provider} and
  * {@code transcribe-provider} also publish into.
  */

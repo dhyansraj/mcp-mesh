@@ -1,10 +1,9 @@
 /**
  * transcribe-provider — MCP Mesh agent (TypeScript).
  *
- * Publishes `media.transcribe` via producer sugar (RFC #1280):
- * `agent.addService("media", { transcribe })` publishes the `transcribe` entry
- * as the dotted capability `media.transcribe` — the third slice of the shared
- * `media.*` namespace, served by its own agent.
+ * Publishes the dotted capability `media.transcribe`, declared EXPLICITLY via
+ * `agent.addTool({ capability, ... })` — the third slice of the shared `media.*`
+ * namespace, served by its own agent.
  *
  * Cross-runtime: parameter names (`assetId`, `text`) and the capability match
  * the Java and Python providers, so any-runtime gateways are interchangeable.
@@ -29,26 +28,23 @@ const agent = mesh(server, {
   description: "Publishes media.transcribe into the shared media.* namespace",
 });
 
-agent.addService("media", {
-  // Object form: a Zod schema documents + validates the tool's inputs at
-  // runtime (addService forwards `parameters` to the underlying addTool). The
-  // object-form execute types its args as `unknown`, so narrow after validation.
-  transcribe: {
-    parameters: z.object({
-      assetId: z.string().describe("Media asset identifier"),
-      text: z.string().describe("Source audio text"),
-    }),
-    execute: async (args) => {
-      const { assetId, text } = args as { assetId: string; text: string };
-      const stripped = text.trim();
-      const wordCount = stripped ? stripped.split(/\s+/).length : 0;
-      return {
-        assetId,
-        transcript: `[${assetId}] ${stripped.toUpperCase()}`,
-        wordCount,
-        provider: "transcribe-provider",
-      };
-    },
+agent.addTool({
+  name: "transcribe",
+  capability: "media.transcribe",
+  parameters: z.object({
+    assetId: z.string().describe("Media asset identifier"),
+    text: z.string().describe("Source audio text"),
+  }),
+  execute: async (args) => {
+    const { assetId, text } = args as { assetId: string; text: string };
+    const stripped = text.trim();
+    const wordCount = stripped ? stripped.split(/\s+/).length : 0;
+    return {
+      assetId,
+      transcript: `[${assetId}] ${stripped.toUpperCase()}`,
+      wordCount,
+      provider: "transcribe-provider",
+    };
   },
 });
 

@@ -7,8 +7,8 @@ import java.util.Map;
 
 /**
  * uc37 phase-3 consumer view (RFC #1280): binds the DOT-SEPARATED
- * {@code svc.*} capabilities published by the java-view-producer agent's
- * {@code @McpMeshService("svc")} producer sugar. Both edges are OPTIONAL —
+ * {@code svc.*} capabilities published by the java-view-producer agent as
+ * explicit {@code @MeshTool} dotted capabilities. Both edges are OPTIONAL —
  * this view exists to prove dotted capability names traverse the whole
  * pipeline (widened registry validator -> registration -> dependency
  * resolution -> facade call), not to exercise required semantics (tc03/tc06

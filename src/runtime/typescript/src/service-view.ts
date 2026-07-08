@@ -1,25 +1,23 @@
 /**
- * Service views (RFC #1280) for the TypeScript SDK.
+ * Service views (RFC #1280) for the TypeScript SDK — CONSUMER surface.
  *
- * Two related roles, mirroring the Java runtime (`@McpMeshService`) so the
- * cross-runtime contract (integration suite uc37) holds identically:
- *
- *   1. CONSUMER VIEW — `mesh.serviceView({ methods, minAvailable? })` produces a
- *      branded object that occupies ONE positional dependency slot in a tool's
- *      `dependencies` array but expands into N ordinary dependency edges (one per
- *      method, SORTED BY NAME for deterministic registration). At call time the
- *      framework injects a facade whose methods delegate to each edge's own
- *      resolved proxy — so different methods may bind different provider agents
- *      and rebind independently as topology changes. There are NO wire or
- *      registry changes: every method is an ordinary dependency edge.
- *
- *   2. PRODUCER SUGAR — `agent.addService("prefix", { ... })` publishes each
- *      entry (name-sorted) as an ordinary mesh tool with capability
- *      `prefix.<method>` through the existing `addTool` machinery.
+ * `mesh.serviceView({ methods, minAvailable? })` produces a branded object that
+ * occupies ONE positional dependency slot in a tool's `dependencies` array but
+ * expands into N ordinary dependency edges (one per method, SORTED BY NAME for
+ * deterministic registration). At call time the framework injects a facade whose
+ * methods delegate to each edge's own resolved proxy — so different methods may
+ * bind different provider agents and rebind independently as topology changes.
+ * There are NO wire or registry changes: every method is an ordinary dependency
+ * edge. This mirrors the Java runtime (`@McpMeshService`) so the cross-runtime
+ * contract (integration suite uc37) holds identically.
  *
  * A service view is purely consumer-local: there is no group versioning and no
  * interface-level availability summary. The optional `minAvailable` floor is a
  * consumer-local circuit breaker with no wire effect.
+ *
+ * NOTE: the PRODUCER sugar `agent.addService("prefix", { ... })` was removed in
+ * v3.1.0 (issue #1320). Publish dotted capabilities explicitly with
+ * `agent.addTool({ capability: "prefix.method", ... })`.
  */
 
 import { z } from "zod";
@@ -27,7 +25,6 @@ import type {
   DependencySpec,
   NormalizedDependency,
   TagSpec,
-  MeshToolDef,
 } from "./types.js";
 import { normalizeDependency } from "./proxy.js";
 
@@ -58,9 +55,8 @@ export function assertNoServiceViewDeps(
  * Segment-wise dotted capability-name grammar. Kept in lockstep with the Go
  * registry validator's `capabilityNamePattern`
  * (src/core/registry/validation.go: `^[a-zA-Z][a-zA-Z0-9_-]*(\.[a-zA-Z][a-zA-Z0-9_-]*)*$`)
- * and the Python/Java runtimes. Applied to the PRODUCED capability names of
- * `agent.addService` (the derived `prefix.method`) and `agent.addTool`
- * (`capability ?? name`, #1293 item 6) — both validate before the name reaches
+ * and the Python/Java runtimes. Applied to the PRODUCED capability name of
+ * `agent.addTool` (`capability ?? name`, #1293 item 6) before the name reaches
  * the registry. Dependency capability names are deliberately left unvalidated
  * (the registry remains their single authority).
  */
@@ -360,10 +356,9 @@ export function expandDependencies(
       return;
     }
 
-    // Guard: an object without a `capability` in a dependencies array is almost
-    // certainly a producer-method object placed where a view/dep was expected
-    // (or a malformed spec). Fail loud rather than shipping a `capability:
-    // undefined` edge.
+    // Guard: an object without a `capability` in a dependencies array is
+    // malformed (a bare selector must carry a `capability`). Fail loud rather
+    // than shipping a `capability: undefined` edge.
     if (
       typeof entry === "object" &&
       entry !== null &&
@@ -372,8 +367,7 @@ export function expandDependencies(
       throw new Error(
         `${ownerLabel}: dependency #${slotIndex} is an object without a ` +
           `'capability' — expected a DependencySpec (string or { capability }) ` +
-          `or a mesh.serviceView(...). If this is a producer method, register ` +
-          `it with agent.addService(...).`,
+          `or a mesh.serviceView(...).`,
       );
     }
 
@@ -383,30 +377,4 @@ export function expandDependencies(
   });
 
   return { edges, slots };
-}
-
-/**
- * A producer method for `agent.addService`. Either a bare execute function
- * (shorthand) or an object carrying `execute` plus any `addTool` passthrough
- * (tags/version/description/parameters/dependencies/...). `name` and
- * `capability` are DERIVED (`prefix.<method>`) and must not be supplied.
- */
-export type ServiceProducerMethod =
-  | ((...args: never[]) => Promise<unknown> | unknown)
-  | ServiceProducerMethodObject;
-
-/** Object form of a {@link ServiceProducerMethod}. */
-export type ServiceProducerMethodObject = Omit<
-  Partial<MeshToolDef>,
-  "name" | "capability" | "execute" | "parameters"
-> & {
-  /** Method implementation (positional deps injected after args, as usual). */
-  execute: MeshToolDef["execute"];
-  /** Optional Zod input schema. Defaults to a permissive passthrough object. */
-  parameters?: z.ZodType;
-};
-
-/** Permissive default schema for producer methods that declare no `parameters`. */
-export function defaultProducerParams(): z.ZodType {
-  return z.object({}).passthrough();
 }

@@ -1,10 +1,9 @@
 /**
  * caption-provider — MCP Mesh agent (TypeScript).
  *
- * Publishes ONE slice of the shared `media.*` namespace via producer sugar
- * (RFC #1280). `agent.addService("media", { caption })` publishes the `caption`
- * entry as a mesh tool under the capability `media.caption` (prefix + method
- * name). The `"media"` prefix is entirely user-chosen — nothing is hard-coded.
+ * Publishes ONE slice of the shared `media.*` namespace. The dotted capability
+ * `media.caption` is declared EXPLICITLY via `agent.addTool({ capability, ... })`
+ * — the `media.*` namespace is entirely user-chosen, nothing is hard-coded.
  *
  * Cross-runtime: the parameter names (`assetId`, `text`) and the `media.caption`
  * capability match the Java and Python providers exactly, so a gateway in ANY
@@ -30,23 +29,20 @@ const agent = mesh(server, {
   description: "Publishes media.caption into the shared media.* namespace",
 });
 
-agent.addService("media", {
-  // Object form: a Zod schema documents + validates the tool's inputs at
-  // runtime (addService forwards `parameters` to the underlying addTool). The
-  // object-form execute types its args as `unknown`, so narrow after validation.
-  caption: {
-    parameters: z.object({
-      assetId: z.string().describe("Media asset identifier"),
-      text: z.string().describe("Source description text"),
-    }),
-    execute: async (args) => {
-      const { assetId, text } = args as { assetId: string; text: string };
-      return {
-        assetId,
-        caption: `A scene showing ${text.trim().toLowerCase()}.`,
-        provider: "caption-provider",
-      };
-    },
+agent.addTool({
+  name: "caption",
+  capability: "media.caption",
+  parameters: z.object({
+    assetId: z.string().describe("Media asset identifier"),
+    text: z.string().describe("Source description text"),
+  }),
+  execute: async (args) => {
+    const { assetId, text } = args as { assetId: string; text: string };
+    return {
+      assetId,
+      caption: `A scene showing ${text.trim().toLowerCase()}.`,
+      provider: "caption-provider",
+    };
   },
 });
 

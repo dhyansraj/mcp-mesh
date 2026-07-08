@@ -4,9 +4,8 @@ Provider A in the [service-view example](../README.md).
 
 ## Overview
 
-A TypeScript MCP Mesh agent. Publishes the `media.caption` capability via **producer
-sugar**: `agent.addService("media", { ... })` publishes one method as the dotted
-capability `media.caption` — no per-method `addTool`.
+A TypeScript MCP Mesh agent. Publishes the `media.caption` capability by
+declaring it **explicitly**: `agent.addTool({ capability: "media.caption", ... })`.
 
 The `media.*` capability + its parameters match the Java and Python providers
 exactly, so gateways in ANY runtime are interchangeable.

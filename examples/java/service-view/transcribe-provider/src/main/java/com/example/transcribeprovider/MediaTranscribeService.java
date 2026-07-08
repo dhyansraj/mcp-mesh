@@ -1,18 +1,15 @@
 package com.example.transcribeprovider;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshTool;
 import io.mcpmesh.Param;
 import org.springframework.stereotype.Component;
 
 /**
- * Producer-sugar bean (RFC #1280 phase 3): {@code @McpMeshService("media")}
- * publishes each public method as {@code media.<methodName>}. This bean's single
- * public method {@code transcribe} publishes the dotted capability
- * {@code media.transcribe} — the third slice of the same {@code media.*}
- * namespace served by a different agent.
+ * Publishes the dotted capability {@code media.transcribe} — the third slice of
+ * the shared {@code media.*} namespace, served by a different agent. The
+ * capability name is declared EXPLICITLY on the {@code @MeshTool}.
  */
 @Component
-@McpMeshService("media")
 public class MediaTranscribeService {
 
     /**
@@ -22,6 +19,7 @@ public class MediaTranscribeService {
      * @param text    source audio text
      * @return a transcript record, tagged with this provider's name
      */
+    @MeshTool(capability = "media.transcribe")
     public TranscriptResult transcribe(
         @Param(value = "assetId", description = "Media asset identifier") String assetId,
         @Param(value = "text", description = "Source audio text") String text

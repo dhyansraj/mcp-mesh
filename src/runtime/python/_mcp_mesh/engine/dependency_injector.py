@@ -608,15 +608,6 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
             )
         return []
 
-    # @mesh.service("prefix") producer-sugar wrappers carry the
-    # ``_mesh_service_served_name`` mark (stamped on the ``published`` callable
-    # in ``mesh._service._build_producer`` / ``_republish_tool_wins`` BEFORE
-    # ``@mesh.tool`` runs, so it is visible here — the DI wrapper is created
-    # inside that decoration and this analysis reads the marked ``func``
-    # directly). Their single ``args: dict`` parameter is the tool's MCP INPUT
-    # data, never a DI slot; typing it as McpMeshTool would be actively wrong.
-    is_producer_served = getattr(func, "_mesh_service_served_name", None) is not None
-
     # Single parameter rule: inject regardless of typing. Only applies when
     # no params are hidden — a hidden single param is framework-bound by the
     # hiding decorator itself, never an injection target — and when the lone
@@ -628,15 +619,6 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
                 # The single parameter is a MeshJob — the unified injection
                 # path constructs a MeshJobSubmitter for it. No McpMeshTool
                 # position to record here.
-                return []
-
-            if is_producer_served and not dependencies:
-                # Producer sugar with no declared dependencies: the lone param
-                # is MCP input data, and there is nothing to inject. Skip the
-                # untyped single-parameter heuristic entirely — no warning, no
-                # force-inject of position 0. (A tool-wins producer that
-                # legitimately declares a dependency has ``dependencies``
-                # non-empty and falls through to the normal path below.)
                 return []
 
             # Deprecation notice — but ONLY when a dependency is actually

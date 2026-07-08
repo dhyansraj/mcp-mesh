@@ -1,22 +1,17 @@
 package com.example.captionprovider;
 
-import io.mcpmesh.McpMeshService;
+import io.mcpmesh.MeshTool;
 import io.mcpmesh.Param;
 import org.springframework.stereotype.Component;
 
 /**
- * Producer-sugar bean (RFC #1280 phase 3): a class annotated
- * {@code @McpMeshService("media")} publishes each public method as a mesh tool
- * under the capability {@code media.<methodName>}. The {@code "media"} prefix is
- * entirely user-chosen — nothing about it is hard-coded in the mesh.
- *
- * <p>This bean exposes one public method, {@code caption}, so it publishes
- * exactly one capability: {@code media.caption}. Dotted capability names are
- * first-class across the stack; the input schema still comes from the
- * {@code @Param} annotations, exactly as a hand-written {@code @MeshTool} would.
+ * Publishes one tool into the shared {@code media.*} capability namespace. The
+ * dotted capability name {@code media.caption} is declared EXPLICITLY on the
+ * {@code @MeshTool}, so the wire contract is owned by the annotation rather than
+ * derived from the Java method name. Dotted capability names are first-class
+ * across the stack; the input schema comes from the {@code @Param} annotations.
  */
 @Component
-@McpMeshService("media")
 public class MediaCaptionService {
 
     /**
@@ -26,6 +21,7 @@ public class MediaCaptionService {
      * @param text    source description text
      * @return a caption record, tagged with this provider's name
      */
+    @MeshTool(capability = "media.caption")
     public CaptionResult caption(
         @Param(value = "assetId", description = "Media asset identifier") String assetId,
         @Param(value = "text", description = "Source description text") String text

@@ -64,28 +64,13 @@ import java.lang.annotation.Target;
  * any scalar "is the view up?" would lie about partial availability, since each
  * method resolves independently.
  *
- * <h2>On a CLASS — producer sugar (phase 3)</h2>
- * <p>A {@code @Component} class annotated {@code @McpMeshService("prefix")}
- * publishes each eligible public instance method as an ordinary mesh tool with
- * capability {@code "prefix.<methodName>"}. Pure sugar over N {@code @MeshTool}
- * declarations — each method becomes a normal tool through the existing
- * {@code @MeshTool} machinery (same {@code @Param} rules, injectable slots, and
- * schema generation); there are no wire or registry changes.
- *
- * <pre>{@code
- * @McpMeshService("media")   // prefix is user-chosen; nothing hard-coded in mesh
- * @Component
- * public class MediaTools {
- *     public CaptionResult caption(@Param("text") String text) { ... }   // → "media.caption"
- *     public ThumbResult   thumbnail(@Param("assetId") String id) { ... } // → "media.thumbnail"
- * }
- * }</pre>
- *
- * <p>A method carrying its own {@link MeshTool} wins: it publishes only under
- * that declaration (no auto-publish, no double). Non-public methods, static
- * methods, and {@link Object} overrides are ignored. Per-class tag/version
- * defaults are NOT provided — a method needing tags/version/description uses an
- * explicit {@code @MeshTool} instead.
+ * <p><b>Removed in 3.1:</b> the producer-on-class form
+ * ({@code @McpMeshService("prefix")} on a {@code @Component} class, which
+ * published {@code prefix.<methodName>} tools) was withdrawn — it derived the
+ * wire capability from the method name, coupling the cross-runtime contract to a
+ * language identifier, and could not express tags/version/dependencies. Using
+ * {@link #value()} on a class now fast-fails at boot; declare each tool
+ * explicitly with {@code @MeshTool(capability = "prefix.method")} instead.
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
@@ -95,11 +80,12 @@ public @interface McpMeshService {
     /**
      * The capability-name prefix.
      *
-     * <p><b>On a producer CLASS:</b> REQUIRED (blank → boot-fail) — each
-     * published method's capability is {@code value + "." + methodName}.
+     * <p><b>On a producer CLASS:</b> REMOVED in 3.1 — a non-blank value on a
+     * class fast-fails at boot. Declare each tool explicitly with
+     * {@code @MeshTool(capability = "prefix.method")}.
      *
      * <p><b>On a consumer INTERFACE (service view):</b> optional and currently
-     * inert — reserved for phase-4 display grouping. Method capabilities on a
+     * inert — reserved for future display grouping. Method capabilities on a
      * view come from each method's own {@link Selector}, not this prefix.
      */
     String value() default "";
@@ -114,8 +100,7 @@ public @interface McpMeshService {
      * or hard-fails per its own {@link Selector#required()} flag, exactly like
      * a directly-injected {@code McpMeshTool}.
      *
-     * <p><b>Meaningful only on an interface (view).</b> On a producer class it
-     * is ignored with a WARN (a consumer-only attribute).
+     * <p><b>Meaningful only on an interface (view).</b>
      */
     int minAvailable() default 0;
 }

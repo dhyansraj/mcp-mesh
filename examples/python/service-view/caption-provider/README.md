@@ -4,9 +4,9 @@ Provider A in the [`@mesh.service` service-view example](../README.md).
 
 ## Overview
 
-A Python MCP Mesh agent. Publishes the `media.caption` capability via **producer sugar**:
-the `@mesh.service("media")` class exposes one public async method, so the mesh
-publishes it as the dotted capability `media.caption` — no per-method `@mesh.tool`.
+A Python MCP Mesh agent. Publishes the `media.caption` capability with an
+explicit `@mesh.tool(capability="media.caption")` — the dotted wire capability is
+declared deliberately, never derived from the Python method name.
 
 The `media.*` capability + its parameters match the Java and TypeScript
 providers exactly, so gateways in ANY runtime are interchangeable.
@@ -39,7 +39,7 @@ The agent will start on port 8120 by default. Override with the
 
 ```text
 caption-provider/
-├── main.py            # agent bootstrap + @mesh.service("media") producer
+├── main.py            # agent bootstrap + @mesh.tool(capability="media.caption")
 ├── requirements.txt
 ├── Dockerfile
 ├── helm-values.yaml

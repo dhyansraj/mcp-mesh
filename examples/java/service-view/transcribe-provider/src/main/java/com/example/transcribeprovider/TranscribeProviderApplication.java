@@ -9,9 +9,9 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 /**
  * TranscribeProvider - one leaf of the {@code @McpMeshService} service-view demo.
  *
- * <p>Agent bootstrap only. The capability is published by the producer-sugar
- * bean {@link MediaTranscribeService}, whose {@code transcribe(...)} method
- * becomes the dotted capability {@code media.transcribe} — a third, independent
+ * <p>Agent bootstrap only. The capability is published by
+ * {@link MediaTranscribeService}, whose {@code transcribe(...)} method carries
+ * {@code @MeshTool(capability = "media.transcribe")} — a third, independent
  * slice of the shared {@code media.*} namespace, served by its own agent.
  */
 @MeshAgent(

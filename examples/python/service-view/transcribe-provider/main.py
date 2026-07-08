@@ -2,10 +2,9 @@
 """
 transcribe-provider - MCP Mesh Agent
 
-Publishes ``media.transcribe`` via producer sugar (RFC #1280): a class decorated
-``@mesh.service("media")`` publishes its public ``transcribe`` method as the
-dotted capability ``media.transcribe`` — the third slice of the shared
-``media.*`` namespace, served by its own agent.
+Publishes ``media.transcribe`` — the third slice of the shared ``media.*``
+namespace, served by its own agent. The tool declares its dotted wire capability
+explicitly with ``@mesh.tool(capability="media.transcribe")``.
 
 Cross-runtime note: parameter names (``assetId``, ``text``) match the Java and
 TypeScript providers, so any-runtime gateways are interchangeable.
@@ -19,20 +18,21 @@ from fastmcp import FastMCP
 app = FastMCP("Transcribe Provider Service")
 
 
-@mesh.service("media")
-class MediaTranscribeService:
-    """Producer sugar: publishes ``media.transcribe``."""
+@app.tool()
+@mesh.tool(capability="media.transcribe")
+async def transcribe(assetId: str, text: str) -> dict:
+    """Generate a deterministic transcript for a media asset.
 
-    async def transcribe(self, assetId: str, text: str) -> dict:
-        """Generate a deterministic transcript for a media asset."""
-        stripped = text.strip()
-        word_count = len(stripped.split()) if stripped else 0
-        return {
-            "assetId": assetId,
-            "transcript": f"[{assetId}] {stripped.upper()}",
-            "wordCount": word_count,
-            "provider": "transcribe-provider",
-        }
+    Published under the dotted capability ``media.transcribe``.
+    """
+    stripped = text.strip()
+    word_count = len(stripped.split()) if stripped else 0
+    return {
+        "assetId": assetId,
+        "transcript": f"[{assetId}] {stripped.upper()}",
+        "wordCount": word_count,
+        "provider": "transcribe-provider",
+    }
 
 
 @mesh.agent(

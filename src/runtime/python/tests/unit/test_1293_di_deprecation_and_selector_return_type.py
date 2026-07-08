@@ -1,10 +1,7 @@
 """Unit tests for issue #1293 Python follow-ups.
 
 Item 1 — the untyped single-parameter injection heuristic:
-  * 1a: @mesh.service("prefix") producer-sugar methods (single ``args: dict``
-    param, MCP input data, NO declared dependencies) must NOT trip the DI
-    warning nor force-inject position 0 — there is nothing to inject.
-  * 1b: a real consumer tool with an untyped single param still warns, now with
+  * a real consumer tool with an untyped single param still warns, now with
     the v3 DEPRECATION wording, and still injects (returns [0]).
 
 Item 2 — @mesh.selector schema-matching ``expected_type`` defaults to the stub's
@@ -46,95 +43,7 @@ def _isolate():
 
 
 # ===========================================================================
-# Item 1a — producer sugar does NOT trip the untyped single-param heuristic
-# ===========================================================================
-
-
-class TestProducerSugarNoFalseWarning:
-    def test_producer_sugar_single_arg_param_no_warning(self, caplog):
-        """A @mesh.service("prefix") producer method with a lone ``args: dict``
-        param publishes+serves without emitting the untyped single-parameter
-        DI warning (the param is MCP input, not a DI slot)."""
-        with caplog.at_level(logging.WARNING):
-
-            @mesh.service("media")
-            class MediaProducer:
-                async def caption(self, args: dict) -> dict:
-                    return {"ok": True}
-
-        assert "Untyped single-parameter injection is DEPRECATED" not in caplog.text
-        assert "consider typing as McpMeshTool" not in caplog.text
-
-        # Tool still published + flagged for serving.
-        tools = DecoratorRegistry.get_mesh_tools()
-        assert "media.caption" in tools
-        served = getattr(tools["media.caption"].function, "_mesh_service_served_name", None)
-        assert served == "media.caption"
-
-    def test_producer_sugar_analyze_returns_no_injection(self, caplog):
-        """Directly assert the analyzer skips (returns []) a marked producer
-        wrapper with no dependencies, and emits no warning."""
-
-        async def published(args: dict):
-            return args
-
-        published._mesh_service_served_name = "media.caption"
-
-        with caplog.at_level(logging.WARNING):
-            result = analyze_injection_strategy(published, [])
-
-        assert result == []
-        assert "DEPRECATED" not in caplog.text
-
-    def test_streaming_producer_method_no_warning(self, caplog):
-        """A streaming producer method (async-generator) with a lone ``args``
-        param is suppressed just like a plain producer method."""
-        from mesh.types import Stream
-
-        with caplog.at_level(logging.WARNING):
-
-            @mesh.service("feed")
-            class FeedProducer:
-                async def tail(self, args: dict) -> Stream[str]:
-                    yield "tick"
-
-        assert "Untyped single-parameter injection is DEPRECATED" not in caplog.text
-        tools = DecoratorRegistry.get_mesh_tools()
-        assert "feed.tail" in tools
-
-    def test_tool_wins_producer_no_deps_suppressed(self, caplog):
-        """A tool-wins producer method (own @mesh.tool) with NO dependencies and
-        a lone untyped param is still a producer-served wrapper → suppressed."""
-        with caplog.at_level(logging.WARNING):
-
-            @mesh.service("shop")
-            class ShopProducer:
-                @mesh.tool(capability="shop.custom")
-                async def custom(self, args: dict) -> dict:
-                    return {"ok": True}
-
-        assert "Untyped single-parameter injection is DEPRECATED" not in caplog.text
-        tools = DecoratorRegistry.get_mesh_tools()
-        assert "shop.custom" in tools
-
-    def test_marked_producer_with_deps_falls_through_and_warns(self, caplog):
-        """A producer-served wrapper that DOES carry a dependency is NOT
-        suppressed — it falls through to the deprecated inject-and-warn path."""
-
-        async def published(args):
-            return args
-
-        published._mesh_service_served_name = "shop.custom"
-
-        with caplog.at_level(logging.WARNING):
-            result = analyze_injection_strategy(published, ["dep"])
-
-        assert result == [0]
-        assert "Untyped single-parameter injection is DEPRECATED" in caplog.text
-
-
-# ===========================================================================
-# Item 1b — real consumer tool still warns (deprecation wording) + injects
+# Item 1 — real consumer tool still warns (deprecation wording) + injects
 # ===========================================================================
 
 

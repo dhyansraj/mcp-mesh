@@ -1,9 +1,11 @@
 """
 Unit tests for RFC #1280 service views — Python runtime.
 
-Python ships the CONSUMER VIEW (tool-parameter form) + PRODUCER SUGAR. These
-tests are the Python instance of the cross-runtime seam (uc37 is the
-integration contract; the Java runtime is the reference).
+Python ships the CONSUMER VIEW (tool-parameter form). These tests are the Python
+instance of the cross-runtime seam (uc37 is the integration contract; the Java
+runtime is the reference). The producer-side ``@mesh.service("prefix")`` sugar
+was removed in v3.1.0 (issue #1320) — a fast-fail on the prefix form is asserted
+in ``TestProducerSugarRemoved``.
 
 CRITICAL: facade delegation is tested against the EXACT shapes of the real
 injected proxies — ``UnifiedMCPProxy.__call__(*args, **kwargs)`` ignores
@@ -613,162 +615,24 @@ class TestMinAvailableFloor:
 
 
 # ===========================================================================
-# Producer sugar
+# Producer sugar removed (issue #1320) — fast-fail on the prefix form
 # ===========================================================================
 
 
-class TestProducerSugar:
-    def test_publishes_prefixed_capabilities(self):
-        @mesh.service("media")
-        class MediaTools:
-            async def caption(self, args: dict) -> dict:
-                return {"cap": "caption"}
-
-            async def thumbnail(self, args: dict) -> dict:
-                return {"cap": "thumbnail"}
-
-        tools = DecoratorRegistry.get_mesh_tools()
-        caps = sorted(
-            t.metadata.get("capability")
-            for t in tools.values()
-            if (t.metadata.get("capability") or "").startswith("media.")
-        )
-        assert caps == ["media.caption", "media.thumbnail"]
-
-    def test_published_tool_registered_under_dotted_name(self):
-        @mesh.service("svc")
-        class SvcTools:
-            async def alpha(self, args: dict) -> dict:
-                return {}
-
-        assert "svc.alpha" in DecoratorRegistry.get_mesh_tools()
-
-    def test_two_producers_same_method_name_both_registered(self):
-        @mesh.service("svca")
-        class A:
-            async def get(self, args: dict) -> dict:
-                return {"from": "a"}
-
-        @mesh.service("svcb")
-        class B:
-            async def get(self, args: dict) -> dict:
-                return {"from": "b"}
-
-        tools = DecoratorRegistry.get_mesh_tools()
-        caps = sorted(
-            t.metadata.get("capability")
-            for t in tools.values()
-            if (t.metadata.get("capability") or "").startswith("svc")
-        )
-        assert "svca.get" in caps
-        assert "svcb.get" in caps
-
-    def test_underscore_methods_skipped(self):
-        @mesh.service("svc")
-        class WithHelper:
-            async def visible(self, args: dict) -> dict:
-                return {}
-
-            def _helper(self):
-                return 1
-
-        tools = DecoratorRegistry.get_mesh_tools()
-        caps = sorted(
-            t.metadata.get("capability")
-            for t in tools.values()
-            if (t.metadata.get("capability") or "").startswith("svc.")
-        )
-        assert caps == ["svc.visible"]
-
-    def test_auto_published_invocation_no_self_in_schema(self):
-        import inspect
-
-        @mesh.service("inv")
-        class InvTools:
-            async def caption(self, args: dict) -> dict:
-                return {"cap": "caption", "got": args}
-
-        fn = DecoratorRegistry.get_mesh_tools()["inv.caption"].function
-        assert "self" not in inspect.signature(fn).parameters
-        out = asyncio.run(fn(args={"k": 1}))
-        assert out == {"cap": "caption", "got": {"k": 1}}
-
-    def test_method_with_own_mesh_tool_wins_no_double_publish(self):
-        @mesh.service("prod")
-        class ProdTools:
-            @mesh.tool(capability="custom_cap")
-            async def special(self, args: dict) -> dict:
-                return {"special": True, "got": args}
-
-            async def plain(self, args: dict) -> dict:
-                return {}
-
-        all_caps = sorted(
-            t.metadata.get("capability")
-            for t in DecoratorRegistry.get_mesh_tools().values()
-            if t.metadata.get("capability")
-        )
-        assert "custom_cap" in all_caps
-        assert "prod.special" not in all_caps
-        assert "prod.plain" in all_caps
-
-    def test_tool_wins_bound_invocation_no_self_in_schema(self):
-        import inspect
-
-        @mesh.service("prod2")
-        class ProdTools2:
-            @mesh.tool(capability="custom_cap2")
-            async def special(self, args: dict) -> dict:
-                return {"special": True, "got": args}
-
-        fn = DecoratorRegistry.get_mesh_tools()["custom_cap2"].function
-        assert "self" not in inspect.signature(fn).parameters
-        out = asyncio.run(fn(args={"n": 2}))
-        assert out == {"special": True, "got": {"n": 2}}
-
-    def test_invalid_prefix_raises_reusing_validator(self):
+class TestProducerSugarRemoved:
+    def test_prefixed_service_raises_removed_error(self):
         with pytest.raises(ValueError) as exc:
 
-            @mesh.service("1bad")
-            class Bad:
-                async def m(self, args: dict) -> dict:
-                    return {}
-
-        assert "capability" in str(exc.value).lower()
-
-    def test_blank_prefix_raises(self):
-        with pytest.raises(ValueError):
-
-            @mesh.service("")
-            class Blank:
-                async def m(self, args: dict) -> dict:
-                    return {}
-
-    def test_producer_min_available_raises(self):
-        with pytest.raises(ValueError) as exc:
-
-            @mesh.service("p", min_available=1)
-            class P:
-                async def m(self, args: dict) -> dict:
-                    return {}
-
-        assert "min_available" in str(exc.value)
-
-    def test_producer_constructor_error_named_clearly(self):
-        with pytest.raises(ValueError) as exc:
-
-            @mesh.service("ctor")
-            class NeedsArg:
-                def __init__(self, required_arg):
-                    self.x = required_arg
-
-                async def m(self, args: dict) -> dict:
-                    return {}
+            @mesh.service("media")
+            class MediaTools:
+                async def caption(self, args: dict) -> dict:
+                    return {"cap": "caption"}
 
         msg = str(exc.value)
-        assert "@mesh.service" in msg
-        assert "NeedsArg" in msg
-        assert "zero-arg" in msg
+        assert "removed in v3.1.0" in msg
+        assert "@mesh.tool" in msg
+        # The prefix is echoed into the actionable capability hint.
+        assert 'capability="media.' in msg
 
 
 # ===========================================================================
@@ -807,17 +671,6 @@ class TestValidationBootFails:
                 return None
 
         assert "async" in str(exc.value).lower()
-
-    def test_producer_with_selector_raises_mixed_roles(self):
-        with pytest.raises(ValueError) as exc:
-
-            @mesh.service("mixed")
-            class Mixed:
-                @mesh.selector("a.b")
-                async def m(self, args: dict) -> dict: ...
-
-        msg = str(exc.value).lower()
-        assert "producer" in msg or "selector" in msg
 
     def test_blank_capability_in_selector_raises(self):
         with pytest.raises(ValueError) as exc:
@@ -920,127 +773,6 @@ class TestStreamToolView:
         result = asyncio.run(stream_view())
         assert result == "alpha"
         assert proxy.received == {"x": 1}
-
-
-# ===========================================================================
-# Producer serving — tools land on the SERVED FastMCP server (not just wire)
-# ===========================================================================
-
-
-def _server_tool_names(server) -> set:
-    lp = server.local_provider
-    return {
-        getattr(comp, "name", key)
-        for key, comp in lp._components.items()
-        if str(key).startswith("tool:")
-    }
-
-
-class TestProducerServing:
-    def _run_serving_step(self, server):
-        from _mcp_mesh.pipeline.mcp_startup import ServiceViewProducerServingStep
-
-        step = ServiceViewProducerServingStep()
-        ctx = {"fastmcp_servers": {"__main__.app": server}}
-        return asyncio.run(step.execute(ctx))
-
-    def test_sugar_tools_registered_on_fastmcp_server(self):
-        from fastmcp import FastMCP
-
-        @mesh.service("pysvc")
-        class PySvc:
-            async def alpha(self, args: dict) -> dict:
-                return {"cap": "pysvc.alpha"}
-
-            async def bravo(self, args: dict) -> dict:
-                return {"cap": "pysvc.bravo"}
-
-        server = FastMCP("test-producer")
-        # Before the step: NOT on the served instance (only in DecoratorRegistry).
-        assert "pysvc.alpha" not in _server_tool_names(server)
-
-        self._run_serving_step(server)
-
-        names = _server_tool_names(server)
-        assert "pysvc.alpha" in names
-        assert "pysvc.bravo" in names
-
-    def test_tool_wins_registered_on_fastmcp_server(self):
-        from fastmcp import FastMCP
-
-        @mesh.service("pw")
-        class PwTools:
-            @mesh.tool(capability="pw_custom")
-            async def special(self, args: dict) -> dict:
-                return {"special": True}
-
-            async def plain(self, args: dict) -> dict:
-                return {"plain": True}
-
-        server = FastMCP("test-toolwins")
-        self._run_serving_step(server)
-
-        names = _server_tool_names(server)
-        # tool-wins served under its own capability; plain under the prefix.
-        assert "pw_custom" in names
-        assert "pw.plain" in names
-
-    def test_serving_is_idempotent(self):
-        from fastmcp import FastMCP
-
-        @mesh.service("idem")
-        class IdemTools:
-            async def alpha(self, args: dict) -> dict:
-                return {}
-
-        server = FastMCP("test-idem")
-        self._run_serving_step(server)
-        # Running again must not raise / double-register.
-        self._run_serving_step(server)
-        names = [n for n in _server_tool_names(server) if n == "idem.alpha"]
-        assert names == ["idem.alpha"]
-
-    def test_step_skips_when_no_servers(self):
-        from _mcp_mesh.pipeline.mcp_startup import ServiceViewProducerServingStep
-        from _mcp_mesh.pipeline.shared import PipelineStatus
-
-        @mesh.service("noserver")
-        class NoServer:
-            async def alpha(self, args: dict) -> dict:
-                return {}
-
-        step = ServiceViewProducerServingStep()
-        res = asyncio.run(step.execute({"fastmcp_servers": {}}))
-        assert res.status == PipelineStatus.SKIPPED
-
-    def test_streaming_producer_method_served_as_stream(self):
-        """A streaming producer method (async-gen → Stream[str]) is published as
-        a real streaming tool and served."""
-        import inspect
-
-        from fastmcp import FastMCP
-
-        @mesh.service("strm")
-        class StrmTools:
-            async def ticker(self, args: dict) -> mesh.Stream[str]:
-                yield "a"
-                yield "b"
-
-        tools = DecoratorRegistry.get_mesh_tools()
-        decorated = tools["strm.ticker"]
-        # Stream detection fired directly (not via the wraps/annotation fallback):
-        # the published wrapper is itself an async-generator function.
-        assert decorated.metadata.get("stream_type") == "text"
-        assert inspect.isasyncgenfunction(decorated.function._mesh_original_func)
-
-        # Served on the FastMCP instance.
-        server = FastMCP("strm-server")
-        self._run_serving_step(server)
-        assert "strm.ticker" in _server_tool_names(server)
-
-        # Invoking the served wrapper accumulates the streamed chunks.
-        out = asyncio.run(decorated.function(args={}))
-        assert out == "ab"
 
 
 # ===========================================================================

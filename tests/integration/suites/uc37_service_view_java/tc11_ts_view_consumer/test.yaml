@@ -1,8 +1,8 @@
 # tc11_ts_view_consumer — RFC #1280 cross-runtime consumer parity
 # (TYPESCRIPT): a mesh.serviceView(...) in a TS consumer binds the DOTTED
-# svc.* capabilities published by the JAVA producer's @McpMeshService("svc")
-# sugar, and the required-edge refusal envelope matches the Java/Python
-# tool-param paths (tc06/tc10).
+# svc.* capabilities published by the JAVA producer's explicit @MeshTool
+# dotted capabilities, and the required-edge refusal envelope matches the
+# Java/Python tool-param paths (tc06/tc10).
 #
 # Topology: java-view-producer (svc.alpha + svc.bravo) + ts-view-consumer
 # whose serviceView occupies ONE dependencies slot (two name-sorted edges,

@@ -23,27 +23,27 @@ to that capability's own resolved proxy — so different methods resolve to
 | `transcribe-provider` | 8122 | `media.transcribe` | Provider C — transcribes an asset      |
 | `media-gateway`       | 8123 | `process_media`    | Consumer — one `MediaService` view     |
 
-## Producer side: publish a service, not N tools
+## Producer side: publish a dotted capability explicitly
 
-Each provider is a producer-sugar class: `@mesh.service("media")` publishes each
-public async method as a mesh tool under the capability `media.<method>` — no
-per-method `@mesh.tool` needed.
+Each provider declares its dotted wire capability directly on the tool with
+`@mesh.tool(capability="media.<method>")`. The capability is chosen
+deliberately — it is never derived from the Python function name.
 
 ```python
-@mesh.service("media")          # prefix is entirely user-chosen; nothing is hard-coded
-class MediaCaptionService:
-    async def caption(self, assetId: str, text: str) -> dict:   # → capability "media.caption"
-        return {"assetId": assetId, "caption": ..., "provider": "caption-provider"}
+@app.tool()
+@mesh.tool(capability="media.caption")   # dotted capability declared explicitly
+async def caption(assetId: str, text: str) -> dict:
+    return {"assetId": assetId, "caption": ..., "provider": "caption-provider"}
 ```
 
 - **Dotted capability names are first-class** across the stack — the
   registry and the Python/Java/TypeScript runtimes all accept segment-wise names
-  like `media.caption`. The published capability is simply `prefix.<method>`.
-- **The prefix is yours** — `"media"` carries no special meaning. All three
-  agents use `"media"`, so together they populate one namespace from three
-  independent processes.
-- A method carrying its own `@mesh.tool` still WINS — reach for it only when a
-  method needs custom tags/version/description.
+  like `media.caption`.
+- **The namespace is yours** — `"media"` carries no special meaning. All three
+  agents publish into `media.*`, so together they populate one namespace from
+  three independent processes.
+- Declaring the capability on `@mesh.tool` keeps the full tool contract in your
+  hands — tags, version, and dependencies live right next to the capability.
 
 ## Consumer side: one typed view
 

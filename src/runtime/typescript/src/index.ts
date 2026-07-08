@@ -194,7 +194,7 @@ export {
   type RouteMetadata,
 } from "./route.js";
 
-// Service views (RFC #1280) — consumer view factory + producer sugar surface.
+// Service views (RFC #1280) — consumer view factory + facade types.
 export {
   serviceView,
   isServiceView,
@@ -206,8 +206,6 @@ export {
   type ServiceViewMethodSpec,
   type MeshServiceFacade,
   type MeshServiceFacadeMethod,
-  type ServiceProducerMethod,
-  type ServiceProducerMethodObject,
 } from "./service-view.js";
 
 // Proxy utilities (for advanced use)

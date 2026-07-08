@@ -4,8 +4,9 @@
 # capabilities fall into an "ungrouped" bucket surfaced only as a trailing
 # "use --tools" note in table form).
 #
-# Topology: java-view-producer (dotted svc.alpha/svc.bravo via the phase-3
-# sugar) + provider-alpha (undotted view-cap-alpha/tp-cap-alpha) — the
+# Topology: java-view-producer (dotted svc.alpha/svc.bravo via explicit
+# @MeshTool dotted capabilities) + provider-alpha (undotted
+# view-cap-alpha/tp-cap-alpha) — the
 # undotted agent gives the ungrouped bucket something user-visible to carry.
 #
 # Design guarantees under test (the --json output is THE contract; the table
