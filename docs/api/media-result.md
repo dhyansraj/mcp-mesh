@@ -181,5 +181,5 @@ String mimeType = result.mimeType();
 
 ## See Also
 
-- [Returning Media](../multimodal/returning-media.md) -- Usage guide
+- [Returning Media](../concepts/multimodal.md#returning-media) -- Usage guide
 - [MediaStore](media-store.md) -- Storage interface

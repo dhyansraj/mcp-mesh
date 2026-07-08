@@ -98,5 +98,5 @@ MediaUploadResult result = MeshMedia.saveUploadResult(file, mediaStore);
 
 ## See Also
 
-- [Web Uploads Guide](../multimodal/web-uploads.md) -- End-to-end examples
+- [Web Uploads Guide](../concepts/multimodal.md#web-uploads) -- End-to-end examples
 - [MediaStore](media-store.md) -- Storage configuration

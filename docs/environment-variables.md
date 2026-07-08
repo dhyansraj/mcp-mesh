@@ -769,7 +769,7 @@ export AWS_ACCESS_KEY_ID=minioadmin
 export AWS_SECRET_ACCESS_KEY=minioadmin
 ```
 
-See [MediaStore Configuration](multimodal/media-store.md) for full details.
+See [MediaStore Configuration](concepts/multimodal.md#storage-configuration) for full details.
 
 ## Configuration Patterns
 

@@ -245,7 +245,7 @@ LLM receives tool result
 | PDF        | Native document blocks | Text fallback      | Text fallback      |
 | Text files | Text content           | Text content       | Text content       |
 
-See [Multimodal documentation](../multimodal/getting-started.md) for usage guides.
+See [Multimodal documentation](multimodal.md#getting-started) for usage guides.
 
 ## See Also
 
