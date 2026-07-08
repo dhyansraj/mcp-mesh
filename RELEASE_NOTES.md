@@ -1,6 +1,38 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.0.1...HEAD)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.1.0...HEAD)
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.0.1...v3.1.0)
+
+## v3.1.0 (2026-07-08)
+
+A service-view refinement release: two RFC-1280 declaration surfaces shipped in v3.0.0 are corrected — the producer-side sugar is withdrawn and the Java view annotation is renamed for consistency — alongside a documentation buildout that gives the service-view, LLM, and HTTP-route features proper conceptual homes.
+
+Both surface changes landed in v3.0.0 roughly two days before this release with effectively no adoption, so they are corrected now, cleanly, rather than carried forward. Neither touches the wire protocol, the registry, or dependency resolution; the consumer-side service view (the RFC-1280 headline) is unchanged.
+
+### 💥 Breaking changes
+
+Two, both narrow and both against surfaces introduced in v3.0.0 (~2 days ago, minimal adoption). Removing or renaming public API in a minor is technically a breaking change; each is corrected here with an actionable failure rather than a silent one, and neither affects the wire, the registry, or the consumer service view.
+
+1. **Producer-side service-view sugar withdrawn (#1320).** `@mesh.service("prefix")` (Python), `agent.addService("prefix", …)` (TypeScript), and `@McpMeshService("prefix")` on a class (Java) are removed. Using any of them now fails fast at decoration/registration with a message pointing to the explicit form. Migrate by declaring each tool explicitly: `@mesh.tool(capability="prefix.method")` / `agent.addTool({ capability: "prefix.method", … })` / `@MeshTool(capability = "prefix.method")`.
+2. **`@McpMeshService` → `@MeshService` (#1322, Java only).** The consumer service-view annotation is renamed to join the `@Mesh*` family. Rename `@McpMeshService` → `@MeshService` (and the import). The injected proxy type `McpMeshTool` is unchanged; Python (`@mesh.service`) and TypeScript (`mesh.serviceView`) are unchanged.
+
+### ✂️ Producer-side service-view sugar withdrawn (#1320)
+
+The producer sugar derived the published capability as `"{prefix}.{methodName}"` — deriving the cross-runtime wire identifier from a language method name, which recoupled the wire contract to a language construct: a local, idiomatic method rename would silently change the capability and break every consumer, `meshctl call`, and LLM tool-name continuity (the exact coupling #680 removed). It could also express none of `tags`, `version`, or `dependencies` — the sweep published `capability` only, with `version` pinned to the `1.0.0` default — so any real producer fell back to an explicit `@MeshTool` anyway. The sugar's entire value, deriving the name, *was* the coupling, so it is removed rather than patched. Consumer views and dot-namespaced capabilities are unaffected: publish a dotted capability explicitly with `@mesh.tool(capability="media.caption")` / `addTool` / `@MeshTool`. The removal is uniform across all three runtimes, with a fast-fail actionable error at the former call sites.
+
+### 🏷️ `@McpMeshService` → `@MeshService` (#1322)
+
+The Java annotation family is uniformly `@Mesh*` (`@MeshAgent`, `@MeshTool`, `@MeshRoute`, `@MeshDependency`, `@MeshInject`, `@MeshDependsOn`, `@MeshLlm`, `@MeshA2A`); `@McpMeshService` was the lone `Mcp`-prefixed annotation. Unlike the injected proxy *type* `McpMeshTool` — whose prefix disambiguates it from the `@MeshTool` annotation — the annotation had no such collision, so its prefix was pure inconsistency. It is renamed to `@MeshService`, which also aligns Java with Python's already-correct `@mesh.service`. Java-only, a hard rename with no alias (same minimal-adoption rationale); `McpMeshTool`, Python, and TypeScript are unchanged.
+
+### 📚 Docs: concept homes for service views, LLM, and routes (#1323, #1324)
+
+The documentation gains proper conceptual coverage for three features that previously lived only in per-SDK guides or reference tables. A dedicated **service-views** page — the mkdocs concept page plus a new `meshctl man service-views` topic with `--java`/`--typescript` variants — documents when a service view fits (a single consumer using most of a cohesive dotted group) versus the anti-pattern of injecting a fat view into thin handlers, where it fans out to one dependency edge per method and can over-gate. New **LLM Agents** and **Routes & Gateways** concept pages cover the tool-calling loop and capability-based tool discovery, and the `@MeshRoute` HTTP-gateway perimeter respectively — the latter framing routes-versus-tools by protocol and role (both are network-reachable over Streamable HTTP, not "internal versus external"). The Concepts nav is reordered into a foundation → capability-model → control-plane → agent-capabilities → state → operations arc, and the seven-page Multimodal group is consolidated into a single concept page so it reads like the others. Consumer-side gaps surfaced in review are closed on both the mkdocs and `meshctl man` surfaces: the Java "a view is rejected in `@MeshRoute`" rule, the dotted-`@MeshInject` route pattern (with the `@MeshDependency(required=…)` default), a multi-`@Param` view-method example, union-plus-dotted capability coexistence, and a note that a facade call threads calling-job identity like any ordinary tool call.
+
+### ⚠️ Notes
+
+- **Two breaking changes, both against v3.0.0-only surfaces with minimal adoption.** If you adopted the producer sugar (`@mesh.service("prefix")` / `addService` / `@McpMeshService("prefix")` on a class), switch to explicit `@mesh.tool` / `addTool` / `@MeshTool` with a dotted capability. If you used the Java `@McpMeshService` consumer view, rename it to `@MeshService`. Both former forms now fail fast with an actionable message.
+- **No wire, registry, or resolution changes.** The consumer service view, dot-namespaced capabilities, and all dependency-resolution behavior are unchanged.
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.0.0...v3.0.1)
 

@@ -27,7 +27,7 @@ The MCP Mesh Java SDK provides an annotation-based API for building distributed 
 <dependency>
     <groupId>io.mcp-mesh</groupId>
     <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-    <version>3.0.1</version>
+    <version>3.1.0</version>
 </dependency>
 ```
 
