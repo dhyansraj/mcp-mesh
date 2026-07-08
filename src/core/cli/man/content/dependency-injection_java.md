@@ -328,6 +328,8 @@ The optional `@McpMeshService(minAvailable = N)` adds a consumer-local availabil
 
 A service view is **consumer-local**, not a shared contract: two consumers may aggregate the same capabilities differently, and there is no group versioning or interface-level availability summary. Each method resolves independently.
 
+**Calling-job identity through the facade.** Invoking a view facade method — or a dotted capability wired via `@MeshInject` — threads the calling-job identity / `MeshCallContext` to the provider exactly like an ordinary tool call (the same `McpMeshToolProxy` → client path). A downstream claim fence or `callingJob()` therefore sees the same caller whether the call arrives via the facade, a dotted `@MeshInject`, or a hand-written `@MeshTool` dependency. See `meshctl man jobs --java` for calling-job identity details.
+
 ### Publishing the dotted capabilities a view binds
 
 A view is consumer-side only — it aggregates capabilities, it does not publish them. The dotted capabilities it binds are ordinary mesh tools, each declared explicitly on its provider with a dot-namespaced `@MeshTool(capability = ...)`:
@@ -349,6 +351,8 @@ public class MediaProvider {
 - Each dotted `capability` is segment-validated at boot (each dot-separated segment `^[a-zA-Z][a-zA-Z0-9_-]*$`, e.g. `media.caption` or `media.v2.caption`) and resolves independently, so the three methods above can live on one bean or spread across several agents.
 - Every published capability carries its own `@MeshTool` — declare each one's tags, version, description, and `outputType` where you need them.
 - `meshctl list --services` groups the dotted names for display by the segments before the last dot; there is no separate service record behind the grouping.
+
+> **Migration note — union and dotted coexist.** A legacy *union* capability (a single `session_state` tool that multiplexes several actions) and its dot-namespaced successors (`session_state.record_question_score`, `session_state.summary`, …) are **independent capabilities** — a bare name is not a hierarchical parent of the dotted ones. The same agent can publish AND consume both at once with no collision, so you can move callers onto the dotted capabilities one method at a time and remove the union tool last. That coexistence is what makes an incremental, reversible migration possible.
 
 > **Discovery caveat.** An auto-registered facade **bean** requires `@McpMeshService` directly on the interface. An interface that only *inherits* `@McpMeshService` from a super-interface is still usable as a `@MeshTool` view parameter, but is not auto-discovered as a bean.
 

@@ -326,6 +326,8 @@ The view slot expands **in place** (name-sorted), so its edges keep contiguous i
 - A view **forces inline execution** — per-tool worker isolation is disabled for a view-bearing tool, with a warning logged at registration when `MCP_MESH_TOOL_WORKERS>1`.
 - Views are a **tool-parameter** surface only: a `mesh.serviceView(...)` in `mesh.route(...)` or `mesh.a2a.mount(...)` dependencies is rejected.
 
+**Calling-job identity through the facade.** Calling a facade method — or a dotted capability declared directly in a tool's `dependencies` and injected as an `McpMeshTool` — threads the calling-job identity / `MeshCallContext` to the provider exactly like an ordinary tool call (same proxy → client path). A downstream claim fence or calling-job check sees the same caller whether the call arrives through the facade, a directly-declared dotted dependency, or a plain string dependency. See `meshctl man jobs --typescript` for calling-job identity details.
+
 ### Publishing the dotted capabilities a view binds
 
 A view is consumer-side only — it aggregates capabilities, it does not publish them. The dotted capabilities it binds are ordinary tools, each declared explicitly on its provider with a dot-namespaced `capability`:
@@ -348,6 +350,8 @@ agent.addTool({
 ```
 
 Each dotted `capability` is segment-validated against the dotted-capability grammar and resolves independently, so `media.caption` and `media.thumbnail` can live on the same agent or on separate ones. `meshctl list --services` groups them for display by the segments before the last dot.
+
+A legacy *union* capability (a single `session_state` tool that multiplexes several actions) and its dotted successors (`session_state.record_question_score`, `session_state.summary`, …) are **independent capabilities** — a bare name is not a hierarchical parent of the dotted ones, so one agent can publish and consume both at once with no collision. Move callers onto the dotted capabilities one at a time and drop the union tool last; that coexistence is what keeps the migration incremental and reversible.
 
 ## Proxy Configuration
 

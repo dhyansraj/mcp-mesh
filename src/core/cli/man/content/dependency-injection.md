@@ -299,6 +299,8 @@ A facade call takes one `dict` that becomes the target tool's named arguments, a
 - **Testing:** passing your own facade object for the view parameter skips the pre-invoke refusal and settle wait for that view — mock the facade directly in unit tests.
 - Views are a **tool-parameter** surface only: a view in `@mesh.route` boot-fails, and an undecorated subclass of a view is not a view (decorate the class directly).
 
+**Calling-job identity through the facade.** Calling a facade method — or a dotted capability injected directly as a `mesh.McpMeshTool` — threads the calling-job identity / `MeshCallContext` to the provider exactly like an ordinary tool call (same proxy → client path). A downstream claim fence or calling-job check sees the same caller whether the call arrives through the facade, a directly-injected dotted dependency, or a plain `@mesh.tool` dependency. See `meshctl man jobs` for calling-job identity details.
+
 ### Publishing the dotted capabilities a view binds
 
 A view is consumer-side only — it aggregates capabilities, it does not publish them. The dotted capabilities it binds are ordinary tools, each declared explicitly on its provider with a dot-namespaced `capability`:
@@ -317,6 +319,8 @@ async def thumbnail(args: dict) -> dict:
 ```
 
 Each dotted `capability` is segment-validated against the dotted-capability grammar and resolves independently, so `media.caption` and `media.thumbnail` can live on the same agent or on separate ones. `meshctl list --services` groups them for display by the segments before the last dot.
+
+A legacy *union* capability (a single `session_state` tool that multiplexes several actions) and its dotted successors (`session_state.record_question_score`, `session_state.summary`, …) are **independent capabilities** — a bare name is not a hierarchical parent of the dotted ones, so one agent can publish and consume both at once with no collision. Move callers onto the dotted capabilities one at a time and drop the union tool last; that coexistence is what keeps the migration incremental and reversible.
 
 ## Proxy Configuration
 
