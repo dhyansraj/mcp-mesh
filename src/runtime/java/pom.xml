@@ -6,7 +6,7 @@
 
     <groupId>io.mcp-mesh</groupId>
     <artifactId>mcp-mesh-parent</artifactId>
-    <version>3.0.1</version>
+    <version>3.1.0</version>
     <packaging>pom</packaging>
 
     <name>MCP Mesh Java SDK</name>

@@ -202,7 +202,7 @@ func TestDetectLanguage_PythonDirectoryRequirements(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// Create requirements.txt
-	if err := os.WriteFile(filepath.Join(tmpDir, "requirements.txt"), []byte("mcp-mesh==3.0.1"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmpDir, "requirements.txt"), []byte("mcp-mesh==3.1.0"), 0644); err != nil {
 		t.Fatalf("Failed to create requirements.txt: %v", err)
 	}
 
@@ -401,7 +401,7 @@ func TestPythonHandler_GetDockerImage(t *testing.T) {
 	// Must equal the exact release tag GetDockerImage() ships (kept in sync by
 	// scripts/bump_version.py). Hard failure, not a log — this is the assertion
 	// that should have caught the 2.8.0 partial bump.
-	if want := "mcpmesh/python-runtime:3.0.1"; image != want {
+	if want := "mcpmesh/python-runtime:3.1.0"; image != want {
 		t.Errorf("GetDockerImage() = %q, want %q", image, want)
 	}
 }
@@ -415,7 +415,7 @@ func TestTypeScriptHandler_GetDockerImage(t *testing.T) {
 	// Must equal the exact release tag GetDockerImage() ships (kept in sync by
 	// scripts/bump_version.py). Hard failure, not a log — this is the assertion
 	// that should have caught the 2.8.0 partial bump.
-	if want := "mcpmesh/typescript-runtime:3.0.1"; image != want {
+	if want := "mcpmesh/typescript-runtime:3.1.0"; image != want {
 		t.Errorf("GetDockerImage() = %q, want %q", image, want)
 	}
 }

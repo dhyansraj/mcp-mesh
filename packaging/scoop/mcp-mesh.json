@@ -1,5 +1,5 @@
 {
-  "version": "3.0.1",
+  "version": "3.1.0",
   "description": "Kubernetes-native platform for distributed MCP applications",
   "homepage": "https://github.com/dhyansraj/mcp-mesh",
   "license": "MIT",

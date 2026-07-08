@@ -1,5 +1,5 @@
 # Dockerfile for adventure-advisor MCP Mesh LLM agent
-FROM mcpmesh/python-runtime:3.0.1
+FROM mcpmesh/python-runtime:3.1.0
 
 WORKDIR /app
 
