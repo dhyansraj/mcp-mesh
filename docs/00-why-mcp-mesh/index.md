@@ -1,15 +1,25 @@
 # Why MCP Mesh?
 
-## The Problem: Building Agents is Easy, Deploying Them is Hard
+## The problem isn't building an agent. It's everything that happens when agents need each other.
 
-Every AI framework lets you build agents. But when it's time to deploy:
+Every framework helps you build an agent. Then the real work starts: that agent needs another — and in production the other one moves, dies, gets a new version, scales to ten copies, runs an LLM, holds state, or is written in another language. Most frameworks hand you a *pile* of separate problems — service discovery here, a retry library there, a job queue, a config system, a deployment story — and say _"that's your problem,"_ five times over.
 
-- **How do you deploy 10 agents to Kubernetes?**
-- **How do agents discover each other at runtime?**
-- **How do you scale Agent A independently from Agent B?**
-- **How do you monitor which agent called which?**
+Mesh has one answer to all of them, and it's a single idea: **Distributed Dynamic Dependency Injection (DDDI).** You declare what a piece of your system *needs* — a capability — and the mesh finds it, types it, health-routes it, and hot-swaps it at runtime, across machines and languages. That's the whole primitive. Everything else in mesh is a _consequence_ of it — which is why mesh is large in features but small in ideas.
 
-The answer from most frameworks: _"That's your problem."_
+Because a dependency is a *live, resolved capability*, problems that are normally entire subsystems just fall out:
+
+- **An LLM is a dependency** → "prefer Claude, fall back to Gemini," model routing, and provider failover become declarations, not integrations.
+- **A long-running job is a dependency that outlives the call** → durable jobs, resume, and cancel come for free — same primitive, longer lifetime.
+- **A group of capabilities is a dependency you bundle** → a typed *service view*, functions from many agents behind one interface each resolving on its own, is just DDDI applied N times.
+- **A dependency that moved, died, or upgraded re-wires itself** → the running consumer never restarts; a better provider appears and it rebinds live.
+- **A Python capability consumed by Java is still just a dependency** → polyglot, typed, identical semantics, because the *mesh* owns the contract, not the language.
+- **Local and Kubernetes are the same declaration** → same code, different transport; there's no second mental model between "build" and "deploy."
+
+None of those is a bolt-on you integrate. They're the same idea from different angles. The traditionally-hard parts of a distributed AI system don't get _solved_ in mesh so much as they **stop being separate problems.**
+
+So the "why" isn't "mesh has a feature for that." It's: **learn one idea — DDDI — and a platform's worth of hard problems quietly disappears.** You describe what your agents need; the mesh makes it true, keeps it true, and rearranges the world underneath them without asking.
+
+And yes — it also deploys to Kubernetes, scales each agent independently, and traces every call. But that's the reassurance, not the reason.
 
 ---
 
@@ -78,7 +88,7 @@ That's a complete agent with:
 
 ### 1. True DDDI (Distributed Dynamic Dependency Injection)
 
-MCP Mesh is the only framework with **Distributed Dynamic Dependency Injection**. Dependencies are discovered, injected, and hot-swapped at runtime across machines and languages — no config files, no restarts. [What is DDDI? -->](../concepts/dddi.md)
+DDDI is the one idea everything above rests on — no other framework has it. If you skipped the opener: dependencies are discovered, typed, health-routed, and hot-swapped at runtime across machines and languages, with no config files and no restarts. [What is DDDI? -->](../concepts/dddi.md)
 
 ### 2. Decorators That Do Everything
 

@@ -8,7 +8,7 @@ template: home.html
 You write the logic. The mesh discovers, connects, heals, and traces — across languages, machines, and clouds.
 
 !!! tip "Complete Platform for AI Agents"
-MCP Mesh is a complete platform for **building and deploying AI agents to production scale**. [See how MCP Mesh compares →](00-why-mcp-mesh/index.md)
+MCP Mesh is a complete platform for **building and deploying AI agents to production scale** — and it's all built on one idea, **DDDI**: you declare a capability, and the mesh resolves, types, heals, and hot-swaps it at runtime. [See how MCP Mesh compares →](00-why-mcp-mesh/index.md)
 
 !!! info "What is DDDI?"
 **Distributed Dynamic Dependency Injection** — dependencies are discovered, injected, and updated at runtime across machines, languages, and clouds. No configuration files, no restart required. [Learn more →](concepts/dddi.md)
