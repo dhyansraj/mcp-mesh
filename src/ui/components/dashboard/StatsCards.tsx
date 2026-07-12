@@ -1,17 +1,22 @@
 import { Bot, HeartPulse, AlertTriangle, Puzzle } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Agent } from "@/lib/types";
+import { groupAgentsByName } from "@/lib/agent-group";
 
 interface StatsCardsProps {
   agents: Agent[];
 }
 
 export function StatsCards({ agents }: StatsCardsProps) {
-  const totalAgents = agents.length;
-  const healthyCount = agents.filter((a) => a.status === "healthy").length;
-  const totalDeps = agents.reduce((sum, a) => sum + a.total_dependencies, 0);
-  const resolvedDeps = agents.reduce((sum, a) => sum + a.dependencies_resolved, 0);
-  const capabilitiesCount = agents.reduce((sum, a) => sum + (a.capabilities?.length || 0), 0);
+  // Count logical agents (replica-collapsed), not raw instances, so replicas
+  // don't inflate every figure. Dependencies/capabilities are counted once per
+  // logical agent via the group's representative instance.
+  const groups = groupAgentsByName(agents);
+  const totalAgents = groups.length;
+  const healthyCount = groups.filter((g) => g.aggregateStatus === "healthy").length;
+  const totalDeps = groups.reduce((sum, g) => sum + (g.representative.total_dependencies || 0), 0);
+  const resolvedDeps = groups.reduce((sum, g) => sum + (g.representative.dependencies_resolved || 0), 0);
+  const capabilitiesCount = groups.reduce((sum, g) => sum + (g.representative.capabilities?.length || 0), 0);
 
   const stats = [
     {
