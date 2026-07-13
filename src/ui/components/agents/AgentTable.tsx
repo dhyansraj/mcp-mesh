@@ -8,23 +8,22 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Agent } from "@/lib/types";
+import { AgentGroup } from "@/lib/agent-group";
 import {
   formatRelativeTime,
   getStatusBgColor,
   getRuntimeLabel,
   getRuntimeBadgeColor,
   getAgentTypeLabel,
-  extractAgentName,
 } from "@/lib/api";
 import { useMesh } from "@/lib/mesh-context";
-import { ChevronDown, ChevronRight, Bot, Activity, ArrowUp, ArrowDown } from "lucide-react";
+import { ChevronDown, ChevronRight, Bot, Activity, ArrowUp, ArrowDown, Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { AgentDetail } from "./AgentDetail";
+import { AgentGroupDetail } from "./AgentGroupDetail";
 import { AgentBadges } from "./AgentBadges";
 
 interface AgentTableProps {
-  agents: Agent[];
+  groups: AgentGroup[];
 }
 
 type SortKey = "name" | "type" | "runtime" | "deps" | "last_seen";
@@ -37,24 +36,24 @@ function getDepsColor(resolved: number, total: number): string {
   return "text-orange-400";
 }
 
-function sortAgents(agents: Agent[], key: SortKey, dir: SortDir): Agent[] {
-  const sorted = [...agents].sort((a, b) => {
+function sortGroups(groups: AgentGroup[], key: SortKey, dir: SortDir): AgentGroup[] {
+  const sorted = [...groups].sort((a, b) => {
     let cmp = 0;
     switch (key) {
       case "name":
         cmp = a.name.localeCompare(b.name);
         break;
       case "type":
-        cmp = a.agent_type.localeCompare(b.agent_type);
+        cmp = a.representative.agent_type.localeCompare(b.representative.agent_type);
         break;
       case "runtime":
-        cmp = (a.runtime || "").localeCompare(b.runtime || "");
+        cmp = (a.representative.runtime || "").localeCompare(b.representative.runtime || "");
         break;
       case "deps":
-        cmp = a.dependencies_resolved - b.dependencies_resolved;
+        cmp = a.dependenciesResolved - b.dependenciesResolved;
         break;
       case "last_seen":
-        cmp = (a.last_seen || "").localeCompare(b.last_seen || "");
+        cmp = (a.lastSeen || "").localeCompare(b.lastSeen || "");
         break;
     }
     return dir === "asc" ? cmp : -cmp;
@@ -95,8 +94,8 @@ function SortableHead({
   );
 }
 
-export function AgentTable({ agents }: AgentTableProps) {
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+export function AgentTable({ groups }: AgentTableProps) {
+  const [expandedName, setExpandedName] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const { traceActivity } = useMesh();
@@ -110,9 +109,9 @@ export function AgentTable({ agents }: AgentTableProps) {
     }
   };
 
-  const sorted = useMemo(() => sortAgents(agents, sortKey, sortDir), [agents, sortKey, sortDir]);
+  const sorted = useMemo(() => sortGroups(groups, sortKey, sortDir), [groups, sortKey, sortDir]);
 
-  if (agents.length === 0) {
+  if (groups.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
         <Bot className="mb-3 h-12 w-12 opacity-40" />
@@ -137,16 +136,16 @@ export function AgentTable({ agents }: AgentTableProps) {
         </TableRow>
       </TableHeader>
       <TableBody>
-        {sorted.map((agent) => {
-          const isExpanded = expandedId === agent.id;
+        {sorted.map((group) => {
+          const isExpanded = expandedName === group.name;
 
           return (
             <AgentRow
-              key={agent.id}
-              agent={agent}
+              key={group.name}
+              group={group}
               isExpanded={isExpanded}
-              onToggle={() => setExpandedId(isExpanded ? null : agent.id)}
-              traceCount={traceActivity[extractAgentName(agent.id)] || 0}
+              onToggle={() => setExpandedName(isExpanded ? null : group.name)}
+              traceCount={traceActivity[group.name] || 0}
             />
           );
         })}
@@ -156,13 +155,16 @@ export function AgentTable({ agents }: AgentTableProps) {
 }
 
 interface AgentRowProps {
-  agent: Agent;
+  group: AgentGroup;
   isExpanded: boolean;
   onToggle: () => void;
   traceCount: number;
 }
 
-function AgentRow({ agent, isExpanded, onToggle, traceCount }: AgentRowProps) {
+function AgentRow({ group, isExpanded, onToggle, traceCount }: AgentRowProps) {
+  const agent = group.representative;
+  const isReplicated = group.replicaCount > 1;
+
   return (
     <>
       <TableRow
@@ -178,12 +180,20 @@ function AgentRow({ agent, isExpanded, onToggle, traceCount }: AgentRowProps) {
         </TableCell>
         <TableCell>
           <span
-            className={`inline-flex h-2.5 w-2.5 rounded-full ${getStatusBgColor(agent.status)}`}
+            className={`inline-flex h-2.5 w-2.5 rounded-full ${getStatusBgColor(group.aggregateStatus)}`}
           />
         </TableCell>
         <TableCell className="font-medium text-foreground">
           <span className="inline-flex items-center gap-1.5 flex-wrap">
-            {agent.name}
+            {group.name}
+            {isReplicated && (
+              <span
+                className="inline-flex items-center gap-0.5 rounded-full border border-primary/40 bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary"
+                title={`${group.replicaCount} replicas`}
+              >
+                <Layers className="h-2.5 w-2.5" />×{group.replicaCount}
+              </span>
+            )}
             {traceCount > 0 && (
               <span className="inline-flex items-center gap-0.5 text-cyan-400" title={`${traceCount} recent trace(s)`}>
                 <Activity className="h-3 w-3 animate-pulse" />
@@ -209,21 +219,21 @@ function AgentRow({ agent, isExpanded, onToggle, traceCount }: AgentRowProps) {
           )}
         </TableCell>
         <TableCell className="text-muted-foreground font-mono text-xs">
-          {agent.version || "\u2014"}
+          {agent.version || "—"}
         </TableCell>
         <TableCell>
-          <span className={`font-mono text-xs ${getDepsColor(agent.dependencies_resolved, agent.total_dependencies)}`}>
-            {agent.dependencies_resolved}/{agent.total_dependencies}
+          <span className={`font-mono text-xs ${getDepsColor(group.dependenciesResolved, group.totalDependencies)}`}>
+            {group.dependenciesResolved}/{group.totalDependencies}
           </span>
         </TableCell>
         <TableCell className="text-xs text-muted-foreground">
-          {formatRelativeTime(agent.last_seen)}
+          {formatRelativeTime(group.lastSeen)}
         </TableCell>
       </TableRow>
       {isExpanded && (
         <TableRow className="hover:bg-transparent">
-          <TableCell colSpan={8} className="bg-background/50 p-0">
-            <AgentDetail agent={agent} />
+          <TableCell colSpan={8} className="bg-background/50 p-4">
+            <AgentGroupDetail name={group.name} instances={group.instances} />
           </TableCell>
         </TableRow>
       )}

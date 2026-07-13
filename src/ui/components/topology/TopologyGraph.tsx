@@ -227,8 +227,6 @@ export function TopologyGraph({ agents }: TopologyGraphProps) {
         name: data.name as string,
         instances: data.instances as Agent[],
         status: data.status as string,
-        totalDependencies: data.total_dependencies as number,
-        dependenciesResolved: data.dependencies_resolved as number,
       };
     }
     return { kind: "single", agent: data.agent as Agent };

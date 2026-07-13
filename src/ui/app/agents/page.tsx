@@ -1,10 +1,10 @@
-import { useMemo } from "react";
 import { Header } from "@/components/layout/Header";
 import { AgentTable } from "@/components/agents/AgentTable";
 import { AgentGrid } from "@/components/agents/AgentGrid";
 import { Button } from "@/components/ui/button";
 import { ConnectionError } from "@/components/layout/ConnectionError";
 import { useMesh } from "@/lib/mesh-context";
+import { useGroupedAgents } from "@/lib/use-grouped-agents";
 import { useLocalStorage } from "@/lib/use-local-storage";
 import { Eye, EyeOff, LayoutGrid, List, Loader2 } from "lucide-react";
 
@@ -19,13 +19,11 @@ export default function AgentsPage() {
     (v): v is "list" | "grid" => v === "list" || v === "grid",
   );
 
-  // Issue #990: server payload order isn't stable, so cards reshuffle on
-  // every 30s refresh / SSE event. Sort once at the page level so both
-  // grid and table views consume the same ordered list.
-  const sortedAgents = useMemo(
-    () => [...agents].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })),
-    [agents],
-  );
+  // Issue #1328: collapse replicas of the same declared name into one logical
+  // group. groupAgentsByName sorts groups by name, so this also gives the
+  // stable ordering that issue #990 required (server payload order isn't
+  // stable). Grouping composes on top of the already health-filtered `agents`.
+  const groups = useGroupedAgents(agents);
 
   if (loading) {
     return (
@@ -89,7 +87,7 @@ export default function AgentsPage() {
             )}
           </Button>
         </div>
-        {view === "grid" ? <AgentGrid agents={sortedAgents} /> : <AgentTable agents={sortedAgents} />}
+        {view === "grid" ? <AgentGrid groups={groups} /> : <AgentTable groups={groups} />}
       </div>
     </div>
   );

@@ -1,5 +1,5 @@
-import { Link } from "react-router-dom";
-import { Agent } from "@/lib/types";
+import { Layers } from "lucide-react";
+import { AgentGroup } from "@/lib/agent-group";
 import { Badge } from "@/components/ui/badge";
 import {
   formatRelativeTime,
@@ -10,9 +10,11 @@ import {
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { AgentBadges, unavailableBadgeCount } from "./AgentBadges";
+import type { Agent } from "@/lib/types";
 
 interface AgentCardProps {
-  agent: Agent;
+  group: AgentGroup;
+  onClick: () => void;
 }
 
 // Same logic as AgentTable.getDepsColor — inlined per the issue brief to
@@ -37,17 +39,31 @@ function hasAnyAgentBadge(agent: Agent): boolean {
   return Boolean(agent.capabilities?.some((c) => c.task === true));
 }
 
-export function AgentCard({ agent }: AgentCardProps) {
+// Health tally suffix for the replica badge, e.g. " · 2 healthy / 1 down".
+// Omitted entirely when every replica is healthy.
+function replicaHealthSuffix(group: AgentGroup): string {
+  const healthy = group.instances.filter((i) => i.status === "healthy").length;
+  const down = group.replicaCount - healthy;
+  if (down === 0) return "";
+  return ` · ${healthy} healthy / ${down} down`;
+}
+
+export function AgentCard({ group, onClick }: AgentCardProps) {
+  // The representative (newest) instance sources the shared runtime/type/
+  // version/description/badges shown for the collapsed group.
+  const agent = group.representative;
   // Match AgentDetail's whitespace-defensive description handling (issue
   // #969) so an empty header reads the same in both views.
   const description = agent.description?.trim() ?? "";
   const showBadgeRow = hasAnyAgentBadge(agent);
+  const isReplicated = group.replicaCount > 1;
 
   return (
-    <Link
-      to={`/agents/${encodeURIComponent(agent.id)}`}
+    <button
+      type="button"
+      onClick={onClick}
       className={cn(
-        "flex min-h-[180px] flex-col rounded-lg border border-border bg-background/40 p-4",
+        "flex min-h-[180px] flex-col rounded-lg border border-border bg-background/40 p-4 text-left",
         "hover:border-primary/40 hover:bg-accent/10 transition-colors",
       )}
     >
@@ -55,13 +71,22 @@ export function AgentCard({ agent }: AgentCardProps) {
         <span
           className={cn(
             "inline-flex h-2.5 w-2.5 shrink-0 rounded-full",
-            getStatusBgColor(agent.status),
+            getStatusBgColor(group.aggregateStatus),
           )}
-          aria-label={agent.status}
+          aria-label={group.aggregateStatus}
         />
-        <h3 className="truncate text-sm font-semibold text-foreground" title={agent.name}>
-          {agent.name}
+        <h3 className="truncate text-sm font-semibold text-foreground" title={group.name}>
+          {group.name}
         </h3>
+        {isReplicated && (
+          <span
+            className="inline-flex items-center gap-0.5 rounded-full border border-primary/40 bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary shrink-0"
+            title={`${group.replicaCount} replicas`}
+          >
+            <Layers className="h-2.5 w-2.5" />×{group.replicaCount}
+            {replicaHealthSuffix(group)}
+          </span>
+        )}
       </div>
 
       {description ? (
@@ -101,13 +126,13 @@ export function AgentCard({ agent }: AgentCardProps) {
         <span
           className={cn(
             "font-mono",
-            getDepsColor(agent.dependencies_resolved, agent.total_dependencies),
+            getDepsColor(group.dependenciesResolved, group.totalDependencies),
           )}
         >
-          {agent.dependencies_resolved}/{agent.total_dependencies} deps
+          {group.dependenciesResolved}/{group.totalDependencies} deps
         </span>
-        <span className="text-muted-foreground">{formatRelativeTime(agent.last_seen)}</span>
+        <span className="text-muted-foreground">{formatRelativeTime(group.lastSeen)}</span>
       </div>
-    </Link>
+    </button>
   );
 }

@@ -1,21 +1,14 @@
 import dagre from "dagre";
 import { type Node, type Edge } from "@xyflow/react";
 import { Agent } from "./types";
-import { extractAgentName } from "./api";
+import { groupKeyOf, aggregateStatus } from "./agent-group";
 
-// Returns the base name for an agent by stripping the registry-assigned
-// "-{8hex}" suffix from the full agent ID.
-//
-// Modern SDKs send `name` (base, e.g. "fortuna") and `agent_id` (full, e.g.
-// "fortuna-abc12345") as distinct fields. We still derive the base from
-// `agent.id` here for two reasons:
-//   1. Robustness across SDK versions — older agents collapsed `name == id`,
-//      so trusting `name` as the base would mis-group them.
-//   2. Single source of truth for display grouping — all replica bucketing
-//      happens off the normalized ID suffix, keeping the UI independent of
-//      whatever the sending SDK chose to put in `name`.
+// Returns the canonical grouping key for an agent — the declared `agent.name`
+// (falling back to the full id when empty). Replica bucketing keys off this
+// name, which aligns with the registry's edge/trace stat keys (accumulator.go
+// keys by the declared agent name).
 export function getAgentBaseName(agent: Agent): string {
-  return extractAgentName(agent.id);
+  return groupKeyOf(agent);
 }
 
 // Group key used for collapsed (multi-replica) nodes.
@@ -41,17 +34,6 @@ function bucketAgents(agents: Agent[]): Map<string, GroupInfo> {
     }
   }
   return buckets;
-}
-
-// Worst-of aggregation for group status.
-// Any unhealthy -> unhealthy; any unknown -> unknown; else healthy.
-function aggregateStatus(instances: Agent[]): "healthy" | "unhealthy" | "unknown" {
-  let hasUnknown = false;
-  for (const a of instances) {
-    if (a.status === "unhealthy") return "unhealthy";
-    if (a.status === "unknown") hasUnknown = true;
-  }
-  return hasUnknown ? "unknown" : "healthy";
 }
 
 // Given a set of agents, compute mapping from agent ID to either a group key
