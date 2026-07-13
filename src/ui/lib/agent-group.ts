@@ -56,7 +56,7 @@ function byRecencyDesc(a: Agent, b: Agent): number {
   const ca = a.created_at ?? "";
   const cb = b.created_at ?? "";
   if (ca !== cb) return ca < cb ? 1 : -1;
-  return 0;
+  return a.id.localeCompare(b.id);
 }
 
 // Collapse a health-filtered agent set into one group per canonical name.

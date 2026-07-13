@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Bot, X, Layers } from "lucide-react";
 import { AgentGroup } from "@/lib/agent-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -47,6 +47,18 @@ interface AgentGroupDrawerProps {
 // Right-side slide-over that mirrors the Topology sidebar's chrome (status dot,
 // name, ×N replica badge, close button, scrollable AgentGroupDetail body).
 function AgentGroupDrawer({ group, onClose }: AgentGroupDrawerProps) {
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!group) return;
+    closeButtonRef.current?.focus();
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [group, onClose]);
+
   if (!group) return null;
   const isReplicated = group.replicaCount > 1;
 
@@ -57,7 +69,11 @@ function AgentGroupDrawer({ group, onClose }: AgentGroupDrawerProps) {
         onClick={onClose}
         aria-hidden="true"
       />
-      <div className="fixed right-0 top-0 h-full w-[360px] z-50 border-l border-border bg-card shadow-2xl flex flex-col">
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="fixed right-0 top-0 h-full w-[360px] z-50 border-l border-border bg-card shadow-2xl flex flex-col"
+      >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-border px-4 py-3 shrink-0">
           <div className="flex items-center gap-2 min-w-0">
@@ -70,6 +86,7 @@ function AgentGroupDrawer({ group, onClose }: AgentGroupDrawerProps) {
             )}
           </div>
           <button
+            ref={closeButtonRef}
             onClick={onClose}
             aria-label="Close panel"
             className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"

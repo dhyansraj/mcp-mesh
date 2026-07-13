@@ -10,8 +10,6 @@ export type SidebarSelection =
       name: string;
       instances: Agent[];
       status: string;
-      totalDependencies: number;
-      dependenciesResolved: number;
     };
 
 interface TopologySidebarProps {

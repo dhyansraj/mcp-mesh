@@ -66,4 +66,15 @@ describe("replica collapse — Dashboard stats", () => {
     expect(card.textContent).toContain("1");
     expect(card.textContent).not.toContain("2");
   });
+
+  it("sums dependency counts across all instances of a ×N group", () => {
+    // Each replica reports 1/1 deps, so the collapsed group's Dependencies
+    // card must show the per-instance sum (2/2), not the representative (1/1).
+    render(<StatsCards agents={twoReplicas} />);
+
+    const depsLabel = screen.getByText("Dependencies");
+    const card = depsLabel.closest("div")?.parentElement as HTMLElement;
+    expect(card).toBeTruthy();
+    expect(card.textContent).toContain("2/2");
+  });
 });
