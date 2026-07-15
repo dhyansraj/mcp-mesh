@@ -113,7 +113,7 @@ Infrastructure:
 	cmd.Flags().String("filter-mode", "all", "Filter mode: all, best_match, * (wildcard)")
 
 	// LLM-provider specific flags
-	cmd.Flags().String("model", "", "LiteLLM model (e.g., anthropic/claude-sonnet-4-5)")
+	cmd.Flags().String("model", "", "LiteLLM model (e.g., anthropic/claude-sonnet-5)")
 	cmd.Flags().StringSlice("tags", nil, "Tags for discovery (comma-separated)")
 
 	// Docker-compose generation flags

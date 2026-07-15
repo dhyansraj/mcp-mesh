@@ -20,7 +20,7 @@ test:
     handler: shell
     command: |
       meshctl scaffold --name test-llm-provider-java --agent-type llm-provider \
-        --lang java --model anthropic/claude-sonnet-4-5 --no-interactive -o /workspace
+        --lang java --model anthropic/claude-sonnet-5 --no-interactive -o /workspace
     workdir: /workspace
     capture: scaffold_output
 

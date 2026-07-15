@@ -17,7 +17,7 @@ var supportedLLMRuntimes = []string{"python", "typescript", "java"}
 // vendorToModel maps a vendor shortcut to a default LiteLLM model string.
 // Used by `meshctl scaffold llm-provider`.
 var vendorToModel = map[string]string{
-	"claude":           "anthropic/claude-sonnet-4-5",
+	"claude":           "anthropic/claude-sonnet-5",
 	"openai":           "openai/gpt-4o",
 	"gemini":           "gemini/gemini-1.5-pro",
 	"litellm-fallback": "openai/gpt-4o",
