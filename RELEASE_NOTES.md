@@ -1,6 +1,40 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.1.0...HEAD)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.2.0...HEAD)
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.1.0...v3.2.0)
+
+## v3.2.0 (2026-07-16)
+
+A capability and modernization release. LLM model support is broadened to the current Claude and OpenAI generations — Claude Sonnet 5, and OpenAI GPT-5 reasoning models used with function tools — the Java runtime moves from spring-ai 2.0.0-M4 to 2.0.0 GA, and meshui collapses live agent replicas into a single grouped entry. Nothing touches the wire protocol, the registry, dependency resolution, or the declaration syntax; runtime model-id handling remains pass-through, so new provider models work without a mesh change. The one migration item is a Java Gemini/Vertex configuration-key change inherited from the spring-ai upgrade.
+
+### 🤖 LLM: current-model support — Sonnet 5, GPT-5 reasoning + tools (#1333, #1337)
+
+Model handling in mesh is pass-through and keyed on the provider vendor, so a newly released model generally works with no code change. Two manually maintained surfaces are refreshed to match the current generation, and one genuine capability gap is closed.
+
+Anthropic: the native `output_config` structured-output allow-list is refreshed to cover the current models (Claude Sonnet 5, Opus 4.6/4.8, Fable 5); an id it doesn't match continues to degrade to the synthetic-tool path rather than failing, so the change is an optimization refresh, not a behavior break. The `meshctl scaffold` default Claude model is now `claude-sonnet-5`.
+
+OpenAI: the GPT-5-family sampling-parameter gate now recognizes chat variants version-agnostically — a versioned chat id such as `gpt-5.6-chat` is correctly treated as a chat model while a reasoning point release such as `gpt-5.6` stays restricted. More substantially, **GPT-5 reasoning models now work with function tools.** OpenAI rejects reasoning + function tools on `/v1/chat/completions`; the Python runtime now routes those requests to the OpenAI Responses API so reasoning and tools coexist, while non-reasoning models and no-tools calls stay on chat.completions unchanged. Because mesh delegation is provider-managed — the provider's runtime makes the vendor call — any consumer, in any language, can use a GPT-5 reasoning model with tools by delegating to a Python provider. TypeScript providers already route OpenAI through the Responses API by default; a Java-provider equivalent awaits spring-ai's Responses support (#1335).
+
+### ☕ Java: spring-ai 2.0.0 GA (#1339)
+
+The Java runtime moves from the spring-ai 2.0.0-M4 milestone to the 2.0.0 GA release. There is no framework jump — mesh was already on Spring Boot 4 / Java 17 — and the embedded MCP SDK is unchanged, so the custom HTTP transport is untouched. The GA API changes are internal to the LLM handlers, and mesh's own `@MeshAgent` / `@MeshTool` / `@MeshLlm` / `@MeshRoute` surface is unchanged. The provider-side no-execute tool-delegation semantics — the provider returns the model's tool calls and mesh executes them — are preserved and were validated end to end against OpenAI, Anthropic, and Gemini.
+
+⚠️ **Migration — Java Gemini/Vertex users only.** spring-ai 2.0 GA consolidated its Google support into the google-genai SDK and dropped the separate Vertex AI module. If you run a Java Gemini provider, update the configuration keys `spring.ai.vertex.ai.gemini.*` → `spring.ai.google.genai.*` (`api-key` for AI Studio, or `project` / `location` for the Vertex AI backend). The `vertex_ai` / `vertexai` provider aliases now resolve to the single google-genai Gemini model, with the backend selected by that configuration. If you call spring-ai APIs directly (beyond mesh's decorators), review spring-ai's own 2.0 migration notes as well.
+
+### 🖥️ meshui: replicas collapse into a single ×N entry (#1330)
+
+Live agent replicas that share an agent name now collapse into one `×N` entry across the Topology, Agents, and Dashboard views, with worst-of aggregate health and a drill-in for per-instance detail — matching the "one logical agent, N pods" mental model rather than rendering N near-identical rows. Edge wiring and per-instance trace lookups are unaffected.
+
+### 📚 Docs: "Why MCP Mesh?" reframed around DDDI (#1329)
+
+The positioning page now leads with the single idea the platform is built on — Distributed Dynamic Dependency Injection — and frames the feature surface as consequences of that primitive, rather than opening with an operations feature list.
+
+### ⚠️ Notes
+
+- **No wire, registry, resolution, or declaration-syntax changes.** Runtime model-id handling is pass-through; new Claude and OpenAI models work without a mesh change.
+- **One migration item — Java Gemini/Vertex configuration keys** — from the spring-ai 2.0 GA upgrade (see above). All other Java behavior is unchanged, and non-Java runtimes are unaffected.
+- **Known limitation.** OpenAI GPT-5 reasoning-plus-tools works through Python and TypeScript providers today; the Java-provider path awaits spring-ai's Responses API support (#1335). Native Responses streaming and multimodal input on the Python path are tracked follow-ups (#1336).
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.0.1...v3.1.0)
 
