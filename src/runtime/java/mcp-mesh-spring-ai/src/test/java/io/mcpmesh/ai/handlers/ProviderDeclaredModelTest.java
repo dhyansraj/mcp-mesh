@@ -300,6 +300,26 @@ class ProviderDeclaredModelTest {
             assertEquals(0.7, opts.getTemperature(), 1e-9);
             assertEquals(0.9, opts.getTopP(), 1e-9);
         }
+
+        @Test
+        @DisplayName("gpt-5.6 point release omits temperature/top_p but keeps maxCompletionTokens")
+        void gpt5PointReleaseRestricted() {
+            // #1332 — a gpt-5 point release is restricted like the base model.
+            OpenAiChatOptions opts = callWith("gpt-5.6");
+            assertNull(opts.getTemperature(), "temperature must be omitted for gpt-5.6");
+            assertNull(opts.getTopP(), "top_p must be omitted for gpt-5.6");
+            assertEquals(1000, opts.getMaxCompletionTokens());
+            assertEquals("gpt-5.6", opts.getModel());
+        }
+
+        @Test
+        @DisplayName("gpt-5.6-chat point release applies temperature/top_p")
+        void gpt5PointReleaseChatAllowed() {
+            // #1332 — version-agnostic chat exclusion covers versioned chat ids.
+            OpenAiChatOptions opts = callWith("gpt-5.6-chat");
+            assertEquals(0.7, opts.getTemperature(), 1e-9);
+            assertEquals(0.9, opts.getTopP(), 1e-9);
+        }
     }
 
     @Nested
@@ -315,6 +335,10 @@ class ProviderDeclaredModelTest {
             assertTrue(OpenAiHandler.restrictsSamplingParams("gpt-5-mini"));
             assertTrue(OpenAiHandler.restrictsSamplingParams("gpt-5-nano"));
             assertTrue(OpenAiHandler.restrictsSamplingParams("openai/gpt-5"));
+            // #1332 — version-agnostic: gpt-5 point releases stay restricted.
+            assertTrue(OpenAiHandler.restrictsSamplingParams("gpt-5.6"));
+            assertTrue(OpenAiHandler.restrictsSamplingParams("gpt-5-6"));
+            assertTrue(OpenAiHandler.restrictsSamplingParams("openai/gpt-5.6"));
         }
 
         @Test
@@ -322,7 +346,11 @@ class ProviderDeclaredModelTest {
         void unrestricted() {
             assertFalse(OpenAiHandler.restrictsSamplingParams("gpt-4o"));
             assertFalse(OpenAiHandler.restrictsSamplingParams("gpt-4.1"));
+            assertFalse(OpenAiHandler.restrictsSamplingParams("gpt-5-chat"));
             assertFalse(OpenAiHandler.restrictsSamplingParams("gpt-5-chat-latest"));
+            // #1332 — version-agnostic chat exclusion covers versioned chat ids.
+            assertFalse(OpenAiHandler.restrictsSamplingParams("gpt-5.6-chat"));
+            assertFalse(OpenAiHandler.restrictsSamplingParams("gpt-5.6-chat-latest"));
             assertFalse(OpenAiHandler.restrictsSamplingParams(null));
         }
     }

@@ -41,6 +41,7 @@ from typing import Any
 import httpx
 
 from ._native_client_helpers import (
+    is_openai_reasoning_model,
     make_fallback_logger,
     make_is_available,
     reset_unsupported_kwargs_dedupe,
@@ -545,6 +546,467 @@ def _build_create_kwargs(
 
 
 # ---------------------------------------------------------------------------
+# Responses API path (issue #1334)
+# ---------------------------------------------------------------------------
+# OpenAI gpt-5-family / o-series REASONING models reason by default. On
+# ``/v1/chat/completions`` OpenAI returns HTTP 400 when such a model is asked
+# to reason AND is given function tools ("use /v1/responses or set
+# reasoning_effort='none'"). Routing those requests to the Responses API lets
+# reasoning + tools coexist. gpt-4o and gpt-5 *chat* variants — which do not
+# restrict sampling params — stay on chat.completions; no-tools reasoning
+# calls also stay on chat.completions (no 400 there). ``tools`` is constant
+# across an agentic loop so the endpoint never flips mid-conversation.
+
+
+def _openai_wants_responses_api(model: str, request_params: dict[str, Any]) -> bool:
+    """True when this request must route to the OpenAI Responses API.
+
+    Trigger: a reasoning model (o-series / gpt-5 non-chat) *and* the request
+    carries function tools. See the section comment for the rationale.
+
+    Exception: ``reasoning_effort="none"`` is OpenAI's documented way to keep a
+    reasoning model on ``/v1/chat/completions`` with tools (no reasoning, no
+    400). Those requests stay on chat.completions — routing them to Responses
+    would emit ``reasoning={"effort": "none"}``, which Responses rejects.
+    """
+    if request_params.get("reasoning_effort") == "none":
+        return False
+    return is_openai_reasoning_model(model) and bool(request_params.get("tools"))
+
+
+# Chat-completions kwargs the Responses builder consumes/translates itself —
+# the leftover-kwarg WARN must not flag these as "dropped".
+_OPENAI_RESPONSES_HANDLED_KWARGS = frozenset({
+    "messages",
+    "tools",
+    "tool_choice",
+    "reasoning_effort",
+    "response_format",
+    "max_completion_tokens",
+    "max_tokens",
+    "temperature",
+    "top_p",
+    "model",
+    "api_key",
+    "base_url",
+    "stream",
+    "stream_options",
+})
+
+# Kwargs forwarded verbatim to responses.create (shapes are identical on both
+# endpoints).
+_OPENAI_RESPONSES_PASSTHROUGH_KWARGS = frozenset({
+    "parallel_tool_calls",
+    "user",
+    "metadata",
+    "extra_headers",
+    "extra_query",
+    "extra_body",
+})
+
+
+def _stringify_tool_output(content: Any) -> str:
+    """Coerce a chat ``role:tool`` message ``content`` into the Responses
+    ``function_call_output.output`` string."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    try:
+        return json.dumps(content)
+    except (TypeError, ValueError):
+        return str(content)
+
+
+def _translate_response_format_to_text(response_format: Any) -> dict[str, Any]:
+    """chat ``response_format`` → Responses ``text`` block.
+
+    ``{type:json_schema, json_schema:{name,schema,strict}}`` becomes
+    ``{format:{type:json_schema, name, schema, strict}}`` (flattened). Other
+    shapes (``{type:json_object}``, ``{type:text}``) pass through under
+    ``format`` unchanged.
+    """
+    if isinstance(response_format, dict) and response_format.get("type") == "json_schema":
+        js = response_format.get("json_schema") or {}
+        fmt: dict[str, Any] = {"type": "json_schema"}
+        if js.get("name") is not None:
+            fmt["name"] = js.get("name")
+        if js.get("schema") is not None:
+            fmt["schema"] = js.get("schema")
+        if "strict" in js:
+            fmt["strict"] = js.get("strict")
+        return {"format": fmt}
+    return {"format": response_format}
+
+
+def _translate_message_content(content: Any, role: str) -> Any:
+    """Translate chat-style message ``content`` into the Responses input shape.
+
+    Plain-string content passes through unchanged (the common case). A
+    content-part ARRAY is translated part-by-part: text parts
+    ``{"type":"text","text":...}`` become ``input_text`` (user/system) or
+    ``output_text`` (assistant), matching the part types Responses expects.
+
+    Any image or other non-text part raises a clear ``ValueError`` rather than
+    forwarding an untranslated chat-shape part that would yield a cryptic
+    OpenAI 400. Image translation is deliberately NOT attempted here (the
+    Responses image-part shape differs and is unverified for this path).
+    """
+    if not isinstance(content, list):
+        return content
+    text_type = "output_text" if role == "assistant" else "input_text"
+    translated: list[dict[str, Any]] = []
+    for part in content:
+        ptype = part.get("type") if isinstance(part, dict) else None
+        if ptype == "text":
+            translated.append({"type": text_type, "text": part.get("text")})
+        else:
+            raise ValueError(
+                "OpenAI Responses path (reasoning model + tools) does not yet "
+                "support multimodal image content; use string/text content, "
+                "drop tools, or use a non-reasoning model "
+                f"(unsupported content part type={ptype!r})"
+            )
+    return translated
+
+
+def _build_responses_kwargs(
+    request_params: dict[str, Any],
+    *,
+    model: str,
+) -> dict[str, Any]:
+    """Translate mesh/chat.completions-shape request_params → Responses kwargs.
+
+    Parallel to :func:`_build_create_kwargs` but targets ``responses.create``:
+
+      * ``messages`` → ``input`` items (+ ``instructions`` from system turns).
+        The multi-turn history remap is the critical part — prior assistant
+        ``tool_calls`` become ``function_call`` items and ``role:tool`` results
+        become ``function_call_output`` items, preserving ``call_id`` exactly
+        so calls and outputs pair correctly on iteration 2+.
+      * flat tool schema / tool_choice.
+      * ``reasoning_effort`` → ``reasoning={"effort": ...}``.
+      * ``response_format`` → ``text={"format": ...}``.
+      * ``max_completion_tokens`` / ``max_tokens`` → ``max_output_tokens``.
+
+    ``store`` is explicitly set to ``False`` to match the chat path's
+    no-persistence behavior — ``responses.create`` defaults ``store=true``
+    (persisting prompt + output on OpenAI's servers for 30 days) whereas
+    ``chat.completions.create`` defaults ``false``. ``temperature`` / ``top_p``
+    are omitted (reasoning models reject them) with a soft-fail WARN, mirroring
+    the chat path.
+    """
+    # Shallow-copy so we don't mutate the caller's dict (we ``pop`` below).
+    request_params = dict(request_params)
+
+    resolved_timeout = resolve_request_timeout(
+        request_params,
+        adapter_label="Native OpenAI adapter (Responses)",
+        logger=logger,
+    )
+
+    responses_kwargs: dict[str, Any] = {"model": _strip_prefix(model)}
+    # ``responses.create`` defaults ``store=true`` (persists prompt + output on
+    # OpenAI servers for 30 days); ``chat.completions.create`` defaults false.
+    # Set it explicitly so the Responses path matches the chat path's
+    # no-persistence behavior.
+    responses_kwargs["store"] = False
+    if resolved_timeout is not None:
+        responses_kwargs["timeout"] = resolved_timeout
+
+    # --- messages → input items (+ instructions) ----------------------------
+    input_items: list[dict[str, Any]] = []
+    instructions_parts: list[str] = []
+    for msg in request_params.get("messages") or []:
+        role = msg.get("role")
+        content = msg.get("content")
+        if role == "system":
+            # Collect string system prompts into ``instructions``; non-string
+            # (multimodal) system content falls back to an input item.
+            if isinstance(content, str):
+                instructions_parts.append(content)
+            else:
+                input_items.append({
+                    "role": "system",
+                    "content": _translate_message_content(content, "system"),
+                })
+            continue
+        if role == "assistant":
+            # A text turn and tool calls can co-occur — emit both.
+            if content:
+                input_items.append({
+                    "role": "assistant",
+                    "content": _translate_message_content(content, "assistant"),
+                })
+            for tc in msg.get("tool_calls") or []:
+                fn = tc.get("function") or {}
+                input_items.append({
+                    "type": "function_call",
+                    # chat ``tool_call.id`` → Responses ``call_id`` (exact).
+                    "call_id": tc.get("id"),
+                    "name": fn.get("name"),
+                    # Responses expects a string; coerce an explicit None → "".
+                    "arguments": fn.get("arguments") or "",
+                })
+            continue
+        if role == "tool":
+            input_items.append({
+                "type": "function_call_output",
+                # chat ``tool_call_id`` → Responses ``call_id`` (exact).
+                "call_id": msg.get("tool_call_id"),
+                "output": _stringify_tool_output(content),
+            })
+            continue
+        # user / any other role → passthrough input item.
+        input_items.append(
+            {"role": role, "content": _translate_message_content(content, role)}
+        )
+
+    responses_kwargs["input"] = input_items
+    if instructions_parts:
+        responses_kwargs["instructions"] = "\n\n".join(instructions_parts)
+
+    # --- tools: nested {type:function, function:{...}} → flat ---------------
+    tools = request_params.get("tools")
+    if tools:
+        flat_tools: list[dict[str, Any]] = []
+        for t in tools:
+            if isinstance(t, dict) and t.get("type") == "function" and "function" in t:
+                fn = t["function"] or {}
+                flat_tools.append({
+                    "type": "function",
+                    "name": fn.get("name"),
+                    "description": fn.get("description"),
+                    "parameters": fn.get("parameters"),
+                })
+            else:
+                flat_tools.append(t)
+        responses_kwargs["tools"] = flat_tools
+
+    # --- tool_choice: flatten the {type:function, function:{name}} dict ------
+    tool_choice = request_params.get("tool_choice")
+    if tool_choice is not None:
+        if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
+            fn = tool_choice.get("function") or {}
+            responses_kwargs["tool_choice"] = {
+                "type": "function",
+                "name": fn.get("name"),
+            }
+        else:
+            # "auto" / "none" / "required" pass through unchanged.
+            responses_kwargs["tool_choice"] = tool_choice
+
+    # --- reasoning_effort → reasoning={"effort": ...} ----------------------
+    reasoning_effort = request_params.get("reasoning_effort")
+    if reasoning_effort is not None:
+        responses_kwargs["reasoning"] = {"effort": reasoning_effort}
+
+    # --- response_format → text={"format": ...} ----------------------------
+    response_format = request_params.get("response_format")
+    if response_format is not None:
+        responses_kwargs["text"] = _translate_response_format_to_text(response_format)
+
+    # --- max_completion_tokens / max_tokens → max_output_tokens ------------
+    max_output = request_params.get("max_completion_tokens")
+    if max_output is None:
+        max_output = request_params.get("max_tokens")
+    if max_output is not None:
+        responses_kwargs["max_output_tokens"] = max_output
+
+    # --- sampling-param gating (reasoning models reject temperature/top_p) --
+    for key in ("temperature", "top_p"):
+        if request_params.get(key) is not None:
+            logger.warning(
+                "OpenAI model %s rejects %s; omitting %s=%s "
+                "(only the default is supported)",
+                model,
+                key,
+                key,
+                request_params.get(key),
+            )
+
+    # --- verbatim passthrough kwargs ---------------------------------------
+    for key in _OPENAI_RESPONSES_PASSTHROUGH_KWARGS:
+        value = request_params.get(key)
+        if value is not None:
+            responses_kwargs[key] = value
+
+    # --- WARN on leftover unhandled kwargs (mirrors the chat path) ----------
+    # ``timeout`` / ``request_timeout`` were already popped by
+    # resolve_request_timeout, so they won't surface here.
+    for k in request_params:
+        if k.startswith("_mesh_"):
+            continue
+        if k in _OPENAI_RESPONSES_HANDLED_KWARGS:
+            continue
+        if k in _OPENAI_RESPONSES_PASSTHROUGH_KWARGS:
+            continue
+        _warn_unsupported_kwarg_once(k, sdk_call_label="openai.responses.create")
+
+    return responses_kwargs
+
+
+def _rget(obj: Any, key: str, default: Any = None) -> Any:
+    """Attribute-or-key getter so adapters accept both SDK Pydantic objects
+    and plain dicts (keeps the Responses adapter test-friendly)."""
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _adapt_responses_response(raw: Any) -> _Response:
+    """Translate an openai Responses ``Response`` → litellm-shape ``_Response``.
+
+    Maps ``raw.output[]`` items:
+      * ``type=="function_call"`` → :class:`_ToolCall` (``call_id`` → ``id``).
+      * ``type=="message"`` ``output_text`` parts → joined ``_Message.content``.
+        Structured output has no ``message.parsed`` analog on Responses — it
+        arrives as ``output_text`` JSON and is recovered here as the content
+        string.
+      * ``type=="reasoning"`` items are ignored for content.
+    Refusals surface as a ``refusal`` content part (or ``status``) and are
+    raised as the same :class:`LLMRefusedError` the chat path raises.
+    ``raw.usage.input_tokens``/``output_tokens`` → :class:`_Usage`.
+    """
+    output = _rget(raw, "output", None) or []
+
+    text_parts: list[str] = []
+    tool_calls: list[_ToolCall] = []
+    refusal_text: str | None = None
+
+    for item in output:
+        itype = _rget(item, "type", None)
+        if itype == "function_call":
+            call_id = _rget(item, "call_id", None) or _rget(item, "id", "") or ""
+            name = _rget(item, "name", "") or ""
+            arguments = _rget(item, "arguments", "")
+            if not isinstance(arguments, str):
+                try:
+                    arguments = json.dumps(arguments)
+                except (TypeError, ValueError):
+                    arguments = "{}"
+            tool_calls.append(
+                _ToolCall(id=call_id, name=name, arguments=arguments or "")
+            )
+        elif itype == "message":
+            for part in _rget(item, "content", None) or []:
+                ptype = _rget(part, "type", None)
+                if ptype == "refusal":
+                    refusal_text = _rget(part, "refusal", None) or refusal_text
+                elif ptype == "output_text":
+                    text_parts.append(_rget(part, "text", "") or "")
+        # ``reasoning`` (and any other) items contribute no content.
+
+    # Preserve the chat path's refusal behavior: surface a typed exception so
+    # the model's articulated reason reaches the @mesh.llm consumer rather than
+    # collapsing into an opaque empty-response / Pydantic validation error.
+    if refusal_text:
+        from _mcp_mesh.engine.llm_errors import LLMRefusedError
+
+        model_name = _rget(raw, "model", None)
+        logger.info(
+            "Native OpenAI adapter (Responses): model refused structured "
+            "output (model=%s, refusal=%r)",
+            model_name,
+            refusal_text,
+        )
+        raise LLMRefusedError(
+            refusal_text,
+            vendor="openai",
+            model=model_name,
+        )
+
+    content: str | None = "".join(text_parts) if text_parts else None
+
+    message = _Message(
+        content=content,
+        role="assistant",
+        tool_calls=tool_calls or None,
+    )
+
+    usage_obj = _rget(raw, "usage", None)
+    if usage_obj is not None:
+        usage = _Usage(
+            prompt_tokens=_rget(usage_obj, "input_tokens", 0) or 0,
+            completion_tokens=_rget(usage_obj, "output_tokens", 0) or 0,
+        )
+    else:
+        usage = None
+
+    # Preserve a truthful finish_reason (the chat path forwards the real one).
+    # Responses carries the signal on ``status`` / ``incomplete_details`` rather
+    # than a ``finish_reason`` field: map truncation / content-filter /
+    # incomplete outcomes instead of collapsing everything into stop/tool_calls.
+    finish_reason = "tool_calls" if tool_calls else "stop"
+    status = _rget(raw, "status", None)
+    incomplete = _rget(raw, "incomplete_details", None)
+    if status == "incomplete":
+        reason = _rget(incomplete, "reason", None) if incomplete is not None else None
+        if reason == "max_output_tokens":
+            finish_reason = "length"
+        elif reason == "content_filter":
+            finish_reason = "content_filter"
+        else:
+            # An incomplete response with an unmapped (or empty) reason must not
+            # look like a clean stop — surface it for debugging.
+            logger.debug(
+                "Native OpenAI adapter (Responses): incomplete response with "
+                "unmapped reason (status=%r, incomplete_details=%r); keeping "
+                "finish_reason=%r",
+                status,
+                incomplete,
+                finish_reason,
+            )
+    elif status not in (None, "completed"):
+        # "failed" / any other terminal status — keep stop/tool_calls but log so
+        # an empty-output failure isn't a silent clean stop.
+        logger.debug(
+            "Native OpenAI adapter (Responses): non-completed status "
+            "(status=%r, incomplete_details=%r); keeping finish_reason=%r",
+            status,
+            incomplete,
+            finish_reason,
+        )
+
+    return _Response(
+        message=message,
+        usage=usage,
+        model=_rget(raw, "model", None),
+        finish_reason=finish_reason,
+    )
+
+
+def _responses_result_to_stream_chunk(resp: _Response) -> _StreamChunk:
+    """Collapse a buffered Responses ``_Response`` into a single terminal
+    ``_StreamChunk`` carrying content + tool-call deltas + usage + finish_reason.
+
+    Used by the buffered-fallback streaming path (see ``complete_stream``). The
+    provider-side consumer buffers all chunks and merges content / tool_calls /
+    usage across them, so one all-in-one chunk reassembles correctly.
+    """
+    choice = resp.choices[0]
+    msg = choice.message
+    tool_call_deltas: list[_StreamToolCallDelta] | None = None
+    if msg.tool_calls:
+        tool_call_deltas = [
+            _StreamToolCallDelta(
+                index=i,
+                id=tc.id,
+                type="function",
+                name=tc.function.name,
+                arguments=tc.function.arguments,
+            )
+            for i, tc in enumerate(msg.tool_calls)
+        ]
+    return _StreamChunk(
+        delta=_Delta(content=msg.content, tool_calls=tool_call_deltas),
+        usage=resp.usage,
+        model=resp.model,
+        finish_reason=choice.finish_reason,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Response / chunk adaptation
 # ---------------------------------------------------------------------------
 
@@ -744,8 +1206,17 @@ async def complete(
     api_key: str | None = None,
     base_url: str | None = None,
 ) -> _Response:
-    """Run a buffered OpenAI completion and adapt to litellm-shape response."""
+    """Run a buffered OpenAI completion and adapt to litellm-shape response.
+
+    Reasoning models (o-series / gpt-5 non-chat) WITH tools route to the
+    Responses API (issue #1334) so reasoning + function tools coexist; every
+    other model — and no-tools reasoning calls — stay on chat.completions.
+    """
     client = _build_client(model, api_key, base_url)
+    if _openai_wants_responses_api(model, request_params):
+        responses_kwargs = _build_responses_kwargs(request_params, model=model)
+        raw = await client.responses.create(**responses_kwargs)
+        return _adapt_responses_response(raw)
     create_kwargs = _build_create_kwargs(request_params, model=model)
     raw = await client.chat.completions.create(**create_kwargs)
     return _adapt_response(raw)
@@ -773,6 +1244,24 @@ async def complete_stream(
     0 tokens for partial generations.
     """
     client = _build_client(model, api_key, base_url)
+
+    # Reasoning models WITH tools must use the Responses API (issue #1334).
+    # TODO(#1334): native Responses streaming. mesh does not yet stream the
+    # Responses API natively; run the call buffered and emit the terminal
+    # result as a single chunk. The provider-side consumer buffers all chunks
+    # and merges content / tool_calls / usage across them, so a single
+    # all-in-one chunk reassembles correctly (no interrupted-stream fallback
+    # is needed here — a buffered call has no partial-usage hole).
+    if _openai_wants_responses_api(model, request_params):
+        logger.info(
+            "Native OpenAI Responses path: buffering reasoning+tools stream "
+            "(native Responses streaming not yet implemented — #1334)"
+        )
+        responses_kwargs = _build_responses_kwargs(request_params, model=model)
+        raw = await client.responses.create(**responses_kwargs)
+        yield _responses_result_to_stream_chunk(_adapt_responses_response(raw))
+        return
+
     create_kwargs = _build_create_kwargs(request_params, model=model)
     create_kwargs["stream"] = True
 
@@ -874,20 +1363,26 @@ log_fallback_once, is_fallback_logged, _reset_fallback_logged = make_fallback_lo
 _logged_unsupported_kwargs: set[str] = set()
 
 
-def _warn_unsupported_kwarg_once(key: str) -> None:
+def _warn_unsupported_kwarg_once(
+    key: str,
+    *,
+    sdk_call_label: str = "openai.chat.completions.create",
+) -> None:
     """WARN once per unique unsupported kwarg name.
 
     Thin wrapper over the shared helper so call sites stay terse
     (single-arg) and the per-vendor dedupe state stays local to this
     module. Used by ``_build_create_kwargs`` to surface litellm-only
     knobs the adapter is silently dropping (or new fields the OpenAI SDK
-    doesn't accept yet) without logging on every single request.
+    doesn't accept yet) without logging on every single request. The
+    Responses builder passes ``sdk_call_label="openai.responses.create"``
+    so the WARN names the correct endpoint.
     """
     warn_unsupported_kwarg_once(
         _logged_unsupported_kwargs,
         kwarg=key,
         adapter_label="OpenAI",
-        sdk_call_label="openai.chat.completions.create",
+        sdk_call_label=sdk_call_label,
         logger=logger,
     )
 

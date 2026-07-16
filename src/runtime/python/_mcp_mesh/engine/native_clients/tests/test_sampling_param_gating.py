@@ -37,6 +37,10 @@ class TestRestrictsSamplingParams:
             "gpt-5",
             "gpt-5-mini",
             "gpt-5-nano",
+            # #1332 — version-agnostic: gpt-5 point releases stay restricted.
+            "gpt-5.6",
+            "gpt-5-6",
+            "openai/gpt-5.6",
             "openai/gpt-5",
             "openai/o3-mini",
             "GPT-5-MINI",  # case-insensitive
@@ -53,6 +57,9 @@ class TestRestrictsSamplingParams:
             "gpt-4o-mini",
             "gpt-5-chat-latest",
             "gpt-5-chat",
+            # #1332 — version-agnostic chat exclusion covers versioned chat ids.
+            "gpt-5.6-chat",
+            "gpt-5.6-chat-latest",
             "openai/gpt-4o",
             "gemini/gemini-2.5-flash",
             "anthropic/claude-sonnet-4-5",
@@ -98,6 +105,12 @@ class TestNativeBuildCreateKwargsGating:
         assert "temperature" not in kwargs
         assert "top_p" not in kwargs
 
+    def test_restricted_gpt5_point_release_omits_sampling_params(self):
+        # #1332 — a gpt-5 point release is restricted like the base model.
+        kwargs = self._build("openai/gpt-5.6", temperature=0.5, top_p=0.8)
+        assert "temperature" not in kwargs
+        assert "top_p" not in kwargs
+
     def test_unrestricted_model_keeps_temperature(self):
         kwargs = self._build("openai/gpt-4o", temperature=0.7, top_p=0.9)
         assert kwargs["temperature"] == 0.7
@@ -139,6 +152,12 @@ class TestNativeMaxTokensTranslation:
 
     def test_restricted_gpt5_moves_max_tokens(self):
         kwargs = self._build("openai/gpt-5-mini", max_tokens=256)
+        assert "max_tokens" not in kwargs
+        assert kwargs["max_completion_tokens"] == 256
+
+    def test_restricted_gpt5_point_release_moves_max_tokens(self):
+        # #1332 — a gpt-5 point release translates max_tokens like the base model.
+        kwargs = self._build("openai/gpt-5.6", max_tokens=256)
         assert "max_tokens" not in kwargs
         assert kwargs["max_completion_tokens"] == 256
 

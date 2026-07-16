@@ -231,10 +231,12 @@ export function extractModelName(model: string): string {
  * value (rejecting any explicit setting with HTTP 400).
  *
  * OpenAI o-series reasoning models (o1/o3/o4) and the gpt-5 family (except
- * gpt-5-chat) accept ONLY the default sampling params. Verified against the
- * live API:
- *   - REJECT: gpt-5, gpt-5-mini, gpt-5-nano, o1, o3-mini, o4-mini
- *   - ACCEPT: gpt-4o, gpt-4.1, gpt-5-chat-latest
+ * chat variants) accept ONLY the default sampling params. The chat exclusion
+ * is version-agnostic: any gpt-5 id containing a `-chat` marker (`gpt-5-chat`,
+ * `gpt-5-chat-latest`, `gpt-5.6-chat`, …) is treated as a chat variant and left
+ * unrestricted. Verified against the live API:
+ *   - REJECT: gpt-5, gpt-5-mini, gpt-5-nano, gpt-5.6, o1, o3-mini, o4-mini
+ *   - ACCEPT: gpt-4o, gpt-4.1, gpt-5-chat-latest, gpt-5.6-chat
  *
  * Accepts a bare or ``vendor/``-qualified model string (e.g. "openai/o3-mini").
  * Returns true when ``temperature``/``topP`` should be omitted. Mirrors the
@@ -253,8 +255,9 @@ export function restrictsSamplingParams(model: string | undefined | null): boole
   ) {
     return true;
   }
-  // gpt-5 family restricts temperature/top_p to default — except gpt-5-chat*
-  if (m.startsWith("gpt-5") && !m.startsWith("gpt-5-chat")) return true;
+  // gpt-5 family restricts temperature/top_p to default — except chat variants.
+  // Version-agnostic: any gpt-5 id with a "-chat" marker is unrestricted (#1332).
+  if (m.startsWith("gpt-5") && !m.includes("-chat")) return true;
   return false;
 }
 
