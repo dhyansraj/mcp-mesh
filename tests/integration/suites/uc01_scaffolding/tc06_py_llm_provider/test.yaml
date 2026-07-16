@@ -23,7 +23,7 @@ test:
     handler: shell
     command: |
       meshctl scaffold --name test-llm-provider --agent-type llm-provider \
-        --lang python --model anthropic/claude-sonnet-4-5 -o /workspace
+        --lang python --model anthropic/claude-sonnet-5 -o /workspace
     workdir: /workspace
     capture: scaffold_output
 

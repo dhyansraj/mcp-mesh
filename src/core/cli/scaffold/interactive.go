@@ -421,15 +421,15 @@ func promptLLMProviderConfig(config *InteractiveConfig) error {
 	modelPrompt := &survey.Select{
 		Message: "Which LLM model should this provider expose?",
 		Options: []string{
-			"anthropic/claude-sonnet-4-5 - Claude Sonnet 4.5 (latest)",
-			"anthropic/claude-3-5-sonnet-20241022 - Claude 3.5 Sonnet",
-			"anthropic/claude-3-5-haiku-20241022 - Claude 3.5 Haiku (fast)",
+			"anthropic/claude-sonnet-5 - Claude Sonnet 5 (recommended)",
+			"anthropic/claude-opus-4-8 - Claude Opus 4.8 (most capable)",
+			"anthropic/claude-haiku-4-5 - Claude Haiku 4.5 (fast)",
 			"openai/gpt-4o - GPT-4o (recommended)",
 			"openai/gpt-4o-mini - GPT-4o Mini (fast, cheap)",
 			"openai/gpt-4-turbo - GPT-4 Turbo",
 			"custom - Enter custom model string",
 		},
-		Default: "anthropic/claude-sonnet-4-5 - Claude Sonnet 4.5 (latest)",
+		Default: "anthropic/claude-sonnet-5 - Claude Sonnet 5 (recommended)",
 	}
 	if err := survey.AskOne(modelPrompt, &model); err != nil {
 		return fmt.Errorf("failed to get model: %w", err)

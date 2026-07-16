@@ -2,7 +2,7 @@
 # Verifies meshctl scaffold generates Claude provider with correct model version for TypeScript
 
 name: "Scaffold LLM Provider - Claude TS"
-description: "Verify Claude TypeScript provider scaffold uses current model (claude-sonnet-4-5)"
+description: "Verify Claude TypeScript provider scaffold uses current model (claude-sonnet-5)"
 tags:
   - scaffolding
   - meshctl
@@ -17,7 +17,7 @@ test:
   # Scaffold Claude LLM provider for TypeScript
   - name: "Scaffold Claude provider"
     handler: shell
-    command: "meshctl scaffold --name claude-test-ts --agent-type llm-provider --model anthropic/claude-sonnet-4-5 --lang typescript"
+    command: "meshctl scaffold --name claude-test-ts --agent-type llm-provider --model anthropic/claude-sonnet-5 --lang typescript"
     workdir: /workspace
     capture: scaffold_output
 
@@ -52,9 +52,9 @@ assertions:
   - expr: "${captured.index_content} contains 'addLlmProvider'"
     message: "src/index.ts should have addLlmProvider call"
 
-  # Model should be claude-sonnet-4-5
-  - expr: "${captured.index_content} contains 'claude-sonnet-4-5'"
-    message: "Should use claude-sonnet-4-5 model"
+  # Model should be claude-sonnet-5
+  - expr: "${captured.index_content} contains 'claude-sonnet-5'"
+    message: "Should use claude-sonnet-5 model"
 
   # Should have anthropic in model path
   - expr: "${captured.index_content} contains 'anthropic/'"

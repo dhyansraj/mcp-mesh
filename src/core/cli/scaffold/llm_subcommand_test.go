@@ -29,7 +29,7 @@ func TestIsValidLLMVendor(t *testing.T) {
 }
 
 func TestVendorToModel(t *testing.T) {
-	assert.Equal(t, "anthropic/claude-sonnet-4-5", VendorToModel("claude"))
+	assert.Equal(t, "anthropic/claude-sonnet-5", VendorToModel("claude"))
 	assert.Equal(t, "openai/gpt-4o", VendorToModel("openai"))
 	assert.Equal(t, "gemini/gemini-1.5-pro", VendorToModel("gemini"))
 	assert.NotEmpty(t, VendorToModel("litellm-fallback"))
@@ -204,7 +204,7 @@ func TestRunScaffoldLLMProvider_DryRun_Python(t *testing.T) {
 
 	output := out.String()
 	assert.Contains(t, output, "Dry-run")
-	assert.Contains(t, output, "anthropic/claude-sonnet-4-5")
+	assert.Contains(t, output, "anthropic/claude-sonnet-5")
 	assert.Contains(t, output, "+claude")
 }
 

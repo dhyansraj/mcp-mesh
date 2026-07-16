@@ -2,7 +2,7 @@
 # Verifies meshctl scaffold generates Claude provider with correct model version
 
 name: "Scaffold LLM Provider - Claude Py"
-description: "Verify Claude Python provider scaffold uses current model (claude-sonnet-4-5)"
+description: "Verify Claude Python provider scaffold uses current model (claude-sonnet-5)"
 tags:
   - scaffolding
   - meshctl
@@ -17,7 +17,7 @@ test:
   # Scaffold Claude LLM provider
   - name: "Scaffold Claude provider"
     handler: shell
-    command: "meshctl scaffold --name claude-test --agent-type llm-provider --model anthropic/claude-sonnet-4-5 --lang python"
+    command: "meshctl scaffold --name claude-test --agent-type llm-provider --model anthropic/claude-sonnet-5 --lang python"
     workdir: /workspace
     capture: scaffold_output
 
@@ -56,9 +56,9 @@ assertions:
   - expr: "${captured.main_content} contains '@mesh.llm_provider'"
     message: "main.py should have @mesh.llm_provider decorator"
 
-  # Model should be claude-sonnet-4-5
-  - expr: "${captured.main_content} contains 'claude-sonnet-4-5'"
-    message: "Should use claude-sonnet-4-5 model"
+  # Model should be claude-sonnet-5
+  - expr: "${captured.main_content} contains 'claude-sonnet-5'"
+    message: "Should use claude-sonnet-5 model"
 
   # Should have anthropic in model path
   - expr: "${captured.main_content} contains 'anthropic/'"

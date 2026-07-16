@@ -78,7 +78,7 @@ type ScaffoldContext struct {
 	FilterMode string // "all", "best_match", "*" (default: "all")
 
 	// LLM-provider specific (for @mesh.llm_provider decorator)
-	Model string // LiteLLM model string (e.g., "anthropic/claude-sonnet-4-5")
+	Model string // LiteLLM model string (e.g., "anthropic/claude-sonnet-5")
 
 	// Java-specific
 	JavaPackage string // Java package name (e.g., "com.example.greeter")

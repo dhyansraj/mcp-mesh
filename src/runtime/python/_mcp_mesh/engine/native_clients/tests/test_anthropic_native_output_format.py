@@ -108,9 +108,20 @@ class TestSupportsNativeOutputFormat:
             "anthropic/claude-opus-4-5",
             "anthropic/claude-opus-4-7",
             "anthropic/claude-opus-4.7",
+            # #1331 refresh: Sonnet 5, Opus 4.6 / 4.8, Fable 5.
+            "anthropic/claude-sonnet-5",
+            "anthropic/claude-sonnet-5-20260101",
+            "anthropic/claude-opus-4-8",
+            "anthropic/claude-opus-4.8",
+            "anthropic/claude-opus-4-6",
+            "anthropic/claude-opus-4.6",
+            "anthropic/claude-fable-5",
+            "anthropic/claude-fable-5-20260101",
             # Bedrock prefix + substring match.
             "bedrock/anthropic.claude-sonnet-4-6-20260301-v1:0",
             "bedrock/anthropic.claude-opus-4-7-20260401-v1:0",
+            "bedrock/anthropic.claude-sonnet-5-20260101-v1:0",
+            "bedrock/anthropic.claude-opus-4-8-20260401-v1:0",
             # Databricks prefix.
             "databricks/anthropic.claude-sonnet-4-6",
             # Case-insensitive (defensive).
@@ -159,6 +170,11 @@ class TestSupportsNativeOutputFormat:
             "anthropic/claude-sonnet-4-50",
             "anthropic/claude-sonnet-4-60",
             "anthropic/claude-sonnet-4-55",
+            # #1331 refresh — overmatch guard for the new patterns.
+            "anthropic/claude-sonnet-50",
+            "anthropic/claude-opus-4-80",
+            "anthropic/claude-opus-4-88",
+            "anthropic/claude-fable-50",
             # Dot-form overmatch — same problem, dot separator.
             "anthropic/claude-opus-4.10",
             "anthropic/claude-sonnet-4.55",

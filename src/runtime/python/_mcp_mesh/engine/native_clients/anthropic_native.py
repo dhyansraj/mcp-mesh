@@ -724,16 +724,18 @@ _ANTHROPIC_PASSTHROUGH_KWARGS = frozenset(
 # ---------------------------------------------------------------------------
 # Native ``output_config`` (structured output) — model gating + schema filter
 # ---------------------------------------------------------------------------
-# Sonnet 4.5+ / Opus 4.1+ accept Anthropic's first-class
-# ``output_config.format`` primitive. The wire shape is one transform shallower
-# than LiteLLM's ``response_format``:
+# Sonnet 4.5+ / Sonnet 5 / Opus 4.1+ / Opus 4.8 / Fable 5 accept Anthropic's
+# first-class ``output_config.format`` primitive. The wire shape is one
+# transform shallower than LiteLLM's ``response_format``:
 #
 #   output_config = {"format": {"type": "json_schema", "schema": {...}}}
 #
 # Older models (Haiku, Sonnet 3.x / 4.0, Opus 3.x) reject the field, so we
 # fall through to the existing synthetic-tool injection path for those.
 # LiteLLM uses a substring allow-list at transformation.py:822-830; we mirror
-# it plus the Sonnet 4.6 / Opus 4.5 / 4.7 releases.
+# it plus the Sonnet 4.6 / 5, Opus 4.5 / 4.6 / 4.7 / 4.8, and Fable 5 releases
+# (per current Anthropic docs these support native structured outputs; Haiku
+# stays out — see the ``_supports_native_output_format`` docstring).
 #
 # Patterns (not raw substrings) so the trailing minor-version digit is
 # boundary-anchored: ``opus-4-1`` must NOT match a hypothetical future
@@ -748,9 +750,13 @@ _NATIVE_OUTPUT_FORMAT_MODEL_PATTERNS = tuple(
     for p in (
         r"(?<!\d)sonnet-4[-.]5(?!\d)",
         r"(?<!\d)sonnet-4[-.]6(?!\d)",
+        r"(?<!\d)sonnet-5(?!\d)",
         r"(?<!\d)opus-4[-.]1(?!\d)",
         r"(?<!\d)opus-4[-.]5(?!\d)",
+        r"(?<!\d)opus-4[-.]6(?!\d)",
         r"(?<!\d)opus-4[-.]7(?!\d)",
+        r"(?<!\d)opus-4[-.]8(?!\d)",
+        r"(?<!\d)fable-5(?!\d)",
     )
 )
 

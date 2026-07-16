@@ -20,10 +20,11 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
     description = "{{ default "LLM provider" .Description }}",
     port = {{ .Port }}
 )
+{{- $model := default "anthropic/claude-sonnet-5" .Model }}
 @MeshLlmProvider(
-    model = "{{ default "anthropic/claude-sonnet-4-5" .Model }}",
+    model = "{{ $model }}",
     capability = "llm",
-    tags = {{ "{" }}{{ if .Tags }}{{ range $i, $t := .Tags }}{{ if $i }}, {{ end }}"{{ $t }}"{{ end }}{{ else if contains .Model "anthropic" }}"llm", "claude", "anthropic", "provider"{{ else if contains .Model "openai" }}"llm", "openai", "gpt", "provider"{{ else }}"llm", "provider"{{ end }}{{ "}" }},
+    tags = {{ "{" }}{{ if .Tags }}{{ range $i, $t := .Tags }}{{ if $i }}, {{ end }}"{{ $t }}"{{ end }}{{ else if contains $model "anthropic" }}"llm", "claude", "anthropic", "provider"{{ else if contains $model "openai" }}"llm", "openai", "gpt", "provider"{{ else }}"llm", "provider"{{ end }}{{ "}" }},
     version = "1.0.0"
 )
 @SpringBootApplication
