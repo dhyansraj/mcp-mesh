@@ -1,5 +1,5 @@
 # Dockerfile for report-consumer MCP Mesh agent (Java/Spring Boot)
-FROM mcpmesh/java-runtime:3.1.0
+FROM mcpmesh/java-runtime:3.2.0
 
 WORKDIR /app
 
