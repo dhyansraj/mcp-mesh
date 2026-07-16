@@ -219,6 +219,10 @@ class ProviderDeclaredModelTest {
         void openAiKeepsModelOnSchemaFailure() {
             ArgumentCaptor<Prompt> captor = ArgumentCaptor.forClass(Prompt.class);
             ChatModel model = mockModel(captor);
+            // Spring AI GA's ChatClient merges request options over chatModel.getOptions()
+            // (mutate()); a real OpenAiChatModel always has non-null options, so give the
+            // mock one for the auto-execute (ChatClient) path.
+            when(model.getOptions()).thenReturn(OpenAiChatOptions.builder().build());
 
             new OpenAiHandler().generateWithTools(
                 model, userMessages(), List.of(), noopExecutor, brokenSchema(), declared("gpt-4o"));
@@ -232,6 +236,8 @@ class ProviderDeclaredModelTest {
         void anthropicKeepsModelOnSchemaFailure() {
             ArgumentCaptor<Prompt> captor = ArgumentCaptor.forClass(Prompt.class);
             ChatModel model = mockModel(captor);
+            // See note above: GA's ChatClient merges over chatModel.getOptions().
+            when(model.getOptions()).thenReturn(AnthropicChatOptions.builder().build());
 
             new AnthropicHandler().generateWithTools(
                 model, userMessages(), List.of(), noopExecutor, brokenSchema(),

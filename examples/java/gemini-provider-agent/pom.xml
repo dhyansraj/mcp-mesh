@@ -22,7 +22,7 @@
     <properties>
         <java.version>17</java.version>
         <mcp-mesh.version>3.1.0</mcp-mesh.version>
-        <spring-ai.version>2.0.0-M4</spring-ai.version>
+        <spring-ai.version>2.0.0</spring-ai.version>
     </properties>
 
     <!--
@@ -46,10 +46,11 @@
             <version>${mcp-mesh.version}</version>
         </dependency>
 
-        <!-- Spring AI Vertex AI Gemini -->
+        <!-- Spring AI Google GenAI (API key based; also reaches the Vertex backend
+             via spring.ai.google.genai.* backend config) -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-starter-model-vertex-ai-gemini</artifactId>
+            <artifactId>spring-ai-starter-model-google-genai</artifactId>
             <version>${spring-ai.version}</version>
         </dependency>
 

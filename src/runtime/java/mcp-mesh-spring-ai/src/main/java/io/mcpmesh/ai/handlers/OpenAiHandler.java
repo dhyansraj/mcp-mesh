@@ -9,9 +9,9 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
+import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat.Type;
 import org.springframework.ai.openai.OpenAiChatOptions;
-import org.springframework.ai.openai.api.ResponseFormat;
-import org.springframework.ai.openai.api.ResponseFormat.Type;
 import org.springframework.ai.tool.ToolCallback;
 
 import java.util.*;
@@ -143,7 +143,7 @@ public class OpenAiHandler implements LlmProviderHandler {
             // Auto-execution mode: Use ChatClient which handles tool execution automatically
             return generateWithToolsAutoExecute(model, springMessages, tools, toolExecutor, formattedSystemPrompt, enforcedSchema, messages, options);
         } else {
-            // No-execution mode: Use model.call with internalToolExecutionEnabled(false)
+            // No-execution mode: raw model.call() returns tool_calls without executing them
             return generateWithToolsNoExecute(model, springMessages, tools, formattedSystemPrompt, enforcedSchema, options);
         }
     }
@@ -259,7 +259,7 @@ public class OpenAiHandler implements LlmProviderHandler {
 
         // Add tools if present - Spring AI handles tool execution automatically
         if (!toolCallbacks.isEmpty()) {
-            requestSpec.toolCallbacks(toolCallbacks.toArray(new ToolCallback[0]));
+            requestSpec.tools(toolCallbacks.toArray(new ToolCallback[0]));
         }
 
         // Always build OpenAiChatOptions so the effective model (declared model or a
@@ -275,13 +275,12 @@ public class OpenAiHandler implements LlmProviderHandler {
                 // Make schema strict (add additionalProperties: false, all properties required)
                 Map<String, Object> strictSchema = outputSchema.makeStrict(true);
 
+                // Spring AI GA: ResponseFormat.jsonSchema is now the schema JSON string
+                // (the model hardcodes name="json_schema" + strict=true internally).
+                String strictSchemaJson = TOOL_CALLBACK_MAPPER.writeValueAsString(strictSchema);
                 ResponseFormat responseFormat = ResponseFormat.builder()
                     .type(Type.JSON_SCHEMA)
-                    .jsonSchema(ResponseFormat.JsonSchema.builder()
-                        .name(outputSchema.name())
-                        .schema(strictSchema)
-                        .strict(true)
-                        .build())
+                    .jsonSchema(strictSchemaJson)
                     .build();
                 optionsBuilder.responseFormat(responseFormat);
                 log.debug("Applied OpenAI response_format with schema: {}", outputSchema.name());
@@ -291,7 +290,7 @@ public class OpenAiHandler implements LlmProviderHandler {
             }
         }
         applyModelParams(optionsBuilder, options);
-        requestSpec.options(optionsBuilder.build());
+        requestSpec.options(optionsBuilder);
 
         // Execute the request
         ChatResponse chatResponse = requestSpec.call().chatResponse();
@@ -307,9 +306,12 @@ public class OpenAiHandler implements LlmProviderHandler {
     /**
      * Generate with tools but WITHOUT executing them.
      *
-     * <p>Uses model.call() with internalToolExecutionEnabled(false) to get
-     * tool_calls back without auto-execution. This is used for mesh delegation
-     * where the consumer (not provider) executes tools.
+     * <p>Calls the raw {@link ChatModel#call(Prompt)} which, in Spring AI GA,
+     * returns the model's {@code tool_calls} WITHOUT auto-execution — tool
+     * execution now lives in a ChatClient-level advisor that is deliberately
+     * absent on this raw path. Tool callbacks are attached to the options only
+     * to advertise the tool schemas to the model. This is used for mesh
+     * delegation where the consumer (not provider) executes tools.
      */
     private LlmResponse generateWithToolsNoExecute(
             ChatModel model,
@@ -337,19 +339,20 @@ public class OpenAiHandler implements LlmProviderHandler {
                 // Make schema strict (add additionalProperties: false, all properties required)
                 Map<String, Object> strictSchema = outputSchema.makeStrict(true);
 
+                // Spring AI GA: ResponseFormat.jsonSchema is now the schema JSON string
+                // (the model hardcodes name="json_schema" + strict=true internally).
+                String strictSchemaJson = TOOL_CALLBACK_MAPPER.writeValueAsString(strictSchema);
                 ResponseFormat responseFormat = ResponseFormat.builder()
                     .type(Type.JSON_SCHEMA)
-                    .jsonSchema(ResponseFormat.JsonSchema.builder()
-                        .name(outputSchema.name())
-                        .schema(strictSchema)
-                        .strict(true)
-                        .build())
+                    .jsonSchema(strictSchemaJson)
                     .build();
 
-                // Use OpenAiChatOptions which supports both tools and response_format
+                // Use OpenAiChatOptions which supports both tools and response_format.
+                // The raw model.call() path below does NOT execute tools in Spring AI
+                // GA (tool execution lives in a ChatClient advisor, absent here), so
+                // attaching the callbacks only advertises the tool schema to the model.
                 OpenAiChatOptions.Builder optionsBuilder = OpenAiChatOptions.builder()
                     .toolCallbacks(toolCallbacks.toArray(new ToolCallback[0]))
-                    .internalToolExecutionEnabled(false)
                     .responseFormat(responseFormat);
                 applyModelParams(optionsBuilder, options);
 
@@ -360,16 +363,14 @@ public class OpenAiHandler implements LlmProviderHandler {
                     outputSchema.name(), e.getMessage());
                 // Fallback to OpenAiChatOptions without response_format (still apply model_params)
                 OpenAiChatOptions.Builder optionsBuilder = OpenAiChatOptions.builder()
-                    .toolCallbacks(toolCallbacks.toArray(new ToolCallback[0]))
-                    .internalToolExecutionEnabled(false);
+                    .toolCallbacks(toolCallbacks.toArray(new ToolCallback[0]));
                 applyModelParams(optionsBuilder, options);
                 prompt = new Prompt(messagesWithFormattedSystem, optionsBuilder.build());
             }
         } else {
             // No structured output needed — still apply model_params via OpenAiChatOptions.
             OpenAiChatOptions.Builder optionsBuilder = OpenAiChatOptions.builder()
-                .toolCallbacks(toolCallbacks.toArray(new ToolCallback[0]))
-                .internalToolExecutionEnabled(false);
+                .toolCallbacks(toolCallbacks.toArray(new ToolCallback[0]));
             applyModelParams(optionsBuilder, options);
             prompt = new Prompt(messagesWithFormattedSystem, optionsBuilder.build());
         }

@@ -114,8 +114,13 @@ class ProviderModelParamsTest {
                 Map.of(LlmProviderHandler.OPTION_MODEL, "anthropic/claude-3-5-sonnet-latest"));
 
             ChatOptions opts = captor.getValue().getOptions();
-            assertNull(opts.getModel(),
-                "cross-vendor model override must be ignored — provider keeps its own default model");
+            // Spring AI GA populates the vendor SDK default model on the options builder
+            // (previously null). The mesh guarantee is unchanged: the cross-vendor
+            // override is NOT applied — the provider keeps its own/default model.
+            assertNotEquals("claude-3-5-sonnet-latest", opts.getModel(),
+                "cross-vendor model override must be ignored");
+            assertEquals(OpenAiChatOptions.DEFAULT_CHAT_MODEL, opts.getModel(),
+                "unresolved model falls back to the OpenAI SDK default (GA)");
         }
 
         @Test
@@ -131,7 +136,10 @@ class ProviderModelParamsTest {
                 "absent max_tokens must not be force-set");
             assertNull(opts.getTemperature(), "absent temperature must not be force-set");
             assertNull(opts.getTopP(), "absent top_p must not be force-set");
-            assertNull(opts.getModel(), "absent model must not be force-set");
+            // Spring AI GA: the options builder carries the vendor SDK default model
+            // when mesh resolves none (previously null). Mesh still does not force-set it.
+            assertEquals(OpenAiChatOptions.DEFAULT_CHAT_MODEL, opts.getModel(),
+                "absent model falls back to the OpenAI SDK default (GA), not force-set by mesh");
         }
     }
 
@@ -185,8 +193,12 @@ class ProviderModelParamsTest {
                 Map.of(LlmProviderHandler.OPTION_MODEL, "openai/gpt-4o"));
 
             ChatOptions opts = captor.getValue().getOptions();
-            assertNull(opts.getModel(),
-                "cross-vendor model override must be ignored — Anthropic keeps its own default model");
+            // Spring AI GA populates the vendor SDK default model on the options builder
+            // (previously null). The cross-vendor override is still NOT applied.
+            assertNotEquals("gpt-4o", opts.getModel(),
+                "cross-vendor model override must be ignored");
+            assertEquals(AnthropicChatOptions.DEFAULT_MODEL, opts.getModel(),
+                "unresolved model falls back to the Anthropic SDK default (GA)");
         }
     }
 
@@ -196,10 +208,9 @@ class ProviderModelParamsTest {
 
         private final GeminiHandler handler = new GeminiHandler();
 
-        // A plain mock(ChatModel.class) is NOT a VertexAiGeminiChatModel, so the
-        // handler takes the Google AI Studio (GenAI) branch and produces
-        // GoogleGenAiChatOptions. The Vertex branch needs the concrete
-        // VertexAiGeminiChatModel and is out of scope for this unit harness.
+        // Spring AI GA consolidated Google onto the single google-genai SDK, so the
+        // handler always produces GoogleGenAiChatOptions (the Vertex backend is now
+        // reached through google-genai backend config, not a separate options type).
 
         @Test
         @DisplayName("max_tokens→maxOutputTokens/temperature/top_p flow onto GoogleGenAiChatOptions")
@@ -264,8 +275,14 @@ class ProviderModelParamsTest {
             handler.generateWithTools(model, userMessages(), List.of(), null, null,
                 Map.of(LlmProviderHandler.OPTION_MODEL, "openai/gpt-4o"));
 
-            assertNull(captor.getValue().getOptions().getModel(),
-                "cross-vendor model override must be ignored — Gemini keeps its own default model");
+            ChatOptions opts = captor.getValue().getOptions();
+            // Spring AI GA populates the vendor SDK default model on the options builder
+            // (previously null). The cross-vendor override is still NOT applied — Gemini
+            // keeps its own/default model (non-null vendor default).
+            assertNotEquals("gpt-4o", opts.getModel(),
+                "cross-vendor model override must be ignored");
+            assertNotNull(opts.getModel(),
+                "unresolved model falls back to the Gemini SDK default (GA)");
         }
 
         @Test
@@ -294,13 +311,14 @@ class ProviderModelParamsTest {
 
             handler.generateWithMessages(model, userMessages(), Map.of());
 
-            // The handler now always builds a vendor-correct options object so the
-            // effective model can be set on every request. With no declared model
-            // and no override, the model stays null (Spring AI default applies).
+            // The handler always builds a vendor-correct options object so the effective
+            // model can be set on every request. With no declared model and no override,
+            // mesh sets nothing — and Spring AI GA leaves the builder's own SDK default
+            // model in place (previously null on M-series).
             ChatOptions opts = captor.getValue().getOptions();
             assertInstanceOf(GoogleGenAiChatOptions.class, opts);
-            assertNull(opts.getModel(),
-                "no declared model and no override → model stays null (Spring AI default)");
+            assertNotNull(opts.getModel(),
+                "no declared model and no override → Gemini SDK default applies (GA)");
         }
     }
 
