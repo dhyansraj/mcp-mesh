@@ -6,8 +6,6 @@ import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.google.genai.GoogleGenAiChatModel;
 import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 import org.springframework.ai.tool.ToolCallback;
-import org.springframework.ai.vertexai.gemini.VertexAiGeminiChatModel;
-import org.springframework.ai.vertexai.gemini.VertexAiGeminiChatOptions;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mock;
 
@@ -320,18 +318,6 @@ class GeminiHandlerTest {
     @Nested
     @DisplayName("buildToolNoExecuteOptions")
     class BuildToolNoExecuteOptionsTests {
-
-        @Test
-        @DisplayName("returns VertexAiGeminiChatOptions for VertexAiGeminiChatModel")
-        void returnsVertexOptionsForVertexChatModel() {
-            VertexAiGeminiChatModel mockModel = mock(VertexAiGeminiChatModel.class);
-            List<ToolCallback> callbacks = List.of();
-
-            ChatOptions opts = handler.buildToolNoExecuteOptions(mockModel, callbacks);
-
-            assertInstanceOf(VertexAiGeminiChatOptions.class, opts,
-                "Vertex chat model must receive VertexAiGeminiChatOptions to avoid ClassCastException");
-        }
 
         @Test
         @DisplayName("returns GoogleGenAiChatOptions for GoogleGenAiChatModel")

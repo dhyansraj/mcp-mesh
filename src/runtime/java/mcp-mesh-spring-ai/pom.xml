@@ -29,7 +29,7 @@
             <artifactId>mcp-mesh-spring-boot-starter</artifactId>
         </dependency>
 
-        <!-- Spring AI 2.0 (milestone release) -->
+        <!-- Spring AI 2.0 GA -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-model</artifactId>
@@ -55,17 +55,6 @@
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-model-google-genai</artifactId>
-            <version>${spring-ai.version}</version>
-            <optional>true</optional>
-        </dependency>
-        <!-- Vertex AI Gemini: needed at compile time so GeminiHandler can branch on
-             VertexAiGeminiChatModel/Options. The starter is pulled in by the consuming
-             agent (e.g., examples/java/vertex-ai-agent); here we only need the core
-             module for the instanceof check and options builder. Optional, mirroring
-             spring-ai-starter-model-google-genai above. -->
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-vertex-ai-gemini</artifactId>
             <version>${spring-ai.version}</version>
             <optional>true</optional>
         </dependency>

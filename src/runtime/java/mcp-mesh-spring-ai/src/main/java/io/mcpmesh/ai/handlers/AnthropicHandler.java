@@ -242,7 +242,7 @@ public class AnthropicHandler implements LlmProviderHandler {
             // Auto-execution mode: Use ChatClient which handles tool execution automatically
             return generateWithToolsAutoExecute(model, springMessages, tools, toolExecutor, formattedSystemPrompt, enforcedSchema, hintSchema, hintTools, options);
         } else {
-            // No-execution mode: Use model.call with internalToolExecutionEnabled(false)
+            // No-execution mode: raw model.call() returns tool_calls without executing them
             return generateWithToolsNoExecute(model, springMessages, tools, formattedSystemPrompt, enforcedSchema, hintSchema, hintTools, options);
         }
     }
@@ -321,7 +321,7 @@ public class AnthropicHandler implements LlmProviderHandler {
 
         // Add tools if present - Spring AI handles tool execution automatically
         if (!toolCallbacks.isEmpty()) {
-            requestSpec.toolCallbacks(toolCallbacks.toArray(new ToolCallback[0]));
+            requestSpec.tools(toolCallbacks.toArray(new ToolCallback[0]));
         }
 
         // Always build AnthropicChatOptions so the effective model (declared model or
@@ -344,7 +344,7 @@ public class AnthropicHandler implements LlmProviderHandler {
             }
         }
         applyModelParams(optionsBuilder, options);
-        requestSpec.options(optionsBuilder.build());
+        requestSpec.options(optionsBuilder);
 
         // Execute the request — if outputFormat was applied and the API rejects it,
         // retry with HINT-mode instructions instead of native output_format
@@ -365,7 +365,7 @@ public class AnthropicHandler implements LlmProviderHandler {
                 }
                 retrySpec.user(userContent);
                 if (!toolCallbacks.isEmpty()) {
-                    retrySpec.toolCallbacks(toolCallbacks.toArray(new ToolCallback[0]));
+                    retrySpec.tools(toolCallbacks.toArray(new ToolCallback[0]));
                 }
                 // No output_format applied — rely on HINT instructions. Still
                 // re-apply consumer-supplied model_params (max_tokens/temperature/
@@ -373,7 +373,7 @@ public class AnthropicHandler implements LlmProviderHandler {
                 // the rejected output_format.
                 AnthropicChatOptions.Builder retryOptions = AnthropicChatOptions.builder();
                 applyModelParams(retryOptions, options);
-                retrySpec.options(retryOptions.build());
+                retrySpec.options(retryOptions);
                 chatResponse = retrySpec.call().chatResponse();
             } else {
                 throw e;
@@ -391,9 +391,12 @@ public class AnthropicHandler implements LlmProviderHandler {
     /**
      * Generate with tools but WITHOUT executing them.
      *
-     * <p>Uses model.call() with internalToolExecutionEnabled(false) to get
-     * tool_calls back without auto-execution. This is used for mesh delegation
-     * where the consumer (not provider) executes tools.
+     * <p>Calls the raw {@link ChatModel#call(Prompt)} which, in Spring AI GA,
+     * returns the model's {@code tool_calls} WITHOUT auto-execution — tool
+     * execution now lives in a ChatClient-level advisor that is deliberately
+     * absent on this raw path. Tool callbacks are attached to the options only
+     * to advertise the tool schemas to the model. This is used for mesh
+     * delegation where the consumer (not provider) executes tools.
      */
     private LlmResponse generateWithToolsNoExecute(
             ChatModel model,
@@ -425,7 +428,6 @@ public class AnthropicHandler implements LlmProviderHandler {
 
                 AnthropicChatOptions.Builder optionsBuilder = AnthropicChatOptions.builder()
                     .toolCallbacks(toolCallbacks)
-                    .internalToolExecutionEnabled(false)
                     .outputSchema(schemaJson);
                 applyModelParams(optionsBuilder, options);
 
@@ -435,16 +437,14 @@ public class AnthropicHandler implements LlmProviderHandler {
                 log.warn("Failed to apply output_format for {}: {}, falling back to basic options",
                     outputSchema.name(), e.getMessage());
                 AnthropicChatOptions.Builder optionsBuilder = AnthropicChatOptions.builder()
-                    .toolCallbacks(toolCallbacks)
-                    .internalToolExecutionEnabled(false);
+                    .toolCallbacks(toolCallbacks);
                 applyModelParams(optionsBuilder, options);
                 prompt = new org.springframework.ai.chat.prompt.Prompt(messagesWithFormattedSystem, optionsBuilder.build());
             }
         } else {
             // No structured output needed — still apply model_params via AnthropicChatOptions.
             AnthropicChatOptions.Builder optionsBuilder = AnthropicChatOptions.builder()
-                .toolCallbacks(toolCallbacks)
-                .internalToolExecutionEnabled(false);
+                .toolCallbacks(toolCallbacks);
             applyModelParams(optionsBuilder, options);
             prompt = new org.springframework.ai.chat.prompt.Prompt(messagesWithFormattedSystem, optionsBuilder.build());
         }
@@ -478,8 +478,7 @@ public class AnthropicHandler implements LlmProviderHandler {
                 // consumer-supplied model_params so the retry matches the initial
                 // request minus the rejected output_format.
                 AnthropicChatOptions.Builder hintBuilder = AnthropicChatOptions.builder()
-                    .toolCallbacks(toolCallbacks)
-                    .internalToolExecutionEnabled(false);
+                    .toolCallbacks(toolCallbacks);
                 applyModelParams(hintBuilder, options);
                 prompt = new org.springframework.ai.chat.prompt.Prompt(hintMessages, hintBuilder.build());
 

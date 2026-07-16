@@ -25,8 +25,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * <ul>
  *   <li>{@code "claude"}, {@code "anthropic"} - Anthropic Claude models</li>
  *   <li>{@code "openai"}, {@code "gpt"} - OpenAI GPT models</li>
- *   <li>{@code "gemini"}, {@code "google"} - Google Gemini models (prefers AI Studio when both AI Studio + Vertex configured)</li>
- *   <li>{@code "vertex_ai"}, {@code "vertexai"} - Google Gemini via Vertex AI (IAM auth) — forced even if AI Studio is also configured</li>
+ *   <li>{@code "gemini"}, {@code "google"}, {@code "vertex_ai"}, {@code "vertexai"} -
+ *       Google Gemini models. In Spring AI 2.0 GA there is a single google-genai
+ *       ChatModel bean; the backend (AI Studio api-key vs GCP Vertex project/location)
+ *       is chosen purely by google-genai config, so all four aliases resolve to the
+ *       same {@code googleAiGeminiChatModel}.</li>
  * </ul>
  *
  * <h2>Configuration</h2>
@@ -34,8 +37,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * <ul>
  *   <li>{@code ANTHROPIC_API_KEY} - For Claude models</li>
  *   <li>{@code OPENAI_API_KEY} - For OpenAI models</li>
- *   <li>{@code GOOGLE_AI_GEMINI_API_KEY} - For Gemini AI Studio</li>
- *   <li>GCP ADC + {@code spring.ai.vertex.ai.gemini.project-id} + {@code spring.ai.vertex.ai.gemini.location} - For Gemini via Vertex AI</li>
+ *   <li>{@code spring.ai.google.genai.api-key} - For Gemini via AI Studio</li>
+ *   <li>GCP ADC + google-genai project/location config - For Gemini via the Vertex backend</li>
  * </ul>
  *
  * <p>Or in application.yml:
@@ -46,21 +49,18 @@ import java.util.concurrent.ConcurrentHashMap;
  *       api-key: ${ANTHROPIC_API_KEY}
  *     openai:
  *       api-key: ${OPENAI_API_KEY}
- *     vertex:
- *       ai:
- *         gemini:
- *           project-id: ${GOOGLE_PROJECT_ID}
- *           location: us-central1
+ *     google:
+ *       genai:
+ *         api-key: ${GOOGLE_AI_GEMINI_API_KEY}
  * </pre>
  *
- * <p>Note: Spring AI's Vertex AI Gemini auto-config does not key off any
- * fixed env var name itself — it looks at {@code spring.ai.vertex.ai.gemini.*}
- * properties (which Spring Boot can in turn populate from env vars like
- * {@code SPRING_AI_VERTEX_AI_GEMINI_PROJECT_ID}). The {@code GOOGLE_PROJECT_ID}
- * shorthand only works because the example {@code application.properties}
- * substitutes it. Authentication itself uses Google Application Default
+ * <p>Note: The single google-genai ChatModel bean serves both Gemini backends.
+ * Supplying {@code spring.ai.google.genai.api-key} selects the AI Studio backend;
+ * configuring the google-genai project/location (with GCP Application Default
  * Credentials, so {@code GOOGLE_APPLICATION_CREDENTIALS} or {@code gcloud auth
- * application-default login} are still required.
+ * application-default login}) selects the Vertex backend. The {@code vertex_ai}/
+ * {@code vertexai} aliases are just naming conveniences — they resolve to the same
+ * bean and do not force a particular backend.
  */
 public class SpringAiLlmProvider {
 
@@ -73,9 +73,6 @@ public class SpringAiLlmProvider {
 
     @Autowired(required = false)
     private ChatModel openAiChatModel;
-
-    @Autowired(required = false)
-    private ChatModel vertexAiGeminiChatModel;
 
     @Autowired(required = false)
     private ChatModel googleAiGeminiChatModel;
@@ -102,8 +99,7 @@ public class SpringAiLlmProvider {
         return switch (normalizedProvider) {
             case "claude", "anthropic" -> anthropicChatModel != null;
             case "openai", "gpt" -> openAiChatModel != null;
-            case "gemini", "google" -> vertexAiGeminiChatModel != null || googleAiGeminiChatModel != null;
-            case "vertex_ai" -> vertexAiGeminiChatModel != null;
+            case "gemini", "google", "vertex_ai" -> googleAiGeminiChatModel != null;
             default -> false;
         };
     }
@@ -257,28 +253,18 @@ public class SpringAiLlmProvider {
                 }
                 yield openAiChatModel;
             }
-            case "gemini", "google" -> {
-                // Prefer Google AI Gemini (API key based, like Python), fallback to Vertex AI
+            case "gemini", "google", "vertex_ai" -> {
+                // Single google-genai bean in Spring AI 2.0 GA. The backend
+                // (AI Studio vs GCP Vertex) is chosen by google-genai config, so
+                // vertex_ai/vertexai are aliases for the same model.
                 if (googleAiGeminiChatModel != null) {
                     yield googleAiGeminiChatModel;
                 }
-                if (vertexAiGeminiChatModel != null) {
-                    yield vertexAiGeminiChatModel;
-                }
                 throw new IllegalStateException("Gemini ChatModel not configured. " +
-                    "Add spring-ai-google-genai dependency and set GOOGLE_AI_GEMINI_API_KEY, " +
-                    "or add spring-ai-vertex-ai-gemini dependency and configure GCP credentials");
-            }
-            case "vertex_ai" -> {
-                // Explicit Vertex AI: do NOT fall back to AI Studio even if both are configured.
-                // Use this when you specifically need IAM auth, Provisioned Throughput, VPC-SC, etc.
-                if (vertexAiGeminiChatModel != null) {
-                    yield vertexAiGeminiChatModel;
-                }
-                throw new IllegalStateException("Vertex AI Gemini ChatModel not configured. " +
-                    "Add spring-ai-starter-model-vertex-ai-gemini dependency and configure " +
-                    "spring.ai.vertex.ai.gemini.project-id + spring.ai.vertex.ai.gemini.location " +
-                    "(plus GCP Application Default Credentials).");
+                    "Add the spring-ai-starter-model-google-genai dependency and set " +
+                    "spring.ai.google.genai.api-key (AI Studio backend), or configure the " +
+                    "google-genai project/location with GCP Application Default Credentials " +
+                    "(Vertex backend).");
             }
             default -> {
                 // Try anthropic as default fallback
@@ -293,10 +279,6 @@ public class SpringAiLlmProvider {
                 if (googleAiGeminiChatModel != null) {
                     log.warn("Unknown provider '{}', falling back to Gemini (Google AI)", provider);
                     yield googleAiGeminiChatModel;
-                }
-                if (vertexAiGeminiChatModel != null) {
-                    log.warn("Unknown provider '{}', falling back to Gemini (Vertex AI)", provider);
-                    yield vertexAiGeminiChatModel;
                 }
                 throw new IllegalArgumentException("No ChatModel available for provider: " + provider);
             }
@@ -343,25 +325,17 @@ public class SpringAiLlmProvider {
                 }
                 yield openAiChatModel;
             }
-            case "gemini", "google" -> {
-                // Prefer Google AI Gemini (API key based), fallback to Vertex AI
+            case "gemini", "google", "vertex_ai" -> {
+                // Single google-genai bean in Spring AI 2.0 GA; vertex_ai/vertexai
+                // are aliases for the same model (backend chosen by google-genai config).
                 if (googleAiGeminiChatModel != null) {
                     yield googleAiGeminiChatModel;
                 }
-                if (vertexAiGeminiChatModel != null) {
-                    yield vertexAiGeminiChatModel;
-                }
                 throw new IllegalStateException(
-                    "Gemini ChatModel not configured. Add spring-ai-google-genai and set GOOGLE_AI_GEMINI_API_KEY");
-            }
-            case "vertex_ai" -> {
-                if (vertexAiGeminiChatModel != null) {
-                    yield vertexAiGeminiChatModel;
-                }
-                throw new IllegalStateException(
-                    "Vertex AI Gemini ChatModel not configured. " +
-                    "Add spring-ai-starter-model-vertex-ai-gemini and configure " +
-                    "spring.ai.vertex.ai.gemini.project-id + spring.ai.vertex.ai.gemini.location.");
+                    "Gemini ChatModel not configured. Add the spring-ai-starter-model-google-genai " +
+                    "dependency and set spring.ai.google.genai.api-key (AI Studio backend), or " +
+                    "configure the google-genai project/location with GCP Application Default " +
+                    "Credentials (Vertex backend).");
             }
             default -> throw new IllegalArgumentException("Unknown LLM provider: " + provider +
                 ". Supported: claude, anthropic, openai, gpt, gemini, google, vertex_ai");

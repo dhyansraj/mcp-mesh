@@ -12,8 +12,6 @@ import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
-import org.springframework.ai.vertexai.gemini.VertexAiGeminiChatModel;
-import org.springframework.ai.vertexai.gemini.VertexAiGeminiChatOptions;
 
 import java.util.*;
 
@@ -40,7 +38,6 @@ import java.util.*;
 public class GeminiHandler implements LlmProviderHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GeminiHandler.class);
-    private static final tools.jackson.databind.ObjectMapper MAPPER = new tools.jackson.databind.ObjectMapper();
 
     @Override
     public String getVendor() {
@@ -58,7 +55,7 @@ public class GeminiHandler implements LlmProviderHandler {
      * Google AI Studio ({@code gemini/...}) and Vertex AI ({@code vertex_ai/...})
      * model strings through this single {@code GeminiHandler}, so a
      * {@code vertex_ai/}-qualified override is same-provider and must be accepted
-     * on BOTH the Vertex and GenAI option branches. Kept separate from the public
+     * on the google-genai options builder. Kept separate from the public
      * {@link #getAliases()} (which other surfaces assert returns exactly
      * {@code ["google"]}) so widening override-matching doesn't change that
      * contract. A genuinely cross-vendor override (e.g. {@code openai/...}) is
@@ -118,8 +115,7 @@ public class GeminiHandler implements LlmProviderHandler {
         // override) is set on the request — without it the request falls through to
         // Spring AI's default Gemini model. Consumer-supplied model_params
         // (max_tokens→maxOutputTokens/temperature/top_p) are applied here too.
-        // buildModelParamOptions branches Vertex vs GenAI to match the chat model.
-        ChatOptions paramOptions = buildModelParamOptions(model, options);
+        ChatOptions paramOptions = buildModelParamOptions(options).build();
         Prompt prompt = new Prompt(springMessages, paramOptions);
         ChatResponse response = model.call(prompt);
 
@@ -183,7 +179,7 @@ public class GeminiHandler implements LlmProviderHandler {
             // Auto-execution mode: Use ChatClient which handles tool execution automatically
             return generateWithToolsAutoExecute(model, springMessages, tools, toolExecutor, formattedSystemPrompt, outputSchema, options);
         } else {
-            // No-execution mode: Use model.call with internalToolExecutionEnabled(false)
+            // No-execution mode: raw model.call() returns tool_calls without executing them
             return generateWithToolsNoExecute(model, springMessages, tools, formattedSystemPrompt, outputSchema, options);
         }
     }
@@ -227,18 +223,16 @@ public class GeminiHandler implements LlmProviderHandler {
 
         // Add tools if present
         if (!toolCallbacks.isEmpty()) {
-            requestSpec.toolCallbacks(toolCallbacks.toArray(new ToolCallback[0]));
+            requestSpec.tools(toolCallbacks.toArray(new ToolCallback[0]));
         }
 
         // Don't use applyResponseFormat - Spring AI has issues with Gemini responseSchema
         // Structured output is handled via prompt-based hints in formatSystemPrompt()
 
-        // Always attach a vendor-correct Gemini options object so the effective
-        // model (declared model or a vendor-matched per-call override) is set on
-        // EVERY request, plus any consumer-supplied model_params (max_tokens/
-        // temperature/top_p). The concrete options class must match the underlying
-        // chat model (see buildModelParamOptions).
-        requestSpec.options(buildModelParamOptions(model, options));
+        // Always attach a Gemini options object so the effective model (declared
+        // model or a vendor-matched per-call override) is set on EVERY request,
+        // plus any consumer-supplied model_params (max_tokens/temperature/top_p).
+        requestSpec.options(buildModelParamOptions(options));
 
         // Execute the request
         ChatResponse chatResponse = requestSpec.call().chatResponse();
@@ -254,9 +248,12 @@ public class GeminiHandler implements LlmProviderHandler {
     /**
      * Generate with tools but WITHOUT executing them.
      *
-     * <p>Uses model.call() with internalToolExecutionEnabled(false) to get
-     * tool_calls back without auto-execution. This is used for mesh delegation
-     * where the consumer (not provider) executes tools.
+     * <p>Calls the raw {@link ChatModel#call(Prompt)} which, in Spring AI GA,
+     * returns the model's {@code tool_calls} WITHOUT auto-execution — tool
+     * execution now lives in a ChatClient-level advisor that is deliberately
+     * absent on this raw path. Tool callbacks are attached to the options only
+     * to advertise the tool schemas to the model. This is used for mesh
+     * delegation where the consumer (not provider) executes tools.
      */
     private LlmResponse generateWithToolsNoExecute(
             ChatModel model,
@@ -272,10 +269,8 @@ public class GeminiHandler implements LlmProviderHandler {
         // Create tool callbacks for schema only (no execution)
         List<ToolCallback> toolCallbacks = createToolCallbacksForSchema(tools);
 
-        // Build Gemini-specific chat options with tool execution DISABLED.
-        // The concrete options class must match the underlying ChatModel: Vertex's
-        // chat model does an explicit checkcast to VertexAiGeminiChatOptions and
-        // throws ClassCastException if given GoogleGenAiChatOptions (and vice versa).
+        // Build Gemini chat options. Tools are attached to advertise their schema;
+        // the raw model.call() below does not execute them in Spring AI GA.
         // Don't use responseSchema - Spring AI has issues with Gemini responseSchema
         // Structured output is handled via prompt-based hints in formatSystemPrompt()
         log.debug("Using prompt-based JSON hints for structured output (not responseSchema)");
@@ -321,55 +316,15 @@ public class GeminiHandler implements LlmProviderHandler {
         return new LlmResponse(content, toolCalls, extractUsage(response));
     }
 
-    // Reflection-based lookup of Vertex AI chat model class. The
-    // spring-ai-vertex-ai-gemini dependency is declared <optional>true</optional>
-    // in mcp-mesh-spring-ai/pom.xml, so consumers using only AI Studio
-    // (spring-ai-starter-model-google-genai) won't have these classes on their
-    // runtime classpath. Resolving via Class.forName lets us safely detect
-    // availability without an `instanceof` check that would trigger a
-    // NoClassDefFoundError on consumer classpaths missing the dep.
-    //
-    // The compile-time imports of VertexAiGeminiChatModel/VertexAiGeminiChatOptions
-    // are intentional and benign: imports are erased to fully-qualified bytecode
-    // references, and the JVM only resolves a referenced class when a method
-    // *body* mentioning it is first invoked. By isolating Vertex API calls into
-    // buildVertexOptions(), the class load is deferred until we've already
-    // verified the class is present (VERTEX_OPTIONS_CLASS != null).
-    private static final Class<?> VERTEX_CHAT_MODEL_CLASS;
-    private static final Class<?> VERTEX_OPTIONS_CLASS;
-    static {
-        Class<?> modelClass = null;
-        Class<?> optionsClass = null;
-        try {
-            modelClass = Class.forName("org.springframework.ai.vertexai.gemini.VertexAiGeminiChatModel");
-            optionsClass = Class.forName("org.springframework.ai.vertexai.gemini.VertexAiGeminiChatOptions");
-        } catch (ClassNotFoundException e) {
-            // Vertex AI starter not on classpath -- fine, AI Studio path will be used.
-            // Logged at debug level so we don't spam stdout for normal AI-Studio-only deployments.
-            log.debug("spring-ai-vertex-ai-gemini not on classpath; vertex_ai routing disabled");
-        }
-        VERTEX_CHAT_MODEL_CLASS = modelClass;
-        VERTEX_OPTIONS_CLASS = optionsClass;
-    }
-
     /**
-     * Build provider-specific {@link ChatOptions} for the no-tool-execution path.
+     * Build {@link GoogleGenAiChatOptions} for the no-tool-execution path.
      *
-     * <p>Mesh delegation routes both {@code gemini/...} (Google AI Studio) and
-     * {@code vertex_ai/...} model strings through this {@code GeminiHandler}, but
-     * the underlying {@link ChatModel} differs:
-     * <ul>
-     *   <li>{@code GoogleGenAiChatModel} accepts {@link GoogleGenAiChatOptions}</li>
-     *   <li>{@code VertexAiGeminiChatModel} accepts {@code VertexAiGeminiChatOptions}</li>
-     * </ul>
-     * Each chat model does an explicit checkcast on the options it receives, so
-     * passing the wrong type throws {@link ClassCastException} at request time.
-     * Branch on the chat model type to pick the matching options class.
-     *
-     * <p>The Vertex branch is guarded by {@link #VERTEX_CHAT_MODEL_CLASS} being
-     * non-null, which is only true when {@code spring-ai-vertex-ai-gemini} is on
-     * the consumer's classpath. AI-Studio-only consumers will skip the branch
-     * and never trigger a class load of the Vertex types.
+     * <p>Spring AI GA consolidated Google support onto the single google-genai SDK
+     * ({@link org.springframework.ai.google.genai.GoogleGenAiChatModel}); the Vertex
+     * backend is reached through the same SDK via project/location backend config
+     * ({@code spring.ai.google.genai.*}), so a single options type serves both
+     * Google AI Studio and Vertex-backed routing. Tools are attached to advertise
+     * their schema only — the raw {@code model.call()} does not execute them.
      *
      * <p>Package-private for testability.
      */
@@ -378,42 +333,34 @@ public class GeminiHandler implements LlmProviderHandler {
     }
 
     /**
-     * Build provider-specific {@link ChatOptions} for the no-tool-execution path,
+     * Build {@link GoogleGenAiChatOptions} for the no-tool-execution path,
      * applying any consumer-supplied {@code model_params}
      * (max_tokens→maxOutputTokens, temperature, top_p, vendor-matched model).
      */
     ChatOptions buildToolNoExecuteOptions(ChatModel chatModel, List<ToolCallback> toolCallbacks,
                                           Map<String, Object> options) {
-        if (VERTEX_CHAT_MODEL_CLASS != null && VERTEX_CHAT_MODEL_CLASS.isInstance(chatModel)) {
-            return buildVertexOptions(toolCallbacks, options);
-        }
         GoogleGenAiChatOptions.Builder builder = GoogleGenAiChatOptions.builder()
-            .toolCallbacks(toolCallbacks)
-            .internalToolExecutionEnabled(false);
+            .toolCallbacks(toolCallbacks);
         applyGoogleGenAiModelParams(builder, options);
         return builder.build();
     }
 
     /**
-     * Build a vendor-correct Gemini options object carrying the effective model
+     * Build a {@link GoogleGenAiChatOptions} builder carrying the effective model
      * (declared model or a vendor-matched per-call override) and any
      * consumer-supplied {@code model_params} (no tool callbacks) for the
      * auto-execute (ChatClient) path, where tools are attached via the request
      * spec rather than the options object.
      *
-     * <p>Always returns a non-null options object so the effective model is set on
-     * EVERY request — without it the request falls through to Spring AI's default
-     * Gemini model.
+     * <p>Returns a builder so it can be passed directly to the GA ChatClient
+     * {@code .options(ChatOptions.Builder)} overload, or {@code .build()}ed for
+     * the raw {@code Prompt} path. The effective model is set on EVERY request —
+     * without it the request falls through to Spring AI's default Gemini model.
      */
-    private ChatOptions buildModelParamOptions(ChatModel chatModel, Map<String, Object> options) {
-        if (VERTEX_CHAT_MODEL_CLASS != null && VERTEX_CHAT_MODEL_CLASS.isInstance(chatModel)) {
-            VertexAiGeminiChatOptions.Builder builder = VertexAiGeminiChatOptions.builder();
-            applyVertexModelParams(builder, options);
-            return builder.build();
-        }
+    private GoogleGenAiChatOptions.Builder buildModelParamOptions(Map<String, Object> options) {
         GoogleGenAiChatOptions.Builder builder = GoogleGenAiChatOptions.builder();
         applyGoogleGenAiModelParams(builder, options);
-        return builder.build();
+        return builder;
     }
 
     /**
@@ -442,82 +389,6 @@ public class GeminiHandler implements LlmProviderHandler {
         if (eff != null) {
             builder.model(eff);
             log.debug("GeminiHandler: applied model '{}'", eff);
-        }
-    }
-
-    /**
-     * Isolated method that touches the Vertex options class.
-     *
-     * <p>Only called when {@link #VERTEX_CHAT_MODEL_CLASS} != null (verified at
-     * the call site in {@link #buildToolNoExecuteOptions}), so the JVM's lazy
-     * class resolution of {@code VertexAiGeminiChatOptions} when this method
-     * body is first executed is guaranteed to succeed -- the class IS on the
-     * classpath by the time we get here.
-     */
-    private ChatOptions buildVertexOptions(List<ToolCallback> toolCallbacks, Map<String, Object> options) {
-        VertexAiGeminiChatOptions.Builder builder = VertexAiGeminiChatOptions.builder()
-            .toolCallbacks(toolCallbacks)
-            .internalToolExecutionEnabled(false);
-        applyVertexModelParams(builder, options);
-        return builder.build();
-    }
-
-    /**
-     * Apply {@code model_params} to a Vertex AI Gemini options builder. Mirrors
-     * {@link #applyGoogleGenAiModelParams} but on the Vertex builder type (the
-     * concrete class differs and the chat model does an explicit checkcast).
-     */
-    private void applyVertexModelParams(VertexAiGeminiChatOptions.Builder builder, Map<String, Object> options) {
-        Integer maxTokens = LlmProviderHandler.maxTokensOption(options);
-        if (maxTokens != null) {
-            builder.maxOutputTokens(maxTokens);
-        }
-        Double temperature = LlmProviderHandler.temperatureOption(options);
-        if (temperature != null) {
-            builder.temperature(temperature);
-        }
-        Double topP = LlmProviderHandler.topPOption(options);
-        if (topP != null) {
-            builder.topP(topP);
-        }
-        // Set the effective model on EVERY request (see applyGoogleGenAiModelParams).
-        String eff = LlmProviderHandler.effectiveModel(options, getVendor(), MODEL_OVERRIDE_ALIASES);
-        if (eff != null) {
-            builder.model(eff);
-            log.debug("GeminiHandler (vertex): applied model '{}'", eff);
-        }
-    }
-
-    /**
-     * Apply response format for structured output.
-     *
-     * <p>DISABLED: Spring AI 2.0.0-M2 has a bug where setting responseMimeType +
-     * responseSchema alongside tools causes tool arguments to become empty objects ({}).
-     * This is NOT a Gemini API issue -- the same calls work via LiteLLM and Vercel SDK.
-     * Structured output is handled via prompt-based hints in formatSystemPrompt() instead.
-     *
-     * <p>This method is preserved for future use when Spring AI fixes the bug.
-     * See: Spring AI PR #4977 for related work.
-     */
-    @SuppressWarnings("unused")
-    private void applyResponseFormat(ChatClient.ChatClientRequestSpec requestSpec, OutputSchema outputSchema) {
-        try {
-            // Make schema strict (add additionalProperties: false, all properties required)
-            Map<String, Object> strictSchema = outputSchema.makeStrict(true);
-
-            // Convert schema to JSON string for Gemini
-            String schemaJson = MAPPER
-                .writeValueAsString(strictSchema);
-
-            GoogleGenAiChatOptions geminiOptions = GoogleGenAiChatOptions.builder()
-                .responseMimeType("application/json")
-                .responseSchema(schemaJson)
-                .build();
-
-            requestSpec.options(geminiOptions);
-            log.debug("Applied Gemini response format with schema: {}", outputSchema.name());
-        } catch (Exception e) {
-            log.warn("Failed to apply response format for {}: {}", outputSchema.name(), e.getMessage());
         }
     }
 
