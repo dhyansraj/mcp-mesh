@@ -1572,3 +1572,758 @@ class TestIsFallbackLogged:
 
         openai_native.log_fallback_once()
         assert openai_native.is_fallback_logged() is True
+
+
+# ---------------------------------------------------------------------------
+# Responses API routing (issue #1334)
+# ---------------------------------------------------------------------------
+
+
+class TestOpenAiWantsResponsesApi:
+    """Reasoning models WITH tools route to the Responses API; everything else
+    (gpt-4o, gpt-5-chat, no-tools reasoning calls) stays on chat.completions."""
+
+    _TOOLS = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Look up weather.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+
+    @pytest.mark.parametrize(
+        "model,has_tools,expected",
+        [
+            ("gpt-5.6-terra", True, True),        # reasoning + tools → Responses
+            ("gpt-5.6-terra", False, False),      # reasoning, no tools → chat
+            ("gpt-5.6-chat", True, False),        # chat variant → chat
+            ("o3-mini", True, True),              # o-series + tools → Responses
+            ("gpt-4o", True, False),              # non-reasoning → chat
+            ("openai/gpt-5.6-terra", True, True), # vendor-prefixed reasoning
+        ],
+    )
+    def test_routing_table(self, model, has_tools, expected):
+        request_params = {"messages": [{"role": "user", "content": "Hi."}]}
+        if has_tools:
+            request_params["tools"] = self._TOOLS
+        assert (
+            openai_native._openai_wants_responses_api(model, request_params)
+            is expected
+        )
+
+    def test_empty_tools_list_stays_on_chat(self):
+        # An empty tools list is falsy — no 400 risk, stay on chat.completions.
+        assert (
+            openai_native._openai_wants_responses_api(
+                "gpt-5.6-terra", {"tools": []}
+            )
+            is False
+        )
+
+    def test_reasoning_effort_none_stays_on_chat(self):
+        """``reasoning_effort="none"`` is OpenAI's documented way to keep a
+        reasoning model on chat.completions with tools (valid there). It must
+        NOT route to Responses — the builder would emit
+        ``reasoning={"effort":"none"}`` which Responses rejects."""
+        assert (
+            openai_native._openai_wants_responses_api(
+                "gpt-5.6-terra", {"tools": self._TOOLS, "reasoning_effort": "none"}
+            )
+            is False
+        )
+
+    @pytest.mark.parametrize("effort", [None, "low", "medium", "high"])
+    def test_reasoning_effort_non_none_routes_to_responses(self, effort):
+        """Absent or non-"none" reasoning_effort on a reasoning model + tools
+        still routes to Responses."""
+        params = {"tools": self._TOOLS}
+        if effort is not None:
+            params["reasoning_effort"] = effort
+        assert (
+            openai_native._openai_wants_responses_api("gpt-5.6-terra", params)
+            is True
+        )
+
+
+# ---------------------------------------------------------------------------
+# _build_responses_kwargs — chat.completions shape → Responses shape (#1334)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildResponsesKwargs:
+    def _build(self, model="openai/gpt-5.6-terra", **params):
+        request_params = {
+            "messages": [{"role": "user", "content": "Hi."}],
+            **params,
+        }
+        return openai_native._build_responses_kwargs(request_params, model=model)
+
+    def test_strips_model_prefix(self):
+        kwargs = self._build()
+        assert kwargs["model"] == "gpt-5.6-terra"
+
+    def test_user_message_becomes_input_item(self):
+        kwargs = self._build()
+        assert kwargs["input"] == [{"role": "user", "content": "Hi."}]
+
+    def test_system_message_becomes_instructions(self):
+        kwargs = openai_native._build_responses_kwargs(
+            {
+                "messages": [
+                    {"role": "system", "content": "You are helpful."},
+                    {"role": "user", "content": "Hi."},
+                ]
+            },
+            model="openai/gpt-5.6-terra",
+        )
+        assert kwargs["instructions"] == "You are helpful."
+        assert kwargs["input"] == [{"role": "user", "content": "Hi."}]
+
+    def test_tool_schema_flattened(self):
+        kwargs = self._build(
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Look up weather.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"city": {"type": "string"}},
+                        },
+                    },
+                }
+            ]
+        )
+        assert kwargs["tools"] == [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Look up weather.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                },
+            }
+        ]
+
+    def test_tool_choice_dict_flattened(self):
+        kwargs = self._build(
+            tool_choice={"type": "function", "function": {"name": "get_weather"}}
+        )
+        assert kwargs["tool_choice"] == {"type": "function", "name": "get_weather"}
+
+    @pytest.mark.parametrize("choice", ["auto", "none", "required"])
+    def test_tool_choice_strings_pass_through(self, choice):
+        kwargs = self._build(tool_choice=choice)
+        assert kwargs["tool_choice"] == choice
+
+    def test_reasoning_effort_translated(self):
+        kwargs = self._build(reasoning_effort="low")
+        assert kwargs["reasoning"] == {"effort": "low"}
+
+    def test_response_format_json_schema_translated(self):
+        kwargs = self._build(
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "Weather",
+                    "schema": {"type": "object", "properties": {}},
+                    "strict": True,
+                },
+            }
+        )
+        assert kwargs["text"] == {
+            "format": {
+                "type": "json_schema",
+                "name": "Weather",
+                "schema": {"type": "object", "properties": {}},
+                "strict": True,
+            }
+        }
+
+    def test_max_tokens_becomes_max_output_tokens(self):
+        kwargs = self._build(max_tokens=256)
+        assert kwargs["max_output_tokens"] == 256
+        assert "max_tokens" not in kwargs
+
+    def test_max_completion_tokens_becomes_max_output_tokens(self):
+        kwargs = self._build(max_completion_tokens=512)
+        assert kwargs["max_output_tokens"] == 512
+
+    def test_max_completion_tokens_wins_over_max_tokens(self):
+        kwargs = self._build(max_tokens=256, max_completion_tokens=512)
+        assert kwargs["max_output_tokens"] == 512
+
+    def test_temperature_and_top_p_omitted(self):
+        kwargs = self._build(temperature=0.7, top_p=0.9)
+        assert "temperature" not in kwargs
+        assert "top_p" not in kwargs
+
+    def test_store_explicitly_false(self):
+        """``responses.create`` defaults ``store=true`` (30-day server-side
+        persistence); the builder MUST set it False to match the chat path's
+        no-persistence behavior."""
+        kwargs = self._build()
+        assert kwargs["store"] is False
+
+    def test_unknown_kwarg_warns_not_forwarded(self, caplog):
+        import logging
+
+        openai_native._reset_unsupported_kwargs_dedupe()
+        with caplog.at_level(logging.WARNING):
+            kwargs = self._build(some_litellm_only_knob=1)
+        assert "some_litellm_only_knob" not in kwargs
+        assert any(
+            "some_litellm_only_knob" in r.message
+            for r in caplog.records
+            if r.levelno == logging.WARNING
+        )
+
+    def test_unknown_kwarg_warn_labels_responses_endpoint(self, caplog):
+        """The leftover-kwarg WARN on the Responses path must name
+        ``openai.responses.create`` — NOT the chat.completions endpoint."""
+        import logging
+
+        openai_native._reset_unsupported_kwargs_dedupe()
+        with caplog.at_level(logging.WARNING, logger=openai_native.logger.name):
+            self._build(another_litellm_knob=1)
+        warn_msgs = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelname == "WARNING" and "another_litellm_knob" in r.getMessage()
+        ]
+        assert warn_msgs, "expected a WARN for the dropped kwarg"
+        assert all("openai.responses.create" in m for m in warn_msgs)
+        assert not any("chat.completions" in m for m in warn_msgs)
+
+    def test_multi_turn_history_remap_preserves_call_id(self):
+        """Iteration 2+: prior assistant tool_calls → function_call items and
+        role:tool results → function_call_output items, with call_id preserved
+        exactly so calls and outputs pair correctly."""
+        messages = [
+            {"role": "user", "content": "Weather in Paris?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_abc123",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city": "Paris"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_abc123",
+                "content": '{"temp": 20}',
+            },
+        ]
+        kwargs = openai_native._build_responses_kwargs(
+            {"messages": messages}, model="openai/gpt-5.6-terra"
+        )
+        items = kwargs["input"]
+        # user item, function_call item, function_call_output item
+        fc = next(i for i in items if i.get("type") == "function_call")
+        fco = next(i for i in items if i.get("type") == "function_call_output")
+        assert fc["call_id"] == "call_abc123"
+        assert fc["name"] == "get_weather"
+        assert fc["arguments"] == '{"city": "Paris"}'
+        assert fco["call_id"] == "call_abc123"
+        assert fco["output"] == '{"temp": 20}'
+        # call_id pairs the two items.
+        assert fc["call_id"] == fco["call_id"]
+
+    def test_assistant_text_and_tool_calls_both_emitted(self):
+        messages = [
+            {
+                "role": "assistant",
+                "content": "Let me check.",
+                "tool_calls": [
+                    {
+                        "id": "call_x",
+                        "type": "function",
+                        "function": {"name": "f", "arguments": "{}"},
+                    }
+                ],
+            },
+        ]
+        kwargs = openai_native._build_responses_kwargs(
+            {"messages": messages}, model="openai/gpt-5.6-terra"
+        )
+        items = kwargs["input"]
+        assert {"role": "assistant", "content": "Let me check."} in items
+        assert any(i.get("type") == "function_call" for i in items)
+
+    def test_string_content_passes_through_unchanged(self):
+        """Plain-string content (the common case) is forwarded verbatim."""
+        kwargs = self._build()
+        assert kwargs["input"] == [{"role": "user", "content": "Hi."}]
+
+    def test_user_text_part_array_translated_to_input_text(self):
+        """A chat-style content-part array on a user turn is translated:
+        ``{"type":"text"}`` → ``{"type":"input_text"}`` (Responses shape)."""
+        kwargs = openai_native._build_responses_kwargs(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Hello"},
+                            {"type": "text", "text": "world"},
+                        ],
+                    }
+                ]
+            },
+            model="openai/gpt-5.6-terra",
+        )
+        assert kwargs["input"] == [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Hello"},
+                    {"type": "input_text", "text": "world"},
+                ],
+            }
+        ]
+
+    def test_assistant_text_part_array_translated_to_output_text(self):
+        """Assistant content parts use ``output_text`` (not ``input_text``)."""
+        kwargs = openai_native._build_responses_kwargs(
+            {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "Sure thing."}],
+                    }
+                ]
+            },
+            model="openai/gpt-5.6-terra",
+        )
+        assert {
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Sure thing."}],
+        } in kwargs["input"]
+
+    def test_image_part_array_raises_value_error(self):
+        """An image (or any non-text) content part raises a clear ValueError
+        rather than forwarding an untranslated shape that yields a cryptic
+        OpenAI 400."""
+        with pytest.raises(ValueError) as exc_info:
+            openai_native._build_responses_kwargs(
+                {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "What is this?"},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": "https://x/y.png"},
+                                },
+                            ],
+                        }
+                    ]
+                },
+                model="openai/gpt-5.6-terra",
+            )
+        msg = str(exc_info.value)
+        assert "multimodal image content" in msg
+        assert "non-reasoning model" in msg
+
+    def test_tool_call_arguments_none_coerced_to_empty_string(self):
+        """A stored ``arguments`` of explicit ``None`` must become ``""`` —
+        Responses expects a string on function_call items."""
+        kwargs = openai_native._build_responses_kwargs(
+            {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_n",
+                                "type": "function",
+                                "function": {"name": "f", "arguments": None},
+                            }
+                        ],
+                    }
+                ]
+            },
+            model="openai/gpt-5.6-terra",
+        )
+        fc = next(i for i in kwargs["input"] if i.get("type") == "function_call")
+        assert fc["arguments"] == ""
+
+
+# ---------------------------------------------------------------------------
+# _adapt_responses_response — Responses Response → litellm-shape _Response
+# ---------------------------------------------------------------------------
+
+
+def _make_responses_response(
+    *,
+    output=None,
+    input_tokens=11,
+    output_tokens=5,
+    model="gpt-5.6-terra",
+    status=None,
+    incomplete_details=None,
+):
+    """Build a fake openai Responses ``Response``-like object (dicts for the
+    output items — the adapter reads both attrs and dict keys via _rget)."""
+    usage = SimpleNamespace(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
+    return SimpleNamespace(
+        output=output or [],
+        usage=usage,
+        model=model,
+        status=status,
+        incomplete_details=incomplete_details,
+    )
+
+
+class TestAdaptResponsesResponse:
+    def test_text_message_becomes_content(self):
+        raw = _make_responses_response(
+            output=[
+                {"type": "reasoning", "summary": []},
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "Hello there."}],
+                },
+            ]
+        )
+        resp = openai_native._adapt_responses_response(raw)
+        assert resp.choices[0].message.content == "Hello there."
+        assert resp.choices[0].message.tool_calls is None
+        assert resp.choices[0].finish_reason == "stop"
+
+    def test_function_call_becomes_tool_call(self):
+        raw = _make_responses_response(
+            output=[
+                {
+                    "type": "function_call",
+                    "call_id": "call_zzz",
+                    "name": "get_weather",
+                    "arguments": '{"city": "Paris"}',
+                }
+            ]
+        )
+        resp = openai_native._adapt_responses_response(raw)
+        tcs = resp.choices[0].message.tool_calls
+        assert len(tcs) == 1
+        assert tcs[0].id == "call_zzz"
+        assert tcs[0].function.name == "get_weather"
+        assert tcs[0].function.arguments == '{"city": "Paris"}'
+        assert resp.choices[0].finish_reason == "tool_calls"
+
+    def test_reasoning_items_ignored_for_content(self):
+        raw = _make_responses_response(
+            output=[{"type": "reasoning", "summary": [{"text": "thinking..."}]}]
+        )
+        resp = openai_native._adapt_responses_response(raw)
+        assert resp.choices[0].message.content is None
+
+    def test_usage_mapped_from_input_output_tokens(self):
+        raw = _make_responses_response(input_tokens=100, output_tokens=42)
+        resp = openai_native._adapt_responses_response(raw)
+        assert resp.usage.prompt_tokens == 100
+        assert resp.usage.completion_tokens == 42
+        assert resp.usage.total_tokens == 142
+
+    def test_no_usage_does_not_crash(self):
+        raw = SimpleNamespace(output=[], usage=None, model="gpt-5.6-terra")
+        resp = openai_native._adapt_responses_response(raw)
+        assert resp.usage is None
+
+    def test_structured_output_recovered_from_output_text(self):
+        # No message.parsed analog on Responses — JSON arrives as output_text.
+        raw = _make_responses_response(
+            output=[
+                {
+                    "type": "message",
+                    "content": [
+                        {"type": "output_text", "text": '{"answer": 42}'}
+                    ],
+                }
+            ]
+        )
+        resp = openai_native._adapt_responses_response(raw)
+        assert resp.choices[0].message.content == '{"answer": 42}'
+
+    def test_refusal_raises_llm_refused_error(self):
+        from _mcp_mesh.engine.llm_errors import LLMRefusedError
+
+        raw = _make_responses_response(
+            output=[
+                {
+                    "type": "message",
+                    "content": [
+                        {"type": "refusal", "refusal": "I cannot help with that."}
+                    ],
+                }
+            ]
+        )
+        with pytest.raises(LLMRefusedError) as exc_info:
+            openai_native._adapt_responses_response(raw)
+        assert exc_info.value.refusal_text == "I cannot help with that."
+        assert exc_info.value.vendor == "openai"
+
+
+class TestAdaptResponsesFinishReason:
+    """finish_reason must reflect the real outcome (truncation / content-filter
+    / incomplete), mirroring the chat path forwarding the true finish_reason —
+    not collapse everything into stop/tool_calls (#1334)."""
+
+    def test_completed_with_text_is_stop(self):
+        raw = _make_responses_response(
+            status="completed",
+            output=[
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "done"}],
+                }
+            ],
+        )
+        resp = openai_native._adapt_responses_response(raw)
+        assert resp.choices[0].finish_reason == "stop"
+        assert resp.choices[0].message.content == "done"
+
+    def test_completed_with_tool_calls_is_tool_calls(self):
+        raw = _make_responses_response(
+            status="completed",
+            output=[
+                {
+                    "type": "function_call",
+                    "call_id": "call_c",
+                    "name": "get_weather",
+                    "arguments": "{}",
+                }
+            ],
+        )
+        resp = openai_native._adapt_responses_response(raw)
+        assert resp.choices[0].finish_reason == "tool_calls"
+
+    def test_incomplete_max_output_tokens_is_length(self):
+        raw = _make_responses_response(
+            status="incomplete",
+            incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+            output=[
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "trunc"}],
+                }
+            ],
+        )
+        resp = openai_native._adapt_responses_response(raw)
+        assert resp.choices[0].finish_reason == "length"
+
+    def test_incomplete_content_filter_is_content_filter(self):
+        raw = _make_responses_response(
+            status="incomplete",
+            incomplete_details={"reason": "content_filter"},
+        )
+        resp = openai_native._adapt_responses_response(raw)
+        assert resp.choices[0].finish_reason == "content_filter"
+
+    def test_incomplete_empty_output_unmapped_reason_is_not_misleading(self, caplog):
+        """An empty-output incomplete response with an unmapped reason must not
+        crash and must NOT masquerade as a clean stop silently — a debug log is
+        emitted and finish_reason stays the neutral default."""
+        import logging
+
+        raw = _make_responses_response(
+            status="incomplete",
+            incomplete_details=SimpleNamespace(reason="some_future_reason"),
+            output=[],
+        )
+        with caplog.at_level(logging.DEBUG, logger=openai_native.logger.name):
+            resp = openai_native._adapt_responses_response(raw)
+        # No crash; content is None (empty output); default finish_reason.
+        assert resp.choices[0].message.content is None
+        assert resp.choices[0].finish_reason == "stop"
+        assert any(
+            "incomplete response with unmapped reason" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_failed_status_logs_and_keeps_default(self, caplog):
+        import logging
+
+        raw = _make_responses_response(status="failed", output=[])
+        with caplog.at_level(logging.DEBUG, logger=openai_native.logger.name):
+            resp = openai_native._adapt_responses_response(raw)
+        assert resp.choices[0].finish_reason == "stop"
+        assert any(
+            "non-completed status" in r.getMessage() for r in caplog.records
+        )
+
+
+# ---------------------------------------------------------------------------
+# Dispatch regression — reasoning+tools hits responses.create, gpt-4o hits
+# chat.completions.create (issue #1334)
+# ---------------------------------------------------------------------------
+
+
+def _patched_dual_openai(*, chat_response, responses_response):
+    """Return (cls_mock, instance) whose instance exposes BOTH
+    ``.chat.completions.create`` and ``.responses.create`` AsyncMocks."""
+    instance = MagicMock()
+    instance.chat = MagicMock()
+    instance.chat.completions = MagicMock()
+    instance.chat.completions.create = AsyncMock(return_value=chat_response)
+    instance.responses = MagicMock()
+    instance.responses.create = AsyncMock(return_value=responses_response)
+    cls_mock = MagicMock(return_value=instance)
+    return cls_mock, instance
+
+
+class TestResponsesDispatch:
+    _TOOLS = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Look up weather.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+
+    @pytest.mark.asyncio
+    async def test_reasoning_with_tools_calls_responses_create(self):
+        cls_mock, instance = _patched_dual_openai(
+            chat_response=_make_openai_completion(text="chat"),
+            responses_response=_make_responses_response(
+                output=[
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "resp"}],
+                    }
+                ]
+            ),
+        )
+        with patch("openai.AsyncOpenAI", cls_mock):
+            resp = await openai_native.complete(
+                {
+                    "messages": [{"role": "user", "content": "Hi."}],
+                    "tools": self._TOOLS,
+                },
+                model="openai/gpt-5.6-terra",
+                api_key="sk-test",
+            )
+        instance.responses.create.assert_called_once()
+        instance.chat.completions.create.assert_not_called()
+        assert resp.choices[0].message.content == "resp"
+
+    @pytest.mark.asyncio
+    async def test_gpt4o_with_tools_calls_chat_completions_create(self):
+        cls_mock, instance = _patched_dual_openai(
+            chat_response=_make_openai_completion(text="chat"),
+            responses_response=_make_responses_response(),
+        )
+        with patch("openai.AsyncOpenAI", cls_mock):
+            await openai_native.complete(
+                {
+                    "messages": [{"role": "user", "content": "Hi."}],
+                    "tools": self._TOOLS,
+                },
+                model="openai/gpt-4o",
+                api_key="sk-test",
+            )
+        instance.chat.completions.create.assert_called_once()
+        instance.responses.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reasoning_no_tools_calls_chat_completions_create(self):
+        cls_mock, instance = _patched_dual_openai(
+            chat_response=_make_openai_completion(text="chat"),
+            responses_response=_make_responses_response(),
+        )
+        with patch("openai.AsyncOpenAI", cls_mock):
+            await openai_native.complete(
+                {"messages": [{"role": "user", "content": "Hi."}]},
+                model="openai/gpt-5.6-terra",
+                api_key="sk-test",
+            )
+        instance.chat.completions.create.assert_called_once()
+        instance.responses.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stream_reasoning_with_tools_buffers_via_responses(self):
+        """Streaming reasoning+tools falls back to a buffered Responses call and
+        emits a single terminal chunk carrying content + usage."""
+        cls_mock, instance = _patched_dual_openai(
+            chat_response=_make_openai_completion(text="chat"),
+            responses_response=_make_responses_response(
+                output=[
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "buffered"}],
+                    }
+                ],
+                input_tokens=9,
+                output_tokens=3,
+            ),
+        )
+        with patch("openai.AsyncOpenAI", cls_mock):
+            stream = openai_native.complete_stream(
+                {
+                    "messages": [{"role": "user", "content": "Hi."}],
+                    "tools": self._TOOLS,
+                },
+                model="openai/gpt-5.6-terra",
+                api_key="sk-test",
+            )
+            chunks = [c async for c in stream]
+
+        instance.responses.create.assert_called_once()
+        instance.chat.completions.create.assert_not_called()
+        # Single terminal chunk with content + usage.
+        assert len(chunks) == 1
+        assert chunks[0].choices[0].delta.content == "buffered"
+        assert chunks[0].usage.prompt_tokens == 9
+        assert chunks[0].usage.completion_tokens == 3
+
+    @pytest.mark.asyncio
+    async def test_stream_reasoning_with_tools_emits_tool_call_delta(self):
+        cls_mock, instance = _patched_dual_openai(
+            chat_response=_make_openai_completion(text="chat"),
+            responses_response=_make_responses_response(
+                output=[
+                    {
+                        "type": "function_call",
+                        "call_id": "call_s1",
+                        "name": "get_weather",
+                        "arguments": '{"city": "Paris"}',
+                    }
+                ]
+            ),
+        )
+        with patch("openai.AsyncOpenAI", cls_mock):
+            stream = openai_native.complete_stream(
+                {
+                    "messages": [{"role": "user", "content": "Hi."}],
+                    "tools": self._TOOLS,
+                },
+                model="openai/gpt-5.6-terra",
+                api_key="sk-test",
+            )
+            chunks = [c async for c in stream]
+
+        instance.responses.create.assert_called_once()
+        tcs = chunks[0].choices[0].delta.tool_calls
+        assert tcs is not None and len(tcs) == 1
+        assert tcs[0].id == "call_s1"
+        assert tcs[0].function.name == "get_weather"
+        assert tcs[0].function.arguments == '{"city": "Paris"}'

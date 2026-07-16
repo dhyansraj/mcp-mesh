@@ -52,6 +52,10 @@ describe("restrictsSamplingParams truth table", () => {
     "gpt-5",
     "gpt-5-mini",
     "gpt-5-nano",
+    // #1332 — version-agnostic: gpt-5 point releases stay restricted.
+    "gpt-5.6",
+    "gpt-5-6",
+    "openai/gpt-5.6",
     "openai/o3-mini",
     "openai/gpt-5",
     "O3-MINI", // case-insensitive
@@ -62,7 +66,11 @@ describe("restrictsSamplingParams truth table", () => {
   it.each([
     "gpt-4o",
     "gpt-4.1",
+    "gpt-5-chat",
     "gpt-5-chat-latest",
+    // #1332 — version-agnostic chat exclusion covers versioned chat ids.
+    "gpt-5.6-chat",
+    "gpt-5.6-chat-latest",
     "openai/gpt-4o",
     "gemini/gemini-2.0-flash",
     "anthropic/claude-sonnet-4-5",
@@ -169,6 +177,22 @@ describe("OpenAI sampling-param gating — vendor call options", () => {
     await tool.execute(
       baseRequest({ temperature: 0.3, top_p: 0.5 }) as never,
     );
+
+    expect(generateTextMock).toHaveBeenCalledTimes(1);
+    const opts = generateTextMock.mock.calls[0][0] as Record<string, unknown>;
+    expect("temperature" in opts).toBe(false);
+    expect("topP" in opts).toBe(false);
+  });
+
+  it("omits temperature/topP for a gpt-5 point release (gpt-5.6) — generateText", async () => {
+    // #1332 — a gpt-5 point release is restricted like the base model.
+    const tool = llmProvider({
+      model: "openai/gpt-5.6",
+      capability: "llm",
+      temperature: 0.7,
+      topP: 0.9,
+    });
+    await tool.execute(baseRequest({}) as never);
 
     expect(generateTextMock).toHaveBeenCalledTimes(1);
     const opts = generateTextMock.mock.calls[0][0] as Record<string, unknown>;

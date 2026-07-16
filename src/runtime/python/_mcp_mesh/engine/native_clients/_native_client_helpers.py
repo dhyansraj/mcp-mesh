@@ -64,11 +64,13 @@ def restricts_sampling_params(model: str | None) -> bool:
     default value (rejecting any explicit setting with HTTP 400).
 
     OpenAI o-series reasoning models (o1/o3/o4) and the gpt-5 family (except
-    gpt-5-chat) accept ONLY the default sampling params. Verified against the
-    live API:
+    chat variants) accept ONLY the default sampling params. The chat exclusion
+    is version-agnostic: any gpt-5 id containing a ``-chat`` marker
+    (``gpt-5-chat``, ``gpt-5-chat-latest``, ``gpt-5.6-chat``, …) is treated as
+    a chat variant and left unrestricted. Verified against the live API:
 
-      * REJECT: gpt-5, gpt-5-mini, gpt-5-nano, o1, o3-mini, o4-mini
-      * ACCEPT: gpt-4o, gpt-4.1, gpt-5-chat-latest
+      * REJECT: gpt-5, gpt-5-mini, gpt-5-nano, gpt-5.6, o1, o3-mini, o4-mini
+      * ACCEPT: gpt-4o, gpt-4.1, gpt-5-chat-latest, gpt-5.6-chat
 
     Accepts a bare or ``vendor/``-qualified model string (e.g.
     ``openai/o3-mini``). Returns ``True`` when ``temperature``/``top_p`` should
@@ -81,9 +83,19 @@ def restricts_sampling_params(model: str | None) -> bool:
         m = m.split("/", 1)[1]  # strip vendor prefix e.g. "openai/o3-mini"
     if m in ("o1", "o3", "o4") or m.startswith(("o1-", "o3-", "o4-")):
         return True
-    if m.startswith("gpt-5") and not m.startswith("gpt-5-chat"):
+    # Version-agnostic chat exclusion: any gpt-5 id with a "-chat" marker is a
+    # chat variant (accepts sampling params); everything else is restricted (#1332).
+    if m.startswith("gpt-5") and "-chat" not in m:
         return True
     return False
+
+
+# Readability alias: for OpenAI, the models that restrict sampling params are
+# exactly the reasoning models (o-series + gpt-5 non-chat). #1334 routes these
+# to the Responses API when tools are present because they reason by default
+# and OpenAI 400s on reasoning + function tools on /v1/chat/completions. Single
+# implementation — no logic duplication; call whichever name reads best.
+is_openai_reasoning_model = restricts_sampling_params
 
 
 def translate_max_tokens_for_restricted(

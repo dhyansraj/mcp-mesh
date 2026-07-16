@@ -195,10 +195,13 @@ public class OpenAiHandler implements LlmProviderHandler {
 
     /**
      * Whether an OpenAI model restricts {@code temperature}/{@code top_p} to their
-     * default value (rejecting any explicit setting). Verified against the live API:
+     * default value (rejecting any explicit setting). The gpt-5 chat exclusion is
+     * version-agnostic: any gpt-5 id containing a {@code -chat} marker
+     * ({@code gpt-5-chat}, {@code gpt-5-chat-latest}, {@code gpt-5.6-chat}, …) is
+     * treated as a chat variant and left unrestricted. Verified against the live API:
      * <ul>
-     *   <li>REJECT: gpt-5, gpt-5-mini, gpt-5-nano, o1, o3-mini, o4-mini</li>
-     *   <li>ACCEPT: gpt-4o, gpt-4.1, gpt-5-chat-latest</li>
+     *   <li>REJECT: gpt-5, gpt-5-mini, gpt-5-nano, gpt-5.6, o1, o3-mini, o4-mini</li>
+     *   <li>ACCEPT: gpt-4o, gpt-4.1, gpt-5-chat-latest, gpt-5.6-chat</li>
      * </ul>
      * Accepts a bare or {@code vendor/}-qualified model string.
      */
@@ -210,8 +213,9 @@ public class OpenAiHandler implements LlmProviderHandler {
         // o-series reasoning models reject temperature/top_p
         if (m.equals("o1") || m.equals("o3") || m.equals("o4")
             || m.startsWith("o1-") || m.startsWith("o3-") || m.startsWith("o4-")) return true;
-        // gpt-5 family restricts temperature/top_p to default — except gpt-5-chat*
-        if (m.startsWith("gpt-5") && !m.startsWith("gpt-5-chat")) return true;
+        // gpt-5 family restricts temperature/top_p to default — except chat variants.
+        // Version-agnostic: any gpt-5 id with a "-chat" marker is unrestricted (#1332).
+        if (m.startsWith("gpt-5") && !m.contains("-chat")) return true;
         return false;
     }
 
