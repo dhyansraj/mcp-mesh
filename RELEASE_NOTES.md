@@ -1,6 +1,20 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.2.0...HEAD)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.2.1...HEAD)
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.2.0...v3.2.1)
+
+## v3.2.1 (2026-07-17)
+
+A patch that promotes Claude Haiku 4.5 to Anthropic's native structured-output path.
+
+### 🤖 LLM: Haiku 4.5 native `output_config` (#1341)
+
+mesh routed every Claude Haiku model through the synthetic-tool structured-output fallback — a stale exclusion mirrored from an older allow-list that predates Haiku 4.5's structured-output support and lumped all Haiku in with genuinely-unsupported older models. **Haiku 4.5 now uses Anthropic's first-class `output_config` primitive**, matching the current supported set (Fable 5, Opus 4.8, Sonnet 5, Haiku 4.5). The native path is cheaper and more reliable than the synthetic-tool workaround, which matters for cost-driven Haiku usage doing structured output with tools. Pre-4.5 Haiku (3.x) stays on the synthetic-tool path — it genuinely rejects the field. Validated end to end: Haiku 4.5 with a structured response schema and a function tool in the same call resolves via the native `output_config` path, the tool loop completes, and there is no 400.
+
+### ⚠️ Notes
+
+- **Optimization, not a behavior break.** A non-matching model id still degrades to the synthetic-tool path; this change only promotes Haiku 4.5 from synthetic-tool to native. No wire, registry, resolution, or declaration-syntax changes; non-Haiku models are unaffected.
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.1.0...v3.2.0)
 

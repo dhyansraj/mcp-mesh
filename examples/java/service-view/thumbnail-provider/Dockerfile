@@ -1,5 +1,5 @@
 # Dockerfile for thumbnail-provider MCP Mesh agent (Java/Spring Boot)
-FROM mcpmesh/java-runtime:3.2.0
+FROM mcpmesh/java-runtime:3.2.1
 
 WORKDIR /app
 
