@@ -58,6 +58,8 @@ class TestAnthropicResolver:
             "anthropic/claude-opus-4-6",
             "anthropic/claude-opus-4-8",
             "anthropic/claude-fable-5",
+            # #1331 refresh: Haiku 4.5 now supports native output_config.
+            "anthropic/claude-haiku-4-5",
             # Bedrock-prefixed + date-pinned still match (re.search, not anchored).
             "anthropic.claude-sonnet-4-6-20260301-v1:0",
             "anthropic.claude-sonnet-5-20260101-v1:0",
@@ -114,6 +116,7 @@ class TestAnthropicResolver:
             "anthropic/claude-opus-4-6",
             "anthropic/claude-opus-4-8",
             "anthropic/claude-fable-5",
+            "anthropic/claude-haiku-4-5",
             "anthropic.claude-sonnet-4-6-20260301-v1:0",
             "anthropic.claude-sonnet-5-20260101-v1:0",
             "anthropic.claude-opus-4-8-20260401-v1:0",
