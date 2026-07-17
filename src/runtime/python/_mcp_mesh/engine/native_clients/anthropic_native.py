@@ -724,18 +724,19 @@ _ANTHROPIC_PASSTHROUGH_KWARGS = frozenset(
 # ---------------------------------------------------------------------------
 # Native ``output_config`` (structured output) — model gating + schema filter
 # ---------------------------------------------------------------------------
-# Sonnet 4.5+ / Sonnet 5 / Opus 4.1+ / Opus 4.8 / Fable 5 accept Anthropic's
-# first-class ``output_config.format`` primitive. The wire shape is one
-# transform shallower than LiteLLM's ``response_format``:
+# Sonnet 4.5+ / Sonnet 5 / Opus 4.1+ / Opus 4.8 / Haiku 4.5 / Fable 5 accept
+# Anthropic's first-class ``output_config.format`` primitive. The wire shape is
+# one transform shallower than LiteLLM's ``response_format``:
 #
 #   output_config = {"format": {"type": "json_schema", "schema": {...}}}
 #
-# Older models (Haiku, Sonnet 3.x / 4.0, Opus 3.x) reject the field, so we
+# Pre-4.5 Haiku (3.x), Sonnet 3.x / 4.0, and Opus 3.x reject the field, so we
 # fall through to the existing synthetic-tool injection path for those.
 # LiteLLM uses a substring allow-list at transformation.py:822-830; we mirror
-# it plus the Sonnet 4.6 / 5, Opus 4.5 / 4.6 / 4.7 / 4.8, and Fable 5 releases
-# (per current Anthropic docs these support native structured outputs; Haiku
-# stays out — see the ``_supports_native_output_format`` docstring).
+# it plus the Sonnet 4.6 / 5, Opus 4.5 / 4.6 / 4.7 / 4.8, Haiku 4.5, and Fable
+# 5 releases (per current Anthropic docs these support native structured
+# outputs; pre-4.5 Haiku stays out — see the
+# ``_supports_native_output_format`` docstring).
 #
 # Patterns (not raw substrings) so the trailing minor-version digit is
 # boundary-anchored: ``opus-4-1`` must NOT match a hypothetical future
@@ -756,6 +757,7 @@ _NATIVE_OUTPUT_FORMAT_MODEL_PATTERNS = tuple(
         r"(?<!\d)opus-4[-.]6(?!\d)",
         r"(?<!\d)opus-4[-.]7(?!\d)",
         r"(?<!\d)opus-4[-.]8(?!\d)",
+        r"(?<!\d)haiku-4[-.]5(?!\d)",
         r"(?<!\d)fable-5(?!\d)",
     )
 )
@@ -771,9 +773,9 @@ def _supports_native_output_format(model: str | None) -> bool:
     wild. The trailing-digit guard (``(?!\\d)``) prevents a future
     ``opus-4-10`` from being silently accepted on the ``opus-4-1`` pattern.
 
-    Haiku and pre-4.5 Sonnet / pre-4.1 Opus models are intentionally NOT
-    matched by any pattern — they route through the existing synthetic-tool
-    path.
+    Haiku 4.5 accepts native ``output_config``. Pre-4.5 Haiku (3.x), pre-4.5
+    Sonnet (3.x / 4.0), and pre-4.1 Opus (3.x) are intentionally NOT matched by
+    any pattern — they route through the existing synthetic-tool path.
     """
     if not model:
         return False

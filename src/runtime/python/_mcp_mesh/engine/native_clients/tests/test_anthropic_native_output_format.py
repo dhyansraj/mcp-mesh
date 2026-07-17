@@ -7,7 +7,7 @@ tool, the adapter translates ``response_format`` into Anthropic's
 first-class ``output_config.format`` primitive instead of synthetic-tool
 injection.
 
-Older models (Haiku, Sonnet 3.x / 4.0, Opus 3.x) fall through to the
+Pre-4.5 Haiku (3.x), Sonnet 3.x / 4.0, and Opus 3.x fall through to the
 existing synthetic-tool path — that fallback path is covered by
 ``test_anthropic_native_response_format.py``.
 
@@ -117,6 +117,11 @@ class TestSupportsNativeOutputFormat:
             "anthropic/claude-opus-4.6",
             "anthropic/claude-fable-5",
             "anthropic/claude-fable-5-20260101",
+            # #1331 refresh: Haiku 4.5 now supports native output_config.
+            "anthropic/claude-haiku-4-5",
+            "anthropic/claude-haiku-4.5",
+            "anthropic/claude-haiku-4-5-20251001",
+            "anthropic.claude-haiku-4-5-20251001-v1:0",
             # Bedrock prefix + substring match.
             "bedrock/anthropic.claude-sonnet-4-6-20260301-v1:0",
             "bedrock/anthropic.claude-opus-4-7-20260401-v1:0",
@@ -138,10 +143,11 @@ class TestSupportsNativeOutputFormat:
     @pytest.mark.parametrize(
         "model",
         [
-            # Haiku — intentionally excluded per LiteLLM design.
-            "anthropic/claude-haiku-4-5",
-            "anthropic/claude-haiku-4-5-20250929",
-            "bedrock/anthropic.claude-haiku-4-5-20250929-v1:0",
+            # Pre-4.5 Haiku (3.x) — intentionally excluded (no native support).
+            "anthropic/claude-haiku-3-5",
+            "anthropic/claude-haiku-3-5-20241022",
+            "anthropic/claude-3-5-haiku-20241022",
+            "bedrock/anthropic.claude-3-haiku-20240307-v1:0",
             # Pre-4.5 Sonnet variants — synthetic-tool path.
             "anthropic/claude-3-5-sonnet",
             "anthropic/claude-3-5-sonnet-20241022",
@@ -174,6 +180,8 @@ class TestSupportsNativeOutputFormat:
             "anthropic/claude-sonnet-50",
             "anthropic/claude-opus-4-80",
             "anthropic/claude-opus-4-88",
+            "anthropic/claude-haiku-4-50",
+            "anthropic/claude-haiku-4-55",
             "anthropic/claude-fable-50",
             # Dot-form overmatch — same problem, dot separator.
             "anthropic/claude-opus-4.10",
@@ -382,8 +390,9 @@ class TestNativeOutputConfigRouting:
         assert kwargs["output_config"]["format"]["type"] == "json_schema"
 
     @pytest.mark.asyncio
-    async def test_haiku_4_5_falls_through_to_synthetic_tool(self):
-        """Haiku 4.5 + response_format → synthetic-tool path (no output_config)."""
+    async def test_haiku_4_5_emits_output_config(self):
+        """Haiku 4.5 + response_format → native ``output_config`` (same routing
+        as Sonnet 4.6 / Opus 4.7); synthetic-tool path NOT taken."""
         cls_mock, create_mock = _patched_async_anthropic(_make_anthropic_message())
         with patch("anthropic.AsyncAnthropic", cls_mock):
             await anthropic_native.complete(
@@ -392,6 +401,28 @@ class TestNativeOutputConfigRouting:
                     "response_format": _RESPONSE_FORMAT,
                 },
                 model="anthropic/claude-haiku-4-5",
+                api_key="sk-test",
+            )
+
+        kwargs = create_mock.call_args.kwargs
+        assert "response_format" not in kwargs
+        assert "output_config" in kwargs
+        assert kwargs["output_config"]["format"]["type"] == "json_schema"
+        # Synthetic-tool path NOT taken.
+        assert "tools" not in kwargs or not kwargs.get("tools")
+
+    @pytest.mark.asyncio
+    async def test_haiku_3_5_falls_through_to_synthetic_tool(self):
+        """Pre-4.5 Haiku (3.5) + response_format → synthetic-tool path (no
+        output_config; older Haiku has no native structured-output support)."""
+        cls_mock, create_mock = _patched_async_anthropic(_make_anthropic_message())
+        with patch("anthropic.AsyncAnthropic", cls_mock):
+            await anthropic_native.complete(
+                {
+                    "messages": [{"role": "user", "content": "Hi."}],
+                    "response_format": _RESPONSE_FORMAT,
+                },
+                model="anthropic/claude-3-5-haiku-20241022",
                 api_key="sk-test",
             )
 
