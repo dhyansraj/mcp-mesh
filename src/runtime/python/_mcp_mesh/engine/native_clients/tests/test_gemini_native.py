@@ -2521,6 +2521,63 @@ class TestThinkingConfigMutualExclusion:
         self._build(cfg)
         assert cfg == {"thinking_level": "HIGH", "thinking_budget": 1024}
 
+    # -- camelCase aliases ---------------------------------------------------
+    # google-genai's ThinkingConfig accepts the camelCase aliases as
+    # constructor kwargs, so a camelCase (or mixed-spelling) dict must not
+    # bypass the guard and land both fields on the wire.
+
+    def test_camel_case_both_set_drops_budget_keeps_level(self):
+        out = self._build({"thinkingLevel": "HIGH", "thinkingBudget": 1024})
+        tc = out["config"]["thinking_config"]
+        assert tc.thinking_level == "HIGH"
+        assert tc.thinking_budget is None
+
+    def test_camel_case_preserves_caller_key_spelling(self):
+        cfg = {"thinkingLevel": "HIGH", "thinkingBudget": 1024}
+        resolved = gemini_native._resolve_thinking_config_exclusion(cfg)
+        assert resolved == {"thinkingLevel": "HIGH"}
+        # Caller's dict untouched.
+        assert cfg == {"thinkingLevel": "HIGH", "thinkingBudget": 1024}
+
+    def test_camel_case_dropped_field_is_omitted_from_the_wire_shape(self):
+        out = self._build({"thinkingLevel": "HIGH", "thinkingBudget": 1024})
+        payload = out["config"]["thinking_config"].model_dump(
+            exclude_none=True, by_alias=True
+        )
+        assert payload == {"thinkingLevel": "HIGH"}
+        assert "thinkingBudget" not in payload
+
+    @pytest.mark.parametrize(
+        "cfg",
+        [
+            {"thinking_level": "HIGH", "thinkingBudget": 512},
+            {"thinkingLevel": "HIGH", "thinking_budget": 512},
+        ],
+    )
+    def test_mixed_spelling_both_set_drops_budget(self, cfg):
+        out = self._build(cfg)
+        tc = out["config"]["thinking_config"]
+        assert tc.thinking_level == "HIGH"
+        assert tc.thinking_budget is None
+        payload = tc.model_dump(exclude_none=True, by_alias=True)
+        assert "thinkingBudget" not in payload
+
+    @pytest.mark.parametrize(
+        "cfg, expected",
+        [
+            ({"thinkingLevel": "HIGH"}, {"thinkingLevel": "HIGH"}),
+            ({"thinkingBudget": 512}, {"thinkingBudget": 512}),
+            ({"thinkingBudget": 0}, {"thinkingBudget": 0}),
+        ],
+    )
+    def test_camel_case_single_field_passes_through_untouched(self, cfg, expected):
+        assert gemini_native._resolve_thinking_config_exclusion(cfg) is cfg
+        out = self._build(cfg)
+        payload = out["config"]["thinking_config"].model_dump(
+            exclude_none=True, by_alias=True
+        )
+        assert payload == expected
+
     @pytest.mark.parametrize(
         "model", ["gemini/gemini-2.5-flash", "gemini/gemini-3.5-flash"]
     )

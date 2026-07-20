@@ -1129,7 +1129,7 @@ def _resolve_thinking_config_exclusion(thinking_config: Any) -> Any:
     (Google no longer documents ``thinking_budget``); keeping it means a caller
     who set both gets the more future-proof of the two honored.
 
-    The dropped field is OMITTED entirely (dict key removed / model field set
+    The dropped field is OMITTED entirely (dict key(s) removed / model field set
     to ``None``) — never replaced with an "unspecified" sentinel, which would
     still trip the 400 since presence is what is checked. ``None`` fields are
     excluded at serialization time by google-genai, so this keeps the verified
@@ -1137,11 +1137,20 @@ def _resolve_thinking_config_exclusion(thinking_config: Any) -> Any:
     ``{"thinkingBudget": 512}``.
 
     Accepts (and returns) either a plain dict or a ``ThinkingConfig`` instance.
-    A no-op when fewer than two of the fields are set to non-``None`` values.
+    For dicts BOTH spellings are recognized — google-genai accepts the
+    camelCase aliases (``thinkingLevel`` / ``thinkingBudget``) as constructor
+    kwargs, so a camelCase or mixed-spelling dict must not bypass the guard.
+    The surviving level keeps the caller's original key spelling; every budget
+    spelling is removed. A no-op when fewer than two of the fields are set to
+    non-``None`` values.
     """
     if isinstance(thinking_config, dict):
         level = thinking_config.get("thinking_level")
+        if level is None:
+            level = thinking_config.get("thinkingLevel")
         budget = thinking_config.get("thinking_budget")
+        if budget is None:
+            budget = thinking_config.get("thinkingBudget")
         if level is None or budget is None:
             return thinking_config
         logger.warning(
@@ -1153,6 +1162,7 @@ def _resolve_thinking_config_exclusion(thinking_config: Any) -> Any:
         )
         resolved = dict(thinking_config)
         resolved.pop("thinking_budget", None)
+        resolved.pop("thinkingBudget", None)
         return resolved
 
     level = getattr(thinking_config, "thinking_level", None)
