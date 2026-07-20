@@ -40,7 +40,7 @@ export function TopologySidebar({ selection, onClose }: TopologySidebarProps) {
         </div>
 
         {/* Scrollable content */}
-        <ScrollArea className="flex-1 overflow-auto">
+        <ScrollArea className="flex-1 overflow-auto [&>[data-radix-scroll-area-viewport]>div]:block!">
           <div className="p-4">
             <AgentDetailBlock agent={agent} />
           </div>
@@ -73,7 +73,7 @@ export function TopologySidebar({ selection, onClose }: TopologySidebarProps) {
       </div>
 
       {/* Scrollable content */}
-      <ScrollArea className="flex-1 overflow-auto">
+      <ScrollArea className="flex-1 overflow-auto [&>[data-radix-scroll-area-viewport]>div]:block!">
         <div className="p-4">
           <AgentGroupDetail name={name} instances={instances} />
         </div>

@@ -96,7 +96,10 @@ function AgentGroupDrawer({ group, onClose }: AgentGroupDrawerProps) {
         </div>
 
         {/* Scrollable content */}
-        <ScrollArea className="flex-1 overflow-auto">
+        {/* Radix lays the viewport content out in a `display: table` wrapper, which
+            shrink-to-fits to the widest child and defeats `truncate` on long
+            endpoints — force it back to a block so the 360px panel constrains width. */}
+        <ScrollArea className="flex-1 overflow-auto [&>[data-radix-scroll-area-viewport]>div]:block!">
           <div className="p-4">
             <AgentGroupDetail name={group.name} instances={group.instances} />
           </div>
