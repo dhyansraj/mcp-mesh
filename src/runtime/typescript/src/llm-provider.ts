@@ -241,9 +241,9 @@ export function extractModelName(model: string): string {
  * Accepts a bare or ``vendor/``-qualified model string (e.g. "openai/o3-mini").
  * Returns true when ``temperature``/``topP`` should be omitted. Mirrors the
  * Java ``OpenAiHandler.restrictsSamplingParams`` and Python
- * ``restricts_sampling_params``.
+ * ``restricts_openai_sampling_params``.
  */
-export function restrictsSamplingParams(model: string | undefined | null): boolean {
+export function restrictsOpenAiSamplingParams(model: string | undefined | null): boolean {
   if (!model) return false;
   let m = model.toLowerCase();
   const slash = m.indexOf("/");
@@ -262,32 +262,77 @@ export function restrictsSamplingParams(model: string | undefined | null): boole
 }
 
 /**
+ * Anthropic REMOVED ``temperature``/``top_p``/``top_k`` on the Opus 4.7+ /
+ * Sonnet 5 / Fable 5 families — their presence is a hard HTTP 400 (#1344).
+ *
+ * Deliberately NARROWER than the native structured-output model list:
+ * ``opus-4-6``, ``sonnet-4-6`` and ``haiku-4-5`` still ACCEPT sampling params
+ * and must not be caught.
+ *
+ * Patterns (not raw substrings) so the trailing minor-version digit is
+ * boundary-anchored — ``opus-4-7`` must NOT match a hypothetical future
+ * ``opus-4-70``. Both dash and dot separators are accepted (callers pass both
+ * forms), and the match is unanchored so vendor prefixes (`anthropic/`,
+ * `bedrock/anthropic.`, `databricks/anthropic.`) and date-pinned Bedrock ids
+ * still match. Mirrors Python ``restricts_anthropic_sampling_params`` and Java
+ * ``AnthropicHandler.restrictsSamplingParams``.
+ */
+const ANTHROPIC_SAMPLING_RESTRICTED_MODEL_PATTERNS: RegExp[] = [
+  /(?<!\d)sonnet-5(?!\d)/i,
+  /(?<!\d)opus-4[-.]7(?!\d)/i,
+  /(?<!\d)opus-4[-.]8(?!\d)/i,
+  /(?<!\d)fable-5(?!\d)/i,
+];
+
+export function restrictsAnthropicSamplingParams(model: string | undefined | null): boolean {
+  if (!model) return false;
+  return ANTHROPIC_SAMPLING_RESTRICTED_MODEL_PATTERNS.some((p) => p.test(model));
+}
+
+/**
+ * Vendor-agnostic gate: does `model` reject explicitly-set sampling params?
+ * Union of the OpenAI (only-the-default) and Anthropic (removed entirely)
+ * predicates.
+ */
+export function restrictsSamplingParams(model: string | undefined | null): boolean {
+  return restrictsOpenAiSamplingParams(model) || restrictsAnthropicSamplingParams(model);
+}
+
+/**
  * Remove ``temperature``/``topP`` from a fully-assembled request options object
- * for OpenAI models that reject non-default sampling params (see
+ * for models that reject explicitly-set sampling params (see
  * {@link restrictsSamplingParams}). No-op for unrestricted models and when the
  * param is absent (mesh sends no default unless configured).
  *
  * This is version-independent hardening: it makes mesh self-contained rather
- * than silently relying on @ai-sdk/openai to strip these, and surfaces mesh's
+ * than silently relying on the vendor SDK to strip these, and surfaces mesh's
  * OWN warning (the SDK's `warnings` array is not surfaced by mesh). One warning
- * is logged per omitted param. Does NOT touch maxOutputTokens.
+ * is logged per omitted param. Does NOT touch maxOutputTokens (Anthropic
+ * REQUIRES max_tokens).
+ *
+ * TS does not plumb `topK`, so only `temperature`/`topP` are handled here.
  */
 export function sanitizeSamplingParams(
   options: { temperature?: number; topP?: number },
   model: string | undefined | null,
 ): void {
-  if (!restrictsSamplingParams(model)) return;
+  const anthropicRestricted = restrictsAnthropicSamplingParams(model);
+  if (!anthropicRestricted && !restrictsOpenAiSamplingParams(model)) return;
+  const vendor = anthropicRestricted ? "Anthropic" : "OpenAI";
+  const reason = anthropicRestricted
+    ? "sampling params are not supported by this model family"
+    : "only the default is supported";
   if (options.temperature !== undefined) {
     console.warn(
-      `OpenAI model ${model} rejects temperature=${options.temperature}; ` +
-        `omitting it (only the default is supported)`
+      `${vendor} model ${model} rejects temperature=${options.temperature}; ` +
+        `omitting it (${reason})`
     );
     delete options.temperature;
   }
   if (options.topP !== undefined) {
     console.warn(
-      `OpenAI model ${model} rejects top_p=${options.topP}; ` +
-        `omitting it (only the default is supported)`
+      `${vendor} model ${model} rejects top_p=${options.topP}; ` +
+        `omitting it (${reason})`
     );
     delete options.topP;
   }
@@ -996,9 +1041,10 @@ export function llmProvider(config: LlmProviderConfig): {
     }
 
     // Version-independent hardening: OpenAI o-series (o1/o3/o4) and gpt-5
-    // (except gpt-5-chat) reject non-default temperature/top_p with HTTP 400.
+    // (except gpt-5-chat) reject non-default temperature/top_p with HTTP 400,
+    // and Anthropic Opus 4.7+ / Sonnet 5 / Fable 5 removed them outright (#1344).
     // Strip them from the fully-assembled options BEFORE handing off to the
-    // SDK (rather than relying on @ai-sdk/openai to strip them silently), and
+    // SDK (rather than relying on the vendor SDK to strip them silently), and
     // surface mesh's own warning. Sanitizing requestOptions here covers BOTH
     // generateText call sites (the manual agentic loop and the plain/Gemini
     // path both consume requestOptions) AND the generateObject structured path,
@@ -1078,8 +1124,8 @@ export function llmProvider(config: LlmProviderConfig): {
       const strictSchema = makeSchemaStrict(cleanSchema as Record<string, unknown>, { addAllRequired: true });
 
       // temperature/topP inherit from requestOptions, which has already been
-      // run through sanitizeSamplingParams above — so for restricted OpenAI
-      // models these are already stripped (undefined) here. Only include a key
+      // run through sanitizeSamplingParams above — so for restricted OpenAI /
+      // Anthropic models these are already stripped (undefined) here. Only include a key
       // when it is actually set so the vendor call carries NO temperature/topP
       // for restricted models (mirrors Java/Python omission, not "pass null").
       const generateObjectOptions: {

@@ -1,11 +1,11 @@
 """Unit tests for ClaudeHandler's native ``output_config`` branch.
 
-The handler routes Sonnet 4.5+ / Opus 4.1+ buffered structured-output to a
-``response_format`` payload (which the native Anthropic adapter translates to
-``output_config.format`` on the wire) and stamps ``_mesh_output_config_mode``
-so the agentic loop skips synthetic-fallback recovery. Older Claude models
-(Haiku, Sonnet 3.x / 4.0, Opus 3.x) and the LiteLLM path keep their existing
-synthetic-tool / HINT behavior.
+The handler routes Sonnet 4.5+ / Opus 4.1+ / Haiku 4.5 buffered
+structured-output to a ``response_format`` payload (which the native Anthropic
+adapter translates to ``output_config.format`` on the wire) and stamps
+``_mesh_output_config_mode`` so the agentic loop skips synthetic-fallback
+recovery. Older Claude models (Haiku 3.x, Sonnet 3.x / 4.0, Opus 3.x) and the
+LiteLLM path keep their existing synthetic-tool / HINT behavior.
 
 Companion loop-side tests live in
 ``tests/unit/test_provider_agentic_loop_output_config.py``.
@@ -133,6 +133,34 @@ class TestApplyStructuredOutputOutputConfig:
         assert "response_format" in result
         assert result["_mesh_output_config_mode"] is True
         assert "_mesh_synthetic_format_tool" not in result
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "anthropic/claude-haiku-4-5",
+            "anthropic/claude-haiku-4.5",
+            "anthropic/claude-haiku-4-5-20251001",
+            "anthropic.claude-haiku-4-5-20251001-v1:0",
+        ],
+    )
+    def test_haiku_4_5_buffered_native_sets_response_format_and_sentinel(
+        self, _native_on, model
+    ):
+        """#1342: Haiku 4.5 accepts ``output_config.format``, so it takes the
+        native branch — NOT the synthetic-tool fallback used by Haiku 3.x."""
+        handler = ClaudeHandler()
+        params: dict = {
+            "messages": [{"role": "system", "content": "S"}]
+        }
+        result = handler.apply_structured_output(
+            _trip_schema(), "Trip", params, model=model
+        )
+
+        assert "response_format" in result
+        assert result["_mesh_output_config_mode"] is True
+        assert "_mesh_synthetic_format_tool" not in result
+        assert "_mesh_synthetic_format_tool_name" not in result
+        assert "_mesh_hint_mode" not in result
 
     @pytest.mark.parametrize(
         "model",
@@ -358,14 +386,16 @@ class TestApplyNativeOutputConfigStrictification:
         assert "minItems" not in rf_tags
 
 
-class TestApplyStructuredOutputHaikuFallsThroughToSynthetic:
-    """Haiku / older Claude models route to the synthetic-tool path even on
-    the native SDK — they don't accept ``output_config.format``."""
+class TestApplyStructuredOutputLegacyModelsFallThroughToSynthetic:
+    """Pre-``output_config`` Claude models (Haiku 3.x, Sonnet 3.x / 4.0,
+    Opus 3.x) route to the synthetic-tool path even on the native SDK — they
+    don't accept ``output_config.format``. Haiku 4.5 does accept it (#1342)
+    and is asserted on the native branch above."""
 
     @pytest.mark.parametrize(
         "model",
         [
-            "anthropic/claude-haiku-4-5",
+            "anthropic/claude-3-haiku-20240307",
             "anthropic/claude-3-5-haiku-20241022",
             "anthropic/claude-3-5-sonnet-20241022",  # Sonnet 3.5 (pre-4.5)
             "anthropic/claude-3-opus-20240229",  # Opus 3 (pre-4.1)

@@ -15,6 +15,8 @@ from __future__ import annotations
 import pytest
 
 from _mcp_mesh.engine.native_clients._native_client_helpers import (
+    is_openai_reasoning_model,
+    restricts_anthropic_sampling_params,
     restricts_sampling_params,
     translate_max_tokens_for_restricted,
 )
@@ -224,3 +226,129 @@ class TestTranslateMaxTokensForRestricted:
         params = {"max_completion_tokens": 512}
         translate_max_tokens_for_restricted(params, "openai/o3-mini", self._log())
         assert params == {"max_completion_tokens": 512}
+
+
+# ---------------------------------------------------------------------------
+# Anthropic classifier truth table (#1344)
+# ---------------------------------------------------------------------------
+# Anthropic REMOVED temperature/top_p/top_k on the Opus 4.7+ / Sonnet 5 /
+# Fable 5 families — presence is HTTP 400. Narrower than the native
+# structured-output list: opus-4-6 / sonnet-4-6 / haiku-4-5 still accept them.
+
+
+class TestRestrictsAnthropicSamplingParams:
+    @pytest.mark.parametrize(
+        "model",
+        [
+            # bare ids
+            "claude-sonnet-5",
+            "claude-opus-4-7",
+            "claude-opus-4-8",
+            "claude-fable-5",
+            # anthropic/ prefix
+            "anthropic/claude-sonnet-5",
+            "anthropic/claude-opus-4-7",
+            "anthropic/claude-opus-4-8",
+            "anthropic/claude-fable-5",
+            # bedrock / databricks prefixes keep the ``anthropic.`` segment
+            "bedrock/anthropic.claude-opus-4-8-20260101-v1:0",
+            "databricks/anthropic.claude-sonnet-5",
+            # dot-separated version form
+            "anthropic/claude-opus-4.7",
+            "anthropic/claude-opus-4.8",
+            # date-pinned
+            "claude-sonnet-5-20260201",
+            # case-insensitive
+            "ANTHROPIC/CLAUDE-OPUS-4-8",
+        ],
+    )
+    def test_restricted_models(self, model):
+        assert restricts_anthropic_sampling_params(model) is True
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            # Structured-output-capable but sampling params still accepted.
+            "anthropic/claude-opus-4-6",
+            "anthropic/claude-sonnet-4-6",
+            "anthropic/claude-haiku-4-5",
+            "anthropic/claude-sonnet-4-5",
+            "anthropic/claude-opus-4-5",
+            "anthropic/claude-opus-4-1",
+            "claude-3-5-sonnet-20241022",
+            "claude-3-opus-20240229",
+            "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+            # Boundary guard: a hypothetical future minor version must NOT
+            # match the shorter pattern.
+            "anthropic/claude-opus-4-70",
+            "anthropic/claude-opus-4-80",
+            "anthropic/claude-sonnet-50",
+            "anthropic/claude-fable-50",
+            # Leading-digit guard.
+            "anthropic/claude-opus-14-7",
+            # Other vendors.
+            "openai/gpt-4o",
+            "gemini/gemini-2.5-flash",
+            None,
+            "",
+        ],
+    )
+    def test_unrestricted_models(self, model):
+        assert restricts_anthropic_sampling_params(model) is False
+
+
+class TestGeneralizedRestrictsSamplingParams:
+    """The vendor-agnostic gate is the union of the two vendor predicates."""
+
+    @pytest.mark.parametrize(
+        "model",
+        ["o3-mini", "openai/gpt-5", "anthropic/claude-opus-4-8", "claude-sonnet-5"],
+    )
+    def test_union_matches(self, model):
+        assert restricts_sampling_params(model) is True
+
+    @pytest.mark.parametrize(
+        "model", ["gpt-4o", "anthropic/claude-sonnet-4-5", "gemini/gemini-2.5-flash"]
+    )
+    def test_union_does_not_match(self, model):
+        assert restricts_sampling_params(model) is False
+
+
+class TestIsOpenAiReasoningModelStaysOpenAiOnly:
+    """``is_openai_reasoning_model`` drives Responses-API routing (#1334) —
+    generalizing the sampling gate must NOT make Claude ids reasoning models.
+    """
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "anthropic/claude-opus-4-8",
+            "anthropic/claude-opus-4-7",
+            "anthropic/claude-sonnet-5",
+            "anthropic/claude-fable-5",
+        ],
+    )
+    def test_claude_is_not_an_openai_reasoning_model(self, model):
+        assert is_openai_reasoning_model(model) is False
+        # …even though the vendor-agnostic gate does match it.
+        assert restricts_sampling_params(model) is True
+
+    @pytest.mark.parametrize("model", ["o3-mini", "openai/gpt-5-mini"])
+    def test_openai_reasoning_unchanged(self, model):
+        assert is_openai_reasoning_model(model) is True
+
+
+class TestAnthropicMaxTokensUntouched:
+    """Anthropic REQUIRES max_tokens — the OpenAI-only
+    max_tokens → max_completion_tokens translation must not follow the
+    generalized gate onto Claude ids.
+    """
+
+    def test_restricted_claude_keeps_max_tokens(self):
+        import logging
+
+        params = {"max_tokens": 256}
+        translate_max_tokens_for_restricted(
+            params, "anthropic/claude-opus-4-8", logging.getLogger("t")
+        )
+        assert params == {"max_tokens": 256}

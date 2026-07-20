@@ -235,7 +235,7 @@ jobs:
         env:
           MCP_MESH_AUTO_RUN: false
         run: |
-          pytest tests/unit/ -v \
+          pytest tests/unit/ _mcp_mesh/ -v \
             --cov=_mcp_mesh \
             --cov-report=xml \
             --cov-report=term-missing \

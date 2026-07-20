@@ -2413,3 +2413,118 @@ class TestThoughtSignatureRoundTrip:
         # And confirm the args round-trip too (sanity).
         assert fc_part["function_call"]["name"] == "get_weather"
         assert fc_part["function_call"]["args"] == {"city": "NYC"}
+
+
+# ---------------------------------------------------------------------------
+# thinking_level / thinking_budget mutual exclusion (#1346)
+# ---------------------------------------------------------------------------
+# Google returns ``400 You can only set only one of thinking budget and
+# thinking level.`` whenever BOTH fields are present in one request. It is a
+# global request-validation check — model-independent, fires on field PRESENCE
+# not value. mesh resolves it deterministically (thinking_level wins) instead
+# of letting an opaque vendor 400 escape.
+
+
+class TestThinkingConfigMutualExclusion:
+    def _build(self, thinking_config, model="gemini/gemini-3.5-flash"):
+        return gemini_native._build_create_kwargs(
+            {
+                "messages": [{"role": "user", "content": "Hi"}],
+                "thinking_config": thinking_config,
+            },
+            model=model,
+        )
+
+    def test_both_set_drops_budget_keeps_level(self):
+        out = self._build({"thinking_level": "HIGH", "thinking_budget": 1024})
+        tc = out["config"]["thinking_config"]
+        assert tc.thinking_level == "HIGH"
+        # Dropped entirely — None, never a sentinel.
+        assert tc.thinking_budget is None
+
+    def test_both_set_emits_warn_naming_both(self, caplog):
+        with caplog.at_level("WARNING", logger=gemini_native.logger.name):
+            self._build({"thinking_level": "LOW", "thinking_budget": 512})
+        warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert any(
+            "thinking_level" in m and "thinking_budget" in m and "dropping" in m
+            for m in warnings
+        ), warnings
+
+    def test_dropped_field_is_omitted_from_the_wire_shape(self):
+        """The resolved config must serialize WITHOUT a thinkingBudget key —
+        sending an 'unspecified' sentinel would still trip the 400 (presence,
+        not value, is what Google checks)."""
+        out = self._build({"thinking_level": "HIGH", "thinking_budget": 1024})
+        payload = out["config"]["thinking_config"].model_dump(
+            exclude_none=True, by_alias=True
+        )
+        assert payload == {"thinkingLevel": "HIGH"}
+        assert "thinkingBudget" not in payload
+
+    @pytest.mark.parametrize(
+        "cfg, expected",
+        [
+            ({"thinking_budget": 512}, {"thinkingBudget": 512}),
+            ({"thinking_budget": 0}, {"thinkingBudget": 0}),
+            ({"thinking_level": "HIGH"}, {"thinkingLevel": "HIGH"}),
+        ],
+    )
+    def test_single_field_passes_through_untouched(self, cfg, expected):
+        out = self._build(cfg)
+        payload = out["config"]["thinking_config"].model_dump(
+            exclude_none=True, by_alias=True
+        )
+        assert payload == expected
+
+    def test_budget_zero_with_level_still_resolves(self):
+        """Guard fires on PRESENCE, not truthiness — budget=0 is 'set'."""
+        out = self._build({"thinking_level": "MINIMAL", "thinking_budget": 0})
+        tc = out["config"]["thinking_config"]
+        assert tc.thinking_level == "MINIMAL"
+        assert tc.thinking_budget is None
+
+    def test_include_thoughts_survives_the_resolution(self):
+        out = self._build(
+            {
+                "thinking_level": "HIGH",
+                "thinking_budget": 256,
+                "include_thoughts": True,
+            }
+        )
+        tc = out["config"]["thinking_config"]
+        assert tc.include_thoughts is True
+        assert tc.thinking_level == "HIGH"
+        assert tc.thinking_budget is None
+
+    def test_thinking_config_instance_with_both_is_resolved(self):
+        from google.genai.types import ThinkingConfig
+
+        instance = ThinkingConfig(thinking_level="HIGH", thinking_budget=1024)
+        out = self._build(instance)
+        tc = out["config"]["thinking_config"]
+        assert tc.thinking_level == "HIGH"
+        assert tc.thinking_budget is None
+        # The caller's object is NOT mutated — a copy is returned.
+        assert instance.thinking_budget == 1024
+        assert tc is not instance
+
+    def test_thinking_config_instance_with_one_field_is_same_object(self):
+        from google.genai.types import ThinkingConfig
+
+        instance = ThinkingConfig(thinking_budget=512)
+        out = self._build(instance)
+        assert out["config"]["thinking_config"] is instance
+
+    def test_caller_dict_is_not_mutated(self):
+        cfg = {"thinking_level": "HIGH", "thinking_budget": 1024}
+        self._build(cfg)
+        assert cfg == {"thinking_level": "HIGH", "thinking_budget": 1024}
+
+    @pytest.mark.parametrize(
+        "model", ["gemini/gemini-2.5-flash", "gemini/gemini-3.5-flash"]
+    )
+    def test_guard_is_model_independent(self, model):
+        """No model allowlist / generation gate — the vendor check is global."""
+        out = self._build({"thinking_level": "HIGH", "thinking_budget": 1024}, model)
+        assert out["config"]["thinking_config"].thinking_budget is None

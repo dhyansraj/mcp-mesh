@@ -14,11 +14,11 @@ Two injection paths exist:
     ``helpers._run_response_format_retry``) bypasses the handler and emits
     ``response_format`` directly.
 
-All tests target a model NOT in
-``_NATIVE_OUTPUT_FORMAT_MODEL_SUBSTRINGS`` (Haiku 4.5) so the
-adapter routes through the synthetic-tool path. Native
-``output_config`` behaviour for Sonnet 4.5+ / Opus 4.1+ is covered by
-``test_anthropic_native_output_format.py``.
+All tests target ``_SYNTHETIC_PATH_MODEL`` — a model NOT matched by
+``anthropic_native._NATIVE_OUTPUT_FORMAT_MODEL_PATTERNS`` (Claude 3 Haiku) —
+so the adapter routes through the synthetic-tool path. Native
+``output_config`` behaviour for Sonnet 4.5+ / Opus 4.1+ / Haiku 4.5 (#1342)
+is covered by ``test_anthropic_native_output_format.py``.
 
 Real network calls are mocked.
 """
@@ -67,6 +67,12 @@ def _patched_async_anthropic(api_response):
     return cls_mock, create_mock
 
 
+# Model deliberately OFF ``_NATIVE_OUTPUT_FORMAT_MODEL_PATTERNS`` so
+# ``response_format`` is translated into the synthetic-tool injection this
+# module exists to cover. Guarded by
+# ``test_synthetic_path_model_is_not_native_capable`` below.
+_SYNTHETIC_PATH_MODEL = "anthropic/claude-3-haiku-20240307"
+
 _SIMPLE_SCHEMA = {
     "type": "object",
     "properties": {"answer": {"type": "string"}},
@@ -98,6 +104,15 @@ def _reset_dedupe():
 # ---------------------------------------------------------------------------
 
 
+def test_synthetic_path_model_is_not_native_capable():
+    """Guard for the whole module: if ``_SYNTHETIC_PATH_MODEL`` ever lands on
+    the native ``output_config`` allow-list, every test below would silently
+    stop covering the synthetic-tool path."""
+    assert not anthropic_native._supports_native_output_format(
+        _SYNTHETIC_PATH_MODEL
+    )
+
+
 class TestResponseFormatTranslation:
     @pytest.mark.asyncio
     async def test_pops_response_format_before_sdk_call(self):
@@ -111,7 +126,7 @@ class TestResponseFormatTranslation:
                     "messages": [{"role": "user", "content": "Hi."}],
                     "response_format": _RESPONSE_FORMAT,
                 },
-                model="anthropic/claude-haiku-4-5",
+                model=_SYNTHETIC_PATH_MODEL,
                 api_key="sk-test",
             )
 
@@ -138,7 +153,7 @@ class TestResponseFormatTranslation:
                     "tools": [handler_injected_tool],
                     "response_format": _RESPONSE_FORMAT,
                 },
-                model="anthropic/claude-haiku-4-5",
+                model=_SYNTHETIC_PATH_MODEL,
                 api_key="sk-test",
             )
 
@@ -163,7 +178,7 @@ class TestResponseFormatTranslation:
                     "messages": [{"role": "user", "content": "Hi."}],
                     "response_format": _RESPONSE_FORMAT,
                 },
-                model="anthropic/claude-haiku-4-5",
+                model=_SYNTHETIC_PATH_MODEL,
                 api_key="sk-test",
             )
 
@@ -196,7 +211,7 @@ class TestResponseFormatTranslation:
                     "tools": [real_tool],
                     "response_format": _RESPONSE_FORMAT,
                 },
-                model="anthropic/claude-haiku-4-5",
+                model=_SYNTHETIC_PATH_MODEL,
                 api_key="sk-test",
             )
 
@@ -222,7 +237,7 @@ class TestResponseFormatTranslation:
                         "response_format": _RESPONSE_FORMAT,
                         "tool_choice": "none",
                     },
-                    model="anthropic/claude-haiku-4-5",
+                    model=_SYNTHETIC_PATH_MODEL,
                     api_key="sk-test",
                 )
 
@@ -259,7 +274,7 @@ class TestResponseFormatTranslation:
                     "response_format": _RESPONSE_FORMAT,
                     "tool_choice": forced_choice,
                 },
-                model="anthropic/claude-haiku-4-5",
+                model=_SYNTHETIC_PATH_MODEL,
                 api_key="sk-test",
             )
 
@@ -284,7 +299,7 @@ class TestResponseFormatTranslation:
                     ],
                     "response_format": _RESPONSE_FORMAT,
                 },
-                model="anthropic/claude-haiku-4-5",
+                model=_SYNTHETIC_PATH_MODEL,
                 api_key="sk-test",
             )
 
@@ -305,7 +320,7 @@ class TestResponseFormatTranslation:
                     "messages": [{"role": "user", "content": "Hi."}],
                     "response_format": _RESPONSE_FORMAT,
                 },
-                model="anthropic/claude-haiku-4-5",
+                model=_SYNTHETIC_PATH_MODEL,
                 api_key="sk-test",
             )
 
@@ -325,7 +340,7 @@ class TestResponseFormatTranslation:
                     "messages": [{"role": "user", "content": "Hi."}],
                     "response_format": {"type": "json_object"},  # not json_schema
                 },
-                model="anthropic/claude-haiku-4-5",
+                model=_SYNTHETIC_PATH_MODEL,
                 api_key="sk-test",
             )
 
@@ -352,7 +367,7 @@ class TestRequestTimeoutRename:
                     "messages": [{"role": "user", "content": "Hi."}],
                     "request_timeout": 42,
                 },
-                model="anthropic/claude-haiku-4-5",
+                model=_SYNTHETIC_PATH_MODEL,
                 api_key="sk-test",
             )
 
@@ -372,7 +387,7 @@ class TestRequestTimeoutRename:
                     "timeout": 10,
                     "request_timeout": 99,
                 },
-                model="anthropic/claude-haiku-4-5",
+                model=_SYNTHETIC_PATH_MODEL,
                 api_key="sk-test",
             )
 
@@ -392,7 +407,7 @@ class TestRequestTimeoutRename:
                         "messages": [{"role": "user", "content": "Hi."}],
                         "request_timeout": 90,
                     },
-                    model="anthropic/claude-haiku-4-5",
+                    model=_SYNTHETIC_PATH_MODEL,
                     api_key="sk-test",
                 )
 
@@ -426,7 +441,7 @@ class TestResponseFormatNoLongerWarns:
                         "messages": [{"role": "user", "content": "Hi."}],
                         "response_format": _RESPONSE_FORMAT,
                     },
-                    model="anthropic/claude-haiku-4-5",
+                    model=_SYNTHETIC_PATH_MODEL,
                     api_key="sk-test",
                 )
 

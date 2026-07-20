@@ -45,10 +45,12 @@ from .._structured_output_helpers import (
     schema_to_synthetic_tool,
 )
 from ._native_client_helpers import (
+    SAMPLING_PARAM_KEYS,
     make_fallback_logger,
     make_is_available,
     reset_unsupported_kwargs_dedupe,
     resolve_request_timeout,
+    restricts_anthropic_sampling_params,
     warn_unsupported_kwarg_once,
 )
 
@@ -1000,10 +1002,19 @@ def _build_create_kwargs(
     if system_value is not None:
         create_kwargs["system"] = system_value
 
+    # Opus 4.7+ / Sonnet 5 / Fable 5 REMOVED temperature/top_p/top_k — their
+    # presence is a hard HTTP 400. Drop them with a once-per-key WARN rather
+    # than letting the vendor reject the request: dropping degrades gracefully,
+    # forwarding does not (#1344).
+    sampling_restricted = restricts_anthropic_sampling_params(model)
+
     for key in _ANTHROPIC_PASSTHROUGH_KWARGS:
         if key == "max_tokens":
             continue  # handled above
         if key in request_params and request_params[key] is not None:
+            if sampling_restricted and key in SAMPLING_PARAM_KEYS:
+                _warn_dropped_sampling_param_once(model, key, request_params[key])
+                continue
             create_kwargs[key] = request_params[key]
 
     # Tool choice: litellm uses {"type": "function", "function": {"name": "..."}}
@@ -1355,3 +1366,32 @@ def _reset_unsupported_kwargs_dedupe() -> None:
     WARN trail. NOT for production use.
     """
     reset_unsupported_kwargs_dedupe(_logged_unsupported_kwargs)
+    reset_unsupported_kwargs_dedupe(_logged_dropped_sampling_params)
+
+
+# Separate dedupe set for the sampling-param drops (#1344). Kept apart from
+# ``_logged_unsupported_kwargs`` because the two carry different signals: the
+# other set means "mesh does not translate this LiteLLM knob", this one means
+# "the target Claude model removed this param". Same once-per-key-per-process
+# budget so high-volume providers don't flood the log.
+_logged_dropped_sampling_params: set[str] = set()
+
+
+def _warn_dropped_sampling_param_once(model: str, key: str, value: Any) -> None:
+    """WARN once per dropped sampling-param name.
+
+    Wording mirrors ``openai_native._build_create_kwargs`` so both native
+    adapters read the same in a log trail; the parenthetical differs because
+    Anthropic REMOVED the params (not "only the default is accepted").
+    """
+    if key in _logged_dropped_sampling_params:
+        return
+    _logged_dropped_sampling_params.add(key)
+    logger.warning(
+        "Anthropic model %s rejects %s; omitting %s=%s "
+        "(sampling params are not supported by this model family)",
+        model,
+        key,
+        key,
+        value,
+    )

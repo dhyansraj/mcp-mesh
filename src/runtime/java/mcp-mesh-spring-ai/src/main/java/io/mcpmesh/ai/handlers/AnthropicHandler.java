@@ -13,6 +13,7 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.tool.ToolCallback;
 
 import java.util.*;
+import java.util.regex.Pattern;
 
 /**
  * LLM provider handler for Anthropic Claude models.
@@ -262,23 +263,77 @@ public class AnthropicHandler implements LlmProviderHandler {
         if (maxTokens != null) {
             builder.maxTokens(maxTokens);
         }
-        Double temperature = LlmProviderHandler.temperatureOption(options);
-        if (temperature != null) {
-            builder.temperature(temperature);
-        }
-        Double topP = LlmProviderHandler.topPOption(options);
-        if (topP != null) {
-            builder.topP(topP);
-        }
-        // Set the effective model on EVERY request: a vendor-matched per-call
-        // override wins, else the provider's declared model. Without this the
-        // request falls through to Spring AI's default Anthropic model.
+
+        // Resolve the effective model FIRST — the sampling gate below keys on it.
+        // Set it on EVERY request: a vendor-matched per-call override wins, else
+        // the provider's declared model. Without this the request falls through
+        // to Spring AI's default Anthropic model.
         String eff = LlmProviderHandler.effectiveModel(options, getVendor(), getAliases());
         if (eff != null) {
             builder.model(eff);
             log.debug("AnthropicHandler: applied model '{}'", eff);
         }
+
+        // Opus 4.7+ / Sonnet 5 / Fable 5 REMOVED temperature/top_p — their
+        // presence is a hard HTTP 400. Drop them with a WARN for those models,
+        // using the SAME effective model resolved above (mirrors OpenAiHandler).
+        boolean restricted = restrictsSamplingParams(eff);
+        Double temperature = LlmProviderHandler.temperatureOption(options);
+        if (temperature != null) {
+            if (restricted) {
+                log.warn("AnthropicHandler: omitting temperature={} for model '{}' (sampling params are not supported by this model family)", temperature, eff);
+            } else {
+                builder.temperature(temperature);
+            }
+        }
+        Double topP = LlmProviderHandler.topPOption(options);
+        if (topP != null) {
+            if (restricted) {
+                log.warn("AnthropicHandler: omitting top_p={} for model '{}' (sampling params are not supported by this model family)", topP, eff);
+            } else {
+                builder.topP(topP);
+            }
+        }
     }
+
+    /**
+     * Whether an Anthropic model rejects {@code temperature}/{@code top_p}
+     * outright (HTTP 400 when the field is present). Anthropic removed the
+     * sampling params on the Opus 4.7+ / Sonnet 5 / Fable 5 families:
+     * <ul>
+     *   <li>REJECT: claude-opus-4-7, claude-opus-4-8, claude-sonnet-5, claude-fable-5</li>
+     *   <li>ACCEPT: claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5,
+     *       claude-sonnet-4-5, claude-opus-4-5, claude-opus-4-1, all 3.x</li>
+     * </ul>
+     * Deliberately narrower than the native structured-output model set —
+     * {@code opus-4-6} / {@code sonnet-4-6} / {@code haiku-4-5} support that but
+     * still accept sampling params.
+     *
+     * <p>Patterns (not raw substrings) so the trailing minor-version digit is
+     * boundary-anchored: {@code opus-4-7} must NOT match a hypothetical future
+     * {@code opus-4-70}. Both {@code -} and {@code .} separators are accepted,
+     * and the match is unanchored so vendor prefixes ({@code anthropic/},
+     * {@code bedrock/anthropic.}, {@code databricks/anthropic.}) and date-pinned
+     * ids still match. Mirrors Python {@code restricts_anthropic_sampling_params}
+     * and TypeScript {@code restrictsAnthropicSamplingParams}.
+     *
+     * <p>Java never sets {@code top_k} on the Anthropic options builder, so it is
+     * intentionally not handled here.
+     */
+    static boolean restrictsSamplingParams(String model) {
+        if (model == null) return false;
+        for (Pattern p : SAMPLING_RESTRICTED_MODEL_PATTERNS) {
+            if (p.matcher(model).find()) return true;
+        }
+        return false;
+    }
+
+    private static final List<Pattern> SAMPLING_RESTRICTED_MODEL_PATTERNS = List.of(
+        Pattern.compile("(?<!\\d)sonnet-5(?!\\d)", Pattern.CASE_INSENSITIVE),
+        Pattern.compile("(?<!\\d)opus-4[-.]7(?!\\d)", Pattern.CASE_INSENSITIVE),
+        Pattern.compile("(?<!\\d)opus-4[-.]8(?!\\d)", Pattern.CASE_INSENSITIVE),
+        Pattern.compile("(?<!\\d)fable-5(?!\\d)", Pattern.CASE_INSENSITIVE)
+    );
 
     /**
      * Generate with tools and auto-execute them via ChatClient.

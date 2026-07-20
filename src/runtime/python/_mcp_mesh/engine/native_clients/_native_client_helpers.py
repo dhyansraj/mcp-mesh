@@ -13,6 +13,7 @@ otherwise — no module-level state here.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Callable
 
 
@@ -59,7 +60,61 @@ def reset_unsupported_kwargs_dedupe(dedupe_set: set[str]) -> None:
     dedupe_set.clear()
 
 
-def restricts_sampling_params(model: str | None) -> bool:
+# Sampling knobs that a restricted model rejects. ``top_k`` is Anthropic-only
+# (OpenAI has no such param); the OpenAI branch strips the first two.
+SAMPLING_PARAM_KEYS = ("temperature", "top_p", "top_k")
+
+
+# Anthropic REMOVED ``temperature`` / ``top_p`` / ``top_k`` on the Opus 4.7+ /
+# Sonnet 5 / Fable 5 families — presence of any of them is HTTP 400 (Sonnet 5
+# 400s on non-default values; mesh only forwards explicitly-set values, so
+# dropping is correct for both shapes).
+#
+# This list is deliberately NARROWER than
+# ``anthropic_native._NATIVE_OUTPUT_FORMAT_MODEL_PATTERNS``: ``opus-4-6``,
+# ``sonnet-4-6`` and ``haiku-4-5`` support native structured output but still
+# ACCEPT sampling params, so the two lists cannot be shared.
+#
+# Patterns (not raw substrings) so the trailing minor-version digit is
+# boundary-anchored: ``opus-4-7`` must NOT match a hypothetical future
+# ``opus-4-70``. Each pattern accepts both dash and dot separators (callers pass
+# both forms in the wild). ``re.search`` (not anchored to start) so vendor
+# prefixes (``anthropic/``, ``bedrock/anthropic.``, ``databricks/anthropic.``)
+# and date-pinned Bedrock ids still match — consistent with
+# ``anthropic_native.is_anthropic_model`` / ``supports_model``.
+_ANTHROPIC_SAMPLING_RESTRICTED_MODEL_PATTERNS = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"(?<!\d)sonnet-5(?!\d)",
+        r"(?<!\d)opus-4[-.]7(?!\d)",
+        r"(?<!\d)opus-4[-.]8(?!\d)",
+        r"(?<!\d)fable-5(?!\d)",
+    )
+)
+
+
+def restricts_anthropic_sampling_params(model: str | None) -> bool:
+    """Whether an Anthropic model rejects ``temperature``/``top_p``/``top_k``
+    outright (HTTP 400 when the field is present).
+
+    Matches the Opus 4.7 / Opus 4.8 / Sonnet 5 / Fable 5 families only:
+
+      * REJECT: claude-opus-4-7, claude-opus-4-8, claude-sonnet-5,
+        claude-fable-5 (bare, ``anthropic/``-, ``bedrock/anthropic.``- and
+        ``databricks/anthropic.``-prefixed, and date-pinned forms)
+      * ACCEPT: claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5,
+        claude-sonnet-4-5, claude-opus-4-5, claude-opus-4-1, all 3.x
+
+    Kept separate from the OpenAI predicate: the two vendors restrict different
+    key sets (Anthropic also drops ``top_k``) and OpenAI's restricted set has a
+    second meaning (Responses-API routing) that must not follow Anthropic ids.
+    """
+    if not model:
+        return False
+    return any(p.search(model) for p in _ANTHROPIC_SAMPLING_RESTRICTED_MODEL_PATTERNS)
+
+
+def restricts_openai_sampling_params(model: str | None) -> bool:
     """Whether an OpenAI model restricts ``temperature``/``top_p`` to their
     default value (rejecting any explicit setting with HTTP 400).
 
@@ -95,7 +150,28 @@ def restricts_sampling_params(model: str | None) -> bool:
 # to the Responses API when tools are present because they reason by default
 # and OpenAI 400s on reasoning + function tools on /v1/chat/completions. Single
 # implementation — no logic duplication; call whichever name reads best.
-is_openai_reasoning_model = restricts_sampling_params
+#
+# DELIBERATELY aliased to the OpenAI-ONLY predicate, not the vendor-agnostic
+# ``restricts_sampling_params`` below: "restricts sampling params" is now true
+# for Claude ids too, and an ``is_openai_reasoning_model("claude-opus-4-8")``
+# returning True would wrongly route Anthropic models to the OpenAI Responses
+# API (#1344).
+is_openai_reasoning_model = restricts_openai_sampling_params
+
+
+def restricts_sampling_params(model: str | None) -> bool:
+    """Vendor-agnostic gate: does ``model`` reject explicitly-set sampling
+    params (``temperature`` / ``top_p`` / ``top_k``)?
+
+    Union of the per-vendor predicates — OpenAI o-series + gpt-5 non-chat
+    (only-the-default) and Anthropic Opus 4.7+ / Sonnet 5 / Fable 5 (removed
+    entirely). Callers that need vendor-specific follow-on behavior (the
+    ``max_tokens`` → ``max_completion_tokens`` translation, Responses-API
+    routing) must use the vendor-specific predicate instead.
+    """
+    if restricts_openai_sampling_params(model):
+        return True
+    return restricts_anthropic_sampling_params(model)
 
 
 def translate_max_tokens_for_restricted(
@@ -110,7 +186,7 @@ def translate_max_tokens_for_restricted(
     Shared by the native OpenAI adapter and the LiteLLM path so their behavior
     cannot drift.
     """
-    if not restricts_sampling_params(model):
+    if not restricts_openai_sampling_params(model):
         return
     if params.get("max_tokens") is None:
         return
