@@ -154,6 +154,31 @@ jobs:
         working-directory: src/runtime/typescript
         run: npm test
 
+  ui-test:
+    name: UI Dashboard Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: src/ui/package-lock.json
+
+      - name: Install dashboard dependencies
+        run: npm ci
+
+      - name: Type check dashboard
+        run: npx tsc --noEmit
+
+      - name: Run dashboard tests
+        run: npm test
+
   java-test:
     name: Java Tests
     runs-on: ubuntu-latest
@@ -339,6 +364,7 @@ jobs:
         rust-test,
         typescript-test,
         java-test,
+        ui-test,
         build-and-package,
       ]
     if: always()
@@ -353,6 +379,7 @@ jobs:
           echo "Rust Tests: ${{ needs.rust-test.result }}"
           echo "TypeScript Tests: ${{ needs.typescript-test.result }}"
           echo "Java Tests: ${{ needs.java-test.result }}"
+          echo "UI Dashboard Tests: ${{ needs.ui-test.result }}"
           echo "Build and Package: ${{ needs.build-and-package.result }}"
 
           # Allow skipped status for temporarily disabled jobs
@@ -361,6 +388,7 @@ jobs:
              [[ "${{ needs.rust-test.result }}" != "success" ]] || \
              [[ "${{ needs.typescript-test.result }}" != "success" ]] || \
              [[ "${{ needs.java-test.result }}" != "success" ]] || \
+             [[ "${{ needs.ui-test.result }}" != "success" ]] || \
              [[ "${{ needs.build-and-package.result }}" != "success" ]]; then
             echo "❌ CI pipeline failed"
             exit 1
