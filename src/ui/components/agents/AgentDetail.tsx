@@ -349,12 +349,12 @@ export function AgentDetail({ agent }: AgentDetailProps) {
                         </div>
                         <StatusBadge status={res.status} />
                       </div>
-                      {(res.provider_agent_id || res.provider_function_name || res.endpoint) && (
+                      {(res.provider_agent_id || res.mcp_tool || res.endpoint) && (
                         <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
                           {res.provider_agent_id && (
                             <span>Provider: <span className={getDepStatusColor(res.status)}>{res.provider_agent_id}</span></span>
                           )}
-                          {res.provider_function_name && <span>Function: {res.provider_function_name}</span>}
+                          {res.mcp_tool && <span>MCP Tool: {res.mcp_tool}</span>}
                           {res.provider_capability && <span>Capability: {res.provider_capability}</span>}
                           {res.endpoint && (
                             <span className="font-mono truncate max-w-xs">{res.endpoint}</span>
@@ -395,12 +395,12 @@ export function AgentDetail({ agent }: AgentDetailProps) {
                         </div>
                         <StatusBadge status={res.status} />
                       </div>
-                      {(res.provider_agent_id || res.provider_function_name || res.endpoint) && (
+                      {(res.provider_agent_id || res.mcp_tool || res.endpoint) && (
                         <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
                           {res.provider_agent_id && (
                             <span>Provider: <span className={getDepStatusColor(res.status)}>{res.provider_agent_id}</span></span>
                           )}
-                          {res.provider_function_name && <span>Function: {res.provider_function_name}</span>}
+                          {res.mcp_tool && <span>MCP Tool: {res.mcp_tool}</span>}
                           {res.endpoint && (
                             <span className="font-mono truncate max-w-xs">{res.endpoint}</span>
                           )}

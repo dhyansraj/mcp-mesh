@@ -37,6 +37,16 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   return <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">{children}</h3>;
 }
 
+// Context line under a resolution row (capability · mcp tool). The registry can
+// return an empty string for either part — not just null/undefined — so parts
+// are filtered on truthiness and joined, and the whole line is dropped when
+// nothing is left rather than rendering an empty <p> or an orphaned separator.
+function ResolutionContextLine({ parts }: { parts: (string | null | undefined)[] }) {
+  const text = parts.filter((p): p is string => !!p).join(" · ");
+  if (!text) return null;
+  return <p className="text-[10px] text-muted-foreground">{text}</p>;
+}
+
 // Per-agent detail block — used for both single-agent selection and each
 // expanded accordion item in a group selection.
 export function AgentDetailBlock({ agent }: { agent: Agent }) {
@@ -139,10 +149,12 @@ export function AgentDetailBlock({ agent }: { agent: Agent }) {
                   </div>
                   <DepStatusBadge status={dep.status} />
                 </div>
-                <p className="text-[10px] text-muted-foreground">
-                  {dep.capability}
-                  {dep.mcp_tool ? ` (tool: ${dep.mcp_tool})` : ""}
-                </p>
+                <ResolutionContextLine parts={[dep.capability, dep.mcp_tool]} />
+                {dep.endpoint && (
+                  <p className="text-[10px] text-muted-foreground/80 font-mono truncate" title={dep.endpoint}>
+                    {dep.endpoint}
+                  </p>
+                )}
               </div>
             ))}
           </div>
@@ -163,7 +175,12 @@ export function AgentDetailBlock({ agent }: { agent: Agent }) {
                   </div>
                   <DepStatusBadge status={llm.status} />
                 </div>
-                <p className="text-[10px] text-muted-foreground">{llm.filter_capability}</p>
+                <ResolutionContextLine parts={[llm.filter_capability, llm.mcp_tool]} />
+                {llm.endpoint && (
+                  <p className="text-[10px] text-muted-foreground/80 font-mono truncate" title={llm.endpoint}>
+                    {llm.endpoint}
+                  </p>
+                )}
               </div>
             ))}
           </div>
@@ -184,7 +201,12 @@ export function AgentDetailBlock({ agent }: { agent: Agent }) {
                   </div>
                   <DepStatusBadge status={prov.status} />
                 </div>
-                <p className="text-[10px] text-muted-foreground">{prov.required_capability}</p>
+                <ResolutionContextLine parts={[prov.required_capability, prov.mcp_tool]} />
+                {prov.endpoint && (
+                  <p className="text-[10px] text-muted-foreground/80 font-mono truncate" title={prov.endpoint}>
+                    {prov.endpoint}
+                  </p>
+                )}
               </div>
             ))}
           </div>
