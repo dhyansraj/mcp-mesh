@@ -37,6 +37,18 @@ test:
     command: "cat gemini-test-ts/package.json"
     workdir: /workspace
     capture: package_json
+  # Scaffold with the vendor default (no --model) to guard the scaffolder default
+  - name: "Scaffold Gemini provider with vendor default model"
+    handler: shell
+    command: "meshctl scaffold llm-provider --vendor gemini --name gemini-default-ts --lang typescript"
+    workdir: /workspace
+    capture: default_scaffold_output
+  # Check the default-model index.ts
+  - name: "Check default index.ts content"
+    handler: shell
+    command: "cat gemini-default-ts/src/index.ts"
+    workdir: /workspace
+    capture: default_index_content
 assertions:
   # Scaffold succeeded
   - expr: ${last.exit_code} == 0
@@ -53,9 +65,9 @@ assertions:
   # Model should be gemini-2.5-pro (not outdated 1.5-flash)
   - expr: "${captured.index_content} contains 'gemini-2.5-pro'"
     message: "Should use gemini-2.5-pro model"
-  # Should NOT contain outdated model
-  - expr: "${captured.index_content} not contains 'gemini-1.5-flash'"
-    message: "Should NOT use outdated gemini-1.5-flash model"
+  # Vendor default must be the current gemini model, not a retired id
+  - expr: "${captured.default_index_content} contains 'gemini/gemini-2.5-flash'"
+    message: "Should scaffold the current gemini model"
   # package.json should have @mcpmesh/sdk dependency
   - expr: "${captured.package_json} contains '@mcpmesh/sdk'"
     message: "package.json should have @mcpmesh/sdk dependency"
