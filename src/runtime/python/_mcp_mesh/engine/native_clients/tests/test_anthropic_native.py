@@ -1914,3 +1914,106 @@ class TestIsFallbackLogged:
 
         anthropic_native.log_fallback_once()
         assert anthropic_native.is_fallback_logged() is True
+
+
+# ---------------------------------------------------------------------------
+# Sampling-param gating on the native path (#1344)
+# ---------------------------------------------------------------------------
+# Anthropic REMOVED temperature/top_p/top_k on Opus 4.7+ / Sonnet 5 / Fable 5;
+# forwarding them is a hard HTTP 400. The adapter drops them (with a
+# once-per-key WARN) for those families and forwards them unchanged elsewhere.
+
+
+class TestSamplingParamGating:
+    @pytest.fixture(autouse=True)
+    def _reset_dedupe(self):
+        anthropic_native._logged_dropped_sampling_params.clear()
+        yield
+        anthropic_native._logged_dropped_sampling_params.clear()
+
+    def _build(self, model: str, **params):
+        request_params = {
+            "messages": [{"role": "user", "content": "Hi."}],
+            **params,
+        }
+        return anthropic_native._build_create_kwargs(
+            request_params, model=model, stream=False
+        )
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "anthropic/claude-opus-4-7",
+            "anthropic/claude-opus-4-8",
+            "anthropic/claude-sonnet-5",
+            "anthropic/claude-fable-5",
+            "bedrock/anthropic.claude-opus-4-8-20260101-v1:0",
+        ],
+    )
+    def test_restricted_model_drops_all_three_sampling_params(self, model):
+        kwargs = self._build(model, temperature=0.7, top_p=0.9, top_k=40)
+        assert "temperature" not in kwargs
+        assert "top_p" not in kwargs
+        assert "top_k" not in kwargs
+        # max_tokens is REQUIRED by Anthropic — never stripped.
+        assert kwargs["max_tokens"] == 8192
+
+    def test_restricted_model_keeps_other_kwargs(self):
+        kwargs = self._build(
+            "anthropic/claude-opus-4-8",
+            temperature=0.7,
+            max_tokens=1024,
+            stop_sequences=["END"],
+        )
+        assert "temperature" not in kwargs
+        assert kwargs["max_tokens"] == 1024
+        assert kwargs["stop_sequences"] == ["END"]
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "anthropic/claude-opus-4-6",
+            "anthropic/claude-sonnet-4-6",
+            "anthropic/claude-haiku-4-5",
+            "anthropic/claude-sonnet-4-5",
+            # Boundary guard — a future minor version must not be caught by the
+            # shorter ``opus-4-7`` pattern.
+            "anthropic/claude-opus-4-70",
+        ],
+    )
+    def test_unrestricted_model_forwards_sampling_params(self, model):
+        kwargs = self._build(model, temperature=0.7, top_p=0.9, top_k=40)
+        assert kwargs["temperature"] == 0.7
+        assert kwargs["top_p"] == 0.9
+        assert kwargs["top_k"] == 40
+
+    def test_drop_emits_warn_naming_each_key(self, caplog):
+        with caplog.at_level("WARNING", logger=anthropic_native.logger.name):
+            self._build("anthropic/claude-opus-4-8", temperature=0.7, top_p=0.9, top_k=40)
+        warn_msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert any("temperature" in m for m in warn_msgs)
+        assert any("top_p" in m for m in warn_msgs)
+        assert any("top_k" in m for m in warn_msgs)
+
+    def test_warn_fires_once_per_key_across_requests(self, caplog):
+        with caplog.at_level("WARNING", logger=anthropic_native.logger.name):
+            for _ in range(3):
+                self._build("anthropic/claude-opus-4-8", temperature=0.7, top_p=0.9)
+        warn_msgs = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelname == "WARNING" and "rejects" in r.getMessage()
+        ]
+        assert len(warn_msgs) == 2, f"expected one WARN per key; got {warn_msgs}"
+        assert sum("rejects temperature" in m for m in warn_msgs) == 1
+        assert sum("rejects top_p" in m for m in warn_msgs) == 1
+
+    def test_dropped_params_do_not_trip_unsupported_kwarg_warn(self, caplog):
+        """The sampling keys stay in the passthrough allow-list — dropping them
+        must NOT also fire the generic 'dropping unsupported kwarg' WARN."""
+        anthropic_native._logged_unsupported_kwargs.clear()
+        with caplog.at_level("WARNING", logger=anthropic_native.logger.name):
+            self._build("anthropic/claude-opus-4-8", temperature=0.7)
+        assert not any(
+            "dropping unsupported kwarg" in r.getMessage() for r in caplog.records
+        )

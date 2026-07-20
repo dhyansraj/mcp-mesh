@@ -143,3 +143,73 @@ class TestBuildIterationCompletionArgsGating:
         args = self._build("gpt-4o", {"temperature": 0.7, "top_p": 0.9})
         assert args["temperature"] == 0.7
         assert args["top_p"] == 0.9
+
+
+# ---------------------------------------------------------------------------
+# Anthropic branch (#1344)
+# ---------------------------------------------------------------------------
+# Anthropic REMOVED temperature/top_p/top_k on Opus 4.7+ / Sonnet 5 / Fable 5;
+# their presence is HTTP 400. The sanitizer must strip all three for those
+# families and leave max_tokens alone (Anthropic REQUIRES it).
+
+
+class TestSanitizeSamplingParamsAnthropic:
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "anthropic/claude-opus-4-7",
+            "anthropic/claude-opus-4-8",
+            "anthropic/claude-sonnet-5",
+            "anthropic/claude-fable-5",
+            "bedrock/anthropic.claude-opus-4-8-20260101-v1:0",
+            "databricks/anthropic.claude-sonnet-5",
+            "claude-opus-4-8",
+        ],
+    )
+    def test_restricted_claude_pops_all_three(self, model):
+        args = {"temperature": 0.7, "top_p": 0.9, "top_k": 40, "model": model}
+        _sanitize_sampling_params(args, model)
+        assert args == {"model": model}
+
+    def test_restricted_claude_keeps_max_tokens(self):
+        args = {"temperature": 0.7, "max_tokens": 1024}
+        _sanitize_sampling_params(args, "anthropic/claude-opus-4-8")
+        assert args == {"max_tokens": 1024}
+        assert "max_completion_tokens" not in args
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "anthropic/claude-opus-4-6",
+            "anthropic/claude-sonnet-4-6",
+            "anthropic/claude-haiku-4-5",
+            "anthropic/claude-sonnet-4-5",
+            "anthropic/claude-opus-4-1",
+            "claude-3-5-sonnet-20241022",
+            # Boundary guard.
+            "anthropic/claude-opus-4-70",
+        ],
+    )
+    def test_unrestricted_claude_is_noop(self, model):
+        args = {"temperature": 0.7, "top_p": 0.9, "top_k": 40, "max_tokens": 512}
+        _sanitize_sampling_params(args, model)
+        assert args == {
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "top_k": 40,
+            "max_tokens": 512,
+        }
+
+    def test_restricted_claude_warns_per_dropped_key(self, caplog):
+        args = {"temperature": 0.7, "top_p": 0.9, "top_k": 40}
+        with caplog.at_level(logging.WARNING):
+            _sanitize_sampling_params(args, "anthropic/claude-opus-4-8")
+        warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("temperature" in m for m in warnings)
+        assert any("top_p" in m for m in warnings)
+        assert any("top_k" in m for m in warnings)
+
+    def test_unset_params_are_left_unset(self):
+        args = {"temperature": 0.7}
+        _sanitize_sampling_params(args, "anthropic/claude-sonnet-5")
+        assert args == {}

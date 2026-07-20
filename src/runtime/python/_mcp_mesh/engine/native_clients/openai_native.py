@@ -46,7 +46,7 @@ from ._native_client_helpers import (
     make_is_available,
     reset_unsupported_kwargs_dedupe,
     resolve_request_timeout,
-    restricts_sampling_params,
+    restricts_openai_sampling_params,
     translate_max_tokens_for_restricted,
     warn_unsupported_kwarg_once,
 )
@@ -488,7 +488,7 @@ def _build_create_kwargs(
     # Omit those two params for the restricted models (everything else,
     # including ``max_completion_tokens``, is forwarded normally). Soft-fail
     # with a WARN per omitted param rather than letting the request 400.
-    restricted = restricts_sampling_params(model)
+    restricted = restricts_openai_sampling_params(model)
 
     for key in _OPENAI_PASSTHROUGH_KWARGS:
         value = request_params.get(key)

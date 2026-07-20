@@ -3,6 +3,8 @@ package io.mcpmesh.ai.handlers;
 import io.mcpmesh.ai.handlers.LlmProviderHandler.OutputSchema;
 import io.mcpmesh.ai.handlers.LlmProviderHandler.ToolDefinition;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.anthropic.AnthropicChatOptions;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -199,6 +201,101 @@ class ProviderModelParamsTest {
                 "cross-vendor model override must be ignored");
             assertEquals(AnthropicChatOptions.DEFAULT_MODEL, opts.getModel(),
                 "unresolved model falls back to the Anthropic SDK default (GA)");
+        }
+
+        // -----------------------------------------------------------------
+        // Sampling-param gating (#1344)
+        // -----------------------------------------------------------------
+        // Anthropic REMOVED temperature/top_p on the Opus 4.7+ / Sonnet 5 /
+        // Fable 5 families — their presence is a hard HTTP 400. Mirrors the
+        // OpenAiHandler gate; Java never sets top_k so only two params apply.
+
+        private AnthropicChatOptions callWith(String model) {
+            ArgumentCaptor<Prompt> captor = ArgumentCaptor.forClass(Prompt.class);
+            ChatModel chatModel = mockModel(captor);
+
+            Map<String, Object> options = new LinkedHashMap<>();
+            options.put(LlmProviderHandler.OPTION_MODEL, "anthropic/" + model);
+            options.put(LlmProviderHandler.OPTION_MAX_TOKENS, 1000);
+            options.put(LlmProviderHandler.OPTION_TEMPERATURE, 0.7);
+            options.put(LlmProviderHandler.OPTION_TOP_P, 0.9);
+
+            handler.generateWithTools(chatModel, userMessages(), List.of(), null, null, options);
+            return (AnthropicChatOptions) captor.getValue().getOptions();
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {
+            "claude-opus-4-7",
+            "claude-opus-4-8",
+            "claude-sonnet-5",
+            "claude-fable-5",
+            "claude-opus-4.8",
+            "claude-sonnet-5-20260201",
+        })
+        @DisplayName("restricted models omit temperature/top_p but keep maxTokens")
+        void restrictedModelOmitsSamplingParams(String model) {
+            AnthropicChatOptions opts = callWith(model);
+            assertNull(opts.getTemperature(), "temperature must be omitted for " + model);
+            assertNull(opts.getTopP(), "top_p must be omitted for " + model);
+            // Anthropic REQUIRES max_tokens — never stripped.
+            assertEquals(1000, opts.getMaxTokens());
+            assertEquals(model, opts.getModel());
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5",
+            "claude-sonnet-4-5",
+            "claude-opus-4-1",
+            "claude-3-5-sonnet-20241022",
+            // Boundary guard — a future minor version must not match the
+            // shorter "opus-4-7" pattern.
+            "claude-opus-4-70",
+        })
+        @DisplayName("unrestricted models still apply temperature/top_p")
+        void unrestrictedModelAppliesSamplingParams(String model) {
+            AnthropicChatOptions opts = callWith(model);
+            assertEquals(0.7, opts.getTemperature(), 1e-9);
+            assertEquals(0.9, opts.getTopP(), 1e-9);
+        }
+
+        @Test
+        @DisplayName("restrictsSamplingParams truth table")
+        void restrictsSamplingParamsTruthTable() {
+            // Restricted — bare, vendor-prefixed, bedrock/databricks, dotted,
+            // date-pinned, and case-insensitive forms.
+            assertTrue(AnthropicHandler.restrictsSamplingParams("claude-sonnet-5"));
+            assertTrue(AnthropicHandler.restrictsSamplingParams("claude-opus-4-7"));
+            assertTrue(AnthropicHandler.restrictsSamplingParams("claude-opus-4-8"));
+            assertTrue(AnthropicHandler.restrictsSamplingParams("claude-fable-5"));
+            assertTrue(AnthropicHandler.restrictsSamplingParams("anthropic/claude-opus-4-8"));
+            assertTrue(AnthropicHandler.restrictsSamplingParams(
+                "bedrock/anthropic.claude-opus-4-8-20260101-v1:0"));
+            assertTrue(AnthropicHandler.restrictsSamplingParams(
+                "databricks/anthropic.claude-sonnet-5"));
+            assertTrue(AnthropicHandler.restrictsSamplingParams("anthropic/claude-opus-4.7"));
+            assertTrue(AnthropicHandler.restrictsSamplingParams("claude-sonnet-5-20260201"));
+            assertTrue(AnthropicHandler.restrictsSamplingParams("ANTHROPIC/CLAUDE-OPUS-4-8"));
+
+            // Unrestricted — structured-output-capable models that still accept
+            // sampling params, plus the boundary/leading-digit guards.
+            assertFalse(AnthropicHandler.restrictsSamplingParams("claude-opus-4-6"));
+            assertFalse(AnthropicHandler.restrictsSamplingParams("claude-sonnet-4-6"));
+            assertFalse(AnthropicHandler.restrictsSamplingParams("claude-haiku-4-5"));
+            assertFalse(AnthropicHandler.restrictsSamplingParams("claude-sonnet-4-5"));
+            assertFalse(AnthropicHandler.restrictsSamplingParams("claude-opus-4-5"));
+            assertFalse(AnthropicHandler.restrictsSamplingParams("claude-opus-4-1"));
+            assertFalse(AnthropicHandler.restrictsSamplingParams("claude-3-5-sonnet-20241022"));
+            assertFalse(AnthropicHandler.restrictsSamplingParams("claude-opus-4-70"));
+            assertFalse(AnthropicHandler.restrictsSamplingParams("claude-opus-4-80"));
+            assertFalse(AnthropicHandler.restrictsSamplingParams("claude-sonnet-50"));
+            assertFalse(AnthropicHandler.restrictsSamplingParams("claude-fable-50"));
+            assertFalse(AnthropicHandler.restrictsSamplingParams("claude-opus-14-7"));
+            assertFalse(AnthropicHandler.restrictsSamplingParams("openai/gpt-4o"));
+            assertFalse(AnthropicHandler.restrictsSamplingParams(null));
         }
     }
 

@@ -1107,6 +1107,79 @@ _GEMINI_HANDLED_KWARGS = frozenset({
 })
 
 
+def _resolve_thinking_config_exclusion(thinking_config: Any) -> Any:
+    """Enforce Google's ``thinking_level`` / ``thinking_budget`` mutual
+    exclusion before the request leaves mesh (#1346).
+
+    Google's ``generateContent`` rejects a request carrying BOTH fields with
+    ``400 You can only set only one of thinking budget and thinking level.``
+    This is a **global request-validation check** that fires ahead of the
+    per-model support check — it is model-independent (it is the error even on
+    models that support neither field), so this guard is deliberately NOT gated
+    on model id or generation. Do not add a model allowlist here: measurement
+    against the live API shows level/budget support is per-model with differing
+    accepted value subsets, and any hard-coded table would be wrong on day one
+    and rot on every model launch.
+
+    The check fires on field PRESENCE, not value: ``{"thinkingLevel":
+    "THINKING_LEVEL_UNSPECIFIED", "thinkingBudget": 1024}`` still 400s.
+
+    **Resolution is deterministic: ``thinking_level`` WINS, ``thinking_budget``
+    is dropped.** ``thinking_level`` is the newer, portable-forward field
+    (Google no longer documents ``thinking_budget``); keeping it means a caller
+    who set both gets the more future-proof of the two honored.
+
+    The dropped field is OMITTED entirely (dict key(s) removed / model field set
+    to ``None``) — never replaced with an "unspecified" sentinel, which would
+    still trip the 400 since presence is what is checked. ``None`` fields are
+    excluded at serialization time by google-genai, so this keeps the verified
+    property that ``ThinkingConfig(**{"thinking_budget": 512})`` emits exactly
+    ``{"thinkingBudget": 512}``.
+
+    Accepts (and returns) either a plain dict or a ``ThinkingConfig`` instance.
+    For dicts BOTH spellings are recognized — google-genai accepts the
+    camelCase aliases (``thinkingLevel`` / ``thinkingBudget``) as constructor
+    kwargs, so a camelCase or mixed-spelling dict must not bypass the guard.
+    The surviving level keeps the caller's original key spelling; every budget
+    spelling is removed. A no-op when fewer than two of the fields are set to
+    non-``None`` values.
+    """
+    if isinstance(thinking_config, dict):
+        level = thinking_config.get("thinking_level")
+        if level is None:
+            level = thinking_config.get("thinkingLevel")
+        budget = thinking_config.get("thinking_budget")
+        if budget is None:
+            budget = thinking_config.get("thinkingBudget")
+        if level is None or budget is None:
+            return thinking_config
+        logger.warning(
+            "Native Gemini adapter: thinking_config sets both thinking_level=%r "
+            "and thinking_budget=%r; Google accepts only one — dropping "
+            "thinking_budget and keeping thinking_level",
+            level,
+            budget,
+        )
+        resolved = dict(thinking_config)
+        resolved.pop("thinking_budget", None)
+        resolved.pop("thinkingBudget", None)
+        return resolved
+
+    level = getattr(thinking_config, "thinking_level", None)
+    budget = getattr(thinking_config, "thinking_budget", None)
+    if level is None or budget is None:
+        return thinking_config
+    logger.warning(
+        "Native Gemini adapter: thinking_config sets both thinking_level=%r "
+        "and thinking_budget=%r; Google accepts only one — dropping "
+        "thinking_budget and keeping thinking_level",
+        level,
+        budget,
+    )
+    # Pydantic model → copy with the loser set to None (excluded on the wire).
+    return thinking_config.model_copy(update={"thinking_budget": None})
+
+
 def _build_create_kwargs(
     request_params: dict[str, Any],
     *,
@@ -1235,9 +1308,13 @@ def _build_create_kwargs(
         from google.genai.types import ThinkingConfig
 
         if isinstance(thinking_config, ThinkingConfig):
-            config["thinking_config"] = thinking_config
+            config["thinking_config"] = _resolve_thinking_config_exclusion(
+                thinking_config
+            )
         elif isinstance(thinking_config, dict):
-            config["thinking_config"] = ThinkingConfig(**thinking_config)
+            config["thinking_config"] = ThinkingConfig(
+                **_resolve_thinking_config_exclusion(thinking_config)
+            )
         else:
             # Unsupported type — key is in the passthrough set so the generic
             # "unknown kwarg" WARN-once filter won't fire; emit a dedicated

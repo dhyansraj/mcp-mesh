@@ -38,7 +38,11 @@ vi.mock("../tracing.js", () => ({
   matchesPropagateHeader: () => false,
 }));
 
-import { llmProvider, restrictsSamplingParams } from "../llm-provider.js";
+import {
+  llmProvider,
+  restrictsAnthropicSamplingParams,
+  restrictsSamplingParams,
+} from "../llm-provider.js";
 
 // ----------------------------------------------------------------------------
 // Classifier truth table
@@ -244,5 +248,164 @@ describe("OpenAI sampling-param gating — vendor call options", () => {
     const opts = generateObjectMock.mock.calls[0][0] as Record<string, unknown>;
     expect(opts.temperature).toBe(0.7);
     expect(opts.topP).toBe(0.9);
+  });
+});
+
+// ----------------------------------------------------------------------------
+// Anthropic classifier truth table (#1344)
+// ----------------------------------------------------------------------------
+// Anthropic REMOVED temperature/top_p/top_k on the Opus 4.7+ / Sonnet 5 /
+// Fable 5 families — presence is a hard HTTP 400. Narrower than the native
+// structured-output model set: opus-4-6 / sonnet-4-6 / haiku-4-5 still accept
+// sampling params and must NOT be caught. Mirrors Python
+// `restricts_anthropic_sampling_params` / Java
+// `AnthropicHandler.restrictsSamplingParams`.
+
+describe("restrictsAnthropicSamplingParams truth table", () => {
+  it.each([
+    "claude-sonnet-5",
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+    "claude-fable-5",
+    "anthropic/claude-sonnet-5",
+    "anthropic/claude-opus-4-7",
+    "anthropic/claude-opus-4-8",
+    "anthropic/claude-fable-5",
+    "bedrock/anthropic.claude-opus-4-8-20260101-v1:0",
+    "databricks/anthropic.claude-sonnet-5",
+    "anthropic/claude-opus-4.7",
+    "anthropic/claude-opus-4.8",
+    "claude-sonnet-5-20260201",
+    "ANTHROPIC/CLAUDE-OPUS-4-8", // case-insensitive
+  ])("restricts %s", (model) => {
+    expect(restrictsAnthropicSamplingParams(model)).toBe(true);
+    expect(restrictsSamplingParams(model)).toBe(true);
+  });
+
+  it.each([
+    "anthropic/claude-opus-4-6",
+    "anthropic/claude-sonnet-4-6",
+    "anthropic/claude-haiku-4-5",
+    "anthropic/claude-sonnet-4-5",
+    "anthropic/claude-opus-4-5",
+    "anthropic/claude-opus-4-1",
+    "claude-3-5-sonnet-20241022",
+    "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+    // Boundary guard: a hypothetical future minor version must NOT match the
+    // shorter pattern.
+    "anthropic/claude-opus-4-70",
+    "anthropic/claude-opus-4-80",
+    "anthropic/claude-sonnet-50",
+    "anthropic/claude-fable-50",
+    // Leading-digit guard.
+    "anthropic/claude-opus-14-7",
+    "openai/gpt-4o",
+    "gemini/gemini-2.5-flash",
+    undefined,
+    null,
+    "",
+  ])("does not restrict %s", (model) => {
+    expect(
+      restrictsAnthropicSamplingParams(model as string | undefined | null),
+    ).toBe(false);
+  });
+});
+
+// ----------------------------------------------------------------------------
+// Behavioral — Anthropic (#1344)
+// ----------------------------------------------------------------------------
+
+describe("Anthropic sampling-param gating — vendor call options", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    process.env.ANTHROPIC_API_KEY = "sk-test";
+    generateObjectMock.mockReset();
+    generateTextMock.mockReset();
+    generateObjectMock.mockResolvedValue({
+      object: { answer: "ok" },
+      usage: { inputTokens: 1, outputTokens: 1 },
+      finishReason: "stop",
+    });
+    generateTextMock.mockResolvedValue({
+      text: "ok",
+      toolCalls: [],
+      usage: { inputTokens: 1, outputTokens: 1 },
+      finishReason: "stop",
+    });
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    "anthropic/claude-opus-4-8",
+    "anthropic/claude-opus-4-7",
+    "anthropic/claude-sonnet-5",
+    "anthropic/claude-fable-5",
+  ])("omits temperature/topP for a restricted model (%s)", async (model) => {
+    const tool = llmProvider({
+      model,
+      capability: "llm",
+      temperature: 0.7,
+      topP: 0.9,
+    });
+    await tool.execute(baseRequest({}) as never);
+
+    expect(generateTextMock).toHaveBeenCalledTimes(1);
+    const opts = generateTextMock.mock.calls[0][0] as Record<string, unknown>;
+    expect("temperature" in opts).toBe(false);
+    expect("topP" in opts).toBe(false);
+    // mesh surfaces its own warning (one per omitted param).
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    "anthropic/claude-opus-4-6",
+    "anthropic/claude-sonnet-4-6",
+    "anthropic/claude-haiku-4-5",
+    "anthropic/claude-opus-4-70",
+  ])("keeps temperature/topP for an unrestricted model (%s)", async (model) => {
+    const tool = llmProvider({
+      model,
+      capability: "llm",
+      temperature: 0.7,
+      topP: 0.9,
+    });
+    await tool.execute(baseRequest({}) as never);
+
+    const opts = generateTextMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(opts.temperature).toBe(0.7);
+    expect(opts.topP).toBe(0.9);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("omits temperature/topP supplied via model_params for a restricted model", async () => {
+    const tool = llmProvider({
+      model: "anthropic/claude-opus-4-8",
+      capability: "llm",
+    });
+    await tool.execute(baseRequest({ temperature: 0.3, top_p: 0.5 }) as never);
+
+    const opts = generateTextMock.mock.calls[0][0] as Record<string, unknown>;
+    expect("temperature" in opts).toBe(false);
+    expect("topP" in opts).toBe(false);
+  });
+
+  it("does not touch maxOutputTokens for a restricted model", async () => {
+    // Anthropic REQUIRES max_tokens — the gate must never strip it.
+    const tool = llmProvider({
+      model: "anthropic/claude-opus-4-8",
+      capability: "llm",
+      maxOutputTokens: 4096,
+      temperature: 0.7,
+    });
+    await tool.execute(baseRequest({}) as never);
+
+    const opts = generateTextMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(opts.maxOutputTokens).toBe(4096);
+    expect("temperature" in opts).toBe(false);
   });
 });

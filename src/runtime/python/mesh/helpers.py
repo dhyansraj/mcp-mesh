@@ -2408,29 +2408,50 @@ def _sanitize_sampling_params(
     completion_args: dict[str, Any], effective_model: str
 ) -> None:
     """Rewrite restricted-model sampling params in ``completion_args`` in place
-    when the effective OpenAI model rejects them (o-series / gpt-5 non-chat).
+    when the effective model rejects them.
 
-    OpenAI reasoning models and the gpt-5 family (except gpt-5-chat) return
-    HTTP 400 for any explicit ``temperature``/``top_p`` and for the raw
-    ``max_tokens`` param. For those models this:
+    Two vendor branches:
 
-      * pops ``temperature``/``top_p`` (only the default is accepted), and
-      * translates ``max_tokens`` → ``max_completion_tokens`` (unless a
-        ``max_completion_tokens`` is already present, which wins), popping the
-        raw ``max_tokens`` so it never reaches the wire.
+      * **Anthropic** (Opus 4.7+ / Sonnet 5 / Fable 5) — ``temperature``,
+        ``top_p`` and ``top_k`` were REMOVED; their presence is HTTP 400. All
+        three are popped. ``max_tokens`` is required by Anthropic and left
+        alone (#1344).
+      * **OpenAI** (o-series / gpt-5 non-chat) — return HTTP 400 for any
+        explicit ``temperature``/``top_p`` and for the raw ``max_tokens``. Those
+        two sampling params are popped and ``max_tokens`` is translated to
+        ``max_completion_tokens`` (unless a ``max_completion_tokens`` is already
+        present, which wins), popping the raw ``max_tokens`` so it never reaches
+        the wire.
 
-    Each rewrite emits a WARN (soft-fail, mesh philosophy). The classifier
-    strips the vendor prefix and matches only OpenAI restricted names, so this
-    is a safe no-op for gemini/anthropic and for unrestricted OpenAI models
-    (gpt-4o, gpt-4.1, gpt-5-chat-latest). Only present params are touched —
-    mesh sends no defaults, so an unset value is left unset.
+    Each rewrite emits a WARN (soft-fail, mesh philosophy). Non-matching models
+    are untouched, so this is a safe no-op for gemini, for unrestricted OpenAI
+    models (gpt-4o, gpt-4.1, gpt-5-chat-latest) and for unrestricted Claude
+    models (opus-4-6, sonnet-4-6, haiku-4-5, 3.x). Only present params are
+    touched — mesh sends no defaults, so an unset value is left unset.
     """
     from _mcp_mesh.engine.native_clients._native_client_helpers import (
-        restricts_sampling_params,
+        SAMPLING_PARAM_KEYS,
+        restricts_anthropic_sampling_params,
+        restricts_openai_sampling_params,
         translate_max_tokens_for_restricted,
     )
 
-    if not restricts_sampling_params(effective_model):
+    if restricts_anthropic_sampling_params(effective_model):
+        for key in SAMPLING_PARAM_KEYS:
+            if completion_args.get(key) is not None:
+                value = completion_args.pop(key)
+                logger.warning(
+                    "Anthropic model %s rejects %s; omitting %s=%s "
+                    "(sampling params are not supported by this model family)",
+                    effective_model,
+                    key,
+                    key,
+                    value,
+                )
+        # Anthropic REQUIRES max_tokens — no translation, no removal.
+        return
+
+    if not restricts_openai_sampling_params(effective_model):
         return
     for key in ("temperature", "top_p"):
         if completion_args.get(key) is not None:
