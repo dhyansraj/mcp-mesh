@@ -31,7 +31,7 @@ func TestIsValidLLMVendor(t *testing.T) {
 func TestVendorToModel(t *testing.T) {
 	assert.Equal(t, "anthropic/claude-sonnet-5", VendorToModel("claude"))
 	assert.Equal(t, "openai/gpt-4o", VendorToModel("openai"))
-	assert.Equal(t, "gemini/gemini-1.5-pro", VendorToModel("gemini"))
+	assert.Equal(t, "gemini/gemini-2.5-flash", VendorToModel("gemini"))
 	assert.NotEmpty(t, VendorToModel("litellm-fallback"))
 	assert.Equal(t, "", VendorToModel("unknown"))
 }

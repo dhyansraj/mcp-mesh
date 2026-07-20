@@ -19,7 +19,7 @@ var supportedLLMRuntimes = []string{"python", "typescript", "java"}
 var vendorToModel = map[string]string{
 	"claude":           "anthropic/claude-sonnet-5",
 	"openai":           "openai/gpt-4o",
-	"gemini":           "gemini/gemini-1.5-pro",
+	"gemini":           "gemini/gemini-2.5-flash",
 	"litellm-fallback": "openai/gpt-4o",
 }
 

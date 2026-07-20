@@ -37,6 +37,18 @@ test:
     command: "grep -E 'model\\s*=' gemini-test/main.py || echo 'model not found'"
     workdir: /workspace
     capture: model_line
+  # Scaffold with the vendor default (no --model) to guard the scaffolder default
+  - name: "Scaffold Gemini provider with vendor default model"
+    handler: shell
+    command: "meshctl scaffold llm-provider --vendor gemini --name gemini-default --lang python"
+    workdir: /workspace
+    capture: default_scaffold_output
+  # Check the default-model main.py
+  - name: "Check default main.py content"
+    handler: shell
+    command: "cat gemini-default/main.py"
+    workdir: /workspace
+    capture: default_main_content
 assertions:
   # Scaffold succeeded
   - expr: ${last.exit_code} == 0
@@ -56,8 +68,8 @@ assertions:
   # Model should be gemini-2.5-pro (not outdated 1.5-flash)
   - expr: "${captured.main_content} contains 'gemini-2.5-pro'"
     message: "Should use gemini-2.5-pro model"
-  # Should NOT contain outdated model
-  - expr: "${captured.main_content} not contains 'gemini-1.5-flash'"
-    message: "Should NOT use outdated gemini-1.5-flash model"
+  # Vendor default must be the current gemini model, not a retired id
+  - expr: "${captured.default_main_content} contains 'gemini/gemini-2.5-flash'"
+    message: "Should scaffold the current gemini model"
 post_run:
   - routine: global.cleanup_workspace
