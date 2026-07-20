@@ -74,7 +74,7 @@ export interface LLMToolResolution {
   filter_mode?: string;
   status: "available" | "unavailable" | "unresolved";
   provider_agent_id?: string;
-  provider_function_name?: string;
+  mcp_tool?: string;
   provider_capability?: string;
   endpoint?: string;
 }
@@ -85,7 +85,7 @@ export interface LLMProviderResolution {
   required_tags?: string[];
   status: "available" | "unavailable" | "unresolved";
   provider_agent_id?: string;
-  provider_function_name?: string;
+  mcp_tool?: string;
   endpoint?: string;
 }
 

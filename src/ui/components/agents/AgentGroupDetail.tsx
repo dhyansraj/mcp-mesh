@@ -141,8 +141,13 @@ export function AgentDetailBlock({ agent }: { agent: Agent }) {
                 </div>
                 <p className="text-[10px] text-muted-foreground">
                   {dep.capability}
-                  {dep.mcp_tool ? ` (tool: ${dep.mcp_tool})` : ""}
+                  {dep.mcp_tool ? ` · ${dep.mcp_tool}` : ""}
                 </p>
+                {dep.endpoint && (
+                  <p className="text-[10px] text-muted-foreground/80 font-mono truncate" title={dep.endpoint}>
+                    {dep.endpoint}
+                  </p>
+                )}
               </div>
             ))}
           </div>
@@ -163,7 +168,15 @@ export function AgentDetailBlock({ agent }: { agent: Agent }) {
                   </div>
                   <DepStatusBadge status={llm.status} />
                 </div>
-                <p className="text-[10px] text-muted-foreground">{llm.filter_capability}</p>
+                <p className="text-[10px] text-muted-foreground">
+                  {llm.filter_capability}
+                  {llm.mcp_tool ? ` · ${llm.mcp_tool}` : ""}
+                </p>
+                {llm.endpoint && (
+                  <p className="text-[10px] text-muted-foreground/80 font-mono truncate" title={llm.endpoint}>
+                    {llm.endpoint}
+                  </p>
+                )}
               </div>
             ))}
           </div>
@@ -184,7 +197,15 @@ export function AgentDetailBlock({ agent }: { agent: Agent }) {
                   </div>
                   <DepStatusBadge status={prov.status} />
                 </div>
-                <p className="text-[10px] text-muted-foreground">{prov.required_capability}</p>
+                <p className="text-[10px] text-muted-foreground">
+                  {prov.required_capability}
+                  {prov.mcp_tool ? ` · ${prov.mcp_tool}` : ""}
+                </p>
+                {prov.endpoint && (
+                  <p className="text-[10px] text-muted-foreground/80 font-mono truncate" title={prov.endpoint}>
+                    {prov.endpoint}
+                  </p>
+                )}
               </div>
             ))}
           </div>
