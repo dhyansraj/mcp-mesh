@@ -1,5 +1,5 @@
 # Dockerfile for thumbnail-provider MCP Mesh agent
-FROM mcpmesh/python-runtime:3.2.1
+FROM mcpmesh/python-runtime:3.2.2
 
 WORKDIR /app
 
