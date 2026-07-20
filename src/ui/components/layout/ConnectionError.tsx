@@ -9,10 +9,14 @@ interface ConnectionErrorProps {
 }
 
 export function ConnectionError({ error, onRetry }: ConnectionErrorProps) {
+  // Tolerate a non-Error value: a miscast call site should degrade to a
+  // readable message rather than crash the page inside the error boundary.
+  const message = error instanceof Error ? error.message : String(error ?? "");
+
   const isNetworkError =
-    error.message.includes("Failed to fetch") ||
-    error.message.includes("NetworkError") ||
-    error.message.includes("ECONNREFUSED");
+    message.includes("Failed to fetch") ||
+    message.includes("NetworkError") ||
+    message.includes("ECONNREFUSED");
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center px-6 py-8">
@@ -32,7 +36,7 @@ export function ConnectionError({ error, onRetry }: ConnectionErrorProps) {
           <p className="mt-1 text-sm text-muted-foreground">
             {isNetworkError
               ? `The dashboard cannot reach the MCP Mesh registry at ${API_BASE}`
-              : error.message}
+              : message}
           </p>
         </div>
 

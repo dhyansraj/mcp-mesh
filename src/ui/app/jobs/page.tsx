@@ -53,7 +53,7 @@ export default function JobsPage() {
     return (
       <div className="flex flex-col h-full">
         <Header title="Jobs" subtitle="Long-running MeshJob coordination (read-only)" />
-        <ConnectionError error={error} onRetry={refresh} />
+        <ConnectionError error={new Error(error)} onRetry={refresh} />
       </div>
     );
   }
