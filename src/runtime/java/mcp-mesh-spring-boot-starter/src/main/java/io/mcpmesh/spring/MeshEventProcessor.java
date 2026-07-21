@@ -331,7 +331,7 @@ public class MeshEventProcessor implements SmartLifecycle {
             String contextParam = config != null ? config.contextParam() : "ctx";
             int maxIterations = config != null ? config.maxIterations()
                 : MeshLlmRegistry.resolveMaxIterations(
-                    System.getenv("MESH_LLM_MAX_ITERATIONS"), MeshLlmDefaults.MAX_ITERATIONS);
+                    System.getenv("MESH_LLM_MAX_ITERATIONS"), MeshLlmDefaults.MAX_ITERATIONS_UNSET);
             boolean parallelToolCalls = config != null && config.parallelToolCalls();
             int maxTokens = config != null ? config.maxTokens() : MeshLlmDefaults.MAX_TOKENS_UNSET;
             double temperature = config != null ? config.temperature() : MeshLlmDefaults.TEMPERATURE_UNSET;
@@ -514,7 +514,7 @@ public class MeshEventProcessor implements SmartLifecycle {
             String contextParam = config != null ? config.contextParam() : "ctx";
             int maxIterations = config != null ? config.maxIterations()
                 : MeshLlmRegistry.resolveMaxIterations(
-                    System.getenv("MESH_LLM_MAX_ITERATIONS"), MeshLlmDefaults.MAX_ITERATIONS);
+                    System.getenv("MESH_LLM_MAX_ITERATIONS"), MeshLlmDefaults.MAX_ITERATIONS_UNSET);
             boolean parallelToolCalls = config != null && config.parallelToolCalls();
             int maxTokens = config != null ? config.maxTokens() : MeshLlmDefaults.MAX_TOKENS_UNSET;
             double temperature = config != null ? config.temperature() : MeshLlmDefaults.TEMPERATURE_UNSET;

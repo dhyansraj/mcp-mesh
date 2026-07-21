@@ -249,7 +249,9 @@ class MeshLlmAgent:
         self.model = config.model
         self.tools_metadata = filtered_tools  # Tool metadata for schema building
         self.tool_proxies = tool_proxies or {}  # Proxies for execution
-        self.max_iterations = config.max_iterations
+        self.max_iterations = config.effective_max_iterations
+        # Issue #1356: only a cap the user actually configured goes on the wire.
+        self._max_iterations_explicit = config.max_iterations_explicit
         self.output_type = output_type
         self.system_prompt = config.system_prompt  # Public attribute for tests
         self.output_mode = config.output_mode  # Output mode override (strict/hint/text)
@@ -302,7 +304,7 @@ class MeshLlmAgent:
 
         logger.debug(
             f"🤖 MeshLlmAgent initialized: provider={config.provider}, model={config.model}, "
-            f"tools={len(filtered_tools)}, max_iterations={config.max_iterations}, handler={self._provider_handler}"
+            f"tools={len(filtered_tools)}, max_iterations={self.max_iterations}, handler={self._provider_handler}"
         )
 
     def set_system_prompt(self, prompt: str) -> None:
@@ -1030,6 +1032,13 @@ class MeshLlmAgent:
                     if self._parallel_tool_calls:
                         model_params["parallel_tool_calls"] = True
 
+                    # Issue #1356: forward the provider-managed loop cap ONLY
+                    # when the consumer explicitly configured one. Omitting it
+                    # leaves the provider free to apply its own
+                    # MESH_LLM_MAX_ITERATIONS (or the default 10).
+                    if self._max_iterations_explicit:
+                        model_params["max_iterations"] = self.max_iterations
+
                     logger.debug(
                         f"📤 Delegating to mesh provider with handler-prepared params: "
                         f"keys={list(model_params.keys())}"
@@ -1486,6 +1495,10 @@ class MeshLlmAgent:
             model_params["output_type_name"] = self.output_type.__name__
         if self._parallel_tool_calls:
             model_params["parallel_tool_calls"] = True
+        # Issue #1356: forward the loop cap only when explicitly configured
+        # (mirrors __call__).
+        if self._max_iterations_explicit:
+            model_params["max_iterations"] = self.max_iterations
 
         request = MeshLlmRequest(
             messages=messages,

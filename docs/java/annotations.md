@@ -200,7 +200,7 @@ public AnalysisResult analyze(
 | Attribute          | Required | Default | Description                          |
 | ------------------ | -------- | ------- | ------------------------------------ |
 | `providerSelector` | Yes      |         | `@Selector` for mesh LLM discovery   |
-| `maxIterations`    | No       | `1`     | Max agentic loop iterations          |
+| `maxIterations`    | No       | `10`    | Max agentic loop iterations (when set explicitly it is also forwarded to the provider-managed loop) |
 | `systemPrompt`     | No       | `""`    | System prompt or template path       |
 | `contextParam`     | No       | `""`    | Parameter name for template context  |
 | `filter`           | No       |         | `@Selector` for tool filtering       |

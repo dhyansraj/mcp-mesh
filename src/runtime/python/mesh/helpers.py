@@ -8,6 +8,7 @@ mesh decorators to simplify common patterns like zero-code LLM providers.
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 from collections.abc import AsyncIterator
@@ -19,6 +20,48 @@ from _mcp_mesh.engine.provider_handlers import ProviderHandlerRegistry
 from _mcp_mesh.shared.logging_config import format_log_value
 
 logger = logging.getLogger(__name__)
+
+# Issue #1356: provider-managed agentic-loop cap.
+DEFAULT_MAX_ITERATIONS = 10
+
+# Sentinel for "the caller did not send max_iterations at all". Distinct from a
+# wire value of ``None`` (explicit JSON null), which is an INVALID explicit
+# value and therefore falls back to the default instead of consulting env —
+# matching TypeScript's ``paramValue !== undefined`` check.
+_MAX_ITERATIONS_UNSET = object()
+
+
+def _sanitize_max_iterations(value: Any) -> int | None:
+    """Coerce an arbitrary value to a positive integer iteration cap.
+
+    Returns ``None`` when the value is unset/invalid (non-numeric, NaN,
+    infinite, <= 0, or floors to 0). Floors BEFORE the > 0 check so fractional
+    values in (0, 1) are rejected rather than silently zeroed. Parity with
+    TypeScript's ``sanitizeMaxIterations`` in ``llm-provider.ts``.
+    """
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    floored = math.floor(parsed)
+    return floored if floored > 0 else None
+
+
+def _resolve_max_iterations(param_value: Any = _MAX_ITERATIONS_UNSET) -> int:
+    """Resolve the provider-managed agentic-loop cap (issue #1356).
+
+    Precedence: consumer-forwarded ``model_params.max_iterations`` →
+    ``MESH_LLM_MAX_ITERATIONS`` env → default 10. A *present* param (even an
+    invalid one) never falls through to the env branch — invalid param →
+    default. The env branch is consulted only when the param is ABSENT.
+    Parity with TypeScript's ``resolveMaxIterations``.
+    """
+    if param_value is not _MAX_ITERATIONS_UNSET:
+        return _sanitize_max_iterations(param_value) or DEFAULT_MAX_ITERATIONS
+    env_value = os.environ.get("MESH_LLM_MAX_ITERATIONS")
+    return _sanitize_max_iterations(env_value) or DEFAULT_MAX_ITERATIONS
 
 
 def _hint_response_parses(content: str, schema: dict[str, Any]) -> bool:
@@ -2643,6 +2686,7 @@ def llm_provider(
             list[dict[str, Any]] | None,
             dict[str, str],
             dict[str, Any],
+            int,
         ]:
             """Shared setup for ``process_chat`` and ``process_chat_stream``.
 
@@ -2662,9 +2706,9 @@ def llm_provider(
             streaming — synthetic-tool produces a single discrete tool call
             that doesn't actually stream as chunks.
 
-            Returns a 5-tuple:
+            Returns a 6-tuple:
                 ``(effective_model, messages, clean_tools, tool_endpoints,
-                model_params_copy)``
+                model_params_copy, max_iterations)``
             where ``clean_tools`` is ``None`` when ``request.tools`` is
             None / empty (preserving the legacy buffered path's existing
             behavior of omitting ``tools`` from ``completion_args``).
@@ -2713,6 +2757,14 @@ def llm_provider(
             # handler's apply_structured_output honors a valid value over its
             # per-vendor auto-selection. None preserves the auto behavior.
             output_mode_override = model_params_copy.pop("output_mode", None)
+
+            # Issue #1356: consumer-forwarded provider-managed loop cap. Popped
+            # here (like output_mode) so it can never leak into completion_args
+            # / LiteLLM on either the loop path or the legacy single-call path.
+            # Precedence: forwarded value → MESH_LLM_MAX_ITERATIONS → 10.
+            resolved_max_iterations = _resolve_max_iterations(
+                model_params_copy.pop("max_iterations", _MAX_ITERATIONS_UNSET)
+            )
 
             # Source-of-truth for messages downstream. Defaults to the
             # request's messages; ``apply_structured_output`` may swap in a
@@ -2790,6 +2842,7 @@ def llm_provider(
                 clean_tools,
                 tool_endpoints,
                 model_params_copy,
+                resolved_max_iterations,
             )
 
         # Generate the LLM handler function
@@ -2811,6 +2864,7 @@ def llm_provider(
                 clean_tools,
                 tool_endpoints,
                 model_params_copy,
+                resolved_max_iterations,
             ) = _prepare_provider_request(request, streaming=False)
             effective_tools = clean_tools if clean_tools is not None else request.tools
 
@@ -2826,7 +2880,7 @@ def llm_provider(
                     tool_endpoints=tool_endpoints,
                     model_params=model_params_copy,
                     litellm_kwargs=litellm_kwargs,
-                    max_iterations=10,
+                    max_iterations=resolved_max_iterations,
                     loop_logger=logger,
                     vendor=vendor,
                 )
@@ -3152,6 +3206,7 @@ def llm_provider(
                 clean_tools,
                 tool_endpoints,
                 model_params_copy,
+                resolved_max_iterations,
             ) = _prepare_provider_request(request, streaming=True)
             effective_tools = (
                 clean_tools if clean_tools is not None else request.tools
@@ -3168,7 +3223,7 @@ def llm_provider(
                     tool_endpoints=tool_endpoints,
                     model_params=model_params_copy,
                     litellm_kwargs=litellm_kwargs,
-                    max_iterations=10,
+                    max_iterations=resolved_max_iterations,
                     loop_logger=logger,
                     vendor=vendor,
                 ):

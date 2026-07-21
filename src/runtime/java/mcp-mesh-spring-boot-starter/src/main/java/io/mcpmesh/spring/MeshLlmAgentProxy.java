@@ -86,6 +86,8 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
     private volatile String systemPromptTemplate = "";
     private volatile String contextParamName = "ctx";
     private volatile int defaultMaxIterations = MeshLlmDefaults.MAX_ITERATIONS;
+    /** Issue #1356: true when the cap was explicitly configured (annotation or env). */
+    private volatile boolean defaultMaxIterationsExplicit = false;
     private volatile int defaultMaxTokens = MeshLlmDefaults.MAX_TOKENS_UNSET;
     private volatile double defaultTemperature = MeshLlmDefaults.TEMPERATURE_UNSET;
     private volatile boolean parallelToolCalls = false;
@@ -142,6 +144,10 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         this.dependencyInjector = dependencyInjector;
         this.systemPromptTemplate = systemPrompt != null ? systemPrompt : "";
         this.contextParamName = contextParamName != null ? contextParamName : "ctx";
+        // Issue #1356: a non-positive value is the "unset" sentinel — the local
+        // loop still runs 10 iterations, but nothing goes on the wire so the
+        // provider keeps its own MESH_LLM_MAX_ITERATIONS / default.
+        this.defaultMaxIterationsExplicit = maxIterations > 0;
         this.defaultMaxIterations = maxIterations > 0 ? maxIterations : MeshLlmDefaults.MAX_ITERATIONS;
     }
 
@@ -404,6 +410,7 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         private Double topP = null;
         private List<String> stopSequences = null;
         private int maxIterations = defaultMaxIterations;
+        private final boolean maxIterationsExplicit = defaultMaxIterationsExplicit;
 
         // Issue #1019: escape-hatch for vendor-specific model_params kwargs
         // (e.g., thinking_config, output_config, reasoning_effort) not exposed
@@ -768,6 +775,14 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
             }
             if (parallelToolCalls && !modelParams.containsKey("parallel_tool_calls")) {
                 modelParams.put("parallel_tool_calls", true);
+            }
+            // max_iterations (issue #1356): forward the provider-managed loop cap
+            // only when explicitly configured (@MeshLlm(maxIterations=...) or
+            // MESH_LLM_MAX_ITERATIONS) AND the escape-hatch modelParams did not
+            // already supply it. Unset → key omitted → the provider applies its
+            // own MESH_LLM_MAX_ITERATIONS / default of 10.
+            if (maxIterationsExplicit && !modelParams.containsKey("max_iterations")) {
+                modelParams.put("max_iterations", maxIterations);
             }
             // output_mode (issue #1112): inject the annotation's resolved mode only
             // when explicitly set (non-UNSET) AND the escape-hatch modelParams did

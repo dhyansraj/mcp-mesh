@@ -120,7 +120,10 @@ class TestMeshLlmDecoratorConfiguration:
         assert isinstance(config["provider"], dict)
         assert config["provider"].get("capability") == "llm"
         assert config["filter_mode"] == "all"
-        assert config["max_iterations"] == 10
+        # Issue #1356: unset (None) — distinguishable from an explicit 10 so the
+        # cap is not forwarded to the provider. Effective local cap is still 10
+        # (LLMConfig.effective_max_iterations).
+        assert config["max_iterations"] is None
 
     def test_decorator_custom_provider_filter(self):
         """Test decorator with custom provider filter (mesh delegation)."""
