@@ -697,7 +697,15 @@ jobs:
         working-directory: dist/node-core
         env:
           NPM_TAG: ${{ steps.version.outputs.npm_tag }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
+          # Idempotency: a re-dispatched release must not fail on an already
+          # published version. Only skip on a confirmed existing version - never
+          # swallow publish errors, which would mask auth/network/registry faults.
+          if [ -n "$(npm view "@mcpmesh/core@${VERSION}" version 2>/dev/null || true)" ]; then
+            echo "@mcpmesh/core@${VERSION} is already published, skipping"
+            exit 0
+          fi
           echo "Publishing @mcpmesh/core with tag ${NPM_TAG}..."
           # Use --ignore-scripts since prepublishOnly runs napi which isn't in the artifact
           npm publish --access public --tag "${NPM_TAG}" --provenance --ignore-scripts
@@ -815,7 +823,13 @@ jobs:
         working-directory: src/runtime/typescript
         env:
           NPM_TAG: ${{ steps.version.outputs.npm_tag }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
+          # Idempotency: skip only on a confirmed existing version (see publish-node-core).
+          if [ -n "$(npm view "@mcpmesh/sdk@${VERSION}" version 2>/dev/null || true)" ]; then
+            echo "@mcpmesh/sdk@${VERSION} is already published, skipping"
+            exit 0
+          fi
           echo "Publishing @mcpmesh/sdk with tag ${NPM_TAG}..."
           npm publish --access public --tag "${NPM_TAG}" --provenance
 
@@ -973,9 +987,15 @@ jobs:
           # Publish platform-specific packages first (order matters!)
           for pkg in cli-linux-x64 cli-linux-arm64 cli-darwin-x64 cli-darwin-arm64; do
             if [ -d "$pkg" ]; then
+              # Idempotency: skip only on a confirmed existing version. Previously
+              # this tolerated any publish failure, masking auth/network/registry errors.
+              if [ -n "$(npm view "@mcpmesh/${pkg}@${VERSION}" version 2>/dev/null || true)" ]; then
+                echo "@mcpmesh/${pkg}@${VERSION} is already published, skipping"
+                continue
+              fi
               echo "Publishing @mcpmesh/$pkg with tag ${NPM_TAG}..."
               cd "$pkg"
-              npm publish --access public --tag "${NPM_TAG}" --provenance || echo "Package may already exist, continuing..."
+              npm publish --access public --tag "${NPM_TAG}" --provenance
               cd ..
             fi
           done
@@ -983,7 +1003,13 @@ jobs:
       - name: Publish main CLI package to npm
         env:
           NPM_TAG: ${{ steps.version.outputs.npm_tag }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
+          # Idempotency: skip only on a confirmed existing version (see above).
+          if [ -n "$(npm view "@mcpmesh/cli@${VERSION}" version 2>/dev/null || true)" ]; then
+            echo "@mcpmesh/cli@${VERSION} is already published, skipping"
+            exit 0
+          fi
           cd dist/npm/cli
           echo "Publishing @mcpmesh/cli with tag ${NPM_TAG}..."
           npm publish --access public --tag "${NPM_TAG}" --provenance
