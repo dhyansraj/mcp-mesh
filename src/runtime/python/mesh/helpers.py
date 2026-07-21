@@ -16,13 +16,15 @@ from typing import Any
 
 import jsonschema  # type: ignore
 
+from _mcp_mesh.engine.llm_config import DEFAULT_MAX_ITERATIONS
 from _mcp_mesh.engine.provider_handlers import ProviderHandlerRegistry
 from _mcp_mesh.shared.logging_config import format_log_value
 
 logger = logging.getLogger(__name__)
 
-# Issue #1356: provider-managed agentic-loop cap.
-DEFAULT_MAX_ITERATIONS = 10
+# Issue #1356: ``DEFAULT_MAX_ITERATIONS`` (the provider-managed agentic-loop
+# cap) is defined in ``_mcp_mesh.engine.llm_config`` and re-exported here for
+# back-compat with existing importers.
 
 # Sentinel for "the caller did not send max_iterations at all". Distinct from a
 # wire value of ``None`` (explicit JSON null), which is an INVALID explicit

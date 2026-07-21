@@ -7,6 +7,13 @@ Consolidates LLM-related configuration into a single type-safe structure.
 from dataclasses import dataclass
 from typing import Any, Optional
 
+# Issue #1356: effective agentic-loop cap when nothing configured one. Lives
+# here (a leaf module with no intra-package imports) so both the consumer-side
+# helpers (``mesh.helpers``) and the registration path
+# (``_mcp_mesh.pipeline.mcp_heartbeat.rust_heartbeat``) can import it without
+# creating a cycle through the ``mesh`` package.
+DEFAULT_MAX_ITERATIONS = 10
+
 
 @dataclass
 class LLMConfig:
@@ -45,7 +52,11 @@ class LLMConfig:
     @property
     def effective_max_iterations(self) -> int:
         """Iteration cap for the consumer's own loop (default 10 when unset)."""
-        return self.max_iterations if self.max_iterations is not None else 10
+        return (
+            self.max_iterations
+            if self.max_iterations is not None
+            else DEFAULT_MAX_ITERATIONS
+        )
 
     @property
     def max_iterations_explicit(self) -> bool:

@@ -1,0 +1,31 @@
+# MCP Mesh Max-Iterations Java Consumer Configuration (tc47)
+#
+# Overridable via environment variables:
+#   MCP_MESH_REGISTRY_URL - Registry URL
+#   MCP_MESH_HTTP_PORT    - Agent HTTP port
+#   MCP_MESH_AGENT_NAME   - Agent name
+
+spring:
+  application:
+    name: max-iterations-java
+
+server:
+  port: ${MCP_MESH_HTTP_PORT:9047}
+
+mesh:
+  registry:
+    url: ${MCP_MESH_REGISTRY_URL:http://localhost:8000}
+  agent:
+    name: ${MCP_MESH_AGENT_NAME:max-iterations-java}
+    namespace: ${MCP_MESH_NAMESPACE:default}
+  llm:
+    # Capability-only default; the single @MeshLlm annotation selects the provider
+    # and owns the iteration cap (maxIterations = 1).
+    default-provider:
+      capability: llm
+    timeout: 60000
+
+logging:
+  level:
+    io.mcpmesh: DEBUG
+    com.example: DEBUG
