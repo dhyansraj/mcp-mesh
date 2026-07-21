@@ -34,6 +34,18 @@
         <developerConnection>scm:git:git@github.com:dhyansraj/mcp-mesh.git</developerConnection>
     </scm>
 
+    <!--
+        This BOM deliberately has NO <parent>: consumers importing it via
+        dependencyManagement must not be forced to resolve mcp-mesh-parent.
+        The cost is that nothing is inherited, so the GPG signing property and
+        the signing plugin execution below are duplicated from
+        ../pom.xml (mcp-mesh-parent) and must be kept in sync with it.
+    -->
+    <properties>
+        <!-- GPG signing: disabled by default, enable with -Dgpg.skip=false for releases -->
+        <gpg.skip>true</gpg.skip>
+    </properties>
+
     <dependencyManagement>
         <dependencies>
             <dependency>
@@ -63,4 +75,39 @@
             </dependency>
         </dependencies>
     </dependencyManagement>
+
+    <!--
+        A <build> section in a BOM is inert for consumers: importing a BOM via
+        dependencyManagement pulls in only its dependencyManagement (and
+        properties used to resolve it), never its build plugins.
+        This exists solely so that `mvn verify` signs the BOM POM on the same
+        maven-gpg-plugin code path as every other module, instead of leaving it
+        to be signed ad hoc at publish time.
+        Mirrors the sign-artifacts execution in ../pom.xml.
+    -->
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-gpg-plugin</artifactId>
+                <version>3.2.7</version>
+                <executions>
+                    <execution>
+                        <id>sign-artifacts</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>sign</goal>
+                        </goals>
+                        <configuration>
+                            <skip>${gpg.skip}</skip>
+                            <gpgArguments>
+                                <arg>--pinentry-mode</arg>
+                                <arg>loopback</arg>
+                            </gpgArguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 </project>

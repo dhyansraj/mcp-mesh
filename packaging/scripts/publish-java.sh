@@ -27,6 +27,19 @@ GROUP_ID_PATH="io/mcp-mesh"
 
 # Sonatype Central Portal API
 SONATYPE_API="https://central.sonatype.com/api/v1/publisher/upload"
+SONATYPE_STATUS_API="https://central.sonatype.com/api/v1/publisher/status"
+
+# GPG key used to sign artifacts that maven-gpg-plugin does not sign (the BOM).
+# The trailing '!' pins the primary key rather than letting gpg pick the default
+# signing subkey. This MUST match the -Dgpg.keyname value used by Maven in
+# .github/workflows/release.yml, otherwise the bundle mixes two signing keys and
+# Central rejects the deployment. The workflow exports GPG_KEYNAME; the default
+# below only applies to manual/local runs.
+GPG_KEYNAME="${GPG_KEYNAME:-F94266795DCA259D!}"
+
+# Deployment status polling bounds
+POLL_INTERVAL_SECONDS=15
+POLL_TIMEOUT_SECONDS=1800
 
 # Colors for output
 RED='\033[0;31m'
@@ -78,7 +91,22 @@ for MODULE in "${MODULES[@]}"; do
 
     # Collect artifacts based on module type
     if [ "${MODULE}" = "${BOM_MODULE}" ]; then
-        # BOM module: pom-packaging only - may not have target/ from Maven build
+        # BOM module: pom-packaging only - no JARs.
+        #
+        # Two paths exist here, and the Maven one is the expected path:
+        #   1. `mvn verify` with -Dgpg.skip=false runs maven-gpg-plugin's
+        #      sign-artifacts execution (declared directly in mcp-mesh-bom/pom.xml
+        #      because the BOM has no <parent> to inherit it from). For pom
+        #      packaging the plugin copies the module's pom.xml to
+        #      target/<finalName>.pom and signs THAT file, writing
+        #      target/<finalName>.pom.asc alongside it. finalName defaults to
+        #      <artifactId>-<version>, i.e. exactly POM_FILE below - so both the
+        #      POM and its signature are picked up straight from target/ and are
+        #      guaranteed to be over identical bytes.
+        #   2. Fallback: if target/ has no POM (Maven not run, or signing
+        #      skipped), copy the source pom.xml in and sign it here. This is
+        #      defense in depth only; it must use the same pinned key as Maven,
+        #      otherwise the bundle mixes signing keys and Central rejects it.
         log "  BOM module - collecting POM artifacts only"
 
         # Create target dir if Maven didn't
@@ -86,19 +114,26 @@ for MODULE in "${MODULES[@]}"; do
 
         POM_FILE="${TARGET_DIR}/${ARTIFACT_ID}-${VERSION}.pom"
 
-        # If POM not in target, copy from module directory
+        # If POM not in target, copy from module directory.
+        # Any pre-existing .asc signs the previous bytes, so drop it: the
+        # signature must always be regenerated together with the POM.
         if [ ! -f "${POM_FILE}" ]; then
             log "  POM not in target/, copying from module directory"
             cp "${MODULE}/pom.xml" "${POM_FILE}"
+            rm -f "${POM_FILE}.asc"
+        else
+            log "  Using Maven-produced POM from target/"
         fi
 
         cp "${POM_FILE}" "${BUNDLE_MODULE_DIR}/"
         log "  Collected: $(basename "${POM_FILE}")"
 
-        # GPG signature - sign if not already signed by Maven
+        # GPG signature - only sign if maven-gpg-plugin did not already.
         if [ ! -f "${POM_FILE}.asc" ]; then
-            log "  Signing POM with GPG..."
-            gpg --batch --armor --detach-sign "${POM_FILE}"
+            log "  No Maven signature found; signing POM with GPG (key: ${GPG_KEYNAME})..."
+            gpg --local-user "${GPG_KEYNAME}" --batch --armor --detach-sign "${POM_FILE}"
+        else
+            log "  Using Maven-produced GPG signature"
         fi
         cp "${POM_FILE}.asc" "${BUNDLE_MODULE_DIR}/"
         log "  Collected: $(basename "${POM_FILE}").asc"
@@ -230,14 +265,109 @@ rm -f "${BUNDLE_ZIP}"
 
 if [ "${HTTP_STATUS}" -ge 200 ] && [ "${HTTP_STATUS}" -lt 300 ]; then
     success "Bundle uploaded successfully (HTTP ${HTTP_STATUS})"
-    if [ -n "${HTTP_BODY}" ]; then
-        log "Deployment ID: ${HTTP_BODY}"
-    fi
-    log "Monitor status at: https://central.sonatype.com/publishing"
 else
     error "Upload failed with HTTP ${HTTP_STATUS}"
     error "Response: ${HTTP_BODY}"
     exit 1
 fi
 
-success "Java SDK ${VERSION} published to Maven Central"
+# The upload response body is the deployment ID. Upload acceptance is NOT
+# publication: with publishingType=AUTOMATIC the portal still has to validate
+# the bundle (signatures, POM metadata, checksums) before releasing it, and that
+# validation can fail after the upload returned 2xx.
+DEPLOYMENT_ID=$(printf '%s' "${HTTP_BODY}" | tr -d '[:space:]')
+if [ -z "${DEPLOYMENT_ID}" ]; then
+    error "Upload accepted but no deployment ID was returned; cannot verify publication"
+    exit 1
+fi
+
+PORTAL_URL="https://central.sonatype.com/publishing/deployments"
+log "Deployment ID: ${DEPLOYMENT_ID}"
+log "Monitor status at: ${PORTAL_URL}"
+
+# Extract .deploymentState from a status response body
+deployment_state() {
+    if command -v jq >/dev/null 2>&1; then
+        printf '%s' "$1" | jq -r '.deploymentState // empty' 2>/dev/null || true
+    else
+        printf '%s' "$1" | tr -d ' \n' \
+            | sed -n 's/.*"deploymentState":"\([A-Z_]*\)".*/\1/p' || true
+    fi
+}
+
+# Pretty-print a status response body (validation errors live in .errors)
+dump_status_body() {
+    if command -v jq >/dev/null 2>&1; then
+        printf '%s' "$1" | jq . 2>/dev/null || printf '%s\n' "$1"
+    else
+        printf '%s\n' "$1"
+    fi
+}
+
+# Poll the deployment until it reaches a terminal state.
+# States (Sonatype Publisher API): PENDING, VALIDATING, VALIDATED, PUBLISHING,
+# PUBLISHED, FAILED. With AUTOMATIC publishing, PUBLISHED is the success
+# terminal state and FAILED is the failure terminal state; the rest are
+# transitional.
+log "Waiting for deployment ${DEPLOYMENT_ID} to reach a terminal state..."
+
+DEADLINE=$(( $(date +%s) + POLL_TIMEOUT_SECONDS ))
+LAST_STATE=""
+LAST_BODY=""
+
+while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+    STATUS_BODY=$(curl -s -X POST \
+        "${SONATYPE_STATUS_API}?id=${DEPLOYMENT_ID}" \
+        -H "Authorization: Bearer ${TOKEN}") || STATUS_BODY=""
+    STATE=$(deployment_state "${STATUS_BODY}")
+
+    if [ -n "${STATUS_BODY}" ]; then
+        LAST_BODY="${STATUS_BODY}"
+    fi
+
+    if [ -z "${STATE}" ]; then
+        log "  Could not read deployment state (transient?), retrying..."
+    else
+        if [ "${STATE}" != "${LAST_STATE}" ]; then
+            log "  Deployment state: ${STATE}"
+            LAST_STATE="${STATE}"
+        fi
+
+        case "${STATE}" in
+            PUBLISHED)
+                success "Deployment ${DEPLOYMENT_ID} published to Maven Central"
+                success "Java SDK ${VERSION} published to Maven Central"
+                exit 0
+                ;;
+            FAILED)
+                error "Deployment ${DEPLOYMENT_ID} FAILED validation"
+                error "Central reported the following component errors:"
+                dump_status_body "${STATUS_BODY}" >&2
+                error "Inspect at: ${PORTAL_URL}"
+                exit 1
+                ;;
+            PENDING|VALIDATING|VALIDATED|PUBLISHING)
+                # Transitional; keep polling. VALIDATED is not treated as
+                # success here: with AUTOMATIC it advances to PUBLISHING on its
+                # own, and reporting success before the artifacts are on Central
+                # is exactly the failure mode this polling exists to prevent.
+                :
+                ;;
+            *)
+                log "  Unrecognized deployment state '${STATE}', continuing to poll"
+                ;;
+        esac
+    fi
+
+    sleep "${POLL_INTERVAL_SECONDS}"
+done
+
+error "Timed out after ${POLL_TIMEOUT_SECONDS}s waiting for deployment to publish"
+error "Deployment ID: ${DEPLOYMENT_ID}"
+error "Last observed state: ${LAST_STATE:-unknown}"
+if [ -n "${LAST_BODY}" ]; then
+    error "Last status response:"
+    dump_status_body "${LAST_BODY}" >&2
+fi
+error "Inspect at: ${PORTAL_URL}"
+exit 1

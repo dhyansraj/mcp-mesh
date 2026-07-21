@@ -329,6 +329,12 @@ jobs:
     if: >
       github.event_name == 'release' ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
+    env:
+      # Single source of truth for the signing key. The trailing '!' pins the
+      # primary key instead of the default signing subkey; publish-java.sh reads
+      # this same value when it signs the BOM POM (which maven-gpg-plugin does
+      # not sign), so every artifact in the bundle carries the same signature.
+      GPG_KEYNAME: "F94266795DCA259D!"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -408,7 +414,7 @@ jobs:
             -Dskip.rust.build=true \
             -Dgpg.skip=false \
             -Dgpg.passphrase="" \
-            -Dgpg.keyname="F94266795DCA259D!"
+            -Dgpg.keyname="${GPG_KEYNAME}"
 
       - name: Publish to Maven Central
         env:
@@ -1421,13 +1427,20 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Wait for Maven Central to index Java SDK
+      # Pre-flight gate for the Java runtime image only. The image build runs
+      # `mvn dependency:resolve` against Maven Central; if the SDK is not there,
+      # the build fails ~37 minutes later with an opaque Dockerfile frame that
+      # names neither Central nor the missing artifact. Fail here instead, with
+      # the artifact and the likely cause spelled out.
+      # NOTE: groupId io.mcp-mesh maps to the Central path io/mcp-mesh/.
+      - name: Verify Java SDK is available on Maven Central
         run: |
           VERSION="${{ steps.meta.outputs.version }}"
+          ARTIFACT="io.mcp-mesh:mcp-mesh-spring-boot-starter:${VERSION}"
           BASE_URL="https://repo1.maven.org/maven2/io/mcp-mesh/mcp-mesh-spring-boot-starter/${VERSION}"
           POM_URL="${BASE_URL}/mcp-mesh-spring-boot-starter-${VERSION}.pom"
           JAR_URL="${BASE_URL}/mcp-mesh-spring-boot-starter-${VERSION}.jar"
-          echo "Waiting for Maven Central to index io.mcp-mesh:mcp-mesh-spring-boot-starter:${VERSION}..."
+          echo "Waiting for Maven Central to index ${ARTIFACT}..."
           MAX_ATTEMPTS=30
           ATTEMPT=0
           while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
@@ -1437,13 +1450,22 @@ jobs:
             JAR_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$JAR_URL")
             echo "  POM: HTTP $POM_STATUS | JAR: HTTP $JAR_STATUS"
             if [ "$POM_STATUS" = "200" ] && [ "$JAR_STATUS" = "200" ]; then
-              echo "Maven Central has indexed mcp-mesh-spring-boot-starter-${VERSION}.jar"
+              echo "✅ Maven Central has indexed mcp-mesh-spring-boot-starter-${VERSION}.jar"
               exit 0
             fi
             echo "Not fully indexed yet, waiting 20 seconds..."
             sleep 20
           done
-          echo "WARNING: Maven Central may not have fully indexed yet, proceeding with Docker build anyway"
+          echo "❌ ERROR: ${ARTIFACT} is not resolvable from Maven Central"
+          echo "   POM: ${POM_URL} (HTTP ${POM_STATUS})"
+          echo "   JAR: ${JAR_URL} (HTTP ${JAR_STATUS})"
+          echo "   Likely cause: the Central Portal deployment was never published"
+          echo "   (validation failed) or is still validating."
+          echo "   Check https://central.sonatype.com/publishing/deployments"
+          echo "   Aborting before the Java runtime image build, which pre-caches"
+          echo "   this artifact via 'mvn dependency:resolve' and would otherwise"
+          echo "   fail ~37 minutes from now with an opaque Maven error."
+          exit 1
 
       - name: Build and push Java Runtime image
         uses: docker/build-push-action@v5
