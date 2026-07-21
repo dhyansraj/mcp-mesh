@@ -1,0 +1,222 @@
+# Test Case: consumer max_iterations is honored by the PROVIDER-managed loop - Python
+#
+# Issue: https://github.com/dhyansraj/mcp-mesh/issues/1356  (PR #1359)
+#
+# WHAT WAS BROKEN
+#   A consumer's @mesh.llm(max_iterations=N) never reached the provider: the
+#   value was not put on the wire, and the Python provider's agentic loop
+#   hardcoded 10. On the mesh-delegated path (the normal path) the setting was
+#   therefore completely INERT. Unit tests now cover the wire contract in every
+#   runtime, but nothing proved the cap survives the provider->consumer hop.
+#
+# WHAT THIS TC PROVES
+#   A Python consumer with an EXPLICIT max_iterations=1 causes the
+#   PROVIDER-managed agentic loop to execute exactly ONE tool round.
+#
+# THE OBSERVABLE (and why it is NOT the exhaustion sentinel)
+#   The provider currently signals exhaustion with the synthetic string
+#   "Maximum tool call iterations reached". Issue #1355 will replace that with a
+#   STRUCTURED signal, so any assertion on that text is scheduled to break.
+#   Instead this tc counts ACTUAL TOOL INVOCATIONS: iteration-probe-agent keeps
+#   an in-process counter that advance_ticket increments, and exposes it through
+#   a SEPARATE capability (probe_count) that the consumer's filter does not match
+#   — so the model can never see or perturb it. probe_reset (also outside the
+#   filter) zeroes the counter immediately before the measured call.
+#
+#   The ticket needs FOUR advance_ticket rounds to reach status COMPLETE, so:
+#       cap honored  (max_iterations=1) -> PROBE_INVOCATIONS=[1]
+#       cap ignored  (provider default 10) -> PROBE_INVOCATIONS=[4]
+#   The assertion PROBE_INVOCATIONS=[1] therefore genuinely discriminates; it
+#   does not depend on any sentinel text or log wording.
+#
+# WHY CLAUDE (anthropic/claude-sonnet-4-5, the shared uc04 claude-provider)
+#   This is a tool-CALLING determinism test, not a content test. Claude is the
+#   most reliable of the three vendors at (a) actually invoking a tool it is told
+#   to invoke and (b) respecting a "one call per turn, wait for the result"
+#   instruction rather than speculatively batching parallel tool calls — which
+#   would inflate the counter within a single iteration and make the measurement
+#   meaningless. advance_ticket's unguessable random next_token enforces the same
+#   serialization structurally; Claude just makes it reliable in practice.
+#
+# NOTE ON PARALLEL TOOL CALLS
+#   parallel_tool_calls is left OFF and the tool's contract (random next_token)
+#   makes batching impossible, so one counter increment == one loop iteration.
+
+name: "max_iterations forwarded to provider loop - Py"
+description: "Issue #1356: an explicit @mesh.llm(max_iterations=1) caps the PROVIDER-managed agentic loop at exactly one tool round (measured by tool-invocation count, not the exhaustion sentinel)"
+tags:
+  - llm
+  - claude
+  - python
+  - tools
+  - max-iterations
+  - issue-1356
+timeout: 300
+# Skip with --skip-tag llm if no API key is available.
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+test:
+  # --- Copy artifacts ---
+  - name: "Copy Claude provider to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/claude-provider /workspace/"
+    capture: copy_provider_output
+  - name: "Copy iteration-probe-agent to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/iteration-probe-agent /workspace/"
+    capture: copy_probe_output
+  - name: "Copy ticket-agent to workspace"
+    handler: shell
+    command: "cp -r /artifacts/ticket-agent /workspace/"
+    capture: copy_consumer_output
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+  - name: "Verify workspace files"
+    handler: shell
+    command: "ls -la /workspace/"
+    capture: ls_output
+
+  # --- Start the probe tool provider ---
+  - name: "Start iteration-probe-agent"
+    handler: shell
+    command: "meshctl start iteration-probe-agent/main.py -d"
+    workdir: /workspace
+    capture: start_probe_output
+  - name: "Wait for probe agent to register"
+    handler: wait
+    seconds: 5
+
+  # --- Start the LLM provider (no MESH_LLM_MAX_ITERATIONS: the provider's own
+  #     default is 10, so any cap observed below can ONLY have come from the
+  #     consumer's forwarded value) ---
+  - name: "Start Claude provider (no provider-side cap)"
+    handler: shell
+    command: "meshctl start claude-provider/main.py --env-file .env -d"
+    workdir: /workspace
+    capture: start_provider_output
+  - name: "Wait for provider to register"
+    handler: wait
+    seconds: 15
+
+  # --- Start the consumer (max_iterations=1) ---
+  - name: "Start ticket-agent (max_iterations=1)"
+    handler: shell
+    command: "meshctl start ticket-agent/main.py -d --debug"
+    workdir: /workspace
+    capture: start_consumer_output
+  - name: "Wait for consumer to register and resolve dependencies"
+    handler: wait
+    seconds: 15
+  - name: "Verify all agents running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: all_list_output
+  - name: "List available tools"
+    handler: shell
+    command: "meshctl list -t"
+    workdir: /workspace
+    capture: tools_output
+
+  # --- Zero the counter right before the measured call ---
+  - name: "Reset the probe invocation counter"
+    handler: shell
+    command: "meshctl call probe_reset '{}'"
+    workdir: /workspace
+    capture: reset_output
+
+  # --- THE MEASURED CALL (exactly one; never retried, a retry would add a
+  #     second provider-managed loop and a second tool invocation) ---
+  - name: "Call run_ticket (single measured call)"
+    handler: shell
+    command: |
+      meshctl call run_ticket '{"ctx": {"instruction": "Process ticket ABC-1 to completion. Begin by calling advance_ticket with token \"START\". Each response gives you a next_token; call advance_ticket again with it. Keep going until the tool reports status COMPLETE, then reply with the final_code."}}'
+    workdir: /workspace
+    capture: ticket_response
+    timeout: 180
+
+  # --- Read the counter: THE observable ---
+  - name: "Read the probe invocation counter"
+    handler: shell
+    command: "meshctl call probe_count '{}'"
+    workdir: /workspace
+    capture: probe_count_output
+
+  # --- Structural guard: prove the PROVIDER-managed loop is the loop that ran.
+  #     Without this, a cap enforced only by the consumer's own local loop could
+  #     produce the same count. This log line ("Provider-managed loop: N tools
+  #     with endpoints") is emitted when the consumer forwards tool endpoints and
+  #     is independent of the #1355 exhaustion signal. ---
+  - name: "Confirm the provider-managed loop path was taken"
+    handler: shell
+    command: |
+      if meshctl logs claude-provider 2>/dev/null | grep -q "Provider-managed loop"; then
+        echo "PROVIDER_MANAGED_LOOP_OK"
+      else
+        echo "PROVIDER_MANAGED_LOOP_MISSING"
+      fi
+    workdir: /workspace
+    capture: provider_loop_marker
+    ignore_errors: true
+  - name: "Capture provider log tail (diagnostics)"
+    handler: shell
+    command: "meshctl logs claude-provider 2>/dev/null | tail -120 || true"
+    workdir: /workspace
+    capture: provider_log
+    ignore_errors: true
+
+  - name: "Stop all agents"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+    ignore_errors: true
+
+assertions:
+  # --- Infrastructure (must hold for the measurement to mean anything) ---
+  - expr: ${captured.all_list_output} contains 'iteration-probe-agent'
+    message: "iteration-probe-agent should be registered"
+  - expr: ${captured.all_list_output} contains 'claude-provider'
+    message: "claude-provider should be registered"
+  - expr: ${captured.all_list_output} contains 'ticket-agent'
+    message: "ticket-agent should be registered"
+  - expr: ${captured.tools_output} contains 'run_ticket'
+    message: "run_ticket tool should be listed"
+  - expr: ${captured.tools_output} contains 'advance_ticket'
+    message: "advance_ticket tool should be listed"
+  - expr: ${captured.reset_output} contains 'PROBE_RESET_OK'
+    message: "Counter should be reset before the measured call"
+
+  # --- The loop that ran was the PROVIDER-managed one ---
+  - expr: ${captured.provider_loop_marker} contains 'PROVIDER_MANAGED_LOOP_OK'
+    message: "The provider-managed agentic loop should have executed (tools forwarded with endpoints)"
+
+  # --- THE OBSERVABLE: exactly one tool round ---
+  # Uncapped this ticket takes 4 advance_ticket rounds to reach COMPLETE, so
+  # [1] vs [4] cleanly separates "cap honored" from "cap ignored".
+  - expr: ${captured.probe_count_output} contains 'PROBE_INVOCATIONS=[1]'
+    message: "Provider-managed loop should have executed advance_ticket EXACTLY ONCE (consumer max_iterations=1 must reach the provider)"
+  - expr: ${captured.probe_count_output} not contains 'PROBE_INVOCATIONS=[0]'
+    message: "advance_ticket should have run at least once (a zero count means the model never called the tool, so nothing was measured)"
+
+  # --- Secondary, sentinel-text-independent evidence that the loop stopped
+  #     early: the final_code only exists after the 4th round, so a capped run
+  #     can never have seen it. ---
+  - expr: ${captured.ticket_response} not contains 'PROBE-COMPLETE-9F3A'
+    message: "A run capped at 1 iteration cannot have driven the ticket to completion (final_code must be absent)"
+
+  # --- No infrastructure failure masquerading as a small count ---
+  - expr: ${captured.ticket_response} not contains 'Mesh provider not resolved'
+    message: "The consumer's LLM provider should have been resolved"
+  - expr: ${captured.ticket_response} not contains 'timed out'
+    message: "The measured call should not time out"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

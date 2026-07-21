@@ -2,6 +2,7 @@ package io.mcpmesh.ai;
 
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
+import io.mcpmesh.MeshLlmDefaults;
 import io.mcpmesh.MeshLlmProvider;
 import io.mcpmesh.core.MeshObjectMappers;
 import io.mcpmesh.ai.handlers.LlmProviderHandler;
@@ -345,6 +346,12 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
             parallelToolCalls = Boolean.TRUE.equals(ptc) || "true".equals(String.valueOf(ptc));
         }
 
+        // Issue #1356: consumer-forwarded provider-managed loop cap. Removed from
+        // model_params (like parallel_tool_calls) so it can never reach the vendor
+        // API. Precedence: forwarded value → MESH_LLM_MAX_ITERATIONS → 10.
+        int resolvedMaxIterations = extractMaxIterations(
+            modelParams, System.getenv("MESH_LLM_MAX_ITERATIONS"));
+
         // Extract consumer-supplied output_mode override (issue #1112). When absent
         // or invalid the handler falls back to per-vendor auto-selection (zero
         // regression). Threaded to handlers via the options map.
@@ -439,7 +446,7 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                     MediaStore mediaStore = getMediaStore();
                     List<Map<String, Object>> currentMessages = new ArrayList<>(messages);
                     LlmProviderHandler.LlmResponse lastResponse = null;
-                    int maxIterations = 10;
+                    int maxIterations = resolvedMaxIterations;
                     boolean completed = false;
 
                     for (int iteration = 0; iteration < maxIterations; iteration++) {
@@ -888,6 +895,69 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
         if (v != null) {
             handlerOptions.put(key, v);
         }
+    }
+
+    /**
+     * Coerce an arbitrary wire value to a positive integer iteration cap, or
+     * {@code null} when it is unset/invalid (non-numeric, NaN, infinite,
+     * {@code <= 0}, or floors to 0). Floors BEFORE the {@code > 0} check so
+     * fractional values in (0,1) are rejected, not zeroed. Parity with
+     * TypeScript {@code sanitizeMaxIterations} and Python
+     * {@code _sanitize_max_iterations}.
+     *
+     * @param value raw value (Number, String, or anything else)
+     * @return the sanitized cap, or {@code null} when invalid
+     */
+    static Integer sanitizeMaxIterations(Object value) {
+        double parsed;
+        if (value instanceof Number n) {
+            parsed = n.doubleValue();
+        } else if (value instanceof Boolean b) {
+            parsed = b ? 1 : 0;
+        } else if (value instanceof String s) {
+            try {
+                parsed = Double.parseDouble(s.trim());
+            } catch (NumberFormatException | NullPointerException e) {
+                return null;
+            }
+        } else {
+            return null;
+        }
+        if (Double.isNaN(parsed) || Double.isInfinite(parsed)) {
+            return null;
+        }
+        long floored = (long) Math.floor(parsed);
+        if (floored <= 0) {
+            return null;
+        }
+        return (int) Math.min(floored, Integer.MAX_VALUE);
+    }
+
+    /**
+     * Issue #1356: resolve the provider-managed agentic-loop cap and STRIP the
+     * key from {@code modelParams} so it never reaches the vendor API.
+     *
+     * <p>Precedence: consumer-forwarded {@code model_params.max_iterations} →
+     * {@code MESH_LLM_MAX_ITERATIONS} → default 10. A <em>present</em> key
+     * (even with an invalid value) never falls through to the env branch —
+     * invalid param → default. The env value is consulted only when the key is
+     * ABSENT. Parity with TypeScript {@code resolveMaxIterations}.
+     *
+     * <p>Pure w.r.t. the environment: the raw env value is passed in so this is
+     * unit-testable without mutating process env (same style as
+     * {@code MeshLlmRegistry.resolveMaxIterations}).
+     *
+     * @param modelParams wire model_params (may be null); mutated to drop the key
+     * @param envVal      raw value of {@code MESH_LLM_MAX_ITERATIONS} (may be null)
+     * @return the effective iteration cap
+     */
+    static int extractMaxIterations(Map<String, Object> modelParams, String envVal) {
+        if (modelParams != null && modelParams.containsKey("max_iterations")) {
+            Integer sanitized = sanitizeMaxIterations(modelParams.remove("max_iterations"));
+            return sanitized != null ? sanitized : MeshLlmDefaults.MAX_ITERATIONS;
+        }
+        Integer fromEnv = sanitizeMaxIterations(envVal);
+        return fromEnv != null ? fromEnv : MeshLlmDefaults.MAX_ITERATIONS;
     }
 
     private LlmProviderConfig findProvider(String capability) {

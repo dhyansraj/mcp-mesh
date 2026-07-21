@@ -1,0 +1,290 @@
+# Test Case: cross-runtime max_iterations forwarding - Java consumer -> Py provider
+#
+# Issue: https://github.com/dhyansraj/mcp-mesh/issues/1356  (PR #1359)
+#
+# THE GAP THIS CLOSES
+#   Java consumer-side forwarding of the agentic-loop cap
+#   (MeshLlmAgentProxy putting model_params.max_iterations on the wire when the
+#   cap is explicitly configured) is BRAND NEW in PR #1359 and has no end-to-end
+#   coverage whatsoever. The Java unit tests mock the provider; the Python unit
+#   tests mock the consumer. Nothing exercises the actual cross-runtime hop.
+#   This tc runs a JAVA consumer against the PYTHON provider-managed loop.
+#
+# THE OBSERVABLE (and why it is NOT the exhaustion sentinel)
+#   iteration-probe-agent keeps an in-process counter that advance_ticket
+#   increments, and exposes it on a SEPARATE capability (probe_count) that the
+#   consumer's filter does not match, so the model can never see or perturb it.
+#   probe_reset (also outside the filter) zeroes it right before the measured
+#   call. The provider's "Maximum tool call iterations reached" string is
+#   deliberately NOT asserted on: issue #1355 will replace it with a structured
+#   signal.
+#
+#   The ticket needs FOUR advance_ticket rounds to reach COMPLETE, so:
+#       cap forwarded and honored -> PROBE_INVOCATIONS=[1]
+#       cap not forwarded (old)   -> Python provider's default 10 lets the
+#                                    ticket finish -> PROBE_INVOCATIONS=[4]
+#
+# WHY THE JAVA-LOCAL LOOP CANNOT EXPLAIN A COUNT OF 1
+#   The Java proxy sends _mesh_endpoint with every tool definition, so the
+#   PYTHON provider runs the agentic loop and executes the tools itself; the
+#   Java-local loop makes exactly ONE provider call regardless of its own cap.
+#   Were the cap not forwarded, that single provider call would internally run
+#   the ticket to completion (4 tool rounds). The tc also asserts the
+#   "Provider-managed loop" marker in the Python provider's log, so a count of 1
+#   provably means the Python loop stopped at 1 — i.e. the Java-forwarded cap
+#   arrived and was applied.
+#
+# WHY CLAUDE (anthropic/claude-sonnet-4-5, shared uc04 claude-provider)
+#   This is a tool-calling determinism test. Claude most reliably (a) invokes a
+#   tool it is told to invoke and (b) honors "one call per turn, wait for the
+#   result" instead of speculatively batching parallel tool calls, which would
+#   inflate the counter WITHIN a single iteration and destroy the measurement.
+#   advance_ticket's unguessable random next_token enforces that serialization
+#   structurally; Claude makes it reliable in practice.
+#
+# READINESS WITHOUT CORRUPTING THE MEASUREMENT
+#   Java @MeshLlm proxies bind asynchronously (see tc44's header, #1141), so the
+#   call has to be polled until it stops returning the local LLM_UNAVAILABLE
+#   sentinel. Each of those readiness calls DOES bump the probe counter — which
+#   is exactly why the counter is reset AFTER readiness is established and
+#   BEFORE the single measured call. The measured call is never retried.
+
+name: "Cross-Runtime max_iterations - Java consumer -> Py provider"
+description: "Issue #1356: a Java @MeshLlm(maxIterations=1) consumer forwards the cap to the Python provider-managed loop, which executes exactly one tool round"
+tags:
+  - llm
+  - claude
+  - cross-runtime
+  - java
+  - python
+  - tools
+  - max-iterations
+  - issue-1356
+timeout: 600
+# Skip with --skip-tag llm if no API key is available.
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+test:
+  # --- Copy artifacts ---
+  - name: "Copy Python Claude provider to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/claude-provider /workspace/"
+    capture: copy_provider
+  - name: "Copy iteration-probe-agent to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/iteration-probe-agent /workspace/"
+    capture: copy_probe
+  - name: "Copy Java max-iterations consumer to workspace"
+    handler: shell
+    command: "cp -r /artifacts/max-iterations-java /workspace/"
+    capture: copy_consumer
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+
+  # --- Build the Java consumer ---
+  - name: "Install Maven dependencies for the Java consumer"
+    handler: maven-install
+    path: /workspace/max-iterations-java
+    timeout: 600
+
+  # --- Start the probe tool provider (Python) ---
+  - name: "Start iteration-probe-agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start iteration-probe-agent/main.py -d"
+    capture: start_probe
+  - name: "Wait for probe agent to register"
+    handler: wait
+    seconds: 5
+
+  # --- Start the Python LLM provider. NO MESH_LLM_MAX_ITERATIONS here: its own
+  #     default is 10, so any cap observed below can ONLY have come from the
+  #     Java consumer's forwarded value. ---
+  - name: "Start Python Claude provider (no provider-side cap)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start claude-provider/main.py --env-file .env -d"
+    capture: start_provider
+  - name: "Wait for provider to register"
+    handler: wait
+    seconds: 15
+  - name: "Verify probe agent and provider are running"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: pre_agent_list
+
+  # --- Start the Java consumer ---
+  - name: "Start Java max-iterations consumer"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/max-iterations-java --env MCP_MESH_HTTP_PORT=0 -d
+    capture: start_consumer
+  - name: "Wait for the Java consumer to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for max-iterations-java agent..."
+      for i in $(seq 1 45); do
+        AGENTS=$(meshctl list 2>/dev/null || echo "")
+        if echo "$AGENTS" | grep -q "max-iterations-java"; then
+          echo "max-iterations-java registered after $((i*2))s"
+          exit 0
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+          echo "Still waiting... ($((i*2))s)"
+          echo "$AGENTS"
+        fi
+        sleep 2
+      done
+      echo "WARNING: max-iterations-java not registered within 90s"
+      meshctl list 2>/dev/null || true
+      meshctl logs max-iterations-java 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_consumer
+    timeout: 120
+  - name: "Verify all agents running"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: all_list
+  - name: "List available tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools"
+    capture: tools_output
+
+  # --- READINESS: poll the real call until the Java @MeshLlm proxy has bound
+  #     (i.e. it stops returning the local LLM_UNAVAILABLE sentinel). These
+  #     attempts intentionally bump the probe counter; the counter is reset
+  #     afterwards, before the single measured call. ---
+  - name: "Poll runTicket until the LLM proxy has bound (readiness only)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      # Diagnostics to STDERR so the capture stays readable.
+      ARGS='{"ctx": {"instruction": "Process ticket ABC-1 to completion. Begin by calling advance_ticket with token \"START\". Each response gives you a next_token; call advance_ticket again with it. Keep going until the tool reports status COMPLETE, then reply with the final_code."}}'
+      for i in $(seq 1 10); do
+        RESP=$(meshctl call runTicket "$ARGS" 2>/dev/null || echo "")
+        if [ -n "$RESP" ] && ! echo "$RESP" | grep -q "LLM_UNAVAILABLE"; then
+          echo "PROXY_BOUND after attempt $i"
+          exit 0
+        fi
+        echo "Attempt $i: proxy not bound yet, retrying in 5s..." >&2
+        sleep 5
+      done
+      echo "ERROR: runTicket still returned LLM_UNAVAILABLE after 10 attempts" >&2
+      meshctl logs max-iterations-java 2>/dev/null | tail -80 >&2 || true
+      exit 1
+    capture: readiness_output
+    timeout: 240
+
+  # --- Zero the counter: everything measured from here is ONE call ---
+  - name: "Reset the probe invocation counter"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call probe_reset '{}'"
+    capture: reset_output
+
+  # --- THE MEASURED CALL (exactly one, never retried) ---
+  - name: "Call runTicket (single measured call)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call runTicket '{"ctx": {"instruction": "Process ticket ABC-1 to completion. Begin by calling advance_ticket with token \"START\". Each response gives you a next_token; call advance_ticket again with it. Keep going until the tool reports status COMPLETE, then reply with the final_code."}}'
+    capture: ticket_response
+    timeout: 180
+
+  # --- Read the counter: THE observable ---
+  - name: "Read the probe invocation counter"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call probe_count '{}'"
+    capture: probe_count_output
+
+  # --- Structural guard: the loop under measurement is the PYTHON
+  #     provider-managed one, not the Java-local one. ---
+  - name: "Confirm the Python provider-managed loop path was taken"
+    handler: shell
+    workdir: /workspace
+    command: |
+      if meshctl logs claude-provider 2>/dev/null | grep -q "Provider-managed loop"; then
+        echo "PROVIDER_MANAGED_LOOP_OK"
+      else
+        echo "PROVIDER_MANAGED_LOOP_MISSING"
+      fi
+    capture: provider_loop_marker
+    ignore_errors: true
+  - name: "Capture provider log tail (diagnostics)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl logs claude-provider 2>/dev/null | tail -120 || true"
+    capture: provider_log
+    ignore_errors: true
+
+  - name: "Stop all agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl stop"
+    ignore_errors: true
+
+assertions:
+  # --- Infrastructure ---
+  - expr: "${captured.pre_agent_list} contains 'iteration-probe-agent'"
+    message: "iteration-probe-agent should be registered"
+  - expr: "${captured.pre_agent_list} contains 'claude-provider'"
+    message: "Python claude-provider should be registered"
+  - expr: "${captured.all_list} contains 'max-iterations-java'"
+    message: "Java max-iterations-java consumer should be registered"
+  - expr: "${captured.tools_output} contains 'runTicket'"
+    message: "runTicket tool should be available"
+  - expr: "${captured.tools_output} contains 'advance_ticket'"
+    message: "advance_ticket tool should be available"
+
+  # --- Readiness actually succeeded: the LLM proxy bound, so the measured call
+  #     really went through the mesh rather than the local sentinel ---
+  - expr: "${captured.readiness_output} contains 'PROXY_BOUND'"
+    message: "The Java @MeshLlm proxy should have bound before the measured call"
+  - expr: "${captured.ticket_response} not contains 'LLM_UNAVAILABLE'"
+    message: "The measured call must reach the mesh provider, not the local unavailable sentinel"
+  - expr: "${captured.reset_output} contains 'PROBE_RESET_OK'"
+    message: "Counter should be reset after readiness and before the measured call"
+
+  # --- The loop that ran was the PYTHON provider-managed one ---
+  - expr: "${captured.provider_loop_marker} contains 'PROVIDER_MANAGED_LOOP_OK'"
+    message: "The Python provider-managed agentic loop should have executed (Java forwards _mesh_endpoint per tool)"
+
+  # --- THE OBSERVABLE: exactly one tool round ---
+  # Uncapped, the ticket takes 4 advance_ticket rounds to reach COMPLETE.
+  - expr: "${captured.probe_count_output} contains 'PROBE_INVOCATIONS=[1]'"
+    message: "Python provider-managed loop should have executed advance_ticket EXACTLY ONCE (Java's maxIterations=1 must reach the provider)"
+  - expr: "${captured.probe_count_output} not contains 'PROBE_INVOCATIONS=[0]'"
+    message: "advance_ticket should have run at least once (a zero count means the model never called the tool, so nothing was measured)"
+
+  # --- Secondary, sentinel-text-independent evidence the loop stopped early ---
+  - expr: "${captured.ticket_response} not contains 'PROBE-COMPLETE-9F3A'"
+    message: "A run capped at 1 iteration cannot have driven the ticket to completion (final_code must be absent)"
+
+  # --- No infrastructure failure masquerading as a small count ---
+  - expr: "${captured.ticket_response} not contains '\"isError\":true'"
+    message: "The measured call should not return an MCP error envelope"
+  - expr: "${captured.ticket_response} not contains '\"isError\": true'"
+    message: "The measured call should not return an MCP error envelope (spaced form)"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*max-iterations" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

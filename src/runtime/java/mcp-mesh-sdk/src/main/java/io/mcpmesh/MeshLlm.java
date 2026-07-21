@@ -89,8 +89,14 @@ public @interface MeshLlm {
      * Maximum iterations for the agentic loop.
      *
      * <p>Each iteration allows the LLM to make tool calls.
+     *
+     * <p>Unset by default ({@link MeshLlmDefaults#MAX_ITERATIONS_UNSET}), which
+     * means "10, and let the provider decide its own cap". When set explicitly
+     * — here or via {@code MESH_LLM_MAX_ITERATIONS} — the cap is ALSO forwarded
+     * to the provider on the wire ({@code model_params.max_iterations}) so the
+     * provider-managed loop honors it (issue #1356).
      */
-    int maxIterations() default MeshLlmDefaults.MAX_ITERATIONS;
+    int maxIterations() default MeshLlmDefaults.MAX_ITERATIONS_UNSET;
 
     /**
      * System prompt for the LLM.

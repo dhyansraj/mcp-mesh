@@ -57,7 +57,7 @@ def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> AssistResponse:
 | Parameter        | Type | Description                                       |
 | ---------------- | ---- | ------------------------------------------------- |
 | `provider`       | dict | LLM provider selector (capability + tags)         |
-| `max_iterations` | int  | Max agentic loop iterations (default: 1)          |
+| `max_iterations` | int  | Max agentic loop iterations (default: 10; when set explicitly it is also forwarded to the provider-managed loop) |
 | `system_prompt`  | str  | Inline prompt or `file://path` to Jinja2 template |
 | `response_model` | type | Pydantic model the LLM must emit and is validated against (separate from the return type) |
 | `context_param`  | str  | Parameter name receiving context object           |

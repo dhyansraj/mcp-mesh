@@ -2829,7 +2829,7 @@ def llm(
     filter_mode: str = "all",
     provider: dict[str, Any],
     model: str | None = None,
-    max_iterations: int = 10,
+    max_iterations: int | None = None,
     system_prompt: str | None = None,
     system_prompt_file: str | None = None,
     response_model: type | None = None,
@@ -2881,7 +2881,13 @@ def llm(
                consumer pin to a specific model (e.g., haiku) when the provider
                otherwise defaults to a different one (e.g., sonnet). May be
                overridden by MESH_LLM_MODEL.
-        max_iterations: Max agentic loop iterations (can be overridden by MESH_LLM_MAX_ITERATIONS)
+        max_iterations: Max agentic loop iterations (can be overridden by
+                        MESH_LLM_MAX_ITERATIONS). When set — here or via the env
+                        var — the cap is ALSO forwarded to the provider on the
+                        wire (``model_params.max_iterations``) so the
+                        provider-managed loop honors it (issue #1356). When left
+                        unset (None), nothing is forwarded and the provider
+                        applies its own MESH_LLM_MAX_ITERATIONS / default of 10.
         system_prompt: Default system prompt (literal string or ``file://`` template)
         system_prompt_file: Path to Jinja2 template file (deprecated — use system_prompt="file://...")
         response_model: Schema the LLM is required to emit and validate against. When
@@ -3013,10 +3019,16 @@ def llm(
             ),
             "provider": resolved_provider,
             "model": resolved_model,
+            # Issue #1356: resolve to None when NOTHING configured it (no
+            # decorator arg, no env var) so the consumer can tell "user asked
+            # for 10" from "user said nothing". Only an explicitly configured
+            # cap is forwarded to the provider; leaving it unset keeps the
+            # provider's own MESH_LLM_MAX_ITERATIONS alive. The consumer's own
+            # loop falls back to 10 via LLMConfig.effective_max_iterations.
             "max_iterations": get_config_value(
                 "MESH_LLM_MAX_ITERATIONS",
                 override=max_iterations,
-                default=10,
+                default=None,
                 rule=ValidationRule.NONZERO_RULE,
             ),
             "system_prompt": effective_system_prompt,

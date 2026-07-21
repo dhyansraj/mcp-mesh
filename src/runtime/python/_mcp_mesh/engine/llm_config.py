@@ -7,6 +7,13 @@ Consolidates LLM-related configuration into a single type-safe structure.
 from dataclasses import dataclass
 from typing import Any, Optional
 
+# Issue #1356: effective agentic-loop cap when nothing configured one. Lives
+# here (a leaf module with no intra-package imports) so both the consumer-side
+# helpers (``mesh.helpers``) and the registration path
+# (``_mcp_mesh.pipeline.mcp_heartbeat.rust_heartbeat``) can import it without
+# creating a cycle through the ``mesh`` package.
+DEFAULT_MAX_ITERATIONS = 10
+
 
 @dataclass
 class LLMConfig:
@@ -27,8 +34,14 @@ class LLMConfig:
        When set, the consumer requests this specific model from the provider; otherwise
        the provider uses its decorator-time default."""
 
-    max_iterations: int = 10
-    """Maximum iterations for the agentic loop"""
+    max_iterations: Optional[int] = None
+    """Maximum iterations for the agentic loop.
+
+       ``None`` means "not explicitly configured" (issue #1356): the consumer's
+       own loop uses ``effective_max_iterations`` (10), and nothing is forwarded
+       to the provider so the provider's own MESH_LLM_MAX_ITERATIONS / default
+       applies. Any non-None value is treated as an explicit user setting and IS
+       forwarded on the wire."""
 
     system_prompt: Optional[str] = None
     """Optional system prompt to prepend to all interactions"""
@@ -36,9 +49,23 @@ class LLMConfig:
     output_mode: Optional[str] = None
     """Output mode override: 'strict', 'hint', or 'text'. If None, auto-detected by handler."""
 
+    @property
+    def effective_max_iterations(self) -> int:
+        """Iteration cap for the consumer's own loop (default 10 when unset)."""
+        return (
+            self.max_iterations
+            if self.max_iterations is not None
+            else DEFAULT_MAX_ITERATIONS
+        )
+
+    @property
+    def max_iterations_explicit(self) -> bool:
+        """True when a cap was explicitly configured (decorator arg or env)."""
+        return self.max_iterations is not None
+
     def __post_init__(self):
         """Validate configuration after initialization."""
-        if self.max_iterations < 1:
+        if self.max_iterations is not None and self.max_iterations < 1:
             raise ValueError("max_iterations must be >= 1")
         if self.provider is None:
             raise ValueError("provider cannot be empty")

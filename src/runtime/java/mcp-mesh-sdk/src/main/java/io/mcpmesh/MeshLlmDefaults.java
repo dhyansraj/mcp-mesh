@@ -22,6 +22,15 @@ public final class MeshLlmDefaults {
     public static final int MAX_ITERATIONS = 10;
 
     /**
+     * Sentinel for an unset {@code maxIterations} (issue #1356). When
+     * {@code maxIterations} equals this value the consumer's own loop uses
+     * {@link #MAX_ITERATIONS} but no {@code max_iterations} is sent on the
+     * wire, so the provider-managed loop applies its own
+     * {@code MESH_LLM_MAX_ITERATIONS} (or the same default of 10).
+     */
+    public static final int MAX_ITERATIONS_UNSET = 0;
+
+    /**
      * Sentinel for an unset {@code maxTokens}. When {@code maxTokens} equals
      * this value, no {@code max_tokens} is sent on the wire and the provider's
      * own default applies.

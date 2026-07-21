@@ -18,6 +18,8 @@ import logging
 import os
 from typing import Any, Optional
 
+from ...engine.llm_config import DEFAULT_MAX_ITERATIONS
+
 logger = logging.getLogger(__name__)
 
 
@@ -503,12 +505,24 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
         filter_spec = config.get("filter")
         filter_json = json.dumps(filter_spec) if filter_spec else None
 
+        # Issue #1356: the decorator now emits ``max_iterations=None`` when
+        # nothing configured a cap (so the consumer can tell "unset" from
+        # "explicitly 10" for wire forwarding). The registration spec has
+        # always carried a concrete number and the Rust ``LlmAgentSpec`` types
+        # it as a non-optional u32 — passing None through fails the heartbeat
+        # and the agent never registers. Register the EFFECTIVE cap instead.
+        # Note `config.get("max_iterations", ...)` alone is not enough: the key
+        # is always present, just valued None.
+        configured_max_iterations = config.get("max_iterations")
+        if configured_max_iterations is None:
+            configured_max_iterations = DEFAULT_MAX_ITERATIONS
+
         llm_spec = core.LlmAgentSpec(
             function_id=func_id,
             provider=provider_json,
             filter=filter_json,
             filter_mode=config.get("filter_mode", "all"),
-            max_iterations=config.get("max_iterations", 1),
+            max_iterations=configured_max_iterations,
         )
         llm_agents.append(llm_spec)
 

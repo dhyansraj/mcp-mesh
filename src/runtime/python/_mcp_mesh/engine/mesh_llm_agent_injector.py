@@ -661,7 +661,9 @@ class MeshLlmAgentInjector(BaseInjector):
         llm_config = LLMConfig(
             provider=config_dict.get("provider"),
             model=config_dict.get("model"),  # Optional consumer-side override
-            max_iterations=config_dict.get("max_iterations", 10),
+            # Issue #1356: absent/None = not explicitly configured (LLMConfig
+            # falls back to 10 for the local loop and forwards nothing).
+            max_iterations=config_dict.get("max_iterations"),
             system_prompt=config_dict.get("system_prompt"),
             output_mode=config_dict.get(
                 "output_mode"
