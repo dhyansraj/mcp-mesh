@@ -1,5 +1,5 @@
 # Dockerfile for media-gateway MCP Mesh agent (Java/Spring Boot)
-FROM mcpmesh/java-runtime:3.2.2
+FROM mcpmesh/java-runtime:3.2.3
 
 WORKDIR /app
 
