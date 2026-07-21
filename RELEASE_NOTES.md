@@ -1,55 +1,36 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.2.2...HEAD)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.2.3...HEAD)
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.2.1...v3.2.2)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.2.1...v3.2.3)
 
-## v3.2.2 (2026-07-20)
+## v3.2.3 (2026-07-21)
 
-A patch release. Two vendor-contract fixes stop mesh sending parameters that current models reject, the `meshctl scaffold` Gemini default is corrected from a retired model id, and meshui gains the resolution detail the CLI already showed. Two test surfaces that had never executed in CI are now wired in — including one that was already failing. Nothing touches the wire protocol, the registry, dependency resolution, or the declaration syntax.
+A patch release: vendor-contract fixes for current Anthropic and Gemini models, a corrected `meshctl scaffold` default, two meshui fixes, and a release-pipeline fix so the Java SDK reaches Maven Central. No wire, registry, resolution, or declaration-syntax changes.
 
-### 🤖 LLM: vendor-removed sampling parameters are no longer forwarded (#1344)
+> **v3.2.2 was never fully published.** Its Java SDK failed Maven Central validation, so the Java artifacts and `mcpmesh/java-runtime:3.2.2` do not exist. Everything from 3.2.2 is included here — upgrade straight to 3.2.3.
 
-Anthropic removed `temperature`, `top_p` and `top_k` on the Opus 4.7, Opus 4.8, Sonnet 5 and Fable 5 families — passing any of them returns a 400. The Anthropic native path forwarded them unconditionally with no model gating, and mesh already advertises first-class support for exactly those model ids on the native structured-output path. A provider declared on a current model with any sampling knob set therefore failed at the vendor call.
+### 🤖 LLM
 
-Those parameters are now dropped for the affected families, with a once-per-key warning, across **Python, TypeScript and Java**. Dropping degrades gracefully; forwarding is a hard 400, so the failure is asymmetric and dropping is the safe default.
+- **Sampling parameters are no longer sent to models that reject them (#1344).** Anthropic removed `temperature`/`top_p`/`top_k` on Opus 4.7/4.8, Sonnet 5 and Fable 5, where passing them returns a 400. They are now dropped for those families with a warning, in Python, TypeScript and Java. Models that still accept them are unaffected.
+- **Gemini thinking-config conflicts are resolved before the request is sent (#1346).** `thinking_level` and `thinking_budget` together is a Google-side 400; mesh keeps `thinking_level` and drops the other. No model gating was added — measurement showed a version gate would be wrong on arrival.
+- **A consumer's `max_iterations` now reaches the provider-managed loop (#1356).** It was previously ignored on the delegated path, where the provider hardcoded 10. It is forwarded only when explicitly set, so a provider's `MESH_LLM_MAX_ITERATIONS` still governs consumers that set nothing. ⚠️ If you declared a cap on a delegated consumer, it now takes effect.
 
-The restricted set is deliberately **narrower** than the native structured-output allow-list: Opus 4.6, Sonnet 4.6, Haiku 4.5, Sonnet 4.5, Opus 4.5/4.1 and all 3.x still accept sampling parameters and are unaffected. OpenAI's existing gate is unchanged, and remains distinct from the Responses-API routing predicate it shares a shape with.
+### 🛠 CLI and meshui
 
-### 🤖 LLM: Gemini thinking-config conflict resolved before the request leaves mesh (#1346)
+- **`meshctl scaffold` emitted a retired Gemini model (#1345).** The gemini default was `gemini/gemini-1.5-pro`, which 404s on first call; it is now `gemini/gemini-2.5-flash`. Agents scaffolded before this release need the model updated by hand.
+- **The agent detail panel shows the resolved MCP tool and endpoint (#1350)**, matching what `meshctl` already printed.
+- **The Jobs page no longer crashes when the registry is unreachable (#1352)** — it shows the connection-error screen instead.
 
-Google rejects a request carrying both `thinking_level` and `thinking_budget` with `400 You can only set only one of thinking budget and thinking level`. This is a global request-validation check that fires ahead of any per-model check, and it triggers on field **presence**, not value. mesh now resolves the conflict client-side — keeping `thinking_level`, dropping `thinking_budget` by omission (never by writing an "unspecified" sentinel, which trips the same 400) — and recognizes both the snake_case and camelCase spellings the Google SDK accepts.
+### 📦 Release and CI
 
-Deliberately **no model gate was added**. Measurement against the live API showed `thinking_budget` is accepted and honored on 2.5 and 3.x alike, and `thinking_level` support varies per model with differing accepted value subsets — so a generation-based gate would have been wrong on arrival and would rot on every model launch. Gemini sampling parameters likewise need no gate: `temperature`, `top_p` and `top_k` were verified accepted on every current model.
-
-### 🛠 CLI: `meshctl scaffold` emitted a retired Gemini model (#1345)
-
-The gemini vendor default resolved to `gemini/gemini-1.5-pro`, a **retired** model id — a live `generateContent` call returns 404. Every scaffolded Gemini provider registered successfully and then failed on its first LLM call. The default is now `gemini/gemini-2.5-flash`, matching what the man pages have always documented.
-
-The integration guards written to catch exactly this staleness could never fire: both scaffolded with an explicit `--model`, so the captured output never contained the vendor default at all. They now scaffold via the vendor default and assert on it positively.
-
-### 🖥️ meshui: MCP tool and endpoint in the agent detail panel (#1350)
-
-The agent detail side panel showed only a capability name and a status badge for dependencies and LLM resolutions, while `meshctl` printed the resolved MCP tool and endpoint for the same rows — the information that answers "which service is this actually wired to?". Those fields were already present in the API response the dashboard receives; they were simply never rendered. Each row now shows the resolved MCP tool alongside its capability, and the endpoint beneath it, truncated with the full value on hover.
-
-This also fixes two renders that keyed off a field name absent from every registry response and had therefore never displayed.
-
-### 🖥️ meshui: Jobs page no longer crashes when the registry is unreachable (#1352)
-
-With the registry unreachable, the Jobs page rendered a generic error-boundary crash instead of its connection-error screen — the error UI failing in precisely the situation it exists for. The page passed a string where an `Error` was required, so the component's message inspection threw. The page now shows the "Unable to connect to registry" screen with troubleshooting help and a working retry button, and the component tolerates a non-`Error` value rather than crashing.
-
-### 🧪 CI: two test surfaces that had never executed (#1348, #1352)
-
-Two bodies of tests were invisible to CI, and a green build was asserting coverage over code that was never run:
-
-- The Python `_mcp_mesh` unit-test tree — **20 files, 928 tests**, covering the native LLM clients and provider handlers, the most vendor-drift-prone code in the repo. **Eight of those tests were failing on the released v3.2.1.** They assert the synthetic-tool structured-output path against Haiku 4.5, which v3.2.1 deliberately moved to Anthropic's native `output_config` path — meaning that change shipped on a handler branch with no executing coverage. Those tests are repaired (synthetic-path coverage re-fixtured onto a model genuinely still on that path, guarded by an executable assertion so a future allow-list addition fails loudly), handler-level Haiku 4.5 coverage that did not previously exist is added, and the tree now runs in CI.
-- The meshui dashboard — no type check, no build, and **36 tests that never ran**. A type error the compiler had been reporting all along reached `main`; that error is the Jobs page crash above. The dashboard now runs `tsc --noEmit` and its test suite in CI, wired into the pipeline's failure gate rather than merely reported.
+- **Java SDK publication fixed (#1357).** The BOM was the only artifact Maven did not sign, and Central rejected the deployment for it; it is now signed on the same path as every other module. Publication is also verified before the job reports success, and the Java image build fails fast when the SDK is missing rather than 37 minutes later.
+- **Two test surfaces now run in CI (#1348, #1352)** — the `_mcp_mesh` unit tree (928 tests) and the meshui dashboard (type check plus 36 tests). Neither had ever executed; eight tests covering the v3.2.1 Haiku 4.5 change were failing and are now fixed.
 
 ### ⚠️ Notes
 
-- **No upgrade action required.** No wire, registry, resolution, or declaration-syntax changes. Model-id handling remains pass-through and keyed on vendor.
-- **Affected-model behavior change is a fix, not a break.** Sampling parameters set against Opus 4.7/4.8, Sonnet 5 or Fable 5 previously produced a vendor 400; they are now dropped with a warning and the call succeeds. If you relied on those parameters with those models, the calls were failing.
-- **Scaffolded Gemini agents created before this release** carry the retired `gemini/gemini-1.5-pro` id and will 404 on their first LLM call — update the model in the agent declaration.
+- Java `@MeshLlm(maxIterations)`'s annotation default changes from `10` to an unset sentinel. Behavior is unchanged.
+- No upgrade action is required beyond the scaffolded-Gemini note above.
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.2.0...v3.2.1)
 

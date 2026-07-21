@@ -1,5 +1,5 @@
 # Dockerfile for passthrough-agent MCP Mesh agent
-FROM mcpmesh/python-runtime:3.2.2
+FROM mcpmesh/python-runtime:3.2.3
 
 WORKDIR /app
 
