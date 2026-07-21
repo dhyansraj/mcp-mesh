@@ -25,6 +25,13 @@ BOM_MODULE="mcp-mesh-bom"
 # Maven coordinates
 GROUP_ID_PATH="io/mcp-mesh"
 
+# Maven Central read endpoint, used to detect an already-published version.
+CENTRAL_REPO_URL="https://repo1.maven.org/maven2"
+# Central releases a deployment bundle atomically - either every module in the
+# bundle lands or none does - so probing one representative artifact is enough
+# to conclude the whole version is already published.
+PROBE_ARTIFACT_ID="mcp-mesh-spring-boot-starter"
+
 # Sonatype Central Portal API
 SONATYPE_API="https://central.sonatype.com/api/v1/publisher/upload"
 SONATYPE_STATUS_API="https://central.sonatype.com/api/v1/publisher/status"
@@ -72,6 +79,23 @@ fi
 
 log "Publishing Java SDK version: ${VERSION}"
 log "Modules: ${MODULES[*]}"
+
+# Idempotency guard: re-running a release (e.g. to finish a partially-completed
+# one) must not re-upload a version that is already on Central. Uploading an
+# existing version is rejected and leaves a FAILED deployment in the portal.
+PROBE_URL="${CENTRAL_REPO_URL}/${GROUP_ID_PATH}/${PROBE_ARTIFACT_ID}/${VERSION}/${PROBE_ARTIFACT_ID}-${VERSION}.pom"
+log "Checking whether ${VERSION} is already on Maven Central..."
+log "  ${PROBE_URL}"
+PROBE_STATUS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 -L "${PROBE_URL}" || echo "000")
+
+if [ "${PROBE_STATUS}" = "200" ]; then
+    success "Java SDK ${VERSION} is already published to Maven Central, nothing to do"
+    exit 0
+fi
+
+# Any other response (404, or a transient/unknown code) means we cannot confirm
+# publication, so continue with the normal upload path unchanged.
+log "Not published yet (HTTP ${PROBE_STATUS}); proceeding with upload"
 
 # Create temporary working directory for the bundle
 BUNDLE_DIR=$(mktemp -d)
