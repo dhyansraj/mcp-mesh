@@ -79,8 +79,8 @@ class FastAPITracingMiddleware(BaseHTTPMiddleware):
             end_time = time.time()
             duration_ms = round((end_time - start_time) * 1000, 2)
 
-            # Publish route execution trace
-            self._publish_route_trace(
+            # Publish route execution trace (awaited — never blocks the loop)
+            await self._publish_route_trace(
                 route_name=route_name,
                 request_method=request.method,
                 request_path=str(request.url.path),
@@ -98,8 +98,8 @@ class FastAPITracingMiddleware(BaseHTTPMiddleware):
             end_time = time.time()
             duration_ms = round((end_time - start_time) * 1000, 2)
 
-            # Publish failed route execution trace
-            self._publish_route_trace(
+            # Publish failed route execution trace (awaited — never blocks)
+            await self._publish_route_trace(
                 route_name=route_name,
                 request_method=request.method,
                 request_path=str(request.url.path),
@@ -129,7 +129,7 @@ class FastAPITracingMiddleware(BaseHTTPMiddleware):
             self.logger.debug(f"Failed to extract route name: {e}")
             return f"{request.method} {request.url.path}"
 
-    def _publish_route_trace(
+    async def _publish_route_trace(
         self,
         route_name: str,
         request_method: str,
@@ -141,7 +141,12 @@ class FastAPITracingMiddleware(BaseHTTPMiddleware):
         status_code: int = None,
         error: str = None,
     ) -> None:
-        """Publish route execution trace to Redis."""
+        """Publish route execution trace to Redis.
+
+        Async (issue #1363 RC1): awaits the Redis publish so an unreachable
+        telemetry Redis yields the event loop instead of freezing concurrent
+        requests — this runs directly on the loop from ``dispatch``.
+        """
         try:
             from .context import TraceContext
             from .redis_metadata_publisher import get_trace_publisher
@@ -192,10 +197,10 @@ class FastAPITracingMiddleware(BaseHTTPMiddleware):
                 )
             execution_metadata.update(agent_metadata)
 
-            # Publish to Redis
-            from .utils import publish_trace_with_fallback
+            # Publish to Redis (awaited — never blocks the event loop)
+            from .utils import publish_trace_with_fallback_async
 
-            publish_trace_with_fallback(execution_metadata, self.logger)
+            await publish_trace_with_fallback_async(execution_metadata, self.logger)
 
         except Exception as e:
             # Never fail requests due to trace publishing

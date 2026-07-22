@@ -8,6 +8,7 @@ and FastAPI server preparation.
 
 import logging
 
+from ..shared import TracePublisherInitStep
 from ..shared.mesh_pipeline import MeshPipeline
 from . import (ConfigurationStep, DecoratorCollectionStep,
                DualModuleCheckStep, FastAPIServerSetupStep,
@@ -58,6 +59,10 @@ class StartupPipeline(MeshPipeline):
             # validation is enabled) fails at startup instead of at first LLM
             # call. Issue #846 (#1, #2).
             MediaStoreValidationStep(),
+            # Issue #1363: build the Redis trace publisher here (off the request
+            # path) so the sync block_on Redis connect never runs on the serving
+            # event loop at first-span time. No-op when tracing is disabled.
+            TracePublisherInitStep(),
             FastMCPServerDiscoveryStep(),  # Discover user's FastMCP instances (MOVED UP for Phase 2)
             # Phase 1 MeshJob: register helper tools on the FastMCP server
             # BEFORE FastAPIServerSetup mounts it (so they appear in /tools/list).

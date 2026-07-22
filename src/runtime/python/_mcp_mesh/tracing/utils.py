@@ -119,7 +119,38 @@ def publish_trace_with_fallback(
             pass
         else:
             pass
-    except Exception as e:
+    except Exception:
+        # Never fail agent operations due to trace publishing
+        pass
+
+
+async def publish_trace_with_fallback_async(
+    trace_data: dict[str, Any], logger_instance: logging.Logger
+) -> None:
+    """Publish trace data to Redis on the event loop without blocking it.
+
+    Async counterpart of ``publish_trace_with_fallback`` (issue #1363 RC1).
+    Callers running ON the asyncio event loop (the async-tool wrapper and
+    @mesh.route middleware) must ``await`` this so the Redis publish yields the
+    loop instead of freezing concurrent request coroutines when the telemetry
+    Redis is unreachable. Failures stay silent, matching the sync variant.
+
+    Args:
+        trace_data: Trace metadata to publish
+        logger_instance: Logger for debug messages
+    """
+    try:
+        from .redis_metadata_publisher import get_initialized_trace_publisher
+
+        # Pure cached lookup — never construct the publisher here (issue #1363).
+        # Its __init__ runs a sync block_on Redis connect; on this event loop
+        # that would freeze concurrent request coroutines. The singleton is
+        # built off the request path at agent startup
+        # (init_trace_publisher_at_startup); if it isn't set yet, drop the span.
+        publisher = get_initialized_trace_publisher()
+        if publisher is not None and publisher.is_available:
+            await publisher.publish_execution_trace_async(trace_data)
+    except Exception:
         # Never fail agent operations due to trace publishing
         pass
 
