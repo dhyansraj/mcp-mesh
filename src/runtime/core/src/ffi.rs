@@ -999,9 +999,17 @@ pub extern "C" fn mesh_init_trace_publisher() -> i32 {
         tracing_publish::init_trace_publisher().await
     });
 
-    if result {
-        // Arm the non-blocking publish path (queue + drain task).
+    // Arm the non-blocking publish path (queue + drain task) whenever tracing
+    // is enabled, even if the initial connect failed: the background re-prober
+    // (issue #1364) may bring Redis up later, and the drain task calls
+    // publish_span which short-circuits instantly while unavailable. Without
+    // arming here a Redis-down-at-startup Java agent could never publish spans
+    // after recovery.
+    if is_tracing_enabled() {
         let _ = ensure_span_queue();
+    }
+
+    if result {
         info!("FFI: Trace publisher initialized successfully");
         1
     } else {

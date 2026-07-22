@@ -31,10 +31,17 @@ class RedisTracePublisher:
             logger.debug("Distributed tracing: disabled")
 
     def publish_execution_trace(self, trace_data: dict[str, Any]) -> None:
-        """Publish execution trace data to Redis Stream via Rust core (non-blocking)."""
-        if not self._available:
-            return  # Silent no-op when Redis unavailable
+        """Publish execution trace data to Redis Stream via Rust core (non-blocking).
 
+        Issue #1364: does NOT gate on the cached ``self._available`` flag
+        (latched at construction). The Rust sync binding (``publish_span_py``) is
+        the single source of truth — it short-circuits internally in microseconds
+        while Redis is unavailable and resumes automatically once the Rust
+        background re-prober reconnects, so a stale Python latch must never keep
+        skipping a recovered connection (mirrors ``publish_execution_trace_async``
+        and the async un-gating). This is the SYNC path: it runs on an anyio
+        worker thread (off the event loop), so the binding's block_on is harmless.
+        """
         try:
             # Convert trace data to strings for Redis storage
             from .utils import add_timestamp_if_missing, convert_for_redis_storage
@@ -59,10 +66,14 @@ class RedisTracePublisher:
         async-tool wrapper and @mesh.route middleware) must use this instead of
         the sync ``publish_execution_trace`` so a stalled/unreachable telemetry
         Redis yields the loop rather than blocking every concurrent request.
-        """
-        if not self._available:
-            return  # Silent no-op when Redis unavailable
 
+        Issue #1364: does NOT gate on the cached ``self._available`` flag
+        (latched at construction). The Rust async binding is now the single
+        source of truth — it short-circuits internally in microseconds while
+        Redis is unavailable and resumes automatically once the Rust background
+        re-prober reconnects, so a stale Python latch must never block a
+        recovered connection.
+        """
         try:
             from .utils import add_timestamp_if_missing, convert_for_redis_storage
 
