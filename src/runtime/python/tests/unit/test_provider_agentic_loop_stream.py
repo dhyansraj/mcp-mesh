@@ -372,8 +372,9 @@ class TestToolCallIteration:
 
 class TestMaxIterations:
     @pytest.mark.asyncio
-    async def test_emits_max_iterations_indicator_when_loop_never_terminates(self):
+    async def test_emits_terminal_control_frame_when_loop_never_terminates(self):
         from mesh.helpers import _provider_agentic_loop_stream
+        from _mcp_mesh.engine.llm_stop_reason import parse_stream_end
 
         # Each iteration always produces a tool_call so the loop never terminates.
         def make_tool_call_iter():
@@ -413,7 +414,16 @@ class TestMaxIterations:
             ):
                 collected.append(c)
 
-        assert collected == ["Maximum tool call iterations reached"]
+        # Issue #1355: the token stream must NOT contain the English marker.
+        assert "Maximum tool call iterations reached" not in collected
+        assert not any(
+            "Maximum tool call iterations" in c for c in collected
+        )
+        # The stream ends with exactly one reserved terminal control frame
+        # carrying the max_iterations stop_reason; no text tokens precede it
+        # (the model only ever emitted tool calls).
+        assert len(collected) == 1
+        assert parse_stream_end(collected[-1]) == "max_iterations"
 
 
 # ---------------------------------------------------------------------------

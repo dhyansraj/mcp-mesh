@@ -17,6 +17,11 @@ from typing import Any
 import jsonschema  # type: ignore
 
 from _mcp_mesh.engine.llm_config import DEFAULT_MAX_ITERATIONS
+from _mcp_mesh.engine.llm_stop_reason import (
+    STOP_REASON_KEY,
+    STOP_REASON_MAX_ITERATIONS,
+    encode_stream_end,
+)
 from _mcp_mesh.engine.provider_handlers import ProviderHandlerRegistry
 from _mcp_mesh.shared.logging_config import format_log_value
 
@@ -1507,6 +1512,9 @@ async def _provider_agentic_loop(
 
     iteration = 0
     current_messages = list(messages)
+    # Issue #1355: last genuine assistant text seen on a tool-call turn, used
+    # as the exhaustion envelope's ``content`` (never an English marker).
+    last_assistant_text = ""
 
     # Pop parallel_tool_calls before it reaches completion_args
     # (Claude handler strips it, but OpenAI would pass it to API)
@@ -1694,6 +1702,15 @@ async def _provider_agentic_loop(
                     f"Provider executing {len(message.tool_calls)} tool calls "
                     f"(iteration {iteration}/{max_iterations})"
                 )
+
+            # Issue #1355: remember the model's most recent genuine assistant
+            # text (tool-call turns may carry preamble prose). If the loop
+            # later exhausts ``max_iterations`` we surface this as ``content``
+            # instead of fabricating an English marker — the exhaustion itself
+            # rides the ``_mesh_stop_reason`` sibling field.
+            _preamble = _extract_text_from_message_content(message.content)
+            if _preamble:
+                last_assistant_text = _preamble
 
             # Add assistant message with tool_calls to conversation.
             #
@@ -1912,14 +1929,20 @@ async def _provider_agentic_loop(
 
             return message_dict
 
-    # Safety: max iterations reached
+    # Safety: max iterations reached. Issue #1355: mark the exhaustion
+    # structurally via the ``_mesh_stop_reason`` sibling field instead of
+    # writing an English marker into ``content``. ``content`` carries the last
+    # genuine assistant text (or "") — the human-readable message lives only
+    # in the consumer's raised MaxIterationsError. Absence of the field on a
+    # normal-completion envelope means a normal turn.
     if loop_logger:
         loop_logger.warning(
             f"Provider-managed loop hit max iterations ({max_iterations})"
         )
     return {
         "role": "assistant",
-        "content": "Maximum tool call iterations reached",
+        "content": last_assistant_text,
+        STOP_REASON_KEY: STOP_REASON_MAX_ITERATIONS,
     }
 
 
@@ -2343,13 +2366,18 @@ async def _provider_agentic_loop_stream(
                                 f"provider stream: aclose() failed during teardown: {e}"
                             )
 
-    # Safety: max iterations reached. Emit a textual indicator so consumers
-    # iterating ``async for`` always see at least one chunk in this edge.
+    # Safety: max iterations reached. Issue #1355: the stream channel is
+    # strictly stringly-typed (``Stream[str]`` → FastMCP progress
+    # notifications), so we emit a single reserved terminal control frame as
+    # the final chunk — a JSON string keyed ``_mesh_stream_end`` — instead of
+    # polluting the token stream with an English marker. The consumer's stream
+    # wrapper recognizes the frame, never forwards it, and raises the typed
+    # error at end-of-iteration.
     if loop_logger:
         loop_logger.warning(
             f"Provider-managed stream loop hit max iterations ({max_iterations})"
         )
-    yield "Maximum tool call iterations reached"
+    yield encode_stream_end(STOP_REASON_MAX_ITERATIONS)
 
 
 def _extract_vendor_from_model(model: str) -> str | None:

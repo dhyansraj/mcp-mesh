@@ -23,6 +23,11 @@ from .llm_errors import (
     ResponseParseError,
     ToolExecutionError,
 )
+from .llm_stop_reason import (
+    STOP_REASON_KEY,
+    STOP_REASON_MAX_ITERATIONS,
+    parse_stream_end,
+)
 from .provider_handlers import ProviderHandlerRegistry
 from .response_parser import ResponseParser
 from .tool_executor import ToolExecutor
@@ -92,7 +97,7 @@ class _MockToolCall:
 class _MockMessage:
     """Mock message matching LiteLLM ModelResponse.choices[].message."""
 
-    __slots__ = ("content", "role", "tool_calls", "_raw")
+    __slots__ = ("content", "role", "tool_calls", "_raw", "_mesh_stop_reason")
 
     def __init__(self, message_dict: dict):
         # Retain the original wire dict for empty-content diagnostics — model_dump()
@@ -122,7 +127,10 @@ class _MockMessage:
             content is None
             and "content" not in message_dict
             and "role" not in message_dict
-            and not (message_dict.keys() & {"tool_calls", "_mesh_usage"})
+            and not (
+                message_dict.keys()
+                & {"tool_calls", "_mesh_usage", "_mesh_stop_reason"}
+            )
             and not message_dict.get("error")
         ):
             logger.debug(
@@ -131,6 +139,11 @@ class _MockMessage:
             )
             content = _dumps_safe(message_dict)
         self.content = content
+        # Issue #1355: structural exhaustion discriminant. Present (=="max_
+        # iterations") only when the provider-managed loop hit its cap; absent
+        # on a normal turn. The consumer raises a typed error on it — the value
+        # never leaks into ``content``.
+        self._mesh_stop_reason = message_dict.get("_mesh_stop_reason")
         self.role = message_dict.get("role", "assistant")
         self.tool_calls = None
         raw_tool_calls = message_dict.get("tool_calls")
@@ -1079,6 +1092,25 @@ class MeshLlmAgent:
                 # Extract response content
                 assistant_message = response.choices[0].message
 
+                # Issue #1355: the provider-managed loop signals iteration
+                # exhaustion structurally via ``_mesh_stop_reason`` (never in
+                # ``content``). Raise the typed error so the documented contract
+                # holds on the mainline path — previously unreachable because
+                # the managed loop returns a terminal no-tool-calls message and
+                # the consumer exited normally on iteration 1.
+                if (
+                    getattr(assistant_message, "_mesh_stop_reason", None)
+                    == STOP_REASON_MAX_ITERATIONS
+                ):
+                    logger.error(
+                        "❌ Provider-managed loop reported max_iterations "
+                        f"exhaustion (max={self.max_iterations})"
+                    )
+                    raise MaxIterationsError(
+                        iteration_count=self.max_iterations,
+                        max_allowed=self.max_iterations,
+                    )
+
                 # Check if LLM wants to use tools
                 if (
                     hasattr(assistant_message, "tool_calls")
@@ -1531,8 +1563,32 @@ class MeshLlmAgent:
             async for chunk in provider_proxy.stream(
                 name=stream_tool_name, request=request_dict
             ):
+                # Issue #1355: the provider emits a reserved terminal control
+                # frame as the final chunk on max_iterations exhaustion (the
+                # str-only stream channel can't carry a structured object).
+                # Recognize it, never forward it, and raise the typed error so
+                # the consumer's ``async for`` terminates with MaxIterationsError
+                # instead of a spurious token.
+                stop_reason = parse_stream_end(chunk)
+                if stop_reason is not None:
+                    if stop_reason == STOP_REASON_MAX_ITERATIONS:
+                        logger.error(
+                            "❌ stream(mesh): provider signaled max_iterations "
+                            f"exhaustion (max={self.max_iterations})"
+                        )
+                        raise MaxIterationsError(
+                            iteration_count=self.max_iterations,
+                            max_allowed=self.max_iterations,
+                        )
+                    # Unknown control frame: swallow it rather than leaking a
+                    # reserved sentinel into the user's token stream.
+                    continue
                 yield chunk
             return
+        except MaxIterationsError:
+            # Typed exhaustion signal — propagate as-is, do NOT treat as a
+            # missing-tool fallback trigger.
+            raise
         except Exception as e:
             # FastMCP surfaces an unknown tool as fastmcp.exceptions.ToolError
             # with message "Unknown tool: ..." (server raises NotFoundError,
@@ -1600,6 +1656,20 @@ class MeshLlmAgent:
             message_dict = result
         else:
             message_dict = {"role": "assistant", "content": str(result)}
+
+        # Issue #1355: the buffered fallback can itself return an exhaustion
+        # envelope (``content == ""`` + ``_mesh_stop_reason: max_iterations``).
+        # Mirror the primary stream / buffered paths and raise the typed error
+        # so exhaustion isn't swallowed as a silent empty stream.
+        if message_dict.get(STOP_REASON_KEY) == STOP_REASON_MAX_ITERATIONS:
+            logger.error(
+                "❌ stream(mesh): buffered fallback returned max_iterations "
+                f"exhaustion (max={self.max_iterations})"
+            )
+            raise MaxIterationsError(
+                iteration_count=self.max_iterations,
+                max_allowed=self.max_iterations,
+            )
 
         content = message_dict.get("content") or ""
         if content:

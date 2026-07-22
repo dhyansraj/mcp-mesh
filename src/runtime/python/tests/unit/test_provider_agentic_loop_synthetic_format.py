@@ -452,10 +452,11 @@ class TestBufferedLoopSyntheticRecognition:
         }
 
     @pytest.mark.asyncio
-    async def test_max_iterations_exhausted_without_synthetic_returns_safety_message(self):
+    async def test_max_iterations_exhausted_without_synthetic_sets_stop_reason(self):
         """If the model NEVER calls the synthetic and instead keeps calling
-        real tools, the loop hits ``max_iterations`` and returns the safety
-        text. Should NOT infinite-loop.
+        real tools, the loop hits ``max_iterations``. Issue #1355: the
+        exhaustion is marked structurally via ``_mesh_stop_reason`` — NOT an
+        English marker in ``content``. Should NOT infinite-loop.
         """
         from mesh.helpers import _provider_agentic_loop
 
@@ -486,7 +487,12 @@ class TestBufferedLoopSyntheticRecognition:
                 vendor="anthropic",
             )
 
-        assert "Maximum tool call iterations" in result["content"]
+        # Structural discriminant, not an English marker in content.
+        assert result["_mesh_stop_reason"] == "max_iterations"
+        # content is the last genuine assistant text (here "" — the model only
+        # ever emitted tool calls, no prose) and never the English marker.
+        assert result["content"] == ""
+        assert "Maximum tool call iterations" not in (result["content"] or "")
 
 
 # ---------------------------------------------------------------------------
