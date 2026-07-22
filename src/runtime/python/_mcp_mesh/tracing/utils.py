@@ -106,6 +106,17 @@ def publish_trace_with_fallback(
     Attempts to publish trace data to Redis, silently handling failures
     to ensure trace publishing never breaks application execution.
 
+    Issue #1364: does NOT gate on the cached ``publisher.is_available`` flag
+    (latched at construction). Always delegate to the Rust sync binding
+    (``publish_span_py``), which is the single source of truth — it short-
+    circuits internally in microseconds while Redis is unavailable and resumes
+    automatically once the Rust background re-prober reconnects, so a stale
+    Python latch must never keep skipping a recovered connection. This is the
+    SYNC path: it runs on an anyio worker thread (off the event loop), so the
+    binding's block_on is harmless here. ``get_trace_publisher()`` is used
+    (constructing) on purpose — off-loop construction is fine; the request event
+    loop uses the non-constructing ``get_initialized_trace_publisher`` instead.
+
     Args:
         trace_data: Trace metadata to publish
         logger_instance: Logger for debug messages
@@ -114,11 +125,7 @@ def publish_trace_with_fallback(
         from .redis_metadata_publisher import get_trace_publisher
 
         publisher = get_trace_publisher()
-        if publisher.is_available:
-            publisher.publish_execution_trace(trace_data)
-            pass
-        else:
-            pass
+        publisher.publish_execution_trace(trace_data)
     except Exception:
         # Never fail agent operations due to trace publishing
         pass
@@ -147,8 +154,17 @@ async def publish_trace_with_fallback_async(
         # that would freeze concurrent request coroutines. The singleton is
         # built off the request path at agent startup
         # (init_trace_publisher_at_startup); if it isn't set yet, drop the span.
+        # Issue #1364: do NOT gate on the cached ``publisher.is_available`` flag
+        # (latched at construction). Always delegate to the Rust async binding,
+        # which short-circuits internally in microseconds while Redis is
+        # unavailable and resumes automatically once the Rust background
+        # re-prober reconnects — a stale Python latch must never keep skipping a
+        # recovered connection. Still uses the NON-constructing
+        # get_initialized_trace_publisher() so no sync block_on init ever runs on
+        # the event loop (RC4 preserved); if the singleton isn't built yet the
+        # span is simply dropped.
         publisher = get_initialized_trace_publisher()
-        if publisher is not None and publisher.is_available:
+        if publisher is not None:
             await publisher.publish_execution_trace_async(trace_data)
     except Exception:
         # Never fail agent operations due to trace publishing
