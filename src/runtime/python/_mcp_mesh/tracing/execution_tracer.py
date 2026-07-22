@@ -4,6 +4,7 @@ Execution Tracer - Helper class for function execution logging and Redis metadat
 This class encapsulates all the execution logging logic to keep the dependency injector clean.
 """
 
+import asyncio
 import logging
 import time
 from collections.abc import Callable
@@ -15,9 +16,17 @@ from .utils import (
     get_agent_metadata_with_fallback,
     is_tracing_enabled,
     publish_trace_with_fallback,
+    publish_trace_with_fallback_async,
 )
 
 logger = logging.getLogger(__name__)
+
+# Keepalive references for fire-and-forget telemetry publish tasks scheduled by
+# ``end_execution_loop_aware`` (issue #1363). asyncio only holds a weak
+# reference to tasks created via ``loop.create_task``; without a strong
+# reference here the publish could be garbage-collected mid-flight. Each task
+# discards itself on completion so the set never leaks.
+_PENDING_PUBLISH_TASKS: set = set()
 
 
 class ExecutionTracer:
@@ -117,46 +126,68 @@ class ExecutionTracer:
                 f"Failed to setup execution logging for {self.function_name}: {e}"
             )
 
+    def _finalize_metadata(
+        self, result: Any, success: bool, error: str | None
+    ) -> bool:
+        """Populate execution_metadata with end-of-call results.
+
+        Shared by the sync ``end_execution`` and the async
+        ``end_execution_async`` so both build an identical span before publish.
+
+        Returns:
+            True if there is a trace to publish, False if start_execution never
+            ran (nothing to finalize).
+        """
+        if not self.start_time:
+            return False
+
+        end_time = time.time()
+        duration = end_time - self.start_time
+
+        # Update execution metadata with results
+        self.execution_metadata.update(
+            {
+                "end_time": end_time,
+                "duration_ms": round(duration * 1000, 2),
+                "success": success,
+                "error": error,
+                "result_type": (
+                    str(type(result).__name__) if result is not None else "None"
+                ),
+                "runtime": "python",
+            }
+        )
+
+        # Extract LLM metadata from context (set by MeshLlmAgent at the source)
+        from .context import clear_llm_metadata, get_llm_metadata
+
+        llm_meta = get_llm_metadata()
+        if llm_meta:
+            self.execution_metadata.update(llm_meta)
+            clear_llm_metadata()
+
+        # Extract payload sizes if set by proxy call_tool()
+        from .context import clear_payload_sizes, get_payload_sizes
+
+        sizes = get_payload_sizes()
+        if sizes:
+            self.execution_metadata.update(sizes)
+            clear_payload_sizes()
+
+        return True
+
     def end_execution(
         self, result: Any = None, success: bool = True, error: str | None = None
     ) -> None:
-        """End execution tracking and log function completion."""
+        """End execution tracking and log function completion.
+
+        Sync path only (sync-tool wrapper / self-dependency proxy). These run
+        on an anyio worker thread, so the blocking Rust publish is harmless.
+        Event-loop callers must use ``end_execution_async`` (issue #1363 RC1).
+        """
         try:
-            if not self.start_time:
+            if not self._finalize_metadata(result, success, error):
                 return
-
-            end_time = time.time()
-            duration = end_time - self.start_time
-
-            # Update execution metadata with results
-            self.execution_metadata.update(
-                {
-                    "end_time": end_time,
-                    "duration_ms": round(duration * 1000, 2),
-                    "success": success,
-                    "error": error,
-                    "result_type": (
-                        str(type(result).__name__) if result is not None else "None"
-                    ),
-                    "runtime": "python",
-                }
-            )
-
-            # Extract LLM metadata from context (set by MeshLlmAgent at the source)
-            from .context import clear_llm_metadata, get_llm_metadata
-
-            llm_meta = get_llm_metadata()
-            if llm_meta:
-                self.execution_metadata.update(llm_meta)
-                clear_llm_metadata()
-
-            # Extract payload sizes if set by proxy call_tool()
-            from .context import clear_payload_sizes, get_payload_sizes
-
-            sizes = get_payload_sizes()
-            if sizes:
-                self.execution_metadata.update(sizes)
-                clear_payload_sizes()
 
             # Save execution trace to Redis for distributed tracing storage
             publish_trace_with_fallback(self.execution_metadata, self.logger)
@@ -165,6 +196,93 @@ class ExecutionTracer:
             # Without this, subsequent calls become children of this span instead of siblings
             self._restore_parent_context()
 
+        except Exception as e:
+            self.logger.warning(
+                f"Failed to complete execution logging for {self.function_name}: {e}"
+            )
+
+    async def end_execution_async(
+        self, result: Any = None, success: bool = True, error: str | None = None
+    ) -> None:
+        """End execution tracking without blocking the event loop.
+
+        Async counterpart of ``end_execution`` (issue #1363 RC1): awaits the
+        Redis publish so an unreachable telemetry Redis yields the loop instead
+        of freezing concurrent request coroutines. Used by the async-tool
+        wrapper and the @mesh.route middleware, which run on the event loop.
+        """
+        try:
+            if not self._finalize_metadata(result, success, error):
+                return
+
+            # Save execution trace to Redis (awaited — never blocks the loop)
+            await publish_trace_with_fallback_async(
+                self.execution_metadata, self.logger
+            )
+
+            # CRITICAL: Restore parent's trace context so sibling calls have correct parent
+            # Without this, subsequent calls become children of this span instead of siblings
+            self._restore_parent_context()
+
+        except Exception as e:
+            self.logger.warning(
+                f"Failed to complete execution logging for {self.function_name}: {e}"
+            )
+
+    def end_execution_loop_aware(
+        self, result: Any = None, success: bool = True, error: str | None = None
+    ) -> None:
+        """End execution from a SYNC caller that may run on the event loop.
+
+        Loop-aware bridge for sync call sites that can execute either on an
+        anyio worker thread OR directly on the asyncio event-loop thread — the
+        ``SelfDependencyProxy`` is the canonical case: a self-dependency
+        consumed by an async tool or a ``@mesh.route`` handler runs
+        ``proxy(**kwargs)`` synchronously on the loop (issue #1363).
+
+        - No running loop (off-loop, e.g. sync-tool anyio worker thread):
+          fall back to the blocking ``end_execution`` — already off-loop, so
+          the Rust publish blocking is harmless.
+        - Running loop present (on the loop thread): finalize the span and
+          restore the parent trace context synchronously (so span contents and
+          sibling-parent ordering are identical to the blocking path), then
+          schedule the Redis publish as a fire-and-forget task via the async
+          path so it never blocks the loop when telemetry Redis is unreachable.
+
+        Soft-fail throughout: no exception escapes to the request/tool path.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Off-loop: safe to block on the worker thread.
+            self.end_execution(result, success=success, error=error)
+            return
+
+        try:
+            if not self._finalize_metadata(result, success, error):
+                return
+
+            # Snapshot the finalized span before returning: the fire-and-forget
+            # coroutine runs later, after context vars (llm metadata / payload
+            # sizes) may have been mutated by other calls.
+            trace_snapshot = dict(self.execution_metadata)
+
+            # Restore parent context synchronously so sibling calls parent
+            # correctly, matching the blocking end_execution ordering.
+            self._restore_parent_context()
+
+            async def _publish() -> None:
+                try:
+                    await publish_trace_with_fallback_async(
+                        trace_snapshot, self.logger
+                    )
+                except Exception:
+                    # Never let a fire-and-forget telemetry task crash the loop.
+                    pass
+
+            task = loop.create_task(_publish())
+            _PENDING_PUBLISH_TASKS.add(task)
+            task.add_done_callback(_PENDING_PUBLISH_TASKS.discard)
         except Exception as e:
             self.logger.warning(
                 f"Failed to complete execution logging for {self.function_name}: {e}"
@@ -284,8 +402,8 @@ class ExecutionTracer:
                 result = await func(*args, **kwargs)
             else:
                 result = func(*args, **kwargs)
-            tracer.end_execution(result, success=True)
+            await tracer.end_execution_async(result, success=True)
             return result
         except Exception as e:
-            tracer.end_execution(error=str(e), success=False)
+            await tracer.end_execution_async(error=str(e), success=False)
             raise  # Re-raise the exception

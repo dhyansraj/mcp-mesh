@@ -580,6 +580,7 @@ fn mcp_mesh_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Tracing publish functions (defined in tracing_publish.rs)
     m.add_function(wrap_pyfunction!(tracing_publish::init_trace_publisher_py, m)?)?;
     m.add_function(wrap_pyfunction!(tracing_publish::publish_span_py, m)?)?;
+    m.add_function(wrap_pyfunction!(tracing_publish::publish_span_async_py, m)?)?;
     m.add_function(wrap_pyfunction!(tracing_publish::is_trace_publisher_available_py, m)?)?;
 
     // Response parsing

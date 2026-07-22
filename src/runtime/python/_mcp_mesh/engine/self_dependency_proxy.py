@@ -63,7 +63,13 @@ class SelfDependencyProxy:
             tracer.execution_metadata["call_type"] = "self_dependency"
 
             result = self.original_func(**kwargs)
-            tracer.end_execution(result, success=True)
+            # Loop-aware publish (issue #1363): a self-dependency consumed by an
+            # async tool or @mesh.route handler runs this __call__ synchronously
+            # ON the event-loop thread, so a blocking Redis publish would stall
+            # the loop when telemetry Redis is unreachable. end_execution_loop_aware
+            # offloads the publish when a running loop is detected and falls back
+            # to the blocking path only when genuinely off-loop.
+            tracer.end_execution_loop_aware(result, success=True)
 
             self.logger.info(
                 f"✅ SELF-CALL: Direct call to '{self.function_name}' succeeded"
@@ -72,7 +78,7 @@ class SelfDependencyProxy:
             return result
 
         except Exception as e:
-            tracer.end_execution(error=str(e), success=False)
+            tracer.end_execution_loop_aware(error=str(e), success=False)
             self.logger.error(
                 f"❌ SELF-CALL: Direct call to '{self.function_name}' failed: {e}"
             )

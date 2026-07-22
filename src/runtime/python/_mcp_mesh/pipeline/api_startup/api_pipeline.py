@@ -8,6 +8,7 @@ route integration, and service registration.
 
 import logging
 
+from ..shared import TracePublisherInitStep
 from ..shared.mesh_pipeline import MeshPipeline
 from .api_server_setup import APIServerSetupStep
 from .fastapi_discovery import FastAPIAppDiscoveryStep
@@ -47,6 +48,10 @@ class APIPipeline(MeshPipeline):
             FastAPIAppDiscoveryStep(),  # Find user's FastAPI app instances
             RouteIntegrationStep(),  # Apply dependency injection to routes
             TracingMiddlewareIntegrationStep(),  # Add tracing middleware to FastAPI apps
+            # Issue #1363: build the Redis trace publisher here (off the request
+            # path) so the sync block_on Redis connect never runs on the serving
+            # event loop at first-span time. No-op when tracing is disabled.
+            TracePublisherInitStep(),
             APIServerSetupStep(),  # Prepare service registration metadata
             # Note: Heartbeat integration will be added in next phase
             # Note: User controls FastAPI server startup (uvicorn/gunicorn)
