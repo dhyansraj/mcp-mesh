@@ -1,8 +1,34 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.2.3...HEAD)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.3.0...HEAD)
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.2.1...v3.2.3)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.2.3...v3.3.0)
+
+## v3.3.0 (2026-07-23)
+
+A minor release: LLM `max_iterations` exhaustion becomes a typed, catchable error across all three runtimes, a provider's iteration cap now governs unset TypeScript consumers, and distributed-tracing telemetry no longer blocks request handling. The only wire change is additive — a namespaced `_mesh_stop_reason` sibling field and a typed `_mesh_frame` stream envelope carry the exhaustion signal, and an unframed or older provider degrades to plain passthrough. No registry, resolution, or declaration-syntax changes.
+
+> **⚠️ Upgrade all runtime agents together.** The exhaustion signal is a shared cross-runtime contract; a 3.3.0 provider paired with a pre-3.3.0 consumer (or vice-versa) degrades on the exhaustion path only.
+
+### 🤖 LLM
+
+- **`max_iterations` exhaustion is now a typed, catchable error (#1355).** When a provider-managed `@mesh.llm` agentic loop hit its cap it returned a fabricated, success-shaped response indistinguishable from a real answer — a caller could only detect it by string-matching an English marker. It now raises `MaxIterationsError` (Python/TypeScript) or `MeshMaxIterationsException` (Java) on both the buffered and streaming paths, carried by a namespaced `_mesh_stop_reason` sibling field on the reply envelope (buffered) and a typed `_mesh_frame` terminal frame on the stream. Delivered across all three runtimes: Python (with a shared streaming envelope, and the dead in-core agentic-loop module removed), TypeScript (including the Gemini `stopWhen` path that previously emitted nothing on exhaustion), and Java (replacing a silent return of the prior assistant text). Java streaming consumers unwrap the frame envelope too (#1369). `MaxIterationsError` and `ToolExecutionError` are now exported from `mesh` (Python). ⚠️ A delegated `@mesh.llm` consumer now **raises** on exhaustion instead of returning a value — wrap the call if you want to handle it gracefully.
+- **A provider's `MESH_LLM_MAX_ITERATIONS` now governs unset TypeScript consumers (#1360).** The TypeScript consumer forwarded a default of `10` on every delegation, so a provider operator's env cap was inert for TS consumers — Python and Java already forwarded only when explicitly configured. TS now forwards `max_iterations` only when the consumer set it explicitly (a call option, the consumer-side `MESH_LLM_MAX_ITERATIONS`, or an explicit config value), so an unset TS consumer defers to the provider's cap, matching Python and Java. The consumer's own local loop cap still defaults to 10. ⚠️ An unset TypeScript consumer's effective cap now comes from the provider rather than always being 10.
+
+### 🔭 Observability
+
+- **Tracing telemetry no longer blocks request handling, and recovers when the telemetry Redis returns (#1365, #1366).** With distributed tracing enabled, the trace-span publish ran a synchronous Redis push on the request event loop, so a slow or unreachable telemetry Redis stalled tool-call handling — and once the connection was lost after startup, every span paid the full timeout. Publishing is now off the request path (an async binding on the async-tool and `@mesh.route` paths, an off-loop offload for self-dependency calls), the publisher initializes at startup with a bounded connect, and a single-flight background re-prober reconnects with a bounded dial. A telemetry-Redis outage is now a background concern — agents keep serving and resume tracing when Redis comes back, whether it was lost mid-life or never reachable at startup — and the re-probe never dials on the request path.
+
+### 📦 Tests and Release
+
+- **Integration coverage for the LLM exhaustion and forwarding behaviors (#1373).** Three deterministic cross-runtime tsuite cases — the typed buffered error (Python), the provider-env-governs-unset-consumer parity (TypeScript → Python), and the Java streaming frame unwrap with a typed terminal error — using a random-token probe fixture so the loop exhausts deterministically. These behaviors previously had unit coverage only, which is why the gaps weren't caught earlier.
+- **A partial or interrupted release can be finished idempotently (#1362).** The publish steps no longer get stuck when a release run is retried.
+
+### ⚠️ Notes
+
+- **Upgrade coordination.** The exhaustion signal (`_mesh_stop_reason` / `_mesh_frame`) is a shared cross-runtime wire contract; upgrade all runtime agents to 3.3.0 together. The addition is backward-tolerant — an unframed or pre-3.3.0 provider degrades to plain passthrough — but a new provider paired with an old consumer will not surface the typed exhaustion on that path.
+- **Behavior change.** LLM consumers now raise a typed error on `max_iterations` exhaustion instead of returning a fabricated response. A previously-passing normal call is unchanged; only the exhaustion path differs.
+- **No registry, resolution, or declaration-syntax changes.**
 
 ## v3.2.3 (2026-07-21)
 

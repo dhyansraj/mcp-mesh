@@ -127,7 +127,7 @@ describe("Agent Integration", () => {
 # docker-compose.test.yml
 services:
   registry:
-    image: mcpmesh/registry:3.2.3
+    image: mcpmesh/registry:3.3.0
     ports:
       - "8000:8000"
     healthcheck:
