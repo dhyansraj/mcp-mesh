@@ -232,6 +232,13 @@ class MeshLlmAgentProxyContentRecoveryTest {
     }
 
     @Test
+    @DisplayName("nested bare _mesh_stop_reason payload → empty (diagnostics), not the wrapper JSON")
+    void nestedStopReasonOnlyDegradesToEmpty() throws Exception {
+        assertEquals("", extractFromNestedWrapper(
+            Map.of("_mesh_stop_reason", "tool_use")));
+    }
+
+    @Test
     @DisplayName("genuine nested JSON answer (no wrapper markers) passes through unchanged")
     void nestedGenuineJsonAnswerUnchanged() throws Exception {
         String result = extractFromNestedWrapper(Map.of("answer", "42"));

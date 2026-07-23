@@ -10,6 +10,7 @@ import io.mcpmesh.ai.handlers.LlmProviderHandler.OutputSchema;
 import io.mcpmesh.ai.handlers.LlmProviderHandler.ToolDefinition;
 import io.mcpmesh.ai.handlers.LlmProviderHandlerRegistry;
 import io.mcpmesh.core.AgentSpec;
+import io.mcpmesh.types.MeshLlmStopReason;
 import io.mcpmesh.spring.McpHttpClient;
 import io.mcpmesh.spring.media.MediaResolver;
 import io.mcpmesh.spring.media.MediaStore;
@@ -525,9 +526,14 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                     }
 
                     if (!completed) {
+                        // Issue #1355: mark the exhaustion structurally via the
+                        // _mesh_stop_reason sibling field instead of writing an
+                        // English marker into content. Real usage is still reported
+                        // (usageMeta) — it does not mask the discriminant, which
+                        // rides its own field.
                         log.warn("Provider parallel loop hit max iterations ({}) without final response", maxIterations);
-                        response.put("content", "Maximum tool call iterations reached");
-                        response.put("tool_calls", List.of());
+                        applyExhaustionSignal(
+                            response, lastResponse != null ? lastResponse.content() : null);
                         usageMeta = lastResponse != null ? lastResponse.usage() : null;
                     } else if (lastResponse != null) {
                         response.put("content", lastResponse.content());
@@ -958,6 +964,26 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
         }
         Integer fromEnv = sanitizeMaxIterations(envVal);
         return fromEnv != null ? fromEnv : MeshLlmDefaults.MAX_ITERATIONS;
+    }
+
+    /**
+     * Populate a provider-managed-loop exhaustion reply envelope (issue #1355).
+     *
+     * <p>Sets {@code content} to the last genuine assistant text (or {@code ""}
+     * when none — never the fabricated English marker), an empty {@code tool_calls}
+     * list, and the structural discriminant sibling field
+     * {@code _mesh_stop_reason: "max_iterations"}. The field is added ONLY on
+     * exhaustion; a normal completion omits it so absence means a normal turn. The
+     * consumer reads the discriminant and raises {@code MeshMaxIterationsException}
+     * — the human-readable message never rides the wire.
+     *
+     * <p>Byte-matches Python ({@code mesh/helpers.py}) and TypeScript
+     * ({@code llm-provider.ts}): {@code _mesh_stop_reason} / {@code max_iterations}.
+     */
+    static void applyExhaustionSignal(Map<String, Object> response, String lastAssistantText) {
+        response.put("content", lastAssistantText != null ? lastAssistantText : "");
+        response.put("tool_calls", List.of());
+        response.put(MeshLlmStopReason.STOP_REASON_KEY, MeshLlmStopReason.STOP_REASON_MAX_ITERATIONS);
     }
 
     private LlmProviderConfig findProvider(String capability) {
