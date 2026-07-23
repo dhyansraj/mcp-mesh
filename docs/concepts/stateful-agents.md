@@ -48,7 +48,7 @@ mcp-mesh runs your agent across two event loops:
 
 The two-loop split means a long-running tool body (LLM call, slow registry hop, multi-minute MeshJob) holds the user loop, but never the framework loop — your K8s liveness/readiness probes stay responsive.
 
-**What this fixes**: loop-bound resources work as expected when created in `lifespan` startup. `asyncpg.Pool`, `redis.asyncio.Redis`, and `aiohttp.ClientSession` are all loop-affine — they bind to the asyncio loop that created them and fail if reused from a different one. Because v3.3.0 runs your `lifespan` AND your tools on the same user loop, the canonical FastMCP idiom is straightforward:
+**What this fixes**: loop-bound resources work as expected when created in `lifespan` startup. `asyncpg.Pool`, `redis.asyncio.Redis`, and `aiohttp.ClientSession` are all loop-affine — they bind to the asyncio loop that created them and fail if reused from a different one. Because v3.3.1 runs your `lifespan` AND your tools on the same user loop, the canonical FastMCP idiom is straightforward:
 
 ```python
 # Module-level — FastMCP's `lifespan` parameter receives a FastMCP server
@@ -104,7 +104,7 @@ long-running work. From mesh's perspective it's an ordinary CRUD
 agent — every tool call is short, idempotent where possible, and
 returns. The pool lives inside the agent process — created in
 `lifespan` startup, stored in a module-level global, and closed in
-`lifespan` exit. Since v3.3.0, `lifespan` and all tool bodies share
+`lifespan` exit. Since v3.3.1, `lifespan` and all tool bodies share
 the single user loop, so a module-level pool created in `lifespan`
 startup is the supported pattern. (FastMCP's `lifespan` receives a
 FastMCP server instance — there is no `.state` namespace as there is

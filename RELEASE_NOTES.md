@@ -1,8 +1,22 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.3.0...HEAD)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.3.1...HEAD)
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.3.0...v3.3.1)
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.2.3...v3.3.0)
+
+## v3.3.1 (2026-07-23)
+
+A release-infrastructure patch. No runtime, wire, registry, resolution, or declaration-syntax changes — behavior is identical to 3.3.0.
+
+### 📦 Release and CI
+
+- **The Java SDK publish job no longer fails a release re-run (#1376).** Its idempotency guard decided whether a version was already on Maven Central by probing `repo1.maven.org`, which lags Central's authoritative state by minutes-to-an-hour via mirror propagation — so a re-run inside that window re-uploaded the same coordinates and Central rejected the duplicate as a FAILED deployment. The guard now consults Central's authoritative published-check endpoint first, using the `repo1` probe only as a fallback.
+
+### 📝 Docs
+
+- Refreshed the project cover image.
 
 ## v3.3.0 (2026-07-23)
 
