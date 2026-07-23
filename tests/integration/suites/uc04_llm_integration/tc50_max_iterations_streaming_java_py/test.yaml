@@ -1,0 +1,327 @@
+# Test Case: Java streaming frame unwrap + streaming exhaustion over SSE
+#
+# Issue: https://github.com/dhyansraj/mcp-mesh/issues/1369  (PR #1371)
+#
+# WHAT #1369 FIXED (the streaming half of Java's #1355 participation)
+#   A Python streaming provider frames every stream chunk as a typed
+#   _mesh_frame JSON string. The Java streaming consumer
+#   (MeshLlmAgentProxy.streamGenerate()) was a raw Flow.Publisher<String>
+#   passthrough, so it (a) LEAKED the frame JSON to callers and (b) never
+#   surfaced streaming exhaustion. #1371 wraps the stream in StreamFrameDecoder:
+#     - "chunk" frame        -> emit plain content (unwrapped)
+#     - "end" + stop_reason  == "max_iterations" -> terminate the publisher with
+#                               onError(MeshMaxIterationsException) (NOT emitted)
+#     - plain "end"          -> onComplete (NOT emitted)
+#   MeshSse.forward renders that onError as
+#     event: error\ndata: {"error":"...","type":"MeshMaxIterationsException"}
+#   and OMITS data: [DONE]; a normal completion writes data: [DONE].
+#
+# GATEWAY SHAPE (see stream-gateway-java/StreamGatewayApplication.java)
+#   A single @MeshLlm bind tool (issue #1141: exactly ONE @MeshLlm so the
+#   per-funcId proxy binds reliably) captures the framework-injected
+#   MeshLlmAgent proxy into a shared holder; two plain SSE routes forward
+#   proxy.stream(...) via MeshSse.forward. (@MeshRoute/@MeshDependency inject
+#   McpMeshTool proxies, not a MeshLlmAgent — Java has no streaming producer,
+#   #1223 — so the LLM proxy is captured from the @MeshLlm tool instead.)
+#     POST /stream/capped  -> annotation maxIterations=1 governs; the 4-step
+#                             probe ticket forces exhaustion -> error frame.
+#     POST /stream/normal  -> per-call modelParams(max_iterations=10) lets the
+#                             loop complete -> text chunks + [DONE].
+#
+# THE OBSERVABLE
+#   Wire-format assertions on each captured SSE body (event: error + the typed
+#   exception class name for capped; data: chunks + [DONE] for normal), plus the
+#   probe agent's out-of-band invocation counter for the capped route
+#   (PROBE_INVOCATIONS=[1], never [0]). Chunk counts are asserted via a
+#   PASS/FAIL verdict token, never numeric substrings.
+#
+# WHY CLAUDE + temperature 0.0 + parallel_tool_calls OFF: tool-calling
+#   determinism; advance_ticket's unguessable random next_token serializes the
+#   loop structurally (one tool round == one counter increment).
+
+name: "Java streaming exhaustion frame unwrap over SSE - Java->Py"
+description: "Issue #1369: a Java @MeshLlm streaming consumer unwraps the Python provider's _mesh_frame envelope; a capped streaming loop surfaces MeshMaxIterationsException as an SSE error frame (no [DONE]), while a normal loop completes with [DONE]"
+tags:
+  - llm
+  - claude
+  - java
+  - python
+  - cross-runtime
+  - tools
+  - streaming
+  - sse
+  - max-iterations
+  - issue-1369
+  - slow
+# Java build + slow Spring Boot startup: the tc-level budget matches every other
+# Java tc (tc47 / uc18-tc05 = 600). The design's "streaming 240" is applied as
+# the per-SSE-call step timeout, not the total (a maven build cannot fit in 240).
+timeout: 600
+# LLM test: needs a real ANTHROPIC_API_KEY and the tsuite-mesh:local image.
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+test:
+  # --- Copy artifacts ---
+  - name: "Copy Python Claude provider to workspace"
+    handler: shell
+    command: "cp -rL /uc-artifacts/claude-provider /workspace/"
+    capture: copy_provider
+  - name: "Copy iteration-probe-agent to workspace"
+    handler: shell
+    command: "cp -rL /uc-artifacts/iteration-probe-agent /workspace/"
+    capture: copy_probe
+  - name: "Copy Java streaming gateway to workspace"
+    handler: shell
+    command: "cp -rL /artifacts/stream-gateway-java /workspace/"
+    capture: copy_gateway
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+
+  # --- Build the Java gateway ---
+  - name: "Install Maven dependencies for the Java gateway"
+    handler: maven-install
+    path: /workspace/stream-gateway-java
+    timeout: 600
+
+  # --- Start the probe tool provider (Python) ---
+  - name: "Start iteration-probe-agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start iteration-probe-agent/main.py -d"
+    capture: start_probe
+  - name: "Wait for probe agent to register"
+    handler: wait
+    seconds: 5
+
+  # --- Start the Python LLM provider. NO MESH_LLM_MAX_ITERATIONS here: its own
+  #     default is 10, so the capped route's exhaustion can ONLY come from the
+  #     Java consumer's forwarded annotation cap (=1). ---
+  - name: "Start Python Claude provider (no provider-side cap)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start claude-provider/main.py --env-file .env -d"
+    capture: start_provider
+  - name: "Wait for provider to register (streaming variant auto-generated)"
+    handler: wait
+    seconds: 15
+  - name: "Verify probe agent and provider are running"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: pre_agent_list
+  - name: "Confirm the provider streaming variant registered"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: pre_tools
+
+  # --- Start the Java streaming gateway (@MeshAgent HTTP port 9060 also serves
+  #     the @RestController SSE routes) ---
+  - name: "Start Java streaming gateway"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/stream-gateway-java --env MCP_MESH_HTTP_PORT=9060 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+    capture: start_gateway
+  - name: "Wait for stream-gateway-java to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for stream-gateway-java agent..."
+      for i in $(seq 1 45); do
+        AGENTS=$(meshctl list 2>/dev/null || echo "")
+        if echo "$AGENTS" | grep -q "stream-gateway-java"; then
+          echo "stream-gateway-java registered after $((i*2))s"
+          exit 0
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+          echo "Still waiting... ($((i*2))s)"
+          echo "$AGENTS"
+        fi
+        sleep 2
+      done
+      echo "WARNING: stream-gateway-java not registered within 90s"
+      meshctl list 2>/dev/null || true
+      meshctl logs stream-gateway-java 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_gateway
+    timeout: 120
+
+  # --- Poll /health so the HTTP listener (which also serves the SSE routes) is
+  #     confirmed up before we hit /stream/*. ---
+  - name: "Wait for gateway /health to respond"
+    handler: shell
+    command: |
+      for i in $(seq 1 45); do
+        if curl -sf http://localhost:9060/health 2>/dev/null | grep -q '"status":"healthy"'; then
+          echo "gateway /health healthy after $((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "WARNING: gateway /health did not report healthy within 90s"
+      curl -s http://localhost:9060/health 2>/dev/null || true
+      exit 1
+    capture: wait_health
+    timeout: 120
+
+  - name: "Verify all agents running"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: all_list
+  - name: "List available tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: tools_output
+
+  # --- READINESS: poll the bind tool until the Java @MeshLlm proxy has bound
+  #     (i.e. it stops returning LLM_UNAVAILABLE). bindProxy does NOT invoke the
+  #     LLM, so it never bumps the probe counter. It captures the proxy into the
+  #     holder that the SSE routes read. ---
+  - name: "Poll bindProxy until the streaming LLM proxy has bound (readiness)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 12); do
+        RESP=$(meshctl call bindProxy '{"ctx": {"instruction": "bind"}}' 2>/dev/null || echo "")
+        if [ -n "$RESP" ] && echo "$RESP" | grep -q "PROXY_BOUND"; then
+          echo "PROXY_BOUND after attempt $i"
+          exit 0
+        fi
+        echo "Attempt $i: proxy not bound yet, retrying in 5s..." >&2
+        sleep 5
+      done
+      echo "ERROR: bindProxy still LLM_UNAVAILABLE after 12 attempts" >&2
+      meshctl logs stream-gateway-java 2>/dev/null | tail -80 >&2 || true
+      exit 1
+    capture: readiness_output
+    timeout: 120
+
+  # --- NORMAL route: capture headers + full SSE body in one call. max_iterations
+  #     is raised to 10 per-call so the loop completes and terminates with
+  #     data: [DONE]. This runs the ticket to completion (bumps the probe), so it
+  #     is done BEFORE the counter reset below. ---
+  - name: "POST /stream/normal and capture headers + SSE body"
+    handler: shell
+    # SSE over `curl -N` can exit non-zero (e.g. 18 "partial transfer") when the
+    # stream closes; the captured body is what matters, so force a 0 exit and
+    # ignore the curl status.
+    command: |
+      curl -s -N -D - -X POST http://localhost:9060/stream/normal \
+        -H "Content-Type: application/json" \
+        -d '{"instruction": "Process ticket ABC-1 to completion. Begin by calling advance_ticket with token \"START\". Each response gives you a next_token; call advance_ticket again with it. Keep going until the tool reports status COMPLETE, then reply with the final_code."}' 2>&1 || true
+    capture: normal_sse
+    timeout: 240
+    ignore_errors: true
+
+  # --- Zero the counter right before the single measured CAPPED call ---
+  - name: "Reset the probe invocation counter"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call probe_reset '{}'"
+    capture: reset_output
+
+  # --- CAPPED route (the measured call): annotation maxIterations=1 forces the
+  #     provider-managed streaming loop to exhaust after one tool round. #1369
+  #     surfaces that as MeshMaxIterationsException -> SSE error frame, no
+  #     [DONE]. Exactly one call; never retried. ---
+  - name: "POST /stream/capped and capture the SSE body"
+    handler: shell
+    # The exhaustion path ends with an SSE error frame and an abnormal close, so
+    # `curl -N` returns non-zero (typically 18 "partial transfer"). That is the
+    # expected shape here — capture the body and force a 0 exit; the assertions
+    # below inspect the captured frames.
+    command: |
+      curl -s -N -X POST http://localhost:9060/stream/capped \
+        -H "Content-Type: application/json" \
+        -d '{"instruction": "Process ticket ABC-1 to completion. Begin by calling advance_ticket with token \"START\". Each response gives you a next_token; call advance_ticket again with it. Keep going until the tool reports status COMPLETE, then reply with the final_code."}' 2>&1 || true
+    capture: capped_sse
+    timeout: 240
+    ignore_errors: true
+
+  # --- Read the counter: proves the capped route ran exactly one tool round ---
+  - name: "Read the probe invocation counter"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call probe_count '{}'"
+    capture: probe_count_output
+
+  - name: "Capture gateway log tail (diagnostics)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl logs stream-gateway-java 2>/dev/null | tail -120 || true"
+    capture: gateway_log
+    ignore_errors: true
+
+  - name: "Stop all agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl stop"
+    ignore_errors: true
+
+assertions:
+  # --- Infrastructure ---
+  - expr: "${captured.pre_agent_list} contains 'iteration-probe-agent'"
+    message: "iteration-probe-agent should be registered"
+  - expr: "${captured.pre_agent_list} contains 'claude-provider'"
+    message: "Python claude-provider should be registered"
+  - expr: "${captured.pre_tools} contains 'claude_provider_stream'"
+    message: "Provider must expose the auto-generated streaming variant (ai.mcpmesh.stream)"
+  - expr: "${captured.all_list} contains 'stream-gateway-java'"
+    message: "Java streaming gateway should be registered"
+  - expr: "${captured.tools_output} contains 'advance_ticket'"
+    message: "advance_ticket tool should be available"
+  - expr: "${captured.readiness_output} contains 'PROXY_BOUND'"
+    message: "The Java @MeshLlm streaming proxy should have bound before the measured calls"
+  - expr: "${captured.reset_output} contains 'PROBE_RESET_OK'"
+    message: "Counter should be reset after the normal call and before the capped measured call"
+
+  # --- CAPPED route: #1369 surfaces streaming exhaustion as a typed SSE error ---
+  # Note: Spring writes the event-name line as `event:error` (no space), unlike
+  # the space-padded `data: ` lines MeshSse emits deliberately.
+  - expr: "${captured.capped_sse} contains 'event:error'"
+    message: "The capped streaming loop must emit an SSE error frame on exhaustion (MeshSse.forward onError path)"
+  - expr: "${captured.capped_sse} contains '\"type\":\"MeshMaxIterationsException\"'"
+    message: "The SSE error frame must name the typed exception class MeshMaxIterationsException (issue #1369 / #1355)"
+  - expr: "${captured.capped_sse} not contains 'data: [DONE]'"
+    message: "A stream that exhausted must NOT terminate with data: [DONE] (the error path omits the terminator)"
+  # The unwrapped stream must not leak the raw frame envelope to the caller.
+  - expr: "${captured.capped_sse} not contains '_mesh_frame'"
+    message: "The Java consumer must UNWRAP the _mesh_frame envelope, never leak it to the SSE client (issue #1369)"
+
+  # --- NORMAL route: completes cleanly with [DONE], no error frame ---
+  - expr: "${captured.normal_sse} contains 'text/event-stream'"
+    message: "POST /stream/normal response Content-Type must be text/event-stream"
+  - expr: "${captured.normal_sse} contains 'data: '"
+    message: "The normal streaming loop must emit at least one data: chunk"
+  - expr: "${captured.normal_sse} contains 'data: [DONE]'"
+    message: "A normally-completing stream must terminate with data: [DONE]"
+  - expr: "${captured.normal_sse} not contains 'event:error'"
+    message: "A normally-completing stream must NOT emit an error frame"
+  - expr: "${captured.normal_sse} not contains '_mesh_frame'"
+    message: "The normal stream must also be unwrapped (no raw frame envelope leaks) - proves the Java consumer unwrapped the typed frames to text (issue #1369)"
+
+  # --- Probe counter (capped route): exactly one provider-managed tool round ---
+  - expr: "${captured.probe_count_output} contains 'PROBE_INVOCATIONS=[1]'"
+    message: "The capped streaming loop should have executed advance_ticket EXACTLY ONCE before exhausting (Java maxIterations=1 forwarded on the streaming path)"
+  - expr: "${captured.probe_count_output} not contains 'PROBE_INVOCATIONS=[0]'"
+    message: "advance_ticket should have run at least once on the capped route (a zero count means the model never called the tool, so nothing was measured)"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*stream-gateway" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

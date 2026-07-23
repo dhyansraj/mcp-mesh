@@ -1,0 +1,30 @@
+# Streaming Max-Iterations Java Gateway Configuration (issue #1369)
+#
+# Overridable via environment variables:
+#   MCP_MESH_REGISTRY_URL - Registry URL
+#   MCP_MESH_HTTP_PORT    - Agent HTTP port (also serves the SSE routes)
+#   MCP_MESH_AGENT_NAME   - Agent name
+
+spring:
+  application:
+    name: stream-gateway-java
+
+server:
+  # The @MeshAgent HTTP port also serves the @RestController SSE routes.
+  port: ${MCP_MESH_HTTP_PORT:9060}
+
+mesh:
+  registry:
+    url: ${MCP_MESH_REGISTRY_URL:http://localhost:8000}
+  agent:
+    name: ${MCP_MESH_AGENT_NAME:stream-gateway-java}
+    namespace: ${MCP_MESH_NAMESPACE:default}
+  llm:
+    default-provider:
+      capability: llm
+    timeout: 60000
+
+logging:
+  level:
+    io.mcpmesh: DEBUG
+    com.example: DEBUG
