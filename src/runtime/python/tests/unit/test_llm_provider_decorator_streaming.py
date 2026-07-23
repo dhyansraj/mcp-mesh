@@ -27,6 +27,25 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from _mcp_mesh.engine.llm_stop_reason import (
+    FRAME_CHUNK,
+    FRAME_END,
+    FRAME_KEY,
+    parse_stream_frame,
+)
+
+
+def _texts(frames: list[str]) -> list[str]:
+    """Unwrap the ``content`` of every ``chunk`` frame, skipping terminal
+    ``end`` frames. Also asserts every emitted item IS a well-formed typed
+    frame (issue #1355: the provider frames every chunk)."""
+    out: list[str] = []
+    for f in frames:
+        frame = parse_stream_frame(f)
+        assert frame is not None, f"expected a typed stream frame, got {f!r}"
+        if frame[FRAME_KEY] == FRAME_CHUNK:
+            out.append(frame["content"])
+    return out
 
 
 def _make_module_with_app(module_name: str = "test_module"):
@@ -388,6 +407,18 @@ class TestStreamingToolYieldsChunks:
                 async for piece in original(request):
                     collected.append(piece)
 
-            assert collected == ["Hi", " there"]
+            # Issue #1355: the raw provider stream yields typed frames. Decode
+            # them: text deltas unwrap to the plain content, and the stream
+            # terminates with exactly one normal ``end`` frame (no stop_reason
+            # on this normal-completion, no-tools path).
+            assert _texts(collected) == ["Hi", " there"]
+            end_frames = [
+                frame
+                for c in collected
+                if (frame := parse_stream_frame(c)) is not None
+                and frame[FRAME_KEY] == FRAME_END
+            ]
+            assert len(end_frames) == 1
+            assert "stop_reason" not in end_frames[0]
         finally:
             _drop_module(module_name)
