@@ -20,7 +20,8 @@ from _mcp_mesh.engine.llm_config import DEFAULT_MAX_ITERATIONS
 from _mcp_mesh.engine.llm_stop_reason import (
     STOP_REASON_KEY,
     STOP_REASON_MAX_ITERATIONS,
-    encode_stream_end,
+    encode_chunk,
+    encode_end,
 )
 from _mcp_mesh.engine.provider_handlers import ProviderHandlerRegistry
 from _mcp_mesh.shared.logging_config import format_log_value
@@ -2166,7 +2167,7 @@ async def _provider_agentic_loop_stream(
 
                 text = MeshLlmAgent._extract_text_from_chunk(chunk)
                 if text:
-                    yield text
+                    yield encode_chunk(text)
             stream_completed = True
 
             iter_usage = MeshLlmAgent._extract_usage_from_chunks(chunks)
@@ -2210,13 +2211,14 @@ async def _provider_agentic_loop_stream(
                                 iteration,
                                 max_iterations,
                             )
-                        yield synthetic_args
+                        yield encode_chunk(synthetic_args)
                         set_llm_metadata(
                             model=effective_model,
                             provider=vendor or "",
                             input_tokens=total_input_tokens,
                             output_tokens=total_output_tokens,
                         )
+                        yield encode_end()
                         return
 
                 preamble_text = MeshLlmAgent._join_text_from_chunks(chunks)
@@ -2323,7 +2325,7 @@ async def _provider_agentic_loop_stream(
                     raise
 
                 if final_content:
-                    yield final_content
+                    yield encode_chunk(final_content)
 
                 # If the HINT fallback actually fired (_resp is not None),
                 # its tokens/model belong in observability metadata. The
@@ -2353,6 +2355,7 @@ async def _provider_agentic_loop_stream(
                 loop_logger.info(
                     f"Provider-managed stream loop completed in {iteration} iterations"
                 )
+            yield encode_end()
             return
         finally:
             if not stream_completed:
@@ -2368,16 +2371,17 @@ async def _provider_agentic_loop_stream(
 
     # Safety: max iterations reached. Issue #1355: the stream channel is
     # strictly stringly-typed (``Stream[str]`` → FastMCP progress
-    # notifications), so we emit a single reserved terminal control frame as
-    # the final chunk — a JSON string keyed ``_mesh_stream_end`` — instead of
-    # polluting the token stream with an English marker. The consumer's stream
-    # wrapper recognizes the frame, never forwards it, and raises the typed
-    # error at end-of-iteration.
+    # notifications), so exhaustion rides a typed terminal ``end`` frame — a
+    # JSON string ``{"_mesh_frame": "end", "stop_reason": "max_iterations"}`` —
+    # rather than an in-band English marker. Every text delta is already wrapped in a
+    # ``chunk`` frame, so this control frame can never collide with model text.
+    # The consumer's stream wrapper recognizes the ``end`` frame by type, never
+    # forwards it, and raises the typed error at end-of-iteration.
     if loop_logger:
         loop_logger.warning(
             f"Provider-managed stream loop hit max iterations ({max_iterations})"
         )
-    yield encode_stream_end(STOP_REASON_MAX_ITERATIONS)
+    yield encode_end(STOP_REASON_MAX_ITERATIONS)
 
 
 def _extract_vendor_from_model(model: str) -> str | None:
@@ -3354,7 +3358,7 @@ def llm_provider(
                         continue
                     text = MeshLlmAgent._extract_text_from_chunk(chunk)
                     if text:
-                        yield text
+                        yield encode_chunk(text)
                 stream_completed = True
             finally:
                 if not stream_completed:
@@ -3375,6 +3379,11 @@ def llm_provider(
                 input_tokens=(usage or {}).get("prompt_tokens", 0) or 0,
                 output_tokens=(usage or {}).get("completion_tokens", 0) or 0,
             )
+
+            # No-tools path never loops, so exhaustion is impossible here —
+            # emit a normal terminal ``end`` frame so the consumer terminates
+            # on the typed frame like the tools path.
+            yield encode_end()
 
             logger.info(
                 f"LLM provider {func.__name__}_stream completed "

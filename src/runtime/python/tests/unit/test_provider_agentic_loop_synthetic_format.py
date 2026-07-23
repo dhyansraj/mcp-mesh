@@ -23,6 +23,20 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from _mcp_mesh.engine.llm_stop_reason import parse_stream_frame
+
+
+def _texts(frames: list[str]) -> list[str]:
+    """Unwrap the ``content`` of every typed ``chunk`` frame, skipping the
+    terminal ``end`` frame (issue #1355: the streaming loop frames every
+    chunk)."""
+    out: list[str] = []
+    for f in frames:
+        frame = parse_stream_frame(f)
+        assert frame is not None, f"expected a typed stream frame, got {f!r}"
+        if frame["_mesh_frame"] == "chunk":
+            out.append(frame["content"])
+    return out
 
 
 @pytest.fixture(autouse=True)
@@ -614,9 +628,12 @@ class TestStreamingLoopSyntheticRecognition:
             ):
                 collected.append(c)
 
-        # Exactly one chunk: the JSON arguments string.
-        assert len(collected) == 1
-        assert json.loads(collected[0]) == {"answer": "hello"}
+        # Exactly one text chunk frame carrying the JSON arguments string,
+        # then a terminal ``end`` frame.
+        texts = _texts(collected)
+        assert len(texts) == 1
+        assert json.loads(texts[0]) == {"answer": "hello"}
+        assert parse_stream_frame(collected[-1]) == {"_mesh_frame": "end"}
 
     @pytest.mark.asyncio
     async def test_real_tool_call_still_executes_then_continues(self):
@@ -685,9 +702,12 @@ class TestStreamingLoopSyntheticRecognition:
 
         # Real tool was executed.
         assert mock_exec.await_count == 1
-        # Final emitted chunk is the synthetic JSON.
-        assert len(collected) == 1
-        assert json.loads(collected[0]) == {"answer": "sunny"}
+        # Final emitted text chunk is the synthetic JSON, then a terminal
+        # ``end`` frame.
+        texts = _texts(collected)
+        assert len(texts) == 1
+        assert json.loads(texts[0]) == {"answer": "sunny"}
+        assert parse_stream_frame(collected[-1]) == {"_mesh_frame": "end"}
 
     @pytest.mark.asyncio
     async def test_synthetic_tool_in_request_tools_list(self):

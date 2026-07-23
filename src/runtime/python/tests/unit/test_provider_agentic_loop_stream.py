@@ -24,6 +24,24 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from _mcp_mesh.engine.llm_stop_reason import (
+    encode_chunk,
+    encode_end,
+    parse_stream_frame,
+)
+
+
+def _texts(frames: list[str]) -> list[str]:
+    """Unwrap the ``content`` of every ``chunk`` frame, skipping the terminal
+    ``end`` frame. Also asserts every emitted item IS a well-formed typed
+    frame (issue #1355: the provider frames every chunk)."""
+    out: list[str] = []
+    for f in frames:
+        frame = parse_stream_frame(f)
+        assert frame is not None, f"expected a typed stream frame, got {f!r}"
+        if frame["_mesh_frame"] == "chunk":
+            out.append(frame["content"])
+    return out
 
 
 @pytest.fixture(autouse=True)
@@ -148,7 +166,10 @@ class TestTextOnlySingleIteration:
             ):
                 collected.append(c)
 
-        assert collected == ["Hello", ", ", "world!"]
+        # Every text delta is a typed ``chunk`` frame; the stream terminates
+        # with a normal ``end`` frame (no stop_reason).
+        assert _texts(collected) == ["Hello", ", ", "world!"]
+        assert parse_stream_frame(collected[-1]) == {"_mesh_frame": "end"}
         # stream + stream_options were injected
         call_kwargs = mock_ac.call_args.kwargs
         assert call_kwargs["stream"] is True
@@ -234,8 +255,10 @@ class TestToolCallIteration:
             ):
                 collected.append(c)
 
-        # Preamble live, then tool ran, then final answer streams.
-        assert collected == ["Let me ", "check...", "It is ", "72F."]
+        # Preamble live, then tool ran, then final answer streams — all as
+        # typed ``chunk`` frames, terminated by a normal ``end`` frame.
+        assert _texts(collected) == ["Let me ", "check...", "It is ", "72F."]
+        assert parse_stream_frame(collected[-1]) == {"_mesh_frame": "end"}
         assert mock_exec.await_count == 1
         message_arg = mock_exec.await_args.args[0]
         assert message_arg.tool_calls[0].function.name == "get_weather"
@@ -374,7 +397,6 @@ class TestMaxIterations:
     @pytest.mark.asyncio
     async def test_emits_terminal_control_frame_when_loop_never_terminates(self):
         from mesh.helpers import _provider_agentic_loop_stream
-        from _mcp_mesh.engine.llm_stop_reason import parse_stream_end
 
         # Each iteration always produces a tool_call so the loop never terminates.
         def make_tool_call_iter():
@@ -419,11 +441,14 @@ class TestMaxIterations:
         assert not any(
             "Maximum tool call iterations" in c for c in collected
         )
-        # The stream ends with exactly one reserved terminal control frame
-        # carrying the max_iterations stop_reason; no text tokens precede it
+        # The stream ends with exactly one typed terminal ``end`` frame
+        # carrying the max_iterations stop_reason; no text frames precede it
         # (the model only ever emitted tool calls).
         assert len(collected) == 1
-        assert parse_stream_end(collected[-1]) == "max_iterations"
+        assert parse_stream_frame(collected[-1]) == {
+            "_mesh_frame": "end",
+            "stop_reason": "max_iterations",
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -474,8 +499,10 @@ class TestHintMode:
             ):
                 collected.append(c)
 
-        # Single combined chunk, NOT three live deltas.
-        assert collected == ['{"answer":"42"}']
+        # Single combined chunk frame, NOT three live deltas; terminated by a
+        # normal ``end`` frame.
+        assert _texts(collected) == ['{"answer":"42"}']
+        assert parse_stream_frame(collected[-1]) == {"_mesh_frame": "end"}
 
     @pytest.mark.asyncio
     async def test_hint_mode_strips_internal_flags_from_litellm_call(self):

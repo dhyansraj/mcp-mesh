@@ -24,9 +24,11 @@ from .llm_errors import (
     ToolExecutionError,
 )
 from .llm_stop_reason import (
+    FRAME_END,
+    FRAME_KEY,
     STOP_REASON_KEY,
     STOP_REASON_MAX_ITERATIONS,
-    parse_stream_end,
+    parse_stream_frame,
 )
 from .provider_handlers import ProviderHandlerRegistry
 from .response_parser import ResponseParser
@@ -1563,15 +1565,25 @@ class MeshLlmAgent:
             async for chunk in provider_proxy.stream(
                 name=stream_tool_name, request=request_dict
             ):
-                # Issue #1355: the provider emits a reserved terminal control
-                # frame as the final chunk on max_iterations exhaustion (the
-                # str-only stream channel can't carry a structured object).
-                # Recognize it, never forward it, and raise the typed error so
-                # the consumer's ``async for`` terminates with MaxIterationsError
-                # instead of a spurious token.
-                stop_reason = parse_stream_end(chunk)
-                if stop_reason is not None:
-                    if stop_reason == STOP_REASON_MAX_ITERATIONS:
+                # Issue #1355: every provider chunk is a typed stream-envelope
+                # frame keyed by the reserved ``_mesh_frame`` discriminator
+                # (``{"_mesh_frame": "chunk", ...}`` for text, ``{"_mesh_frame":
+                # "end", ...}`` to terminate). The discriminator is the frame
+                # TYPE, never the text content, so model text can never be
+                # misread as a control signal.
+                frame = parse_stream_frame(chunk)
+                if frame is None:
+                    # Not a well-formed frame — a provider that isn't yet
+                    # framing (or a bug). Degrade to plain passthrough rather
+                    # than crashing.
+                    logger.debug(
+                        "stream(mesh): received a non-frame chunk; forwarding "
+                        "as raw text (defensive fallback)"
+                    )
+                    yield chunk
+                    continue
+                if frame[FRAME_KEY] == FRAME_END:
+                    if frame.get("stop_reason") == STOP_REASON_MAX_ITERATIONS:
                         logger.error(
                             "❌ stream(mesh): provider signaled max_iterations "
                             f"exhaustion (max={self.max_iterations})"
@@ -1580,10 +1592,13 @@ class MeshLlmAgent:
                             iteration_count=self.max_iterations,
                             max_allowed=self.max_iterations,
                         )
-                    # Unknown control frame: swallow it rather than leaking a
-                    # reserved sentinel into the user's token stream.
-                    continue
-                yield chunk
+                    # Normal terminal frame — stop cleanly, never forward it.
+                    break
+                # Text delta: unwrap and yield the plain content to the caller.
+                # Coerce to ``str`` so a malformed frame carrying ``content:
+                # null`` can't leak a non-str into the ``AsyncIterator[str]``.
+                content = frame.get("content")
+                yield content if isinstance(content, str) else ""
             return
         except MaxIterationsError:
             # Typed exhaustion signal — propagate as-is, do NOT treat as a
