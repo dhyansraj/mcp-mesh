@@ -64,6 +64,12 @@ import {
 } from "./proxy.js";
 import { isTimeoutError } from "./timeout-utils.js";
 import { envMaxIterations, sanitizeMaxIterations } from "./llm-provider.js";
+import {
+  FRAME_END,
+  FRAME_KEY,
+  STOP_REASON_MAX_ITERATIONS,
+  parseStreamFrame,
+} from "./llm-stop-reason.js";
 
 /**
  * Configuration for MeshLlmAgent.
@@ -337,6 +343,9 @@ export class MeshDelegatedProvider implements LlmProvider {
         function: { name: string; arguments: string };
       }>;
       _mesh_usage?: { prompt_tokens: number; completion_tokens: number };
+      // Issue #1355: structural exhaustion discriminant (sibling of content /
+      // _mesh_usage). Present only when the provider-managed loop hit its cap.
+      _mesh_stop_reason?: string;
     };
 
     // Normalize the envelope's content to a string. Providers should send the
@@ -358,6 +367,7 @@ export class MeshDelegatedProvider implements LlmProvider {
       !("role" in meshResponse) &&
       !("tool_calls" in meshResponse) &&
       !("_mesh_usage" in meshResponse) &&
+      !("_mesh_stop_reason" in meshResponse) &&
       !meshMap.error;
     if (typeof rawContent === "string") {
       normalizedContent = rawContent;
@@ -413,6 +423,13 @@ export class MeshDelegatedProvider implements LlmProvider {
           }
         : undefined,
     };
+
+    // Issue #1355: surface the exhaustion discriminant so run()'s loop can raise
+    // the typed error. Only forwarded when the provider actually set it — a
+    // normal turn omits the field.
+    if (meshResponse._mesh_stop_reason !== undefined) {
+      openAiResponse._mesh_stop_reason = meshResponse._mesh_stop_reason;
+    }
 
     return openAiResponse;
   }
@@ -722,6 +739,22 @@ export class MeshLlmAgent<T = string> {
         totalOutputTokens += response.usage.completion_tokens;
       }
 
+      // Issue #1355: the provider-managed loop signals iteration exhaustion
+      // structurally via `_mesh_stop_reason` (never in `content`). Raise the
+      // typed error so the documented contract holds on the mainline path —
+      // otherwise the managed loop's terminal no-tool-calls message would be
+      // returned as if it were a normal answer on iteration 1.
+      if (response._mesh_stop_reason === STOP_REASON_MAX_ITERATIONS) {
+        console.error(
+          `[mesh.llm] Provider-managed loop reported max_iterations exhaustion (max=${maxIterations})`
+        );
+        throw new MaxIterationsError(
+          maxIterations,
+          response.choices[0]?.message,
+          messages
+        );
+      }
+
       const choice = response.choices[0];
       if (!choice) {
         throw new Error("No response from LLM");
@@ -913,7 +946,13 @@ export class MeshLlmAgent<T = string> {
       this.config.parallelToolCalls ?? false,
     );
 
-    yield* provider.streamComplete(
+    // Issue #1355: every provider chunk is a typed stream-envelope frame keyed
+    // by the reserved `_mesh_frame` discriminator (`{"_mesh_frame":"chunk",...}`
+    // for text, `{"_mesh_frame":"end",...}` to terminate). The discriminator is
+    // the frame TYPE, never the text content, so model text can never be misread
+    // as a control signal. Unwrap `chunk` frames to plain text, raise the typed
+    // error on an exhaustion `end` frame, and never forward a control frame.
+    for await (const chunk of provider.streamComplete(
       model,
       messages,
       toolDefs.length > 0 ? toolDefs : undefined,
@@ -931,7 +970,31 @@ export class MeshLlmAgent<T = string> {
         // provider honors an explicit override; unset stays auto.
         outputMode: this.config.outputMode,
       },
-    );
+    )) {
+      const frame = parseStreamFrame(chunk);
+      if (frame === null) {
+        // Not a well-formed frame — a provider that isn't yet framing (older
+        // provider mid-rollout, or a bug). Degrade to plain passthrough rather
+        // than crashing.
+        yield chunk;
+        continue;
+      }
+      if (frame[FRAME_KEY] === FRAME_END) {
+        if (frame.stop_reason === STOP_REASON_MAX_ITERATIONS) {
+          console.error(
+            `[mesh.llm] stream: provider signaled max_iterations exhaustion (max=${maxIterations})`
+          );
+          throw new MaxIterationsError(maxIterations, null, messages);
+        }
+        // Normal terminal frame — stop cleanly, never forward it.
+        return;
+      }
+      // Text delta: unwrap and yield the plain content to the caller. Coerce to
+      // string so a malformed frame carrying `content: null` can't leak a
+      // non-string into the AsyncGenerator<string>.
+      const frameContent = frame.content;
+      yield typeof frameContent === "string" ? frameContent : "";
+    }
   }
 
   /**

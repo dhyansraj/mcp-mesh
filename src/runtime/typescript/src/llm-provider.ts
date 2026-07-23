@@ -30,6 +30,7 @@ import type {
   LlmToolCallRequest,
 } from "./types.js";
 import { ProviderHandlerRegistry, makeSchemaStrict } from "./provider-handlers/index.js";
+import { STOP_REASON_KEY, STOP_REASON_MAX_ITERATIONS } from "./llm-stop-reason.js";
 import { generateTraceId, generateSpanId, publishTraceSpan, matchesPropagateHeader } from "./tracing.js";
 import type { TraceContext } from "./tracing.js";
 import { runWithTraceContext, runWithPropagatedHeaders, callMcpTool, DEFAULT_CALL_OPTIONS } from "./proxy.js";
@@ -860,6 +861,10 @@ export function llmProvider(config: LlmProviderConfig): {
         outputTokens: number;
       };
       finishReason: string;
+      // Issue #1355 (T3): AI SDK v6 exposes the per-step breakdown of the
+      // SDK-managed (stopWhen) agentic loop. Used by the Gemini path to detect
+      // step-cap exhaustion (finishReason === "tool-calls" at the cap).
+      steps?: unknown[];
     }>;
 
     // Convert tools to Vercel AI SDK format using the tool() helper
@@ -1176,6 +1181,9 @@ export function llmProvider(config: LlmProviderConfig): {
       const maxIterations = resolvedMaxIterations;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let currentMessages: any[] = [...convertedMessages];
+      // Issue #1355: last genuine assistant text seen on a tool-call turn, used
+      // as the exhaustion envelope's `content` (never an English marker).
+      let lastAssistantText = "";
 
       while (iteration < maxIterations) {
         iteration++;
@@ -1200,6 +1208,15 @@ export function llmProvider(config: LlmProviderConfig): {
 
         if (result.toolCalls && result.toolCalls.length > 0) {
           debug(`Provider executing ${result.toolCalls.length} tool calls (iteration ${iteration}/${maxIterations})`);
+
+          // Issue #1355: remember the model's most recent genuine assistant text
+          // (tool-call turns may carry preamble prose). If the loop later exhausts
+          // maxIterations we surface this as `content` instead of fabricating an
+          // English marker — the exhaustion itself rides the `_mesh_stop_reason`
+          // sibling field.
+          if (result.text) {
+            lastAssistantText = result.text;
+          }
 
           // Add assistant message with tool calls (Vercel AI SDK content block format)
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1364,13 +1381,20 @@ export function llmProvider(config: LlmProviderConfig): {
         }
       }
 
-      // Safety: max iterations reached without a final text response
+      // Safety: max iterations reached without a final text response.
+      // Issue #1355: mark the exhaustion structurally via the `_mesh_stop_reason`
+      // sibling field instead of writing an English marker into `content`.
+      // `content` carries the last genuine assistant text (or "") — the
+      // human-readable message lives only in the consumer's raised
+      // MaxIterationsError. Absence of the field on a normal-completion envelope
+      // means a normal turn.
       if (iteration >= maxIterations && !response) {
         latencyMs = Date.now() - startTime;
         debug(`Provider-managed loop hit max iterations (${maxIterations}), latency=${latencyMs}ms`);
         response = {
           role: "assistant",
-          content: "Maximum tool call iterations reached",
+          content: lastAssistantText,
+          [STOP_REASON_KEY]: STOP_REASON_MAX_ITERATIONS,
         };
       }
     } else {
@@ -1400,6 +1424,41 @@ export function llmProvider(config: LlmProviderConfig): {
         response.tool_calls = convertToolCalls(result.toolCalls);
       }
       resultUsage = result.usage;
+
+      // Issue #1355 (T3): Gemini SDK-managed loop exhaustion detection.
+      // The Gemini path hands the agentic loop to the AI SDK via
+      // `stopWhen: stepCountIs(resolvedMaxIterations)`. Every Gemini tool here
+      // carries an execute function, so the SDK auto-executes tools and loops;
+      // it only returns control when EITHER (a) the model produced no tool calls
+      // (natural completion — the final step is a text answer, so the LAST-STEP
+      // `toolCalls` is empty), OR (b) `stopWhen` fired at the step cap while the
+      // model still wanted to call tools. Per AI SDK v6, `result.toolCalls` and
+      // `result.finishReason` are the LAST STEP's values (NOT aggregates over all
+      // steps) — the predicate's correctness DEPENDS on that: a non-empty
+      // last-step `result.toolCalls` at the step cap is unambiguously the
+      // stopWhen cut-off — an UNRESOLVED tool-call last step — not a heuristic.
+      // (The last-step `finishReason` is "tool-calls" on cut-off; we accept it as
+      // an additional signal for robustness, but the unresolved-tool-call +
+      // step-cap invariant is the primary predicate.) Do NOT "correct" these to
+      // true-aggregate semantics — that reintroduces a false positive when a run
+      // completes naturally exactly at the cap (last step is text, but an earlier
+      // step called a tool).
+      // Mark the exhaustion structurally; content carries whatever preamble text
+      // the final step produced (or "").
+      const stepCount = result.steps?.length ?? 0;
+      const hasUnresolvedToolCall = !!(result.toolCalls && result.toolCalls.length > 0);
+      if (
+        useMaxSteps &&
+        stepCount >= resolvedMaxIterations &&
+        (hasUnresolvedToolCall || result.finishReason === "tool-calls")
+      ) {
+        debug(
+          `Gemini SDK-managed loop hit max iterations (${resolvedMaxIterations}) ` +
+            `(finishReason=${result.finishReason}, steps=${stepCount}, ` +
+            `unresolvedToolCalls=${result.toolCalls?.length ?? 0})`
+        );
+        response._mesh_stop_reason = STOP_REASON_MAX_ITERATIONS;
+      }
     }
 
     // All code paths above must set response; assert it here

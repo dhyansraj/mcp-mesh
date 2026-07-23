@@ -885,6 +885,13 @@ export interface LlmCompletionResponse {
     completion_tokens: number;
     total_tokens: number;
   };
+  /**
+   * Issue #1355: structural exhaustion discriminant forwarded from the provider
+   * reply envelope's `_mesh_stop_reason` sibling field. Present (=="max_iterations")
+   * only when the provider-managed loop hit its cap; the consumer's run() loop
+   * raises MaxIterationsError on it.
+   */
+  _mesh_stop_reason?: string;
 }
 
 /**
@@ -1203,6 +1210,12 @@ export interface MeshLlmResponse {
   tool_calls?: LlmToolCallRequest[];
   /** Token usage metadata for cost tracking */
   _mesh_usage?: MeshLlmUsage;
+  /**
+   * Issue #1355: structural exhaustion discriminant. Present (=="max_iterations")
+   * ONLY when the provider-managed loop hit its cap; absent on a normal turn. The
+   * consumer raises a typed error on it — the value never leaks into `content`.
+   */
+  _mesh_stop_reason?: string;
 }
 
 /**
