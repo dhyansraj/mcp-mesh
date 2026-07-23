@@ -38,7 +38,7 @@ Ensure the dependency version matches an available release:
 <dependency>
     <groupId>io.mcp-mesh</groupId>
     <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-    <version>3.2.3</version>
+    <version>3.3.0</version>
 </dependency>
 ```
 
