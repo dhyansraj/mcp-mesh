@@ -238,6 +238,17 @@ def __getattr__(name):
         from _mcp_mesh.engine.superseded import SupersededError
 
         return SupersededError
+    elif name == "MaxIterationsError":
+        # Issue #1355: typed signal raised by the delegating @mesh.llm consumer
+        # when the provider-managed loop exhausts max_iterations.
+        from _mcp_mesh.engine.llm_errors import MaxIterationsError
+
+        return MaxIterationsError
+    elif name == "ToolExecutionError":
+        # Raised when a tool invoked inside the agentic loop fails.
+        from _mcp_mesh.engine.llm_errors import ToolExecutionError
+
+        return ToolExecutionError
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 

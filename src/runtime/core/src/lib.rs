@@ -31,7 +31,6 @@
 //! - `typescript`: Enable TypeScript/Node.js bindings via napi-rs
 //! - `ffi`: Enable C FFI bindings for multi-language SDK support
 
-pub mod agentic_loop;
 pub mod cancel_registry;
 pub mod claim_worker;
 pub mod config;
@@ -506,42 +505,6 @@ fn call_tool_py(
     })
 }
 
-// =============================================================================
-// Agentic Loop (Python bindings)
-// =============================================================================
-
-/// Create initial agentic loop state (Python binding).
-#[cfg(feature = "python")]
-#[pyfunction]
-fn create_agentic_loop_py(config_json: &str) -> PyResult<String> {
-    agentic_loop::create_loop(config_json)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
-}
-
-/// Process an LLM response in the agentic loop (Python binding).
-#[cfg(feature = "python")]
-#[pyfunction]
-fn process_llm_response_py(state_json: &str, llm_response_json: &str) -> PyResult<String> {
-    agentic_loop::process_response(state_json, llm_response_json)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
-}
-
-/// Add tool results to the agentic loop (Python binding).
-#[cfg(feature = "python")]
-#[pyfunction]
-fn add_tool_results_py(state_json: &str, tool_results_json: &str) -> PyResult<String> {
-    agentic_loop::add_tool_results(state_json, tool_results_json)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
-}
-
-/// Get loop state for debugging/logging (Python binding).
-#[cfg(feature = "python")]
-#[pyfunction]
-fn get_loop_state_py(state_json: &str) -> PyResult<String> {
-    agentic_loop::get_loop_state(state_json)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
-}
-
 /// MCP Mesh Core Python module.
 #[cfg(feature = "python")]
 #[pymodule]
@@ -615,12 +578,6 @@ fn mcp_mesh_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(format_system_prompt_py, m)?)?;
     m.add_function(wrap_pyfunction!(build_response_format_py, m)?)?;
     m.add_function(wrap_pyfunction!(get_vendor_capabilities_py, m)?)?;
-
-    // Agentic Loop
-    m.add_function(wrap_pyfunction!(create_agentic_loop_py, m)?)?;
-    m.add_function(wrap_pyfunction!(process_llm_response_py, m)?)?;
-    m.add_function(wrap_pyfunction!(add_tool_results_py, m)?)?;
-    m.add_function(wrap_pyfunction!(get_loop_state_py, m)?)?;
 
     // MeshJob substrate (Phase 1)
     m.add_class::<jobs_py::PyJobController>()?;

@@ -17,6 +17,12 @@ from typing import Any
 import jsonschema  # type: ignore
 
 from _mcp_mesh.engine.llm_config import DEFAULT_MAX_ITERATIONS
+from _mcp_mesh.engine.llm_stop_reason import (
+    STOP_REASON_KEY,
+    STOP_REASON_MAX_ITERATIONS,
+    encode_chunk,
+    encode_end,
+)
 from _mcp_mesh.engine.provider_handlers import ProviderHandlerRegistry
 from _mcp_mesh.shared.logging_config import format_log_value
 
@@ -1507,6 +1513,9 @@ async def _provider_agentic_loop(
 
     iteration = 0
     current_messages = list(messages)
+    # Issue #1355: last genuine assistant text seen on a tool-call turn, used
+    # as the exhaustion envelope's ``content`` (never an English marker).
+    last_assistant_text = ""
 
     # Pop parallel_tool_calls before it reaches completion_args
     # (Claude handler strips it, but OpenAI would pass it to API)
@@ -1694,6 +1703,15 @@ async def _provider_agentic_loop(
                     f"Provider executing {len(message.tool_calls)} tool calls "
                     f"(iteration {iteration}/{max_iterations})"
                 )
+
+            # Issue #1355: remember the model's most recent genuine assistant
+            # text (tool-call turns may carry preamble prose). If the loop
+            # later exhausts ``max_iterations`` we surface this as ``content``
+            # instead of fabricating an English marker — the exhaustion itself
+            # rides the ``_mesh_stop_reason`` sibling field.
+            _preamble = _extract_text_from_message_content(message.content)
+            if _preamble:
+                last_assistant_text = _preamble
 
             # Add assistant message with tool_calls to conversation.
             #
@@ -1912,14 +1930,20 @@ async def _provider_agentic_loop(
 
             return message_dict
 
-    # Safety: max iterations reached
+    # Safety: max iterations reached. Issue #1355: mark the exhaustion
+    # structurally via the ``_mesh_stop_reason`` sibling field instead of
+    # writing an English marker into ``content``. ``content`` carries the last
+    # genuine assistant text (or "") — the human-readable message lives only
+    # in the consumer's raised MaxIterationsError. Absence of the field on a
+    # normal-completion envelope means a normal turn.
     if loop_logger:
         loop_logger.warning(
             f"Provider-managed loop hit max iterations ({max_iterations})"
         )
     return {
         "role": "assistant",
-        "content": "Maximum tool call iterations reached",
+        "content": last_assistant_text,
+        STOP_REASON_KEY: STOP_REASON_MAX_ITERATIONS,
     }
 
 
@@ -2143,7 +2167,7 @@ async def _provider_agentic_loop_stream(
 
                 text = MeshLlmAgent._extract_text_from_chunk(chunk)
                 if text:
-                    yield text
+                    yield encode_chunk(text)
             stream_completed = True
 
             iter_usage = MeshLlmAgent._extract_usage_from_chunks(chunks)
@@ -2187,13 +2211,14 @@ async def _provider_agentic_loop_stream(
                                 iteration,
                                 max_iterations,
                             )
-                        yield synthetic_args
+                        yield encode_chunk(synthetic_args)
                         set_llm_metadata(
                             model=effective_model,
                             provider=vendor or "",
                             input_tokens=total_input_tokens,
                             output_tokens=total_output_tokens,
                         )
+                        yield encode_end()
                         return
 
                 preamble_text = MeshLlmAgent._join_text_from_chunks(chunks)
@@ -2300,7 +2325,7 @@ async def _provider_agentic_loop_stream(
                     raise
 
                 if final_content:
-                    yield final_content
+                    yield encode_chunk(final_content)
 
                 # If the HINT fallback actually fired (_resp is not None),
                 # its tokens/model belong in observability metadata. The
@@ -2330,6 +2355,7 @@ async def _provider_agentic_loop_stream(
                 loop_logger.info(
                     f"Provider-managed stream loop completed in {iteration} iterations"
                 )
+            yield encode_end()
             return
         finally:
             if not stream_completed:
@@ -2343,13 +2369,25 @@ async def _provider_agentic_loop_stream(
                                 f"provider stream: aclose() failed during teardown: {e}"
                             )
 
-    # Safety: max iterations reached. Emit a textual indicator so consumers
-    # iterating ``async for`` always see at least one chunk in this edge.
+    # Safety: max iterations reached. Issue #1355: the stream channel is
+    # strictly stringly-typed (``Stream[str]`` → FastMCP progress
+    # notifications), so exhaustion rides a typed terminal ``end`` frame — a
+    # JSON string ``{"_mesh_frame": "end", "stop_reason": "max_iterations"}`` —
+    # rather than an in-band English marker. Every text delta is already wrapped in a
+    # ``chunk`` frame, so this control frame can never collide with model text.
+    # The consumer's stream wrapper recognizes the ``end`` frame by type, never
+    # forwards it, and raises the typed error at end-of-iteration.
     if loop_logger:
         loop_logger.warning(
             f"Provider-managed stream loop hit max iterations ({max_iterations})"
         )
-    yield "Maximum tool call iterations reached"
+    set_llm_metadata(
+        model=effective_model,
+        provider=vendor or "",
+        input_tokens=total_input_tokens,
+        output_tokens=total_output_tokens,
+    )
+    yield encode_end(STOP_REASON_MAX_ITERATIONS)
 
 
 def _extract_vendor_from_model(model: str) -> str | None:
@@ -3326,7 +3364,7 @@ def llm_provider(
                         continue
                     text = MeshLlmAgent._extract_text_from_chunk(chunk)
                     if text:
-                        yield text
+                        yield encode_chunk(text)
                 stream_completed = True
             finally:
                 if not stream_completed:
@@ -3347,6 +3385,11 @@ def llm_provider(
                 input_tokens=(usage or {}).get("prompt_tokens", 0) or 0,
                 output_tokens=(usage or {}).get("completion_tokens", 0) or 0,
             )
+
+            # No-tools path never loops, so exhaustion is impossible here —
+            # emit a normal terminal ``end`` frame so the consumer terminates
+            # on the typed frame like the tools path.
+            yield encode_end()
 
             logger.info(
                 f"LLM provider {func.__name__}_stream completed "
