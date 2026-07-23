@@ -715,7 +715,15 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                     provider.endpoint(), provider.functionName(),
                     llmMessages.size(), toolDefs.size());
 
-                return mcpClient.streamTool(provider.endpoint(), provider.functionName(), params, null);
+                // Issue #1369: a Python/TS streaming provider frames EVERY chunk as
+                // a typed _mesh_frame envelope (chunk/end). Decode it so the caller
+                // sees plain text, a plain `end` completes the stream, and an
+                // exhaustion `end` terminates with onError(MeshMaxIterationsException)
+                // — mirroring the buffered path's typed exhaustion. A non-frame chunk
+                // (unframed/old provider) passes through verbatim.
+                return StreamFrameDecoder.decode(
+                    mcpClient.streamTool(provider.endpoint(), provider.functionName(), params, null),
+                    maxIterations);
             } finally {
                 // Clear the ThreadLocal invocationContext on return so it does not
                 // leak across pooled-thread reuse (Spring/Tomcat). The ThreadLocal
