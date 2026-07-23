@@ -161,7 +161,12 @@ export interface LlmToolConfig {
   tags: string[];
   provider: LlmProviderSpec;
   model?: string;
-  maxIterations: number;
+  // Issue #1360: `undefined` = the consumer configured NOTHING (no decorator
+  // arg). Preserved (not defaulted to 10 here) so the forwarding path can tell
+  // "user asked for 10" from "user said nothing" and only forward an explicit
+  // cap — leaving an unset cap lets the provider's MESH_LLM_MAX_ITERATIONS
+  // govern. Local-use sites apply `?? 10`.
+  maxIterations?: number;
   systemPrompt?: string;
   contextParam?: string;
   filter?: LlmFilterSpec[];
@@ -231,7 +236,12 @@ export function llm<
     tags: config.tags ?? [],
     provider: config.provider,
     model: config.model,
-    maxIterations: config.maxIterations ?? 10,
+    // Issue #1360: preserve the RAW user value (undefined when unset). The
+    // default of 10 is applied only at LOCAL-use sites (the consumer's own loop
+    // cap, the Rust core spec). Defaulting here would make "unset" look explicit
+    // and forward a defaulted 10 onto the wire, shadowing the provider's
+    // MESH_LLM_MAX_ITERATIONS (parity gap with Python/Java).
+    maxIterations: config.maxIterations,
     systemPrompt: config.systemPrompt,
     contextParam: config.contextParam,
     filter: config.filter,
@@ -481,8 +491,9 @@ export function buildLlmAgentSpecs(): Array<{
     const resolvedFilterMode =
       process.env.MESH_LLM_FILTER_MODE || config.filterMode;
 
-    // MESH_LLM_MAX_ITERATIONS: Override max iterations
-    const resolvedMaxIterations = envMaxIterations() ?? config.maxIterations;
+    // MESH_LLM_MAX_ITERATIONS: Override max iterations. Local-use site — the
+    // Rust core spec needs a concrete cap, so default to 10 when unset (#1360).
+    const resolvedMaxIterations = envMaxIterations() ?? config.maxIterations ?? 10;
 
     specs.push({
       functionId: config.functionId,
