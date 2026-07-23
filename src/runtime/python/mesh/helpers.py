@@ -2381,6 +2381,12 @@ async def _provider_agentic_loop_stream(
         loop_logger.warning(
             f"Provider-managed stream loop hit max iterations ({max_iterations})"
         )
+    set_llm_metadata(
+        model=effective_model,
+        provider=vendor or "",
+        input_tokens=total_input_tokens,
+        output_tokens=total_output_tokens,
+    )
     yield encode_end(STOP_REASON_MAX_ITERATIONS)
 
 

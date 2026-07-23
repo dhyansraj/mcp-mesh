@@ -420,7 +420,9 @@ class TestMaxIterations:
                     [],
                 )
             ),
-        ):
+        ), patch(
+            "_mcp_mesh.tracing.context.set_llm_metadata"
+        ) as mock_set_meta:
             mock_ac.side_effect = [_FakeStream(make_tool_call_iter()) for _ in range(2)]
 
             collected: list[str] = []
@@ -435,6 +437,17 @@ class TestMaxIterations:
                 vendor="anthropic",
             ):
                 collected.append(c)
+
+        # Issue #1355 / #1367: the exhaustion terminal branch must still publish
+        # the accumulated token usage before yielding the ``end`` frame, exactly
+        # like the normal-completion branch. Each of the 2 iterations reported
+        # prompt=1/completion=1, so the totals are 2/2.
+        mock_set_meta.assert_called_once_with(
+            model="anthropic/claude-3-5-haiku",
+            provider="anthropic",
+            input_tokens=2,
+            output_tokens=2,
+        )
 
         # Issue #1355: the token stream must NOT contain the English marker.
         assert "Maximum tool call iterations reached" not in collected
