@@ -305,6 +305,12 @@ HANDLERS: list[Handler] = [
         replacement=r"\g<1>\g<2>NEW\3",
     ),
     # --- Category 5: Java Parent/Module POMs ------------------------------
+    # Only rewrite the mcp-mesh-owned <version>, i.e. the one that directly
+    # follows an `io.mcp-mesh` <groupId>/<artifactId> pair (the project coords
+    # or a <parent> block). A blind `<version>OLD</version>` replace also
+    # catches coincidental third-party plugin/dependency pins that happen to
+    # sit at the same version (e.g. maven-jar-plugin 3.3.0), which broke the
+    # 3.3.1 release when it bumped them to a nonexistent 3.3.1 plugin.
     Handler(
         name="Java Parent/Module POMs",
         globs=[
@@ -316,7 +322,10 @@ HANDLERS: list[Handler] = [
             "src/runtime/java/mcp-mesh-spring-ai/pom.xml",
             "src/runtime/java/mcp-mesh-native/pom.xml",
         ],
-        pattern=r"(<version>)OLD(</version>)",
+        pattern=(
+            r"(<groupId>io\.mcp-mesh</groupId>\s*"
+            r"<artifactId>[^<]+</artifactId>\s*<version>)OLD(</version>)"
+        ),
         replacement=r"\g<1>NEW\2",
     ),
     # --- Category 6: Java Example POMs ------------------------------------
