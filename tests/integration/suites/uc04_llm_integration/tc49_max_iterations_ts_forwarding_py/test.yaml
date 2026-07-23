@@ -1,0 +1,207 @@
+# Test Case: TS consumer forwarding parity - an UNSET cap defers to provider env
+#
+# Issue: https://github.com/dhyansraj/mcp-mesh/issues/1360
+#
+# WHAT #1360 FIXED (the fix site is the TS CONSUMER)
+#   Before #1360 the TypeScript consumer unconditionally put max_iterations=10
+#   on the wire even when the user configured NOTHING. That defaulted value
+#   SHADOWED any provider-side MESH_LLM_MAX_ITERATIONS, making the provider env
+#   inert. After #1360 an UNSET maxIterations forwards no max_iterations at all,
+#   so the provider's own MESH_LLM_MAX_ITERATIONS governs the loop.
+#
+# SETUP (mirrors tc46, but the consumer is TypeScript)
+#   Consumer (ticket-consumer-ts): declares NO maxIterations, filters in exactly
+#     the iteration_probe capability (advance_ticket).
+#   Provider (claude-provider, Python): started with MESH_LLM_MAX_ITERATIONS=1 in
+#     its OWN environment, passed via --env (NOT the shared .env) so the cap can
+#     only ever reach the provider process, never the TS consumer (the
+#     load-bearing isolation from tc46).
+#
+# WHY THE ASSERTION REALLY DISCRIMINATES
+#   The observable is the probe agent's tool-invocation counter (out-of-band on
+#   probe_count / probe_reset, which the consumer filter never matches). The
+#   ticket needs FOUR advance_ticket rounds to reach COMPLETE, so:
+#       fix applied: TS forwards nothing -> provider env (1) caps -> [1]   PASS
+#       pre-#1360:   TS forwards 10 -> shadows provider env -> ticket runs
+#                    to completion -> [4]                                  FAIL
+#   So [1] vs [4] cleanly separates "unset forwards nothing" from the exact
+#   regression #1360 fixed. On exhaustion the TS MeshLlmAgent also RAISES the
+#   typed MaxIterationsError (issue #1355), which the consumer catches and
+#   reports by class name.
+#
+# WHY CLAUDE: tool-calling determinism (temperature 0.0, parallel_tool_calls
+#   OFF). advance_ticket's unguessable random next_token enforces one-call-
+#   per-turn serialization structurally; Claude makes it reliable in practice.
+
+name: "Unset TS consumer cap defers to provider env - TS->Py"
+description: "Issue #1360: a TS @mesh.llm consumer with NO maxIterations forwards nothing, so the Python provider's MESH_LLM_MAX_ITERATIONS=1 caps the provider-managed loop at one tool round (pre-fix it forwarded 10 and shadowed the env)"
+tags:
+  - llm
+  - claude
+  - typescript
+  - python
+  - cross-runtime
+  - tools
+  - max-iterations
+  - issue-1360
+timeout: 300
+# LLM test: needs a real ANTHROPIC_API_KEY and the tsuite-mesh:local image.
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+test:
+  # --- Copy artifacts ---
+  - name: "Copy Claude provider to workspace"
+    handler: shell
+    command: "cp -rL /uc-artifacts/claude-provider /workspace/"
+    capture: copy_provider_output
+  - name: "Copy iteration-probe-agent to workspace"
+    handler: shell
+    command: "cp -rL /uc-artifacts/iteration-probe-agent /workspace/"
+    capture: copy_probe_output
+  - name: "Copy ticket-consumer-ts to workspace"
+    handler: shell
+    command: "cp -rL /artifacts/ticket-consumer-ts /workspace/"
+    capture: copy_consumer_output
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+  - name: "Verify workspace files"
+    handler: shell
+    command: "ls -la /workspace/"
+    capture: ls_output
+
+  # --- Install TS consumer deps ---
+  - name: "Install npm dependencies for the TS consumer"
+    handler: npm-install
+    path: /workspace/ticket-consumer-ts
+
+  # --- Start the probe tool provider ---
+  - name: "Start iteration-probe-agent"
+    handler: shell
+    command: "meshctl start iteration-probe-agent/main.py -d"
+    workdir: /workspace
+    capture: start_probe_output
+  - name: "Wait for probe agent to register"
+    handler: wait
+    seconds: 5
+
+  # --- Start the Python LLM provider WITH its own cap in the environment. The
+  #     cap is passed via --env (NOT the shared .env) so it can only ever reach
+  #     the provider process, never the TS consumer. ---
+  - name: "Start Claude provider with MESH_LLM_MAX_ITERATIONS=1 (private --env)"
+    handler: shell
+    command: "meshctl start claude-provider/main.py --env-file .env --env MESH_LLM_MAX_ITERATIONS=1 -d"
+    workdir: /workspace
+    capture: start_provider_output
+  - name: "Wait for provider to register"
+    handler: wait
+    seconds: 15
+
+  # --- Start the TS consumer that configures NO cap ---
+  - name: "Start ticket-consumer-ts (no configured cap)"
+    handler: shell
+    command: "meshctl start ticket-consumer-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9049 -d"
+    workdir: /workspace
+    capture: start_consumer_output
+  - name: "Wait for consumer to register and resolve dependencies"
+    handler: wait
+    seconds: 20
+  - name: "Verify all agents running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: all_list_output
+  - name: "List available tools"
+    handler: shell
+    command: "meshctl list -t"
+    workdir: /workspace
+    capture: tools_output
+
+  # --- Zero the counter right before the measured call ---
+  - name: "Reset the probe invocation counter"
+    handler: shell
+    command: "meshctl call probe_reset '{}'"
+    workdir: /workspace
+    capture: reset_output
+
+  # --- THE MEASURED CALL (exactly one; never retried) ---
+  - name: "Call run_ticket_ts (single measured call)"
+    handler: shell
+    command: |
+      meshctl call run_ticket_ts '{"ctx": {"instruction": "Process ticket ABC-1 to completion. Begin by calling advance_ticket with token \"START\". Each response gives you a next_token; call advance_ticket again with it. Keep going until the tool reports status COMPLETE, then reply with the final_code."}}'
+    workdir: /workspace
+    capture: ticket_response
+    timeout: 180
+
+  # --- Read the counter: THE observable ---
+  - name: "Read the probe invocation counter"
+    handler: shell
+    command: "meshctl call probe_count '{}'"
+    workdir: /workspace
+    capture: probe_count_output
+
+  - name: "Capture consumer log tail (diagnostics)"
+    handler: shell
+    command: "meshctl logs ticket-consumer-ts 2>/dev/null | tail -80 || true"
+    workdir: /workspace
+    capture: consumer_log
+    ignore_errors: true
+
+  - name: "Stop all agents"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+    ignore_errors: true
+
+assertions:
+  # --- Infrastructure ---
+  - expr: ${captured.all_list_output} contains 'iteration-probe-agent'
+    message: "iteration-probe-agent should be registered"
+  - expr: ${captured.all_list_output} contains 'claude-provider'
+    message: "claude-provider should be registered"
+  - expr: ${captured.all_list_output} contains 'ticket-consumer-ts'
+    message: "ticket-consumer-ts should be registered"
+  - expr: ${captured.tools_output} contains 'run_ticket_ts'
+    message: "run_ticket_ts tool should be listed"
+  - expr: ${captured.tools_output} contains 'advance_ticket'
+    message: "advance_ticket tool should be listed"
+  - expr: ${captured.reset_output} contains 'PROBE_RESET_OK'
+    message: "Counter should be reset before the measured call"
+
+  # --- THE OBSERVABLE: the PROVIDER's env cap took effect ---
+  # [1] = the TS consumer forwarded nothing, so the provider's env (1) governed.
+  # [4] = the ticket ran to completion, meaning the TS consumer forwarded a
+  #       default (10) that shadowed the provider env — the pre-#1360 regression.
+  - expr: ${captured.probe_count_output} contains 'PROBE_INVOCATIONS=[1]'
+    message: "Provider's MESH_LLM_MAX_ITERATIONS=1 should cap the loop at exactly one tool round (an unset TS consumer must forward nothing)"
+  - expr: ${captured.probe_count_output} not contains 'PROBE_INVOCATIONS=[0]'
+    message: "advance_ticket should have run at least once (a zero count means the model never called the tool, so nothing was measured)"
+
+  # --- The TS consumer surfaced the typed exhaustion error (issue #1355) ---
+  - expr: ${captured.ticket_response} contains 'EXHAUSTED_TYPED type=MaxIterationsError'
+    message: "On exhaustion the TS MeshLlmAgent must raise MaxIterationsError, which the consumer catches and reports by class name"
+
+  # --- Secondary, sentinel-independent evidence the loop stopped early ---
+  - expr: ${captured.ticket_response} not contains 'PROBE-COMPLETE-9F3A'
+    message: "A run capped at 1 iteration cannot have driven the ticket to completion (final_code must be absent)"
+
+  # --- No infrastructure failure masquerading as a small count ---
+  - expr: ${captured.ticket_response} not contains 'timed out'
+    message: "The measured call should not time out"
+  - expr: "${captured.ticket_response} not contains '\"isError\":true'"
+    message: "The measured call should not return an MCP error envelope"
+  - expr: "${captured.ticket_response} not contains '\"isError\": true'"
+    message: "The measured call should not return an MCP error envelope (spaced form)"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace
