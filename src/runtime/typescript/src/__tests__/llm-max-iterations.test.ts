@@ -315,6 +315,132 @@ describe("MeshDelegatedProvider.complete() — maxIterations forwarding", () => 
 });
 
 // ----------------------------------------------------------------------------
+// Issue #1360: consumer-level forwarding through MeshLlmAgent.run().
+//
+// The complete()-level tests above prove the wire guard omits the key when the
+// caller passes no maxIterations. These assert the END-TO-END consumer path:
+// run() resolves the cap, and only an EXPLICITLY configured one (runtime option
+// / consumer env / user-supplied config) reaches the wire. A consumer that
+// configured NOTHING must send no max_iterations key so the provider's own
+// MESH_LLM_MAX_ITERATIONS governs — mirroring the Python/Java tests from #1356.
+//
+// The consumer's OWN loop cap must still default to 10 when unset (the #1355
+// exhaustion path), which the last test asserts via the raised error's cap.
+// ----------------------------------------------------------------------------
+
+describe("MeshLlmAgent forwarding — explicit vs unset (issue #1360)", () => {
+  let originalFetch: typeof fetch;
+  const ORIGINAL_ENV = process.env.MESH_LLM_MAX_ITERATIONS;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+    if (ORIGINAL_ENV === undefined) {
+      delete process.env.MESH_LLM_MAX_ITERATIONS;
+    } else {
+      process.env.MESH_LLM_MAX_ITERATIONS = ORIGINAL_ENV;
+    }
+  });
+
+  /**
+   * Run the agent through a fetch mock returning a normal completion, and
+   * return the wire request's model_params (undefined when the request carried
+   * no model_params block at all — e.g. a consumer that configured nothing).
+   */
+  async function captureRunModelParams(
+    agent: MeshLlmAgent,
+    options?: { maxIterations?: number },
+  ): Promise<Record<string, unknown> | undefined> {
+    let capturedBody: string | undefined;
+    globalThis.fetch = vi.fn(async (_url: string, init: RequestInit) => {
+      capturedBody = init.body as string;
+      return mockJsonResponse(mcpToolResponse({ role: "assistant", content: "ok" }));
+    }) as unknown as typeof fetch;
+
+    await agent.run("hi", {
+      tools: [],
+      meshProvider: { endpoint: ENDPOINT, functionName: FN_BUFFERED },
+      options,
+    });
+
+    const body = JSON.parse(capturedBody!);
+    return body.params.arguments.request.model_params as
+      | Record<string, unknown>
+      | undefined;
+  }
+
+  function unsetAgent(): MeshLlmAgent {
+    // No maxIterations configured at all — the crux of #1360.
+    return new MeshLlmAgent({
+      functionId: "test.1360.unset",
+      provider: { capability: "llm", tags: ["+claude"] },
+    });
+  }
+
+  it("omits max_iterations when the consumer configured nothing (provider env governs)", async () => {
+    delete process.env.MESH_LLM_MAX_ITERATIONS;
+    const modelParams = await captureRunModelParams(unsetAgent());
+    expect(modelParams?.max_iterations).toBeUndefined();
+  });
+
+  it("forwards an explicit runtime option", async () => {
+    delete process.env.MESH_LLM_MAX_ITERATIONS;
+    const modelParams = await captureRunModelParams(unsetAgent(), {
+      maxIterations: 25,
+    });
+    expect(modelParams?.max_iterations).toBe(25);
+  });
+
+  it("forwards the consumer-side MESH_LLM_MAX_ITERATIONS env", async () => {
+    process.env.MESH_LLM_MAX_ITERATIONS = "15";
+    const modelParams = await captureRunModelParams(unsetAgent());
+    expect(modelParams?.max_iterations).toBe(15);
+  });
+
+  it("forwards an explicit user-supplied config value", async () => {
+    delete process.env.MESH_LLM_MAX_ITERATIONS;
+    const agent = new MeshLlmAgent({
+      functionId: "test.1360.explicit-config",
+      provider: { capability: "llm", tags: ["+claude"] },
+      maxIterations: 8,
+    });
+    const modelParams = await captureRunModelParams(agent);
+    expect(modelParams?.max_iterations).toBe(8);
+  });
+
+  it("still caps the consumer's own loop at 10 when unset (default local cap preserved)", async () => {
+    delete process.env.MESH_LLM_MAX_ITERATIONS;
+    // Provider signals exhaustion structurally; the raised error must carry the
+    // default local cap of 10, proving the consumer loop is still bounded even
+    // though nothing is forwarded to the provider.
+    globalThis.fetch = vi.fn(async () =>
+      mockJsonResponse(
+        mcpToolResponse({
+          role: "assistant",
+          content: "",
+          _mesh_stop_reason: "max_iterations",
+        }),
+      ),
+    ) as unknown as typeof fetch;
+
+    try {
+      await unsetAgent().run("hi", {
+        tools: [],
+        meshProvider: { endpoint: ENDPOINT, functionName: FN_BUFFERED },
+      });
+      throw new Error("expected MaxIterationsError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MaxIterationsError);
+      expect((err as MaxIterationsError).iterations).toBe(10);
+    }
+  });
+});
+
+// ----------------------------------------------------------------------------
 // Issue #1355: shared exhaustion vocabulary — encode/parse frame helpers.
 // These must be byte-identical to Python's llm_stop_reason.py so a TS consumer
 // interoperates with a Python provider (and vice versa).

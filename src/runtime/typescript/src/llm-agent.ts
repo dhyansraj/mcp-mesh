@@ -85,8 +85,14 @@ export interface MeshLlmAgentConfig {
   systemPrompt?: string;
   /** Parameter name for template context */
   contextParam?: string;
-  /** Max agentic loop iterations */
-  maxIterations: number;
+  /**
+   * Max agentic loop iterations. Issue #1360: `undefined` = the consumer
+   * configured nothing — the local loop still caps at 10 (applied in run()/
+   * stream()), but no `max_iterations` is forwarded to the provider, so the
+   * provider's MESH_LLM_MAX_ITERATIONS governs. Any defined value is an
+   * explicit consumer cap and IS forwarded.
+   */
+  maxIterations?: number;
   /** Max tokens */
   maxOutputTokens?: number;
   /** Temperature */
@@ -655,6 +661,26 @@ export class MeshLlmAgent<T = string> {
   }
 
   /**
+   * Issue #1360: single-source the max-iterations resolution shared by run() and
+   * stream(). `forwarded` is the EXPLICIT cap the consumer configured (runtime
+   * option → consumer env → user config), or undefined when nothing is set — in
+   * which case the delegation request omits `max_iterations` and the provider's
+   * own MESH_LLM_MAX_ITERATIONS governs (parity with Python/Java). `localCap` is
+   * the concrete bound the consumer's own loop always needs (#1355), defaulting
+   * to 10 when nothing is configured.
+   */
+  private resolveForwardedMaxIterations(options?: LlmCallOptions): {
+    forwarded: number | undefined;
+    localCap: number;
+  } {
+    const forwarded =
+      sanitizeMaxIterations(options?.maxIterations) ??
+      envMaxIterations() ??
+      this.config.maxIterations;
+    return { forwarded, localCap: forwarded ?? 10 };
+  }
+
+  /**
    * Run the agentic loop.
    *
    * @param messageInput - User message string or multi-turn message array
@@ -687,11 +713,13 @@ export class MeshLlmAgent<T = string> {
       includeOutputSchemaHint: !isMeshDelegated,
     });
 
-    // Get effective options (runtime options > MESH_LLM_* env > config)
-    const maxIterations =
-      sanitizeMaxIterations(context.options?.maxIterations) ??
-      envMaxIterations() ??
-      this.config.maxIterations;
+    // Get effective options (runtime options > MESH_LLM_* env > config).
+    // Issue #1360: `forwardedMaxIterations` is the EXPLICIT cap the consumer
+    // configured (undefined = omit from the delegation request so the provider's
+    // MESH_LLM_MAX_ITERATIONS governs); `maxIterations` is the concrete local
+    // exhaustion bound (#1355), default 10 when nothing is configured.
+    const { forwarded: forwardedMaxIterations, localCap: maxIterations } =
+      this.resolveForwardedMaxIterations(context.options);
     const maxTokens = context.options?.maxOutputTokens ?? this.config.maxOutputTokens;
     const temperature = context.options?.temperature ?? this.config.temperature;
 
@@ -725,8 +753,10 @@ export class MeshLlmAgent<T = string> {
           outputSchema,
           // Issue #1019: forward caller-supplied escape-hatch kwargs
           modelParams: context.options?.modelParams,
-          // Issue #1116: forward the resolved provider-managed loop cap.
-          maxIterations,
+          // Issue #1116/#1360: forward the provider-managed loop cap ONLY when
+          // the consumer explicitly configured one (undefined = omit the key so
+          // the provider's MESH_LLM_MAX_ITERATIONS / default of 10 applies).
+          maxIterations: forwardedMaxIterations,
           // Issue #1112: forward the RAW (possibly-undefined) output_mode so the
           // provider honors an explicit override; unset stays auto.
           outputMode: this.config.outputMode,
@@ -924,11 +954,11 @@ export class MeshLlmAgent<T = string> {
       includeOutputSchemaHint: false,
     });
 
-    // Effective options (runtime > env > config)
-    const maxIterations =
-      sanitizeMaxIterations(context.options?.maxIterations) ??
-      envMaxIterations() ??
-      this.config.maxIterations;
+    // Effective options (runtime > env > config). Issue #1360: forward only an
+    // explicitly configured cap (undefined = omit; provider env governs); the
+    // local exhaustion cap still defaults to 10.
+    const { forwarded: forwardedMaxIterations, localCap: maxIterations } =
+      this.resolveForwardedMaxIterations(context.options);
     const maxTokens = context.options?.maxOutputTokens ?? this.config.maxOutputTokens;
     const temperature = context.options?.temperature ?? this.config.temperature;
 
@@ -964,8 +994,10 @@ export class MeshLlmAgent<T = string> {
         outputSchema,
         // Issue #1019: forward caller-supplied escape-hatch kwargs
         modelParams: context.options?.modelParams,
-        // Issue #1116: forward the resolved provider-managed loop cap.
-        maxIterations,
+        // Issue #1116/#1360: forward the provider-managed loop cap ONLY when
+        // the consumer explicitly configured one (undefined = omit the key so
+        // the provider's MESH_LLM_MAX_ITERATIONS / default of 10 applies).
+        maxIterations: forwardedMaxIterations,
         // Issue #1112: forward the RAW (possibly-undefined) output_mode so the
         // provider honors an explicit override; unset stays auto.
         outputMode: this.config.outputMode,

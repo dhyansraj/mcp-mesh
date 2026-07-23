@@ -369,10 +369,10 @@ export function envMaxIterations(): number | undefined {
  *
  * Note: a *present* paramValue (even if invalid) never falls through to the
  * env branch — invalid param → default. The env branch is consulted only when
- * the param is ABSENT. For TS consumers this means the provider-host env only
- * applies when the consumer does not forward a cap: run()/stream() always
- * forward one, so provider-side MESH_LLM_MAX_ITERATIONS primarily affects
- * non-forwarding / other-language / raw callers.
+ * the param is ABSENT. Since #1360, run()/stream() forward max_iterations only
+ * when the consumer explicitly configured it (runtime option → consumer env →
+ * user config); when unset, no cap is forwarded and this provider-side
+ * MESH_LLM_MAX_ITERATIONS governs — parity with Python/Java.
  */
 export function resolveMaxIterations(paramValue: unknown): number {
   const DEFAULT = 10;
