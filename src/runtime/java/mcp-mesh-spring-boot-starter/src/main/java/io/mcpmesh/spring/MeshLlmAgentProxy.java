@@ -15,6 +15,8 @@ import io.mcpmesh.spring.media.MediaStore;
 import io.mcpmesh.spring.tracing.TraceContext;
 import io.mcpmesh.types.McpMeshTool;
 import io.mcpmesh.types.MeshLlmAgent;
+import io.mcpmesh.types.MeshLlmStopReason;
+import io.mcpmesh.types.MeshMaxIterationsException;
 import io.mcpmesh.types.MeshToolCallException;
 import io.mcpmesh.types.MeshToolUnavailableException;
 import org.slf4j.Logger;
@@ -891,6 +893,17 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                 // _mesh_usage contributes nothing.
                 accumulateUsage(response);
 
+                // Issue #1355: a provider-managed loop that hit its cap returns a
+                // terminal no-tool-calls reply carrying the structural exhaustion
+                // discriminant (_mesh_stop_reason == "max_iterations"). Raise a
+                // typed error instead of returning the (possibly empty) prior text
+                // — content never carries the failure, so this is the only signal.
+                if (MeshLlmStopReason.STOP_REASON_MAX_ITERATIONS.equals(extractStopReason(response))) {
+                    log.warn("Provider-managed loop reported max_iterations exhaustion (max={}) for LLM agent {}",
+                        maxIterations, functionId);
+                    throw new MeshMaxIterationsException(maxIterations, maxIterations);
+                }
+
                 // Check for tool calls
                 List<Map<String, Object>> toolCalls = extractToolCalls(response);
 
@@ -938,8 +951,12 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                 }
             }
 
+            // Issue #1355: the consumer-managed loop exhausted its cap without a
+            // final response. Raise the typed error instead of silently returning
+            // prior assistant text — exhaustion is a loud, typed failure on the
+            // mainline, matching the provider-managed path and the Python/TS SDKs.
             log.warn("Max iterations ({}) reached for LLM agent {}", maxIterations, functionId);
-            return extractLastAssistantContent(llmMessages);
+            throw new MeshMaxIterationsException(maxIterations, maxIterations);
             } finally {
                 // Publish accumulated token usage to the per-thread sink so
                 // ExecutionTracer.endSpan can stamp the CONSUMER span (parity
@@ -1281,6 +1298,45 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         return null;
     }
 
+    /**
+     * Extract the provider's {@code _mesh_stop_reason} exhaustion discriminant
+     * from a response (issue #1355).
+     *
+     * <p>The value — {@code "max_iterations"} on a provider-managed loop that hit
+     * its cap, absent otherwise — may appear at the response top level OR inside
+     * the nested {@code content[0].text} JSON envelope. Mirrors the same unwrap
+     * path as {@link #extractUsage}. Returns {@code null} when no discriminant is
+     * present (a normal turn).
+     */
+    @SuppressWarnings("unchecked")
+    private String extractStopReason(Map<String, Object> response) {
+        Object topLevel = response.get(MeshLlmStopReason.STOP_REASON_KEY);
+        if (topLevel instanceof String s) {
+            return s;
+        }
+
+        Object content = response.get("content");
+        if (content instanceof List<?> contentList && !contentList.isEmpty()) {
+            Object first = contentList.get(0);
+            if (first instanceof Map<?, ?> block) {
+                Object text = block.get("text");
+                if (text instanceof String textStr && textStr.trim().startsWith("{")) {
+                    try {
+                        Map<String, Object> parsed = objectMapper.readValue(textStr, Map.class);
+                        Object nested = parsed.get(MeshLlmStopReason.STOP_REASON_KEY);
+                        if (nested instanceof String ns) {
+                            return ns;
+                        }
+                    } catch (JacksonException e) {
+                        log.trace("Failed to parse nested JSON for _mesh_stop_reason: {}", e.getMessage());
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
     /** Coerce a token-count field (Number or numeric String) to a long; 0 if missing/unparseable. */
     private static long toTokenCount(Object value) {
         if (value instanceof Number n) {
@@ -1328,6 +1384,7 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                 && !response.containsKey("role")
                 && !response.containsKey("tool_calls")
                 && !response.containsKey("_mesh_usage")
+                && !response.containsKey(MeshLlmStopReason.STOP_REASON_KEY)
                 && !isTruthy(response.get("error"))) {
             return serializeContent(response, "a bare structured answer without an envelope");
         }
@@ -1469,6 +1526,7 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                 // content diagnostics rather than returning the error/tool JSON.
                 if (parsed.containsKey("tool_calls")
                         || parsed.containsKey("_mesh_usage")
+                        || parsed.containsKey(MeshLlmStopReason.STOP_REASON_KEY)
                         || isTruthy(parsed.get("error"))) {
                     return "";
                 }
@@ -1623,19 +1681,6 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                 return;
             }
         }
-    }
-
-    private String extractLastAssistantContent(List<Map<String, Object>> messages) {
-        for (int i = messages.size() - 1; i >= 0; i--) {
-            Map<String, Object> msg = messages.get(i);
-            if ("assistant".equals(msg.get("role"))) {
-                Object content = msg.get("content");
-                if (content instanceof String s) {
-                    return s;
-                }
-            }
-        }
-        return "";
     }
 
     private String extractJsonFromResponse(String response) {
