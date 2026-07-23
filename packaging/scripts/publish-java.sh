@@ -24,8 +24,13 @@ BOM_MODULE="mcp-mesh-bom"
 
 # Maven coordinates
 GROUP_ID_PATH="io/mcp-mesh"
+# Dotted form of the group id, required by the Central published-check endpoint
+# (which takes ?namespace=io.mcp-mesh, not the slash path used for repo1 URLs).
+GROUP_NAMESPACE="io.mcp-mesh"
 
-# Maven Central read endpoint, used to detect an already-published version.
+# Maven Central read endpoint, used as a SECONDARY (fallback) check for an
+# already-published version. repo1.maven.org lags Central's authoritative state
+# by minutes to an hour via mirror propagation, so it is not trusted on its own.
 CENTRAL_REPO_URL="https://repo1.maven.org/maven2"
 # Central releases a deployment bundle atomically - either every module in the
 # bundle lands or none does - so probing one representative artifact is enough
@@ -35,6 +40,10 @@ PROBE_ARTIFACT_ID="mcp-mesh-spring-boot-starter"
 # Sonatype Central Portal API
 SONATYPE_API="https://central.sonatype.com/api/v1/publisher/upload"
 SONATYPE_STATUS_API="https://central.sonatype.com/api/v1/publisher/status"
+# Central's authoritative published-check endpoint. Unlike repo1.maven.org this
+# reflects publication immediately (no mirror-propagation lag), so it is the
+# primary signal for the idempotency guard below.
+SONATYPE_PUBLISHED_API="https://central.sonatype.com/api/v1/publisher/published"
 
 # GPG key used to sign artifacts that maven-gpg-plugin does not sign (the BOM).
 # The trailing '!' pins the primary key rather than letting gpg pick the default
@@ -77,25 +86,82 @@ if [ -z "${SONATYPE_TOKEN:-}" ]; then
     exit 1
 fi
 
+# Bearer token for every authenticated Central call (published-check, upload,
+# status poll). Computed once here; never logged.
+TOKEN=$(printf '%s' "${SONATYPE_USERNAME}:${SONATYPE_TOKEN}" | openssl base64 -A)
+
 log "Publishing Java SDK version: ${VERSION}"
 log "Modules: ${MODULES[*]}"
 
 # Idempotency guard: re-running a release (e.g. to finish a partially-completed
 # one) must not re-upload a version that is already on Central. Uploading an
-# existing version is rejected and leaves a FAILED deployment in the portal.
-PROBE_URL="${CENTRAL_REPO_URL}/${GROUP_ID_PATH}/${PROBE_ARTIFACT_ID}/${VERSION}/${PROBE_ARTIFACT_ID}-${VERSION}.pom"
+# existing version is rejected and leaves a FAILED deployment in the portal
+# (this is exactly what happened during v3.3.0 - see #1376).
+#
+# The check is done in two tiers:
+#   1. PRIMARY: Central's /publisher/published endpoint. It reflects the
+#      authoritative publication state immediately, so it never produces a
+#      false "not published" for a just-released version.
+#   2. FALLBACK: only if the Central call is inconclusive (transient error,
+#      non-200, unparseable body), probe repo1.maven.org for the POM. repo1
+#      lags Central by minutes to an hour via mirror propagation, so trusting
+#      it as the primary signal is what caused the duplicate FAILED deployment
+#      in #1376; it is kept purely as a best-effort secondary check.
 log "Checking whether ${VERSION} is already on Maven Central..."
-log "  ${PROBE_URL}"
-PROBE_STATUS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 -L "${PROBE_URL}" || echo "000")
 
-if [ "${PROBE_STATUS}" = "200" ]; then
-    success "Java SDK ${VERSION} is already published to Maven Central, nothing to do"
-    exit 0
+# Tier 1: authoritative Central published-check.
+# Returns HTTP 200 with body {"published":true|false}. Guard curl/jq against
+# set -e so a transient failure falls through to the repo1 fallback instead of
+# aborting the release.
+PUBLISHED_URL="${SONATYPE_PUBLISHED_API}?namespace=${GROUP_NAMESPACE}&name=${PROBE_ARTIFACT_ID}&version=${VERSION}"
+log "  ${PUBLISHED_URL}"
+PUBLISHED_RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 60 \
+    -H "Authorization: Bearer ${TOKEN}" \
+    "${PUBLISHED_URL}" || printf '\n000')
+PUBLISHED_STATUS=$(printf '%s' "${PUBLISHED_RESPONSE}" | tail -n 1)
+PUBLISHED_BODY=$(printf '%s' "${PUBLISHED_RESPONSE}" | sed '$d')
+
+# Extract the boolean .published field robustly (jq if present, else grep/sed).
+PUBLISHED_FLAG=""
+if [ "${PUBLISHED_STATUS}" = "200" ]; then
+    if command -v jq >/dev/null 2>&1; then
+        # Plain '.published' (NOT '// empty'): jq's // treats a false value as
+        # falsy and would collapse {"published":false} to empty, killing the
+        # Tier-1 "false -> upload" branch. This yields the string true/false/null;
+        # anything but true/false falls through to the Tier-2 fallback below.
+        PUBLISHED_FLAG=$(printf '%s' "${PUBLISHED_BODY}" | jq -r '.published' 2>/dev/null || true)
+    else
+        # Portable POSIX glob match - no sed \| alternation (GNU-only, empty on
+        # BSD/macOS sed).
+        case "$(printf '%s' "${PUBLISHED_BODY}" | tr -d ' \n')" in
+            *'"published":true'*)  PUBLISHED_FLAG="true" ;;
+            *'"published":false'*) PUBLISHED_FLAG="false" ;;
+            *)                     PUBLISHED_FLAG="" ;;
+        esac
+    fi
 fi
 
-# Any other response (404, or a transient/unknown code) means we cannot confirm
-# publication, so continue with the normal upload path unchanged.
-log "Not published yet (HTTP ${PROBE_STATUS}); proceeding with upload"
+if [ "${PUBLISHED_FLAG}" = "true" ]; then
+    success "Java SDK ${VERSION} is already published to Maven Central, nothing to do"
+    exit 0
+elif [ "${PUBLISHED_FLAG}" = "false" ]; then
+    log "Central reports ${VERSION} not published yet; proceeding with upload"
+else
+    # Tier 2: Central call was inconclusive - fall back to the lagging repo1 probe.
+    log "Central published-check inconclusive (HTTP ${PUBLISHED_STATUS}); falling back to repo1.maven.org"
+    PROBE_URL="${CENTRAL_REPO_URL}/${GROUP_ID_PATH}/${PROBE_ARTIFACT_ID}/${VERSION}/${PROBE_ARTIFACT_ID}-${VERSION}.pom"
+    log "  ${PROBE_URL}"
+    PROBE_STATUS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 -L "${PROBE_URL}" || echo "000")
+
+    if [ "${PROBE_STATUS}" = "200" ]; then
+        success "Java SDK ${VERSION} is already published to Maven Central, nothing to do"
+        exit 0
+    fi
+
+    # Still can't confirm (404, or a transient/unknown code): continue with the
+    # normal upload path unchanged.
+    log "Not confirmed published (repo1 HTTP ${PROBE_STATUS}); proceeding with upload"
+fi
 
 # Create temporary working directory for the bundle
 BUNDLE_DIR=$(mktemp -d)
@@ -273,8 +339,6 @@ done)
 
 # Upload to Sonatype Central Portal
 log "Uploading bundle to Sonatype Central Portal..."
-
-TOKEN=$(printf '%s' "${SONATYPE_USERNAME}:${SONATYPE_TOKEN}" | openssl base64 -A)
 
 HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
     "${SONATYPE_API}?publishingType=AUTOMATIC" \
