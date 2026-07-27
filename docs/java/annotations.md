@@ -269,11 +269,11 @@ public class ClaudeProviderApplication {
 Enables mesh dependency injection in REST endpoint handlers.
 
 ```java
-@MeshRoute(dependencies = @Selector(capability = "avatar_chat"))
+@MeshRoute(dependencies = @MeshDependency(capability = "avatar_chat"))
 @PostMapping("/chat")
 public ResponseEntity<ChatResponse> chat(
         @RequestBody ChatRequest request,
-        McpMeshTool<String> avatarChat) {
+        @MeshInject("avatar_chat") McpMeshTool<String> avatarChat) {
     if (avatarChat == null || !avatarChat.isAvailable()) {
         return ResponseEntity.status(503)
             .body(new ChatResponse("Service unavailable"));

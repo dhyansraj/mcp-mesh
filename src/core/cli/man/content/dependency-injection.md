@@ -96,7 +96,7 @@ async def greet(name: str, date_service: mesh.McpMeshTool = None) -> str:
 
 **Important**: Functions with dependencies must be `async def` and calls must use `await`.
 
-**Note**: Both `@mesh.tool` and `@mesh.route` inject dependencies POSITIONALLY into `McpMeshTool`-typed parameters — pairing the order of `McpMeshTool` parameters in the function signature against the order of `dependencies=[...]` (the runtime takes `mesh_positions[: len(dependencies)]`). Parameter names like `date_service` in examples are reader-friendly only — they don't match against the dependency capability name. The same rule applies in TypeScript (`addTool({ dependencies: [...] })`, injected positionally) and Java (`@MeshTool(dependencies = @Selector(...))`, parameter order). A `MeshJob` slot (one per tool) is detected by parameter type but counts as an eligible position in this same positional pairing — it pairs with its own `dependencies=[...]` entry, and that dependency is bound as the job's submitter — see `meshctl man jobs`.
+**How pairing works**: In both `@mesh.tool` and `@mesh.route`, `dependencies=[...]` pairs with your `McpMeshTool`-typed parameters in declaration order — the first dependency fills the first such parameter, and so on. Parameter names are yours to choose; pick whatever reads best. The same order-based rule applies in TypeScript (`addTool({ dependencies: [...] })`) and Java (`@MeshTool(dependencies = @Selector(...))`). A `MeshJob` parameter (at most one per tool) occupies a position in this same ordering and binds its paired dependency as the job's submitter — see `meshctl man jobs`.
 
 ### Dependencies with Filters
 

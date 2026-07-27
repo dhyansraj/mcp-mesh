@@ -55,6 +55,40 @@ public GreetingResponse smartGreet(
 
 **Important**: Dependencies are injected as `McpMeshTool<T>` parameters on the method. They may be `null` if unavailable.
 
+**How pairing works**: On `@MeshTool`, the `dependencies` entries pair with the method's dependency-typed parameters — `McpMeshTool<T>` and, where present, `MeshJob` — in declaration order: the first `@Selector` fills the first such parameter, the second fills the second, and so on. `@Param`-annotated business parameters take no part in the pairing. Parameter names are yours to choose; pick whatever reads best. Declare more than one dependency as an array:
+
+```java
+@MeshTool(capability = "report",
+          dependencies = {@Selector(capability = "data_service"),
+                          @Selector(capability = "formatter")})
+public Report generateReport(
+        @Param(value = "query", description = "Report query") String query,
+        McpMeshTool<Data> data,        // ← data_service
+        McpMeshTool<String> format) {  // ← formatter
+    ...
+}
+```
+
+A `MeshJob` parameter (at most one per method) occupies a position in this same ordering and binds its paired dependency as the job's submitter — see `meshctl man jobs --java`. The same order-based rule applies in Python (`dependencies=[...]`) and TypeScript (`addTool({ dependencies: [...] })`).
+
+`@MeshRoute` handlers bind **by name**, not by order. Each handler parameter contributes one match key — its `@MeshInject("...")` value when present, otherwise the Java parameter name — and binds to the `@MeshDependency` whose capability or injection name equals that key. The injection name is `name()` when you set it, and otherwise the capability with kebab hyphens folded to camelCase (`pdf-tool` becomes `pdfTool`); a capability containing no hyphen is left exactly as written. A snake_case capability therefore never matches a camelCase parameter on its own — name the binding explicitly, at whichever end reads better:
+
+```java
+// At the parameter: @MeshInject supplies the key directly.
+@MeshRoute(dependencies = @MeshDependency(capability = "lookup_employee"))
+@PostMapping("/a")
+public ResponseEntity<Report> a(
+        @MeshInject("lookup_employee") McpMeshTool<Employee> employeeLookup) { ... }
+
+// At the dependency: name() declares the parameter it should land on.
+@MeshRoute(dependencies = @MeshDependency(capability = "lookup_employee",
+                                          name = "employeeLookup"))
+@PostMapping("/b")
+public ResponseEntity<Report> b(McpMeshTool<Employee> employeeLookup) { ... }
+```
+
+Falling back to the bare Java parameter name also requires compiling with `-parameters`; `@MeshInject` does not. `@MeshDependsOn` beans bind by `@Qualifier`, by name as well.
+
 ### Dependencies with Filters
 
 Use the `@Selector` annotation with tags or version to filter providers:
@@ -106,7 +140,8 @@ For Spring web routes, the equivalent annotation is `@MeshDependency` (used insi
     )
 })
 @PostMapping("/report")
-public ResponseEntity<Report> report(McpMeshTool<Employee> employeeLookup) { ... }
+public ResponseEntity<Report> report(
+        @MeshInject("lookup_employee") McpMeshTool<Employee> employeeLookup) { ... }
 ```
 
 > Note: Use `@NotNull` (`jakarta.validation.constraints`) on required fields. Java reference types are nullable by default; `@NotNull` is required for cross-language `STRICT` matching with Python/TypeScript counterparts.
@@ -498,7 +533,8 @@ public Report generateReport(McpMeshTool<Data> dataService) { ... }
     @MeshDependency(capability = "data_service", required = true)
 })
 @PostMapping("/report")
-public ResponseEntity<Report> report(McpMeshTool<Data> dataService) { ... }
+public ResponseEntity<Report> report(
+        @MeshInject("data_service") McpMeshTool<Data> dataService) { ... }
 ```
 
 `required` defaults to `false` and combines with the other selector fields (`tags`, `version`, `expectedType`). It is carried on the wire only when `true`.

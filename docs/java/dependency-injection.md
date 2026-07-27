@@ -459,7 +459,8 @@ public Report generateReport(McpMeshTool<Data> dataService) {
 ```java
 @GetMapping("/report")
 @MeshRoute(dependencies = @MeshDependency(capability = "data_service", required = true))
-public ResponseEntity<Report> report(McpMeshTool<Data> dataService) {
+public ResponseEntity<Report> report(
+        @MeshInject("data_service") McpMeshTool<Data> dataService) {
     return ResponseEntity.ok(new Report(dataService.call()));
 }
 ```

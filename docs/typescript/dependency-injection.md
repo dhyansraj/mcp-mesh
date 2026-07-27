@@ -48,7 +48,7 @@ agent.addTool({
 });
 ```
 
-**Important**: Dependencies are injected **positionally** as parameters after the first `args` parameter, in declaration order (`dependencies[0]`, `dependencies[1]`, ...). They may be `null` if unavailable.
+**How pairing works**: Dependencies are injected positionally as parameters after the first `args` parameter, in declaration order (`dependencies[0]`, `dependencies[1]`, ...), and arrive as `null` if unavailable. Parameter names are yours to choose; pick whatever reads best.
 
 ### Dependencies with Filters
 
@@ -197,7 +197,7 @@ agent.addTool({
     { capability: "formatter" }, // optional (default)
   ],
   parameters: z.object({}),
-  // Tool deps inject POSITIONALLY as McpMeshTool params after args
+  // Tool deps inject positionally as McpMeshTool params after args
   // (dependencies[0], dependencies[1], ...).
   execute: async (
     {},

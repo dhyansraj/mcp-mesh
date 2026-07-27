@@ -163,7 +163,8 @@ For Spring web routes (`@MeshRoute(dependencies = @MeshDependency(...))`):
     )
 })
 @PostMapping("/report")
-public ResponseEntity<Report> report(McpMeshTool<Employee> employeeLookup) { ... }
+public ResponseEntity<Report> report(
+        @MeshInject("lookup_employee") McpMeshTool<Employee> employeeLookup) { ... }
 ```
 
 ## Cross-language convention
