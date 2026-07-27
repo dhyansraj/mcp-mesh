@@ -68,7 +68,7 @@ dependencies = [
     "python-dateutil>=2.8.0,<3.0.0",
     "click>=8.1.0,<9.0.0",
     "rich>=13.0.0,<14.0.0",
-    "typer>=0.9.1,<1.0.0",
+    "typer>=0.9.0,<1.0.0",
     # Pinned exact (#1312): an upstream FastMCP default-flip enabling
     # DNS-rebinding Host validation drifted in on rebuild and broke every
     # k8s Service-DNS /mcp call with 421. Loose ranges hid it. Follow-up:
@@ -76,15 +76,24 @@ dependencies = [
     "mcp==1.28.1",
     "fastmcp==3.4.3",
     "litellm>=1.80.5,!=1.82.7,!=1.82.8",
-    "anthropic>=0.42",
+    "anthropic>=0.77",
     "openai>=1.60",
-    "google-genai>=0.8.0",
+    "google-genai>=1.22",
     "prometheus-client>=0.19.0,<1.0.0",
     "pyyaml>=6.0,<7.0",
     "jinja2>=3.1.0",
     "redis>=4.0.0,<7.0.0",
     "cachetools>=5.3.0",
-    "watchfiles>=1.0.0"
+    "watchfiles>=1.0.0",
+    # orjson and jsonschema are direct runtime deps, not transitive ones.
+    # ``_mcp_mesh.shared.json_fast`` prefers orjson (stdlib json is the
+    # slow fallback) and ``mesh.helpers`` imports jsonschema unguarded at
+    # module scope for synthetic-tool schema validation (#962), so
+    # ``mesh.llm_provider`` fails to import without it. jsonschema happens
+    # to arrive via mcp/litellm today and orjson does not arrive at all;
+    # declaring both directly prevents breakage if those transitives shift.
+    "orjson>=3.10.0",
+    "jsonschema>=4"
 ]
 
 [project.optional-dependencies]
@@ -97,8 +106,7 @@ dev = [
     "mypy>=1.16.0",
     "pre-commit>=4.0.0",
     "isort>=6.0.0",
-    "bandit[toml]>=1.7.0",
-    "jsonschema>=4.0.0"
+    "bandit[toml]>=1.7.0"
 ]
 docs = [
     "mkdocs>=1.5.0",
@@ -120,13 +128,13 @@ anthropic = [
     # Backward-compat alias: ``anthropic`` is now a base dependency (issue
     # #834). This entry is kept so existing ``pip install mcp-mesh[anthropic]``
     # commands continue to work without error.
-    "anthropic>=0.42"
+    "anthropic>=0.77"
 ]
 anthropic-bedrock = [
     # AWS Bedrock backend for the native Anthropic adapter. Required when
     # using ``bedrock/anthropic.claude-*`` model strings. Opt-in because
     # boto3 is a heavy dependency.
-    "anthropic[bedrock]>=0.42"
+    "anthropic[bedrock]>=0.77"
 ]
 openai = [
     # Backward-compat alias: ``openai`` is now a base dependency (issue
@@ -139,7 +147,7 @@ gemini = [
     # (issue #834 PR 3). This entry is kept so existing
     # ``pip install mcp-mesh[gemini]`` commands continue to work without
     # error.
-    "google-genai>=0.8.0"
+    "google-genai>=1.22"
 ]
 
 [project.urls]
