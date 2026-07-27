@@ -39,6 +39,58 @@ logger = logging.getLogger(__name__)
 _MAX_ITERATIONS_UNSET = object()
 
 
+def _require_litellm(model: str | None = None, vendor: str | None = None) -> Any:
+    """Import and return the ``litellm`` module, or raise actionable guidance.
+
+    LiteLLM is an OPTIONAL dependency (issue #1383). The big-3 vendors
+    (Anthropic / OpenAI / Gemini) dispatch through the bundled native SDK
+    adapters and never reach this helper; only the long-tail
+    GenericHandler/LiteLLM path genuinely needs the package. Call this at the
+    point of genuine use — never at function top — so a big-3-only install
+    stays fully functional without litellm present.
+    """
+    try:
+        import litellm
+
+        return litellm
+    except ModuleNotFoundError as e:
+        # Only the top-level 'litellm' package being absent is an optional-dep
+        # problem. A failing transitive import (e.g. 'tokenizers') or any other
+        # ImportError (ABI mismatch, circular import) must propagate untouched —
+        # mislabelling those sends users to an install command that is already
+        # satisfied and cannot fix anything, while hiding the real cause.
+        if e.name != "litellm":
+            raise
+
+        try:
+            from mesh import __version__ as mesh_version
+        except Exception:  # pragma: no cover - version lookup is best-effort
+            mesh_version = None
+
+        pin = (
+            f"mcp-mesh[litellm]=={mesh_version}"
+            if mesh_version
+            else "mcp-mesh[litellm]"
+        )
+        target = ""
+        if model and vendor and vendor != "unknown":
+            target = f" for model '{model}' (vendor '{vendor}')"
+        elif model:
+            target = f" for model '{model}'"
+        elif vendor and vendor != "unknown":
+            target = f" for vendor '{vendor}'"
+
+        raise ImportError(
+            f"This request{target} requires the optional LiteLLM provider path, "
+            "but the 'litellm' package is not installed. mcp-mesh bundles native "
+            "SDK adapters for Anthropic, OpenAI and Gemini; every other "
+            "vendor/model dispatches through LiteLLM.\n"
+            f"  Install it with:  pip install '{pin}'\n"
+            f"  Containerized agents: add  {pin}  to your agent's "
+            "requirements.txt so the image build includes it."
+        ) from e
+
+
 def _sanitize_max_iterations(value: Any) -> int | None:
     """Coerce an arbitrary value to a positive integer iteration cap.
 
@@ -539,10 +591,6 @@ async def _run_response_format_retry(
         },
     }
     fallback_args["request_timeout"] = fallback_timeout
-    # Lazy import keeps this module importable in environments without
-    # litellm (e.g., during static analysis); both call sites already
-    # import litellm before invoking this helper.
-    import litellm
 
     # Native dispatch (issue #834, PR 1): if the vendor handler ships a
     # native SDK adapter and the feature flag is on, route through it.
@@ -571,6 +619,9 @@ async def _run_response_format_retry(
             base_url=fallback_args.get("base_url"),
         )
     else:
+        # LiteLLM is optional (#1383) — resolve it only on the branch that
+        # actually calls into it.
+        litellm = _require_litellm(model=fb_model, vendor=fb_vendor)
         fallback_response = await asyncio.to_thread(
             litellm.completion, **fallback_args
         )
@@ -767,10 +818,10 @@ async def _maybe_retry_synthetic_on_validation_failure(
     tools: list[dict],
     completion_args_template: dict,
     native_handler,
-    litellm_module,
     effective_model: str,
     vendor: str | None,
     loop_logger: logging.Logger | None,
+    litellm_module=None,
 ) -> tuple[str, dict | None]:
     """Validate synthetic-tool args against the schema; retry once on failure.
 
@@ -932,8 +983,13 @@ async def _maybe_retry_synthetic_on_validation_failure(
                 base_url=retry_args.get("base_url"),
             )
         else:
+            # LiteLLM is optional (#1383) — resolve it only on the branch that
+            # actually calls into it.
+            _litellm = litellm_module
+            if _litellm is None:
+                _litellm = _require_litellm(model=effective_model, vendor=vendor)
             retry_response = await asyncio.to_thread(
-                litellm_module.completion, **retry_args
+                _litellm.completion, **retry_args
             )
     except Exception as retry_exc:  # noqa: BLE001 - any retry failure falls back
         effective_logger.warning(
@@ -1435,10 +1491,11 @@ async def _dispatch_completion(
     native_handler: Any,
     completion_args: dict[str, Any],
     effective_model: str,
-    litellm_module: Any,
+    litellm_module: Any = None,
     *,
     stream: bool,
     native_exclude_keys: tuple[str, ...],
+    vendor: str | None = None,
 ) -> Any:
     """Dispatch one completion call, native-SDK or LiteLLM.
 
@@ -1449,6 +1506,10 @@ async def _dispatch_completion(
     explicit kwargs, and the streaming path additionally excludes
     ``stream``/``stream_options``). The buffered path uses the buffered
     native/LiteLLM calls; the streaming path uses the streaming variants.
+
+    ``litellm_module`` is optional (#1383): callers on the native path must
+    not import litellm just to reach this function. When omitted, the module
+    is imported lazily on the LiteLLM branch only.
 
     Returns the buffered response object (``stream=False``) or the stream
     async iterator (``stream=True``), matching what each loop inlined.
@@ -1473,6 +1534,8 @@ async def _dispatch_completion(
             base_url=completion_args.get("base_url"),
         )
 
+    if litellm_module is None:
+        litellm_module = _require_litellm(model=effective_model, vendor=vendor)
     if stream:
         return await litellm_module.acompletion(**completion_args)
     return await asyncio.to_thread(litellm_module.completion, **completion_args)
@@ -1509,8 +1572,6 @@ async def _provider_agentic_loop(
     Returns:
         Message dict with role, content, and optionally _mesh_usage.
     """
-    import litellm
-
     iteration = 0
     current_messages = list(messages)
     # Issue #1355: last genuine assistant text seen on a tool-call turn, used
@@ -1596,9 +1657,9 @@ async def _provider_agentic_loop(
             _native_handler,
             completion_args,
             effective_model,
-            litellm,
             stream=False,
             native_exclude_keys=("model", "api_key", "base_url"),
+            vendor=vendor,
         )
         message = response.choices[0].message
 
@@ -1667,7 +1728,6 @@ async def _provider_agentic_loop(
                                 tools=tools,
                                 completion_args_template=retry_template,
                                 native_handler=_native_handler,
-                                litellm_module=litellm,
                                 effective_model=effective_model,
                                 vendor=vendor,
                                 loop_logger=loop_logger,
@@ -2044,8 +2104,7 @@ async def _provider_agentic_loop_stream(
     # same way the main iteration does — see the buffered loop's
     # ``retry_template`` construction for the keys to strip.
     # Tracking issue: https://github.com/dhyanraj/mcp-mesh/issues/961.
-    import litellm
-
+    #
     # Imported here to avoid a circular import: ``_mcp_mesh.engine`` imports
     # this module via the @mesh.llm_provider decorator path.
     from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
@@ -2124,7 +2183,6 @@ async def _provider_agentic_loop_stream(
             _native_handler,
             completion_args,
             effective_model,
-            litellm,
             stream=True,
             native_exclude_keys=(
                 "model",
@@ -2133,6 +2191,7 @@ async def _provider_agentic_loop_stream(
                 "stream",
                 "stream_options",
             ),
+            vendor=vendor,
         )
 
         chunks: list[Any] = []
@@ -2636,7 +2695,10 @@ def llm_provider(
 
     Raises:
         RuntimeError: If FastMCP 'app' not found in module
-        ImportError: If litellm not installed
+        ImportError: At call time, if the model routes to the LiteLLM
+            long-tail path and ``litellm`` is not installed. Anthropic,
+            OpenAI and Gemini models dispatch through the bundled native SDK
+            adapters and do not require it.
     """
 
     def decorator(func):
@@ -2896,8 +2958,6 @@ def llm_provider(
             Returns:
                 Full message dict with content, role, and tool_calls (if present)
             """
-            import litellm
-
             (
                 effective_model,
                 messages,
@@ -3011,6 +3071,11 @@ def llm_provider(
                         base_url=completion_args.get("base_url"),
                     )
                 else:
+                    # LiteLLM is optional (#1383) — import it only here, on
+                    # the long-tail branch that actually calls into it.
+                    litellm = _require_litellm(
+                        model=effective_model, vendor=vendor
+                    )
                     response = await asyncio.to_thread(
                         litellm.completion, **completion_args
                     )
@@ -3282,8 +3347,6 @@ def llm_provider(
             # which only runs when ``output_schema`` is set in
             # ``model_params``); the buffered legacy path's HINT branch is
             # preserved exactly as-is in ``process_chat``.
-            import litellm
-
             completion_args: dict[str, Any] = {
                 "model": effective_model,
                 "messages": messages,
@@ -3347,6 +3410,9 @@ def llm_provider(
                     base_url=completion_args.get("base_url"),
                 )
             else:
+                # LiteLLM is optional (#1383) — import it only here, on the
+                # long-tail branch that actually calls into it.
+                litellm = _require_litellm(model=effective_model, vendor=vendor)
                 stream_iter = await litellm.acompletion(**completion_args)
             chunks: list[Any] = []
             stream_completed = False
