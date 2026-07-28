@@ -31,6 +31,7 @@ import mesh
 from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
 from _mcp_mesh.pipeline.api_startup.route_integration import (
     RouteIntegrationStep,
+    RouteRebuildError,
     _build_sse_endpoint,
     _frame_chunk_as_sse,
     _resolve_user_function,
@@ -699,3 +700,278 @@ class TestSseGatewayShape:
         r = client_err.post("/api/chat", json={})
         assert r.status_code == 503
         assert "dep unavailable" in r.text
+
+
+# ---------------------------------------------------------------------------
+# Issues #1387 / #1389: version-independent route rebuild + loud failure
+# ---------------------------------------------------------------------------
+
+
+class TestRouteRebuildIsVersionIndependent:
+    """The rebuild must not reach into FastAPI's private API.
+
+    FastAPI 0.140.5 renamed ``get_body_field`` to ``_get_body_field`` and
+    changed its signature. The old hand-rebuild imported it directly, the
+    ``ImportError`` was swallowed, and every @mesh.route SSE endpoint
+    silently degraded to ``application/jsonl`` (#1387). The rebuild now
+    constructs a fresh ``APIRoute``, so FastAPI derives that state with
+    whatever internals the installed version has.
+    """
+
+    def test_no_private_fastapi_imports_in_route_integration(self):
+        import _mcp_mesh.pipeline.api_startup.route_integration as mod
+
+        source = inspect.getsource(mod)
+        # ``APIRoute`` is public (documented for custom route classes);
+        # anything else out of fastapi.dependencies/fastapi.routing is not.
+        assert "fastapi.dependencies" not in source
+        for line in source.splitlines():
+            if "from fastapi.routing import" in line:
+                assert line.strip() == "from fastapi.routing import APIRoute", line
+
+    def test_rebuild_preserves_route_registration_options(self):
+        """Every APIRoute.__init__ option the user set must survive.
+
+        The old hand-rebuild recomputed only four attributes and silently
+        dropped route-level ``dependencies=[Depends(...)]`` (FastAPI
+        re-inserts those into the dependant, the manual ``get_dependant``
+        call did not).
+        """
+        from fastapi import Depends
+        from fastapi.responses import PlainTextResponse
+
+        guard_calls: list[int] = []
+
+        async def guard():
+            guard_calls.append(1)
+
+        async def chat(prompt: str) -> mesh.Stream[str]:
+            yield "a"
+
+        app = FastAPI()
+        app.post(
+            "/api/chat",
+            response_model=None,
+            status_code=201,
+            tags=["chat-tag"],
+            name="custom_route_name",
+            dependencies=[Depends(guard)],
+            response_class=PlainTextResponse,
+            include_in_schema=False,
+        )(chat)
+
+        before = next(
+            r for r in app.router.routes if getattr(r, "path", "") == "/api/chat"
+        )
+        before_state = (
+            before.unique_id,
+            before.name,
+            before.status_code,
+            before.tags,
+            before.response_class,
+            before.include_in_schema,
+            len(before.dependencies),
+        )
+
+        step = RouteIntegrationStep()
+        result = step._integrate_single_route(
+            app, _build_route_info(chat, "/api/chat"), MagicMock()
+        )
+        assert result["status"] == "integrated"
+
+        after = next(
+            r for r in app.router.routes if getattr(r, "path", "") == "/api/chat"
+        )
+        assert (
+            after.unique_id,
+            after.name,
+            after.status_code,
+            after.tags,
+            after.response_class,
+            after.include_in_schema,
+            len(after.dependencies),
+        ) == before_state
+
+        # The route-level Depends must still run on a real request. (Status
+        # and media type come from the StreamingResponse the SSE wrapper
+        # returns explicitly, so the route's status_code/response_class do
+        # not apply to the wire — unchanged by the rebuild.)
+        client = TestClient(app)
+        with client.stream("POST", "/api/chat?prompt=hi") as response:
+            assert response.status_code == 200
+            assert response.headers["content-type"].startswith("text/event-stream")
+            body = response.read().decode("utf-8")
+        assert body == "data: a\n\ndata: [DONE]\n\n"
+        assert guard_calls == [1]
+
+    def test_non_streaming_di_route_still_works_end_to_end(self):
+        """The rebuild runs for plain (non-SSE) DI routes too — it must not
+        regress them. Ordinary params still bind, the injected McpMeshTool is
+        kept out of the HTTP-facing signature, and the JSON response is
+        unchanged.
+        """
+
+        @mesh.route(dependencies=["greeter"])
+        async def hello(name: str, greeter: mesh.McpMeshTool = None) -> dict:
+            return {"name": name, "dep": greeter}
+
+        app = FastAPI()
+        app.get("/hello")(hello)
+
+        step = RouteIntegrationStep()
+        route_info = _build_route_info(
+            hello, "/hello", methods=("GET",), deps=[{"capability": "greeter"}]
+        )
+        result = step._integrate_single_route(app, route_info, MagicMock())
+        assert result["status"] == "integrated"
+        assert result.get("sse") is not True
+
+        registered = next(
+            r for r in app.router.routes if getattr(r, "path", "") == "/hello"
+        )
+        sig = inspect.signature(registered.endpoint)
+        assert "name" in sig.parameters
+        assert "greeter" not in sig.parameters
+
+        response = TestClient(app).get("/hello?name=world")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("application/json")
+        assert response.json() == {"name": "world", "dep": None}
+
+    def test_auto_stream_flags_are_false_after_rebuild(self):
+        """FastAPI >=0.136 caches is_json_stream/is_sse_stream from the
+        ORIGINAL async-generator endpoint. The wrapper is a coroutine, so a
+        correct rebuild recomputes both as False — otherwise FastAPI's
+        auto-JSONL path iterates our wrapper and the response comes back as
+        application/jsonl (the #1387 symptom).
+        """
+
+        async def chat(prompt: str) -> mesh.Stream[str]:
+            yield "a"
+
+        app = FastAPI()
+        app.post("/api/chat", response_model=None)(chat)
+
+        before = next(
+            r for r in app.router.routes if getattr(r, "path", "") == "/api/chat"
+        )
+        if not hasattr(before, "is_json_stream"):
+            pytest.skip("FastAPI too old for auto-streaming flags")
+        assert before.is_json_stream is True
+
+        step = RouteIntegrationStep()
+        step._integrate_single_route(
+            app, _build_route_info(chat, "/api/chat"), MagicMock()
+        )
+
+        after = next(
+            r for r in app.router.routes if getattr(r, "path", "") == "/api/chat"
+        )
+        assert after.is_json_stream is False
+        assert after.is_sse_stream is False
+
+
+class TestRouteRebuildFailureIsLoud:
+    """A failed rebuild must never be reported as a successful integration.
+
+    Before #1387 the rebuild ran under ``except Exception`` that logged a
+    warning and then ``return True`` — the route stayed live with FastAPI
+    dispatch state pointing at the unwrapped endpoint, so SSE silently
+    became JSON while the agent looked healthy.
+    """
+
+    @staticmethod
+    def _app_with_stream_route():
+        async def chat(prompt: str) -> mesh.Stream[str]:
+            yield "a"
+
+        app = FastAPI()
+        app.post("/api/chat", response_model=None)(chat)
+        return app, chat
+
+    def test_rebuild_failure_raises_instead_of_reporting_integrated(
+        self, monkeypatch
+    ):
+        app, chat = self._app_with_stream_route()
+
+        def _boom(route, wrapped_handler):
+            raise ImportError("cannot import name 'get_body_field'")
+
+        monkeypatch.setattr(
+            RouteIntegrationStep, "_rebuild_api_route", staticmethod(_boom)
+        )
+
+        step = RouteIntegrationStep()
+        with pytest.raises(RouteRebuildError) as exc:
+            step._integrate_single_route(
+                app, _build_route_info(chat, "/api/chat"), MagicMock()
+            )
+        assert "get_body_field" in str(exc.value)
+
+    def test_rebuild_failure_is_not_absorbed_into_error_count(self, monkeypatch):
+        """``_integrate_app_routes`` swallows ordinary per-route errors into
+        ``error_count``, which ``execute()`` discards. A rebuild failure must
+        punch through that instead."""
+        app, chat = self._app_with_stream_route()
+
+        def _boom(route, wrapped_handler):
+            raise RuntimeError("nope")
+
+        monkeypatch.setattr(
+            RouteIntegrationStep, "_rebuild_api_route", staticmethod(_boom)
+        )
+
+        step = RouteIntegrationStep()
+        with pytest.raises(RouteRebuildError):
+            step._integrate_app_routes(
+                {"instance": app, "title": "t"},
+                {"chat": _build_route_info(chat, "/api/chat")},
+            )
+
+    @pytest.mark.asyncio
+    async def test_rebuild_failure_fails_the_pipeline_step(self, monkeypatch):
+        """RouteIntegrationStep is required=True, so a FAILED result aborts
+        startup (startup_orchestrator raises on a failed pipeline) rather
+        than serving a route with a broken wire contract."""
+        from _mcp_mesh.pipeline.shared import PipelineStatus
+
+        app, chat = self._app_with_stream_route()
+
+        def _boom(route, wrapped_handler):
+            raise RuntimeError("nope")
+
+        monkeypatch.setattr(
+            RouteIntegrationStep, "_rebuild_api_route", staticmethod(_boom)
+        )
+
+        step = RouteIntegrationStep()
+        assert step.required is True
+        result = await step.execute(
+            {
+                "fastapi_apps": {"app1": {"instance": app, "title": "t"}},
+                "route_mapping": {
+                    "app1": {"chat": _build_route_info(chat, "/api/chat")}
+                },
+            }
+        )
+        assert result.status == PipelineStatus.FAILED
+        assert "Failed to rebuild route" in result.message
+
+    def test_non_apiroute_match_is_a_loud_failure(self):
+        """@mesh.route on a plain Starlette route can't have its dispatch
+        state rebuilt; that must surface rather than pretend to succeed."""
+        from starlette.routing import Route as StarletteRoute
+
+        async def chat(prompt: str) -> mesh.Stream[str]:
+            yield "a"
+
+        app = FastAPI()
+        plain = StarletteRoute("/api/chat", endpoint=chat, methods=["POST"])
+        app.router.routes.append(plain)
+
+        step = RouteIntegrationStep()
+        with pytest.raises(RouteRebuildError) as exc:
+            step._integrate_single_route(
+                app, _build_route_info(chat, "/api/chat"), MagicMock()
+            )
+        assert "APIRoute" in str(exc.value)
