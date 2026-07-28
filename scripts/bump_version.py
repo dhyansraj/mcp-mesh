@@ -19,9 +19,14 @@ Design:
     minor / scaffold-tag). A small number of edge cases that need bespoke
     logic (Helm Charts.yaml multi-pattern, Test Config multi-key, etc.)
     remain as functions and are invoked alongside the handlers.
+
+    Two guards run at the end and can fail the bump:
+      - coverage_guard   — did we MISS a mesh version? (false negatives)
+      - overmatch_guard  — did we rewrite something that ISN'T ours?
 """
 
 import argparse
+import difflib
 import os
 import re
 import subprocess
@@ -77,6 +82,58 @@ def format_version(version: str, version_format: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Change recording (feeds the post-bump over-match guard)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ChangedLine:
+    path: str  # repo-relative POSIX path
+    lineno: int  # 1-based line number in the post-bump content
+    text: str  # the line as it reads AFTER the replacement
+    source: str  # handler / bespoke-step label that rewrote it
+
+
+# Every line any handler rewrote, in application order.
+_CHANGE_LOG: list[ChangedLine] = []
+
+# Post-bump content (as a line list) of every file we touched. Kept in memory
+# so the over-match guard can inspect a changed line's neighbours even under
+# --dry-run, where nothing was written to disk.
+_FILE_SNAPSHOTS: dict[str, list[str]] = {}
+
+
+def reset_change_log() -> None:
+    """Clear the recorded changes. Call once at the start of a bump."""
+    _CHANGE_LOG.clear()
+    _FILE_SNAPSHOTS.clear()
+
+
+def record_changes(
+    filepath: Path, old_content: str, new_content: str, source: str
+) -> None:
+    """Record which individual lines a replacement rewrote.
+
+    The guard needs to know what we changed without shelling out to
+    `git diff`: the script must stay self-contained, work on a dirty tree,
+    and work under --dry-run, where the change exists only in memory.
+    """
+    try:
+        rel = filepath.relative_to(PROJECT_ROOT).as_posix()
+    except ValueError:
+        rel = str(filepath)
+    new_lines = new_content.splitlines()
+    _FILE_SNAPSHOTS[rel] = new_lines
+    matcher = difflib.SequenceMatcher(
+        a=old_content.splitlines(), b=new_lines, autojunk=False
+    )
+    for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
+        if tag in ("replace", "insert"):
+            for j in range(j1, j2):
+                _CHANGE_LOG.append(ChangedLine(rel, j + 1, new_lines[j], source))
+
+
+# ---------------------------------------------------------------------------
 # File replacement helpers
 # ---------------------------------------------------------------------------
 
@@ -87,6 +144,7 @@ def replace_in_file(
     replacement: str,
     dry_run: bool,
     flags: int = 0,
+    source: str = "",
 ) -> bool:
     """Apply a regex replacement in a file. Returns True if changes were made."""
     if not filepath.exists():
@@ -95,6 +153,7 @@ def replace_in_file(
     new_content = re.sub(pattern, replacement, content, flags=flags)
     if new_content == content:
         return False
+    record_changes(filepath, content, new_content, source or pattern)
     if not dry_run:
         filepath.write_text(new_content)
     return True
@@ -237,7 +296,14 @@ def run_handler(handler: Handler, old: str, new: str, dry_run: bool) -> list[str
 
     changed: list[str] = []
     for f in sorted(files):
-        if replace_in_file(f, pattern, replacement, dry_run, flags=handler.flags):
+        if replace_in_file(
+            f,
+            pattern,
+            replacement,
+            dry_run,
+            flags=handler.flags,
+            source=handler.name,
+        ):
             label = str(f.relative_to(PROJECT_ROOT))
             if handler.report_suffix:
                 label = f"{label} {handler.report_suffix}"
@@ -260,9 +326,14 @@ HANDLERS: list[Handler] = [
             "src/runtime/python/pyproject.toml",
             "src/runtime/core/pyproject.toml",
         ],
-        pattern=r'(version\s*=\s*")OLD(")',
+        # Start-of-line anchored: only the top-level `[project] version` key
+        # sits in column 0. Without the anchor this also matches suffixed keys
+        # (`target-version = "..."`) and any nested/inline-table `version = `
+        # belonging to a third-party pin.
+        pattern=r'(^version\s*=\s*")OLD(")',
         replacement=r"\g<1>NEW\2",
         version_format="pep440",
+        flags=re.MULTILINE,
     ),
     Handler(
         name="Python Packages (__init__.py __version__)",
@@ -270,9 +341,12 @@ HANDLERS: list[Handler] = [
             "src/runtime/python/_mcp_mesh/__init__.py",
             "src/runtime/python/mesh/__init__.py",
         ],
-        pattern=r'(__version__\s*=\s*")OLD(")',
+        # Start-of-line anchored: the module-level dunder, not a `__version__`
+        # read off some other package inside a function body.
+        pattern=r'(^__version__\s*=\s*")OLD(")',
         replacement=r"\g<1>NEW\2",
         version_format="pep440",
+        flags=re.MULTILINE,
     ),
     # --- Category 2: Python OUR dependencies ------------------------------
     Handler(
@@ -291,8 +365,13 @@ HANDLERS: list[Handler] = [
             "src/runtime/core/typescript/package.json",
             "npm/cli/package.json",
         ],
-        pattern=r'("version":\s*")OLD(")',
+        # Anchored to the top-level key (column 0 plus one indent level).
+        # Nested `"version"` keys — e.g. the `"scripts": { "version": "napi
+        # version" }` entry in src/runtime/core/typescript/package.json — are
+        # deeper and are not ours to rewrite.
+        pattern=r'(^ {0,2}"version":\s*")OLD(")',
         replacement=r"\g<1>NEW\2",
+        flags=re.MULTILINE,
     ),
     # --- Category 4: TypeScript Dependencies (@mcpmesh/*) -----------------
     Handler(
@@ -343,21 +422,33 @@ HANDLERS: list[Handler] = [
     Handler(
         name="Rust Cargo.toml",
         globs=["src/runtime/core/Cargo.toml"],
-        pattern=r'(version\s*=\s*")OLD(")',
+        # Start-of-line anchored: the `[package] version` key. Every crate we
+        # depend on declares its pin as an inline table
+        # (`pyo3 = { version = "0.27", ... }`), which the unanchored form
+        # would happily rewrite the day a crate's version collides with ours.
+        pattern=r'(^version\s*=\s*")OLD(")',
         replacement=r"\g<1>NEW\2",
+        flags=re.MULTILINE,
     ),
     # --- Category 9: Package Managers (Homebrew + Scoop) ------------------
     Handler(
         name="Package Managers (Homebrew)",
         globs=["packaging/homebrew/mcp-mesh.rb"],
-        pattern=r'(version\s+")OLD(")',
+        # Anchored to the formula-body indent. A Homebrew formula can carry
+        # `resource "..." do ... version "..." end` blocks for third-party
+        # dependencies; those nest deeper than the formula's own version.
+        pattern=r'(^  version\s+")OLD(")',
         replacement=r"\g<1>NEW\2",
+        flags=re.MULTILINE,
     ),
     Handler(
         name="Package Managers (Scoop)",
         globs=["packaging/scoop/mcp-mesh.json"],
-        pattern=r'("version":\s*")OLD(")',
+        # Anchored to the top-level key; a Scoop manifest's `architecture`
+        # and `checkver` blocks nest deeper.
+        pattern=r'(^ {0,2}"version":\s*")OLD(")',
         replacement=r"\g<1>NEW\2",
+        flags=re.MULTILINE,
     ),
     # --- Category 10: Go Handler Templates --------------------------------
     Handler(
@@ -373,10 +464,16 @@ HANDLERS: list[Handler] = [
         pattern=r'("@mcpmesh/sdk":\s*"\^)OLD(")',
         replacement=r"\g<1>NEW\2",
     ),
+    # The embedded pom.xml template also pins spring-boot-starter-parent, so a
+    # blind `<version>OLD</version>` here is the same trap that broke the 3.3.1
+    # Java publish (#1379). Anchored to the io.mcp-mesh coordinate.
     Handler(
         name="Go Handler Templates (java_handler.go <version>)",
         globs=["src/core/cli/handlers/java_handler.go"],
-        pattern=r"(<version>)OLD(</version>)",
+        pattern=(
+            r"(<groupId>io\.mcp-mesh</groupId>\s*"
+            r"<artifactId>[^<]+</artifactId>\s*<version>)OLD(</version>)"
+        ),
         replacement=r"\g<1>NEW\2",
     ),
     Handler(
@@ -401,6 +498,14 @@ HANDLERS: list[Handler] = [
     ),
     # --- Category 12: Documentation (markdown) ----------------------------
     # Three patterns: --version OLD, <version>OLD</version>, vOLD.
+    #
+    # All three are deliberately left unanchored — there is no mesh token on
+    # the same line to anchor to. `--version X` sits on its own backslash
+    # continuation line of a `helm upgrade ... mcp-mesh/<chart>` command;
+    # `<version>X</version>` is one line below the artifactId; `vX` is bare
+    # prose. Narrowing them to the same line would stop legitimate sites from
+    # updating. The over-match guard covers these instead: it reads the
+    # surrounding lines, so the mesh coordinate one line up still counts.
     Handler(
         name="Documentation (--version OLD)",
         globs=[
@@ -439,6 +544,10 @@ HANDLERS: list[Handler] = [
         version_format="pep440",
     ),
     # --- Category 15: CI/CD Workflows ------------------------------------
+    # Both are the `workflow_dispatch` version input (its default, and the
+    # example inside its description). A YAML input default carries no
+    # artifact name, so there is nothing to anchor to; both globs are single
+    # files and the sites are on the over-match allowlist.
     Handler(
         name="CI/CD Workflows (default: \"vOLD\")",
         globs=[
@@ -471,6 +580,9 @@ HANDLERS: list[Handler] = [
         replacement=r"\g<1>^NEW\2",
     ),
     # --- Category 17: Docker Example Helm Values --------------------------
+    # `--version X` again sits on a continuation line of a `helm upgrade`
+    # command whose chart ref is on the preceding line — left unanchored for
+    # the same reason as the documentation handler.
     Handler(
         name="Docker Example Helm Values",
         globs=["examples/docker-examples/agents/*/helm-values.yaml"],
@@ -617,15 +729,34 @@ def bump_helm_charts(old: str, new: str, dry_run: bool) -> list[str]:
         file_changed = False
         # version: OLD (top-level chart version, start of line)
         p1 = rf"(^version:\s*){re.escape(old)}$"
-        if replace_in_file(chart_yaml, p1, rf"\g<1>{new}", dry_run, flags=re.MULTILINE):
+        if replace_in_file(
+            chart_yaml,
+            p1,
+            rf"\g<1>{new}",
+            dry_run,
+            flags=re.MULTILINE,
+            source="Helm Charts (chart version)",
+        ):
             file_changed = True
         # appVersion: "OLD"
         p2 = rf'(appVersion:\s*"){re.escape(old)}(")'
-        if replace_in_file(chart_yaml, p2, rf"\g<1>{new}\2", dry_run):
+        if replace_in_file(
+            chart_yaml,
+            p2,
+            rf"\g<1>{new}\2",
+            dry_run,
+            source="Helm Charts (appVersion)",
+        ):
             file_changed = True
         # dependency version: "OLD" (indented, in dependencies section)
         p3 = rf'(    version:\s*"){re.escape(old)}(")'
-        if replace_in_file(chart_yaml, p3, rf"\g<1>{new}\2", dry_run):
+        if replace_in_file(
+            chart_yaml,
+            p3,
+            rf"\g<1>{new}\2",
+            dry_run,
+            source="Helm Charts (dependency version)",
+        ):
             file_changed = True
         if file_changed:
             changed.append(str(chart_yaml.relative_to(PROJECT_ROOT)))
@@ -635,7 +766,12 @@ def bump_helm_charts(old: str, new: str, dry_run: bool) -> list[str]:
     if chart_lock.exists():
         pattern = rf"(  version:\s*){re.escape(old)}$"
         if replace_in_file(
-            chart_lock, pattern, rf"\g<1>{new}", dry_run, flags=re.MULTILINE
+            chart_lock,
+            pattern,
+            rf"\g<1>{new}",
+            dry_run,
+            flags=re.MULTILINE,
+            source="Helm Charts (Chart.lock)",
         ):
             changed.append(str(chart_lock.relative_to(PROJECT_ROOT)))
 
@@ -654,7 +790,13 @@ def bump_helm_charts(old: str, new: str, dry_run: bool) -> list[str]:
             if values_yaml.exists():
                 pattern = rf'(tag:\s*"){re.escape(old_minor)}(")'
                 replacement = rf"\g<1>{new_minor}\2"
-                if replace_in_file(values_yaml, pattern, replacement, dry_run):
+                if replace_in_file(
+                    values_yaml,
+                    pattern,
+                    replacement,
+                    dry_run,
+                    source="Helm Charts (values.yaml image tag)",
+                ):
                     changed.append(str(values_yaml.relative_to(PROJECT_ROOT)))
 
     return changed
@@ -685,6 +827,7 @@ def bump_test_config(old: str, new: str, dry_run: bool) -> list[str]:
     new_content = re.sub(p, rf"\g<1>{new_pep440}\2", new_content)
 
     if new_content != content:
+        record_changes(f, content, new_content, "Test Config")
         if not dry_run:
             f.write_text(new_content)
         changed.append(str(f.relative_to(PROJECT_ROOT)))
@@ -706,6 +849,7 @@ def bump_test_documentation(old: str, new: str, dry_run: bool) -> list[str]:
         content = f.read_text()
         new_content = content.replace(old, new)
         if new_content != content:
+            record_changes(f, content, new_content, "Test Documentation")
             if not dry_run:
                 f.write_text(new_content)
             changed.append(str(f.relative_to(PROJECT_ROOT)))
@@ -815,6 +959,229 @@ def coverage_guard(old: str, new: str) -> tuple[bool, list[str]]:
 
 
 # ---------------------------------------------------------------------------
+# Post-bump over-match guard
+# ---------------------------------------------------------------------------
+#
+# `coverage_guard` answers "did we MISS a mesh version?" — false negatives.
+# This guard answers the opposite question, which is where both shipped
+# incidents came from: "did we rewrite something that isn't ours?"
+#
+#   - #1379 (v3.3.1): the Java POM handler's blind `<version>OLD</version>`
+#     bumped maven-jar-plugin 3.3.0 -> a nonexistent 3.3.1 and broke the Java
+#     publish after PyPI/npm/crates had already gone out.
+#   - #1388 (v0.9.1): `typer>=0.9.0` -> `>=0.9.1`, unnoticed for five years.
+#
+# The rule: every line we rewrote must be PROVABLY mcp-mesh-owned. Anchoring
+# individual patterns shrinks the surface; only this guard proves nothing
+# foreign changed — including for handlers added later.
+
+# A mesh identifier anywhere in the line or its immediate neighbourhood is
+# proof of ownership. Covers mcp-mesh, mcp_mesh, mcpmesh, "MCP Mesh" (docs
+# prose), io.mcp-mesh (Maven), @mcpmesh/ (npm) and tsuite-mesh (test images).
+_MESH_TOKEN = re.compile(r"mcp[-_ ]?mesh|tsuite[-_ ]?mesh", re.IGNORECASE)
+
+# How many lines either side of a changed line count as "immediate context".
+# Three is what makes an XML `<artifactId>…</artifactId>` / `<version>` pair
+# and a JSON `"name"` / `"version"` pair resolvable, without loosening the
+# guard enough to absorb an unrelated neighbouring block.
+_CONTEXT_RADIUS = 3
+
+# NOTE: "the file path names a mesh artifact" is deliberately NOT accepted as
+# proof. It would clear src/runtime/java/mcp-mesh-native/pom.xml wholesale —
+# the exact file #1379 damaged — and empirically it only clears lines the
+# allowlist below already covers with a stated reason.
+
+
+@dataclass(frozen=True)
+class Exemption:
+    """A (file glob, line pattern) pair allowed to change without carrying a
+    mesh identifier, plus why it cannot be proven any other way.
+
+    Entries are intentionally narrow — a blanket path allowlist would defeat
+    the guard. `pattern`, and the optional `context` (matched against the same
+    ±_CONTEXT_RADIUS window as the mesh-token check), may use `NEW` as a
+    placeholder for the new version in any of its projections.
+    """
+
+    glob: str
+    pattern: str
+    reason: str
+    context: str = ""
+
+
+# Seeded from a 3.3.1 -> 9.9.9 sentinel bump: 455 files / 660 changed lines
+# reduce to 25 lines that no rule can prove, every one of them legitimate.
+OVERMATCH_ALLOWLIST: list[Exemption] = [
+    Exemption(
+        glob=".github/workflows/*release.yml",
+        pattern=r'default:\s*"vNEW"',
+        reason=(
+            "workflow_dispatch version input default. A YAML input default is "
+            "a bare scalar — there is no artifact name on the line or near it "
+            "to anchor to, and adding one would change the input contract."
+        ),
+    ),
+    Exemption(
+        glob=".github/workflows/*release.yml",
+        pattern=r'description:\s*"[^"]*e\.g\.,?\s*vNEW',
+        reason="the example version inside that same input's description.",
+    ),
+    Exemption(
+        glob="docs/index.md",
+        pattern=r"\*\*Latest Release\*\*:\s*vNEW",
+        reason=(
+            "the release line on the docs landing page; the sentence names "
+            "the release, not an artifact."
+        ),
+    ),
+    Exemption(
+        glob="docs/concepts/stateful-agents.md",
+        pattern=r"\bvNEW\b",
+        reason=(
+            "narrative prose ('Since vX, lifespan and all tool bodies share "
+            "one loop') dating a runtime behavior change. The document is "
+            "about the mesh runtime, but these two sentences carry no "
+            "coordinate. Scoped to this one file so a bare vX anywhere else "
+            "in docs/ is still challenged."
+        ),
+    ),
+    Exemption(
+        glob="docs/java/getting-started/index.md",
+        pattern=r"<version>NEW</version>",
+        context=r"<artifactId>greeter-agent</artifactId>",
+        reason=(
+            "the tutorial project's OWN <version> (com.example:greeter-agent), "
+            "which our docs keep in step with the mesh release. Not a mesh "
+            "coordinate, so the context check pins it to the greeter-agent "
+            "artifactId — a third-party <version> in the same POM listing is "
+            "still challenged."
+        ),
+    ),
+    Exemption(
+        glob="src/core/cli/man/content/quickstart_java.md",
+        pattern=r"<version>NEW</version>",
+        context=r"<artifactId>greeter-agent</artifactId>",
+        reason="man-page copy of the same tutorial POM; see above.",
+    ),
+    Exemption(
+        glob="src/core/cli/man/content/deployment*.md",
+        pattern=r"your-registry/my-agent:vNEW",
+        reason=(
+            "a `docker buildx build -t your-registry/my-agent:vX` example. The "
+            "tag names the READER's registry and app; it carries our version "
+            "only because the walkthrough continues into a helm install of "
+            "the matching chart."
+        ),
+    ),
+    Exemption(
+        glob="src/runtime/python/mesh/__init__.py",
+        pattern=r'^__version__\s*=\s*"NEW"',
+        reason=(
+            "the mesh package's own __version__ constant. The distribution is "
+            "mcp-mesh but the import package is `mesh`, so neither the line "
+            "nor its neighbours spell the mesh name."
+        ),
+    ),
+    Exemption(
+        glob="src/runtime/python/_mcp_mesh/__init__.py",
+        pattern=r'^__version__\s*=\s*"NEW"',
+        reason=(
+            "same constant in the private runtime package; here the mesh "
+            "token is in the directory name only, which is not proof."
+        ),
+    ),
+    Exemption(
+        glob="tests/lib-tests/config.yaml",
+        pattern=r'^\s*(?:cli|core|sdk_python|sdk_typescript|sdk_java)_version:\s*"NEW"',
+        reason=(
+            "tsuite package-version block. The keys name each artifact by "
+            "role (cli/core/sdk_*) rather than by coordinate, and the block "
+            "is dense enough that no surrounding key names the mesh."
+        ),
+    ),
+    Exemption(
+        glob="tests/lib-tests/README.md",
+        pattern=r'^\s*(?:cli|core|sdk_python|sdk_typescript|sdk_java)_version:\s*"NEW"',
+        reason="the same block quoted verbatim in the suite README.",
+    ),
+    Exemption(
+        glob="tests/integration/suites/README.md",
+        pattern=r"`config\.packages\.[a-z_]*version`\s*\|\s*NEW\s*\|",
+        reason="the same keys again, as rows of a markdown reference table.",
+    ),
+]
+
+
+def _version_alternation(new: str) -> str:
+    """Regex alternation over every projection of the new version, so an
+    allowlist pattern can say `NEW` without caring whether the site carries
+    the raw, PEP 440 or minor form."""
+    forms = {new, to_pep440(new), to_minor(new)}
+    ordered = sorted(forms, key=len, reverse=True)
+    return "(?:" + "|".join(re.escape(f) for f in ordered) + ")"
+
+
+def _expand_new(pattern: str, new: str) -> str:
+    return pattern.replace("NEW", _version_alternation(new))
+
+
+def overmatch_guard(new: str) -> list[ChangedLine]:
+    """Return every recorded change that is not provably mcp-mesh-owned.
+
+    A change is proven when the rewritten line carries a mesh identifier, when
+    its immediate context does, or when an explicit `OVERMATCH_ALLOWLIST`
+    entry covers the (file, line) pair. Anything else is a suspect: either a
+    handler over-matched a third-party pin, or a new legitimate site needs an
+    allowlist entry that justifies itself.
+
+    Reads the in-memory change log rather than `git diff`, so it is correct on
+    a dirty tree and under --dry-run.
+    """
+    exemptions = [
+        (
+            _glob_to_regex(e.glob),
+            re.compile(_expand_new(e.pattern, new), re.MULTILINE),
+            re.compile(_expand_new(e.context, new)) if e.context else None,
+        )
+        for e in OVERMATCH_ALLOWLIST
+    ]
+
+    suspects: list[ChangedLine] = []
+    seen: set[tuple[str, int]] = set()
+    for change in _CHANGE_LOG:
+        key = (change.path, change.lineno)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        if _MESH_TOKEN.search(change.text):
+            continue
+
+        lines = _FILE_SNAPSHOTS.get(change.path, [])
+        lo = max(0, change.lineno - 1 - _CONTEXT_RADIUS)
+        hi = min(len(lines), change.lineno + _CONTEXT_RADIUS)
+        window = "\n".join(lines[lo:hi])
+        if _MESH_TOKEN.search(window):
+            continue
+
+        if any(
+            glob_re.match(change.path)
+            and line_re.search(change.text)
+            and (ctx_re is None or ctx_re.search(window))
+            for glob_re, line_re, ctx_re in exemptions
+        ):
+            continue
+
+        suspects.append(change)
+
+    return sorted(suspects, key=lambda c: (c.path, c.lineno))
+
+
+def changed_line_count() -> int:
+    return len({(c.path, c.lineno) for c in _CHANGE_LOG})
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -861,6 +1228,7 @@ def main() -> int:
 
     # Run handlers, grouping per handler name. Some handlers share categories
     # at the report level (e.g., several "Documentation" sub-handlers).
+    reset_change_log()
     categories: dict[str, list[str]] = {}
 
     for handler in HANDLERS:
@@ -915,8 +1283,46 @@ def main() -> int:
             "to refresh Cargo.lock with the new mcp-mesh-core version"
         )
 
-    # Final step: verify no mesh-shaped reference to the OLD version survived.
-    # Skipped on --dry-run (nothing was written, so every ref would "survive").
+    failed = False
+
+    # Over-match guard: every line we rewrote must be provably mesh-owned.
+    # Runs under --dry-run too — the change log is populated either way, so
+    # suspects surface before anything is written.
+    suspects = overmatch_guard(new)
+    print()
+    if suspects:
+        failed = True
+        print(
+            f"❌ Over-match guard: {len(suspects)} of {changed_line_count()} "
+            "changed line(s) are not provably mcp-mesh-owned:"
+        )
+        for s in suspects:
+            print(f"  {s.path}:{s.lineno}: {s.text.strip()}")
+            print(f"      rewritten by handler: {s.source}")
+        print(
+            "None of these carry an mcp-mesh identifier on the line or within "
+            f"{_CONTEXT_RADIUS} lines of it, and none are covered by "
+            "OVERMATCH_ALLOWLIST in scripts/bump_version.py."
+        )
+        print(
+            "Either a handler over-matched a third-party pin that happens to "
+            f"sit at {old} (anchor its pattern to a mesh coordinate), or the "
+            "site is legitimate (add a narrow OVERMATCH_ALLOWLIST entry "
+            "saying why it cannot be proven)."
+        )
+        if not dry_run:
+            print(
+                "Files have already been written — run 'git checkout -- .' "
+                "before retrying."
+            )
+    else:
+        print(
+            f"✅ Over-match guard: all {changed_line_count()} changed lines "
+            "are provably mcp-mesh-owned."
+        )
+
+    # Verify no mesh-shaped reference to the OLD version survived. Skipped on
+    # --dry-run (nothing was written, so every ref would "survive").
     if not dry_run:
         ran, survivors = coverage_guard(old, new)
         print()
@@ -928,6 +1334,7 @@ def main() -> int:
             )
             return 1
         if survivors:
+            failed = True
             print(
                 f"❌ Coverage guard: {len(survivors)} stale mesh-shaped "
                 f"reference(s) to {old} survived the bump:"
@@ -938,10 +1345,13 @@ def main() -> int:
                 "Add or broaden a handler in scripts/bump_version.py to cover "
                 "these, then re-run."
             )
-            return 1
-        print(f"✅ Coverage guard: no stale mesh-shaped references to {old} remain.")
+        else:
+            print(
+                f"✅ Coverage guard: no stale mesh-shaped references to {old} "
+                "remain."
+            )
 
-    return 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

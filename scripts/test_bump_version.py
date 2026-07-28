@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Lightweight checks for scripts/bump_version.py's coverage-guard regexes.
+"""Lightweight checks for scripts/bump_version.py's two guards.
 
 Run directly (`python scripts/test_bump_version.py`) or via pytest. These
 exercise `_guard_patterns` against representative lines so a future edit that
 breaks mesh-shaped detection (like the @mcpmesh package.json form that the
-first cut of the guard silently missed) fails loudly.
+first cut of the guard silently missed) fails loudly, and exercise
+`overmatch_guard` so the opposite direction — rewriting a third-party pin
+that happens to sit at our version — cannot regress either.
 """
 
 import importlib.util
 import pathlib
+import tempfile
 
 _spec = importlib.util.spec_from_file_location(
     "bump_version", pathlib.Path(__file__).with_name("bump_version.py")
@@ -54,6 +57,129 @@ def test_non_mesh_lines_ignored():
     assert not _matches(old, '        "node": ">=12.8.0"')      # engines range
     assert not _matches(old, 'version = "2.8.0"  # crate')      # third-party
     assert not _matches(old, "FROM mcpmesh/python-runtime:2.8.01")  # boundary
+
+
+def _guard_on(rel_path: str, before: str, after: str, new: str = "3.3.1"):
+    """Feed one file's before/after through the change recorder and return the
+    over-match guard's verdict for it."""
+    bv.reset_change_log()
+    bv.record_changes(bv.PROJECT_ROOT / rel_path, before, after, "test handler")
+    return bv.overmatch_guard(new)
+
+
+def test_overmatch_guard_flags_third_party_pin():
+    # The #1379 shape: a plugin pinned at the mesh version, no mesh token on
+    # the line or anywhere near it.
+    pom = """<build>
+    <plugins>
+        <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-jar-plugin</artifactId>
+            <version>{v}</version>
+        </plugin>
+    </plugins>
+</build>
+"""
+    suspects = _guard_on(
+        "src/runtime/java/mcp-mesh-native/pom.xml",
+        pom.format(v="3.3.0"),
+        pom.format(v="3.3.1"),
+    )
+    assert len(suspects) == 1, suspects
+    assert suspects[0].lineno == 6
+    assert "maven-jar-plugin" not in suspects[0].text  # it names the version line
+    assert suspects[0].text.strip() == "<version>3.3.1</version>"
+
+
+def test_overmatch_guard_clears_mesh_coordinate():
+    # Same shape, but the artifactId two lines up is ours -> proven by context.
+    pom = """<dependency>
+    <groupId>io.mcp-mesh</groupId>
+    <artifactId>mcp-mesh-spring-boot-starter</artifactId>
+    <version>{v}</version>
+</dependency>
+"""
+    assert not _guard_on(
+        "src/runtime/java/mcp-mesh-native/pom.xml",
+        pom.format(v="3.3.0"),
+        pom.format(v="3.3.1"),
+    )
+
+
+def test_overmatch_guard_clears_line_level_token():
+    assert not _guard_on(
+        "docs/index.md",
+        "docker pull mcpmesh/registry:3.3.0\n",
+        "docker pull mcpmesh/registry:3.3.1\n",
+    )
+    # Prose form: "MCP Mesh v3.3.1 adds ..." — the space-separated spelling
+    # counts, which is what keeps narrative docs out of the report.
+    assert not _guard_on(
+        "docs/concepts/architecture.md",
+        "MCP Mesh v3.3.0 adds a media pipeline\n",
+        "MCP Mesh v3.3.1 adds a media pipeline\n",
+    )
+
+
+def test_overmatch_guard_path_is_not_proof():
+    # A mesh-named path must NOT clear a foreign line: mcp-mesh-native/pom.xml
+    # is exactly the file #1379 damaged.
+    suspects = _guard_on(
+        "src/runtime/java/mcp-mesh-native/pom.xml",
+        "<version>3.3.0</version>\n",
+        "<version>3.3.1</version>\n",
+    )
+    assert len(suspects) == 1, suspects
+
+
+def test_overmatch_allowlist_entries_are_narrow():
+    # Every exemption must state a reason and must not be a bare path pass.
+    for e in bv.OVERMATCH_ALLOWLIST:
+        assert e.reason.strip(), e
+        assert e.pattern not in ("", ".*", "NEW"), e
+
+
+def test_anchored_patterns_skip_third_party_pins():
+    """The anchored handlers must leave an inline/nested third-party pin that
+    collides with our version alone, while still bumping our own field."""
+    cases = [
+        (
+            "Rust Cargo.toml",
+            "Cargo.toml",
+            '[package]\nversion = "3.3.1"\n\n[dependencies]\n'
+            'pyo3 = { version = "3.3.1" }\n',
+            '[package]\nversion = "3.4.0"\n\n[dependencies]\n'
+            'pyo3 = { version = "3.3.1" }\n',
+        ),
+        (
+            "Python Packages (pyproject.toml)",
+            "pyproject.toml",
+            '[project]\nversion = "3.3.1"\n\n[tool.black]\n'
+            'target-version = "3.3.1"\n',
+            '[project]\nversion = "3.4.0"\n\n[tool.black]\n'
+            'target-version = "3.3.1"\n',
+        ),
+        (
+            "TypeScript/Node.js Packages",
+            "package.json",
+            '{\n  "version": "3.3.1",\n  "scripts": {\n'
+            '    "version": "3.3.1"\n  }\n}\n',
+            '{\n  "version": "3.4.0",\n  "scripts": {\n'
+            '    "version": "3.3.1"\n  }\n}\n',
+        ),
+    ]
+    handlers = {h.name: h for h in bv.HANDLERS}
+    for name, filename, before, expected in cases:
+        handler = handlers[name]
+        pattern = handler.pattern.replace("OLD", "3\\.3\\.1")
+        replacement = handler.replacement.replace("NEW", "3.4.0")
+        with tempfile.TemporaryDirectory() as d:
+            f = pathlib.Path(d) / filename
+            f.write_text(before)
+            bv.reset_change_log()
+            bv.replace_in_file(f, pattern, replacement, dry_run=False,
+                               flags=handler.flags)
+            assert f.read_text() == expected, f"{name}: got\n{f.read_text()}"
 
 
 if __name__ == "__main__":
