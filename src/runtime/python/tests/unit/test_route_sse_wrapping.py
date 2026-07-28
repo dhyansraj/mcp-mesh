@@ -870,6 +870,89 @@ class TestRouteRebuildIsVersionIndependent:
         assert after.is_json_stream is False
         assert after.is_sse_stream is False
 
+    def test_no_constructor_params_are_skipped_on_installed_fastapi(self, caplog):
+        """Every APIRoute.__init__ parameter round-trips off the route today.
+
+        The rebuild can only carry over a constructor parameter that the
+        route also exposes as a same-named attribute. On the installed
+        FastAPI all of them do, so nothing is skipped and the debug line
+        never fires.
+        """
+        import logging
+
+        async def handler(prompt: str) -> dict:
+            return {"prompt": prompt}
+
+        app = FastAPI()
+        app.post("/api/plain")(handler)
+        route = next(
+            r for r in app.router.routes if getattr(r, "path", "") == "/api/plain"
+        )
+
+        with caplog.at_level(
+            logging.DEBUG, logger="_mcp_mesh.pipeline.api_startup.route_integration"
+        ):
+            RouteIntegrationStep._rebuild_api_route(route, handler)
+
+        assert not [m for m in caplog.messages if "not readable" in m]
+
+    def test_unreadable_constructor_param_is_logged(self, caplog, monkeypatch):
+        """A future FastAPI option with no matching attribute must be visible.
+
+        Such a parameter cannot be round-tripped, so the rebuilt route falls
+        back to the FastAPI default for it. That is the silent-degradation
+        class #1387/#1389 exists to eliminate, so it is logged (debug —
+        informational, and unreachable on today's FastAPI) rather than
+        dropped without a trace.
+        """
+        import logging
+
+        from fastapi.routing import APIRoute
+
+        import _mcp_mesh.pipeline.api_startup.route_integration as mod
+
+        real_signature = inspect.signature
+        patched = real_signature(APIRoute.__init__)
+        patched = patched.replace(
+            parameters=[
+                *patched.parameters.values(),
+                inspect.Parameter(
+                    "future_fastapi_option",
+                    inspect.Parameter.KEYWORD_ONLY,
+                    default=None,
+                ),
+            ]
+        )
+
+        def fake_signature(obj, *args, **kwargs):
+            if obj is APIRoute.__init__:
+                return patched
+            return real_signature(obj, *args, **kwargs)
+
+        monkeypatch.setattr(mod.inspect, "signature", fake_signature)
+
+        async def handler(prompt: str) -> dict:
+            return {"prompt": prompt}
+
+        app = FastAPI()
+        app.post("/api/plain")(handler)
+        route = next(
+            r for r in app.router.routes if getattr(r, "path", "") == "/api/plain"
+        )
+
+        with caplog.at_level(
+            logging.DEBUG, logger="_mcp_mesh.pipeline.api_startup.route_integration"
+        ):
+            # Still built, with the parameter simply left at its default.
+            rebuilt = RouteIntegrationStep._rebuild_api_route(route, handler)
+
+        assert rebuilt.path == "/api/plain"
+        skipped = [m for m in caplog.messages if "not readable" in m]
+        assert len(skipped) == 1
+        assert "future_fastapi_option" in skipped[0]
+        assert "/api/plain" in skipped[0]
+        assert "POST" in skipped[0]
+
 
 class TestRouteRebuildFailureIsLoud:
     """A failed rebuild must never be reported as a successful integration.

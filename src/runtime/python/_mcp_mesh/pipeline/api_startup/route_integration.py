@@ -799,4 +799,18 @@ class RouteIntegrationStep(PipelineStep):
         kwargs = {
             name: getattr(route, name) for name in init_params if hasattr(route, name)
         }
+        # Anything the constructor accepts but the route doesn't mirror as an
+        # attribute can't be round-tripped, so it falls back to the FastAPI
+        # default on the rebuilt route. That never happens on today's FastAPI
+        # (all parameters round-trip); log it so a future release that breaks
+        # the symmetry is visible instead of silently degrading.
+        skipped = [name for name in init_params if name not in kwargs]
+        if skipped:
+            logger.debug(
+                "Route rebuild for '%s' %s: APIRoute parameter(s) %s not readable "
+                "off the existing route, falling back to FastAPI defaults",
+                route.path,
+                sorted(getattr(route, "methods", None) or []),
+                ", ".join(skipped),
+            )
         return APIRoute(path=route.path, endpoint=wrapped_handler, **kwargs)
