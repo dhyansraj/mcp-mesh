@@ -108,6 +108,14 @@ class JobsCancelRouteStep(PipelineStep):
             )
 
             # Defensive: skip duplicate registration on hot-reload.
+            #
+            # Deliberately scans only the app's own list — not the
+            # include_router() mounts that issue #1396 made invisible here.
+            # This guard asks "did THIS step already insert its route", and
+            # that insertion is always a top-level ``routes[0]``, so the
+            # top-level list is the exact answer. Widening it to every served
+            # path would turn it into a user-collision check with no good
+            # outcome: skipping leaves MeshJob cancellation silently dead.
             existing_paths = {
                 getattr(r, "path", None) for r in app.router.routes
             }

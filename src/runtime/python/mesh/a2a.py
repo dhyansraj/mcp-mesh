@@ -1467,11 +1467,23 @@ def mount(
         # collision would let a hostile/typo'd route own ``card_path`` /
         # ``rpc_path`` while heartbeat still advertises the surface for
         # this agent — clients would then call the wrong handler.
+        #
+        # The scan covers include_router() mounts too (issue #1396): those
+        # stopped being flattened into ``app.router.routes`` in FastAPI 0.139,
+        # so a top-level-only scan was blind to exactly the foreign route this
+        # guard exists to catch, and ``add_api_route`` below would have added
+        # a second registration for the same path.
+        from _mcp_mesh.shared.fastapi_routes import iter_app_routes
+
         existing_endpoints: dict = {}
         for r in app.router.routes:
+            # Keeps non-route entries that still claim a path (Mount/Host),
+            # which iter_app_routes deliberately does not yield.
             r_path = getattr(r, "path", None)
             if r_path is not None:
                 existing_endpoints[r_path] = getattr(r, "endpoint", None)
+        for ref in iter_app_routes(app):
+            existing_endpoints[ref.path] = ref.endpoint
 
         card_endpoint = _make_card_endpoint(
             metadata=metadata,

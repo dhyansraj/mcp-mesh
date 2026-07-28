@@ -16,6 +16,7 @@ to the registry.
 import logging
 from typing import Any
 
+from ...shared.fastapi_routes import iter_app_routes
 from ...shared.server_discovery import ServerDiscoveryUtil
 from ..shared import PipelineResult, PipelineStatus, PipelineStep
 
@@ -90,9 +91,14 @@ class A2AFastAPIDiscoveryStep(PipelineStep):
                 app = app_info.get("instance")
                 if app is None:
                     continue
-                app_route_paths = {
-                    getattr(r, "path", None) for r in app.router.routes
-                }
+                # Walk everything the app serves, not just its top-level
+                # list: routes mounted with include_router() are no longer
+                # flattened into it (issue #1396). ``mesh.a2a.mount()``
+                # registers its surfaces top-level, so this filter is not
+                # broken today — but it is a "does this app host the surface"
+                # question, and answering it off a partial view is how the
+                # multi-app mystery this filter exists to prevent comes back.
+                app_route_paths = {ref.path for ref in iter_app_routes(app)}
                 if app_route_paths & wanted_paths:
                     filtered_apps[app_id] = app_info
 

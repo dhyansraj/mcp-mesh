@@ -686,74 +686,95 @@ class RouteIntegrationStep(PipelineStep):
             the caller reports the route as not integrated.
 
         Raises:
-            RouteRebuildError: The route was found but could not be rebuilt.
-                Never reported as success: the route is live and its dispatch
-                state would contradict the installed handler (issue #1387).
+            RouteRebuildError: The route was found but could not be rebuilt,
+                or the rebuild did not take effect. Never reported as
+                success: the route is live and its dispatch state would
+                contradict the installed handler (issue #1387).
         """
         from fastapi.routing import APIRoute
 
+        from ...shared.fastapi_routes import invalidate_route_caches, iter_app_routes
+
         try:
-            # Find the matching route in FastAPI's router.
+            # Find the matching route among everything the app serves.
             #
-            # ``app.routes`` IS ``app.router.routes`` (same list object), and
-            # Starlette resolves requests by walking that list per request —
-            # no route is cached by identity anywhere, and nothing in
-            # _mcp_mesh holds a route object (only ``route.endpoint``
-            # functions and path/method strings). So substituting a rebuilt
-            # route in place is equivalent to mutating the existing one.
-            for index, route in enumerate(app.router.routes):
-                if (
-                    hasattr(route, "endpoint")
-                    and hasattr(route, "path")
-                    and hasattr(route, "methods")
-                ):
+            # ``iter_app_routes`` also reaches routes mounted with
+            # ``include_router()``, which stopped being flattened into
+            # ``app.router.routes`` in FastAPI 0.139 (issue #1396). It reports
+            # each route's EFFECTIVE path, matching what discovery recorded in
+            # ``route_info["path"]``, and the mutable list that owns it.
+            for ref in iter_app_routes(app):
+                if ref.path != path or ref.endpoint is not original_handler:
+                    continue
 
-                    # Match by path and endpoint function
-                    if route.path == path and route.endpoint is original_handler:
+                route = ref.route
+                if not isinstance(route, APIRoute):
+                    raise RouteRebuildError(
+                        f"Route {methods} {path} is a "
+                        f"{type(route).__name__}, not a FastAPI "
+                        f"APIRoute; @mesh.route handlers must be "
+                        f"registered through FastAPI's decorators "
+                        f"(@app.post/@app.get/...) so their dispatch "
+                        f"state can be rebuilt after wrapping"
+                    )
 
-                        if not isinstance(route, APIRoute):
-                            raise RouteRebuildError(
-                                f"Route {methods} {path} is a "
-                                f"{type(route).__name__}, not a FastAPI "
-                                f"APIRoute; @mesh.route handlers must be "
-                                f"registered through FastAPI's decorators "
-                                f"(@app.post/@app.get/...) so their dispatch "
-                                f"state can be rebuilt after wrapping"
-                            )
+                if ref.container is None or ref.index is None:
+                    raise RouteRebuildError(
+                        f"Route {methods} {path} is served through an "
+                        f"include_router() mount, but the router list that "
+                        f"owns it could not be located, so its dispatch "
+                        f"state cannot be rebuilt after wrapping"
+                    )
 
-                        # FastAPI dispatches via a per-route ASGI handler
-                        # closure (route.app) built from state APIRoute.__init__
-                        # derives from the endpoint: the Dependant, the
-                        # flattened dependant, the embed-body-fields decision,
-                        # the body field model, the response field, and (since
-                        # 0.136) the is_json_stream / is_sse_stream
-                        # auto-streaming flags. Assigning route.endpoint alone
-                        # leaves ALL of that pointing at the original function.
-                        #
-                        # Critical for SSE wrapping, where the wrapper returns
-                        # a StreamingResponse: without a rebuild FastAPI keeps
-                        # calling the original async-generator function and
-                        # JSON-encodes (or JSONL-streams) the result, so the
-                        # response comes back as application/jsonl instead of
-                        # text/event-stream. Harmless-but-correct for plain DI
-                        # wrapping, where the closure already targeted the
-                        # wrapper.
-                        #
-                        # Rather than hand-recomputing that state through
-                        # private FastAPI internals — which is how the 0.140.5
-                        # rename of ``get_body_field`` broke SSE silently
-                        # (issues #1387/#1389) — construct a fresh APIRoute
-                        # around the wrapper and let FastAPI derive everything
-                        # itself. Every APIRoute.__init__ parameter is
-                        # round-trippable off the existing route, so the new
-                        # route carries the user's original registration
-                        # options (response_model, status_code, tags,
-                        # dependencies, response_class, name/unique_id, ...)
-                        # unchanged.
-                        new_route = self._rebuild_api_route(route, wrapped_handler)
-                        app.router.routes[index] = new_route
+                # FastAPI dispatches from state APIRoute.__init__ derives
+                # from the endpoint: the Dependant, the flattened dependant,
+                # the embed-body-fields decision, the body field model, the
+                # response field, and (since 0.136) the is_json_stream /
+                # is_sse_stream auto-streaming flags. Assigning
+                # route.endpoint alone leaves ALL of that pointing at the
+                # original function.
+                #
+                # Critical for SSE wrapping, where the wrapper returns a
+                # StreamingResponse: without a rebuild FastAPI keeps calling
+                # the original async-generator function and JSON-encodes (or
+                # JSONL-streams) the result, so the response comes back as
+                # application/jsonl instead of text/event-stream.
+                # Harmless-but-correct for plain DI wrapping, where the
+                # dispatch state already targeted the wrapper.
+                #
+                # Rather than hand-recomputing that state through private
+                # FastAPI internals — which is how the 0.140.5 rename of
+                # ``get_body_field`` broke SSE silently (issues
+                # #1387/#1389) — construct a fresh APIRoute around the
+                # wrapper and let FastAPI derive everything itself. Every
+                # APIRoute.__init__ parameter is round-trippable off the
+                # existing route, so the new route carries the user's
+                # original registration options (response_model,
+                # status_code, tags, dependencies, response_class,
+                # name/unique_id, ...) unchanged.
+                new_route = self._rebuild_api_route(route, wrapped_handler)
+                ref.container[ref.index] = new_route
 
-                        return True
+                # Substitution is invisible to the version counter that
+                # include_router() entries cache their effective routes on,
+                # so tell FastAPI its lists changed. (Top-level routes need
+                # no such notice — Starlette re-walks that list per request —
+                # but the call is cheap and keeps one code path.)
+                invalidate_route_caches(app)
+
+                if not any(r.route is new_route for r in iter_app_routes(app)):
+                    # FastAPI still resolves this path to the pre-rebuild
+                    # route: the swap is live in the router's list but its
+                    # dispatch state was not recomputed, which is precisely
+                    # the silent-degradation shape of #1387.
+                    raise RouteRebuildError(
+                        f"Rebuilt route {methods} {path} did not take effect: "
+                        f"FastAPI still resolves this path to the "
+                        f"pre-rebuild route, so the wrapped handler would "
+                        f"not be dispatched"
+                    )
+
+                return True
 
             # If we get here, we didn't find the route
             self.logger.warning(
