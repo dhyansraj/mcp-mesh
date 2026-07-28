@@ -14,6 +14,23 @@ from ..shared import PipelineResult, PipelineStatus, PipelineStep
 logger = logging.getLogger(__name__)
 
 
+class RouteRebuildError(RuntimeError):
+    """Raised when a route's FastAPI state could not be rebuilt after wrapping.
+
+    A rebuild failure means the route is still REGISTERED AND SERVING, but
+    FastAPI's cached dispatch state (dependant, body field, per-route ASGI
+    handler) no longer matches the handler mesh installed. For an SSE route
+    that surfaces as ``application/jsonl`` instead of ``text/event-stream``
+    — a broken wire contract on a route that looks healthy.
+
+    This is deliberately fatal (issue #1387): the previous code logged a
+    warning and reported success, which is how FastAPI 0.140.5's rename of
+    ``get_body_field`` shipped as a silent SSE degradation. Route
+    integration is a ``required=True`` pipeline step, so raising here fails
+    the pipeline and aborts startup rather than serving a wrong response.
+    """
+
+
 _SSE_HEADERS = {
     "Cache-Control": "no-cache",
     "X-Accel-Buffering": "no",
@@ -412,6 +429,15 @@ class RouteIntegrationStep(PipelineStep):
                 else:
                     integration_results["error_count"] += 1
 
+            except RouteRebuildError:
+                # Do NOT absorb into error_count like other per-route
+                # failures. A rebuild failure leaves a live route whose
+                # FastAPI dispatch state contradicts the handler mesh
+                # installed (e.g. an SSE route answering application/jsonl).
+                # Let it reach execute(), which fails this required step so
+                # startup aborts instead of serving a broken contract
+                # (issue #1387).
+                raise
             except Exception as e:
                 self.logger.error(f"❌ Failed to integrate route '{route_name}': {e}")
                 integration_results["error_count"] += 1
@@ -642,6 +668,11 @@ class RouteIntegrationStep(PipelineStep):
         """
         Replace the route handler in FastAPI's router.
 
+        The matched route is swapped for a freshly-constructed ``APIRoute``
+        carrying the wrapped endpoint, so FastAPI recomputes its own cached
+        dispatch state instead of mesh hand-patching it through private
+        internals.
+
         Args:
             app: FastAPI application instance
             path: Route path to find
@@ -650,11 +681,27 @@ class RouteIntegrationStep(PipelineStep):
             wrapped_handler: New wrapped handler function
 
         Returns:
-            True if replacement was successful, False otherwise
+            True if the route was found and rebuilt. False only when no
+            matching route exists — nothing was modified in that case, so
+            the caller reports the route as not integrated.
+
+        Raises:
+            RouteRebuildError: The route was found but could not be rebuilt.
+                Never reported as success: the route is live and its dispatch
+                state would contradict the installed handler (issue #1387).
         """
+        from fastapi.routing import APIRoute
+
         try:
-            # Find the matching route in FastAPI's router
-            for route in app.router.routes:
+            # Find the matching route in FastAPI's router.
+            #
+            # ``app.routes`` IS ``app.router.routes`` (same list object), and
+            # Starlette resolves requests by walking that list per request —
+            # no route is cached by identity anywhere, and nothing in
+            # _mcp_mesh holds a route object (only ``route.endpoint``
+            # functions and path/method strings). So substituting a rebuilt
+            # route in place is equivalent to mutating the existing one.
+            for index, route in enumerate(app.router.routes):
                 if (
                     hasattr(route, "endpoint")
                     and hasattr(route, "path")
@@ -664,80 +711,47 @@ class RouteIntegrationStep(PipelineStep):
                     # Match by path and endpoint function
                     if route.path == path and route.endpoint is original_handler:
 
-                        # Replace the endpoint with our wrapped version
-                        route.endpoint = wrapped_handler
+                        if not isinstance(route, APIRoute):
+                            raise RouteRebuildError(
+                                f"Route {methods} {path} is a "
+                                f"{type(route).__name__}, not a FastAPI "
+                                f"APIRoute; @mesh.route handlers must be "
+                                f"registered through FastAPI's decorators "
+                                f"(@app.post/@app.get/...) so their dispatch "
+                                f"state can be rebuilt after wrapping"
+                            )
 
-                        # FastAPI dispatches via a per-route ASGI handler closure
-                        # (route.app) that captured the original Dependant and
-                        # response_field at registration time. Updating
-                        # route.endpoint alone is not enough — we must rebuild
-                        # the dependant AND the request_response closure so
-                        # invocation actually targets the wrapper. Critical for
-                        # SSE wrapping where the wrapper returns a
-                        # StreamingResponse; without rebuild, FastAPI keeps
-                        # calling the original async-generator function and tries
-                        # to JSON-encode the result. Harmless for plain DI
-                        # wrapping where the closure already targeted the wrapper.
-                        try:
-                            from fastapi.dependencies.utils import (
-                                _should_embed_body_fields,
-                                get_body_field,
-                                get_dependant,
-                                get_flat_dependant,
-                            )
-                            from fastapi.routing import request_response
-
-                            route.dependant = get_dependant(
-                                path=route.path_format, call=wrapped_handler
-                            )
-                            # APIRoute.__init__ caches a flattened dependant,
-                            # the embed-body-fields decision, and the body
-                            # field model based on the original endpoint.
-                            # When the original endpoint mixed a Pydantic
-                            # body model with framework-only params (e.g.
-                            # McpMeshTool, FastMCP Context), FastAPI baked
-                            # in embed-mode body parsing — request parser
-                            # then expects ``{"body": {...}}`` envelopes.
-                            # Since the SSE wrapper now exposes ONLY the
-                            # user-facing params, refresh the cached
-                            # decision from the rebuilt dependant. Issue
-                            # #645 bug 5.
-                            route._flat_dependant = get_flat_dependant(
-                                route.dependant
-                            )
-                            route._embed_body_fields = _should_embed_body_fields(
-                                route._flat_dependant.body_params
-                            )
-                            try:
-                                route.body_field = get_body_field(
-                                    flat_dependant=route._flat_dependant,
-                                    name=route.unique_id,
-                                    embed_body_fields=route._embed_body_fields,
-                                )
-                            except TypeError:
-                                # Older FastAPI signature without embed_body_fields kwarg
-                                route.body_field = get_body_field(
-                                    dependant=route._flat_dependant,
-                                    name=route.unique_id,
-                                )
-                            # FastAPI >=0.136 added auto JSONL/SSE streaming for
-                            # generator endpoints. APIRoute.__init__ caches
-                            # is_json_stream and is_sse_stream based on the
-                            # ORIGINAL endpoint's is_async_gen_callable. Our
-                            # wrapped_handler is always a coroutine returning
-                            # StreamingResponse, so those flags must be False —
-                            # otherwise FastAPI's auto-streaming path tries to
-                            # iterate our wrapper and fails with "'coroutine'
-                            # object is not iterable". Older FastAPI versions
-                            # don't have these attributes; setattr is safe.
-                            for attr in ("is_json_stream", "is_sse_stream"):
-                                if hasattr(route, attr):
-                                    setattr(route, attr, False)
-                            route.app = request_response(route.get_route_handler())
-                        except Exception as e:
-                            self.logger.warning(
-                                f"Failed to rebuild route handler for {path}: {e}"
-                            )
+                        # FastAPI dispatches via a per-route ASGI handler
+                        # closure (route.app) built from state APIRoute.__init__
+                        # derives from the endpoint: the Dependant, the
+                        # flattened dependant, the embed-body-fields decision,
+                        # the body field model, the response field, and (since
+                        # 0.136) the is_json_stream / is_sse_stream
+                        # auto-streaming flags. Assigning route.endpoint alone
+                        # leaves ALL of that pointing at the original function.
+                        #
+                        # Critical for SSE wrapping, where the wrapper returns
+                        # a StreamingResponse: without a rebuild FastAPI keeps
+                        # calling the original async-generator function and
+                        # JSON-encodes (or JSONL-streams) the result, so the
+                        # response comes back as application/jsonl instead of
+                        # text/event-stream. Harmless-but-correct for plain DI
+                        # wrapping, where the closure already targeted the
+                        # wrapper.
+                        #
+                        # Rather than hand-recomputing that state through
+                        # private FastAPI internals — which is how the 0.140.5
+                        # rename of ``get_body_field`` broke SSE silently
+                        # (issues #1387/#1389) — construct a fresh APIRoute
+                        # around the wrapper and let FastAPI derive everything
+                        # itself. Every APIRoute.__init__ parameter is
+                        # round-trippable off the existing route, so the new
+                        # route carries the user's original registration
+                        # options (response_model, status_code, tags,
+                        # dependencies, response_class, name/unique_id, ...)
+                        # unchanged.
+                        new_route = self._rebuild_api_route(route, wrapped_handler)
+                        app.router.routes[index] = new_route
 
                         return True
 
@@ -747,6 +761,56 @@ class RouteIntegrationStep(PipelineStep):
             )
             return False
 
+        except RouteRebuildError:
+            raise
         except Exception as e:
-            self.logger.error(f"❌ Error replacing route handler: {e}")
-            return False
+            raise RouteRebuildError(
+                f"Failed to rebuild route {methods} {path} after wrapping: {e}"
+            ) from e
+
+    @staticmethod
+    def _rebuild_api_route(route, wrapped_handler):
+        """Build a fresh ``APIRoute`` for ``wrapped_handler`` from ``route``.
+
+        Reads every ``APIRoute.__init__`` parameter back off the existing
+        route and re-runs the constructor with the wrapped endpoint. The
+        parameter list is read from the signature at call time, so a FastAPI
+        release that adds a registration option is carried over automatically
+        instead of being silently dropped.
+
+        This is what makes the rebuild version-independent: FastAPI computes
+        the dependant, body field, embed-body-fields decision and the
+        auto-streaming flags itself, using whatever private helpers the
+        installed version happens to have. In particular ``is_json_stream`` /
+        ``is_sse_stream`` come out False on their own, because the wrapper is
+        a coroutine rather than an async generator.
+        """
+        from fastapi.routing import APIRoute
+
+        init_params = [
+            name
+            for name, param in inspect.signature(
+                APIRoute.__init__
+            ).parameters.items()
+            if name not in ("self", "path", "endpoint")
+            and param.kind
+            in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY)
+        ]
+        kwargs = {
+            name: getattr(route, name) for name in init_params if hasattr(route, name)
+        }
+        # Anything the constructor accepts but the route doesn't mirror as an
+        # attribute can't be round-tripped, so it falls back to the FastAPI
+        # default on the rebuilt route. That never happens on today's FastAPI
+        # (all parameters round-trip); log it so a future release that breaks
+        # the symmetry is visible instead of silently degrading.
+        skipped = [name for name in init_params if name not in kwargs]
+        if skipped:
+            logger.debug(
+                "Route rebuild for '%s' %s: APIRoute parameter(s) %s not readable "
+                "off the existing route, falling back to FastAPI defaults",
+                route.path,
+                sorted(getattr(route, "methods", None) or []),
+                ", ".join(skipped),
+            )
+        return APIRoute(path=route.path, endpoint=wrapped_handler, **kwargs)

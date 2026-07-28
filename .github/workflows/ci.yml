@@ -282,6 +282,25 @@ jobs:
           name: codecov-${{ matrix.test-group }}
           fail_ci_if_error: false
 
+      # Issue #1387/#1389: @mesh.route route integration is the one place mesh
+      # rebuilds FastAPI's cached route state, so it is the one place a FastAPI
+      # release can break us. Testing a single resolved FastAPI is how 0.140.5
+      # shipped as a silent SSE-to-JSON degradation. The run above uses whatever
+      # pip resolves (latest); re-run the route-integration tests against an
+      # older FastAPI so both ends of the supported range are covered.
+      # Runs last so it cannot perturb coverage/test-result artifacts.
+      - name: Route integration tests against older FastAPI
+        if: matrix.test-group == 'unit' && matrix.python-version == '3.11'
+        env:
+          MCP_MESH_AUTO_RUN: false
+        run: |
+          python -c "import fastapi; print('resolved fastapi:', fastapi.__version__)"
+          pip install "fastapi==0.136.1"
+          python -c "import fastapi; print('pinned fastapi:', fastapi.__version__)"
+          pytest tests/unit/test_route_sse_wrapping.py \
+            tests/unit/test_sse_strips_mcp_mesh_tool_params.py \
+            tests/unit/test_stream_settle.py -q
+
   security-scan:
     name: Security Scanning
     runs-on: ubuntu-latest
