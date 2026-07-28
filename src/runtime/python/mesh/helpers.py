@@ -2512,6 +2512,14 @@ def _infer_big3_vendor_from_bare_name(model: str) -> str | None:
     returns ``None`` so the caller keeps the existing GenericHandler/LiteLLM
     tail behavior.
 
+    !! CROSS-LANGUAGE DUPLICATE (issue #1383) !!
+    ``meshctl scaffold`` re-implements these prefix rules in Go so it can
+    decide whether a generated ``requirements.txt`` needs the optional
+    ``mcp-mesh[litellm]`` pin — see ``inferBig3VendorFromBareName`` in
+    ``src/core/cli/scaffold/model_dispatch.go``. Adding or removing a vendor
+    here must be mirrored there, or scaffolded agents will install the wrong
+    set.
+
     Args:
         model: A model identifier (bare or prefixed).
 

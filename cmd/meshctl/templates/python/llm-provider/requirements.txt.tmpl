@@ -1,3 +1,12 @@
 # {{ .Name }} dependencies
 # Add your third-party dependencies here
 # Note: mcp-mesh is provided by the runtime environment (local venv or Docker base image)
+{{- if .RequiresLiteLLM }}
+
+# LiteLLM provider path (model: {{ .Model }}).
+# mcp-mesh bundles native SDK adapters for Anthropic, OpenAI and Gemini only;
+# every other vendor dispatches through LiteLLM. LiteLLM ships in the base
+# mcp-mesh install today, so this line currently changes nothing. It is
+# declared so this agent keeps working when LiteLLM becomes an opt-in extra.
+mcp-mesh[litellm]==3.3.1
+{{- end }}

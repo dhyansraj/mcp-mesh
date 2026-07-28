@@ -278,6 +278,11 @@ func TemplateDataFromContext(ctx *ScaffoldContext) map[string]interface{} {
 		// LLM-provider specific
 		"Model": ctx.Model,
 
+		// True when the selected model takes the LiteLLM long-tail path
+		// rather than a bundled native SDK adapter, i.e. when the generated
+		// requirements.txt must pin mcp-mesh[litellm] (issue #1383).
+		"RequiresLiteLLM": RequiresLiteLLM(ctx.Model),
+
 		// Tool fields
 		"ToolName":        ctx.ToolName,
 		"ToolDescription": ctx.ToolDescription,

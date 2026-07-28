@@ -500,6 +500,18 @@ HANDLERS: list[Handler] = [
         pattern=r'("@mcpmesh/sdk":\s*"\^)OLD(")',
         replacement=r"\g<1>NEW\2",
     ),
+    # The generated requirements.txt pins the optional LiteLLM extra for
+    # long-tail models (#1383). The version literal lives in the template — the
+    # same mechanism Dockerfile.tmpl uses one directory over — so both files in
+    # a scaffolded agent are bumped from here and can never disagree about
+    # which mesh version the image and its pip layer target.
+    Handler(
+        name="Scaffold Templates (Python requirements.txt.tmpl litellm extra)",
+        globs=["cmd/meshctl/templates/python/*/requirements.txt.tmpl"],
+        pattern=r"(mcp-mesh\[litellm\]==)OLD",
+        replacement=r"\g<1>NEW",
+        version_format="pep440",
+    ),
     # --- Category 12: Documentation (markdown) ----------------------------
     # Three patterns: --version OLD, <version>OLD</version>, vOLD.
     #
@@ -926,7 +938,10 @@ def _guard_patterns(old: str, new: str | None = None) -> list[re.Pattern]:
     boundary = r"(?![\d.\-+])"
     patterns = [
         re.compile(img + o + boundary),
-        re.compile(r"mcp-mesh(?:>=|==)" + op),
+        # Optional `[extras]` between the name and the specifier: a pip
+        # requirement may be written `mcp-mesh[litellm]==X` (#1383), and
+        # without the bracket group the guard reads straight past a stale one.
+        re.compile(r"mcp-mesh(?:\[[^\]]*\])?(?:>=|==)" + op),
         # package.json: "@mcpmesh/sdk": "^X" / "@mcpmesh/core": "X" (the key
         # quote, ": ", then the value's opening quote sit between the package
         # name and the version), plus the npm `@mcpmesh/sdk@^X` shorthand.

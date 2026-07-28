@@ -145,6 +145,27 @@ gemini = [
     # resolves cleanly for users who pinned it from earlier docs.
     "google-genai>=1.22"
 ]
+litellm = [
+    # LiteLLM long-tail provider path (issue #1383).
+    #
+    # DELIBERATELY REDUNDANT TODAY: ``litellm`` is still a BASE dependency
+    # above, so ``pip install mcp-mesh[litellm]`` resolves to exactly the same
+    # set as ``pip install mcp-mesh``. The extra exists now, ahead of the move,
+    # so that a pin written today (by a user, by ``meshctl scaffold``'s
+    # generated requirements.txt, or by the install guidance in
+    # ``mesh.helpers._require_litellm``) keeps working unchanged when the base
+    # entry is deleted at the next major — at that point THIS is the only
+    # declaration that installs litellm.
+    #
+    # This is why the requirement is spelled out in full rather than left as an
+    # empty stub: an empty extra resolves cleanly today but would silently
+    # install nothing the day the base entry goes away.
+    #
+    # The pin MUST stay identical to the ``litellm`` entry in [project]
+    # dependencies above. Enforced by
+    # tests/unit/test_litellm_extra_pin_sync.py.
+    "litellm>=1.80.5,!=1.82.7,!=1.82.8"
+]
 
 [project.urls]
 Homepage = "https://github.com/dhyansraj/mcp-mesh"

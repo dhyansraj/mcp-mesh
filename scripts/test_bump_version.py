@@ -44,6 +44,17 @@ def test_other_mesh_contexts():
     assert _matches(old, '  tag: "2.8"')  # minor-tag form
 
 
+def test_pip_requirement_with_extras():
+    """`mcp-mesh[litellm]==X` (#1383) is a pip requirement like any other —
+    the bracketed extras sit between the name and the specifier, which the
+    first cut of this pattern read straight past."""
+    old = "2.8.0"
+    assert _matches(old, "mcp-mesh[litellm]==2.8.0")
+    assert _matches(old, "pip install 'mcp-mesh[litellm]==2.8.0'")
+    assert _matches(old, "mcp-mesh[litellm,vertex]>=2.8.0")
+    assert _matches(old, "mcp-mesh==2.8.0")  # bare form still matches
+
+
 def _matches_multiline(old: str, text: str) -> bool:
     return any(p.search(text) for p in bv._guard_multiline_patterns(old))
 
@@ -364,6 +375,24 @@ def test_scaffold_dockerfile_handler_matches_old_only():
         "FROM mcpmesh/python-runtime:3.4.0\n"
         "FROM mcpmesh/java-runtime:latest\n"
         "FROM mcpmesh/typescript-runtime:${RUNTIME_TAG}\n"
+    )
+
+
+def test_scaffold_requirements_litellm_extra_handler():
+    """The generated requirements.txt pins the optional LiteLLM extra (#1383).
+    Only OUR pin moves — a user's third-party pin sitting at the same version
+    is not ours to bump."""
+    text = (
+        "# my-provider dependencies\n"
+        "mcp-mesh[litellm]==3.3.1\n"
+        "some-vendor-sdk==3.3.1\n"
+    )
+    assert _apply_handler(
+        "Scaffold Templates (Python requirements.txt.tmpl litellm extra)", text
+    ) == (
+        "# my-provider dependencies\n"
+        "mcp-mesh[litellm]==3.4.0\n"
+        "some-vendor-sdk==3.3.1\n"
     )
 
 
