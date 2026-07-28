@@ -2,6 +2,7 @@ package man
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -42,6 +43,12 @@ var (
 	inlineLinkRe   = regexp.MustCompile(`\[([^\]]+)\]\([^)]+\)`)
 	numberedListRe = regexp.MustCompile(`^\d+\. `)
 )
+
+// placeholderSentinel wraps the index of an already-styled span while the
+// remaining inline passes run. NUL is stripped from the input first, so a
+// placeholder can never be forged by real content, and it matches none of the
+// bold/italic/link patterns (no backtick, underscore, asterisk, or brackets).
+const placeholderSentinel = "\x00"
 
 // Renderer handles guide content rendering.
 type Renderer struct {
@@ -126,19 +133,22 @@ func (r *Renderer) renderStyled(guide *Guide, content string) string {
 			continue
 		}
 
-		// Handle bullet points
+		// Handle bullet points. Only the content is styled; the marker keeps its
+		// own colouring so styleInline cannot disturb or swallow it. Code fences
+		// are handled above, so a "- " line inside a fenced block never reaches
+		// here and stays literal.
 		if strings.HasPrefix(line, "- ") {
-			sb.WriteString(yellow + "  • " + reset + strings.TrimPrefix(line, "- ") + "\n")
+			sb.WriteString(yellow + "  • " + reset + r.styleInline(strings.TrimPrefix(line, "- ")) + "\n")
 			continue
 		}
 		if strings.HasPrefix(line, "  - ") {
-			sb.WriteString(yellow + "    ◦ " + reset + strings.TrimPrefix(line, "  - ") + "\n")
+			sb.WriteString(yellow + "    ◦ " + reset + r.styleInline(strings.TrimPrefix(line, "  - ")) + "\n")
 			continue
 		}
 
 		// Handle numbered lists
-		if numberedListRe.MatchString(line) {
-			sb.WriteString(yellow + "  " + reset + line + "\n")
+		if marker := numberedListRe.FindString(line); marker != "" {
+			sb.WriteString(yellow + "  " + reset + marker + r.styleInline(strings.TrimPrefix(line, marker)) + "\n")
 			continue
 		}
 
@@ -159,8 +169,30 @@ func (r *Renderer) renderStyled(guide *Guide, content string) string {
 // styleInline applies inline styling for bold, italic, code, etc.
 // Uses pre-compiled regex patterns for performance.
 func (r *Renderer) styleInline(line string) string {
+	// Code spans and links are styled first and stashed behind placeholders so
+	// the bold/italic passes cannot reach their contents. Without this, a line
+	// carrying two snake_case code spans (e.g. `dependency_resolved` and
+	// `dependency_unresolved`) has its underscores paired across the spans by
+	// the italic pass, and a link URL containing underscores gets ANSI injected
+	// mid-URL. Reordering alone cannot fix this: running italic first would
+	// instead corrupt the text inside the code spans.
+	line = strings.ReplaceAll(line, placeholderSentinel, "")
+
+	var stashed []string
+	stash := func(styled string) string {
+		stashed = append(stashed, styled)
+		return placeholderSentinel + strconv.Itoa(len(stashed)-1) + placeholderSentinel
+	}
+
 	// Inline code: `code`
-	line = inlineCodeRe.ReplaceAllString(line, green+"$1"+reset)
+	line = inlineCodeRe.ReplaceAllStringFunc(line, func(match string) string {
+		return stash(green + inlineCodeRe.FindStringSubmatch(match)[1] + reset)
+	})
+
+	// Links: [text](url) - show as underlined text
+	line = inlineLinkRe.ReplaceAllStringFunc(line, func(match string) string {
+		return stash(underline + cyan + inlineLinkRe.FindStringSubmatch(match)[1] + reset)
+	})
 
 	// Bold: **text** or __text__
 	line = inlineBoldRe.ReplaceAllString(line, bold+"$1$2"+reset)
@@ -168,8 +200,12 @@ func (r *Renderer) styleInline(line string) string {
 	// Italic: *text* or _text_
 	line = inlineItalicRe.ReplaceAllString(line, italic+"$1$2"+reset)
 
-	// Links: [text](url) - show as underlined text
-	line = inlineLinkRe.ReplaceAllString(line, underline+cyan+"$1"+reset)
+	// Restore highest index first: a link may have stashed a code placeholder
+	// inside its text, and that code span always holds a lower index.
+	for i := len(stashed) - 1; i >= 0; i-- {
+		token := placeholderSentinel + strconv.Itoa(i) + placeholderSentinel
+		line = strings.ReplaceAll(line, token, stashed[i])
+	}
 
 	return line
 }
