@@ -38,6 +38,35 @@ _SSE_HEADERS = {
 }
 
 
+def _methods_overlap(route_methods: Any, call_methods: Any) -> bool:
+    """True when a route's verbs and the verbs being integrated intersect.
+
+    The two sides come from independent places — ``RouteRef.methods`` is
+    whatever FastAPI stored on the route (a set on an ``APIRoute``, a list on
+    an effective-route context), while the integration call's ``methods``
+    comes from ``route_info["methods"]`` — so they can differ in container
+    type, order and (for a hand-built route registration) case. Both are
+    normalised to upper-case sets before comparing.
+
+    Intersection, not equality: a single registration may serve several verbs
+    (``methods=["GET", "POST"]``) and must still be rebuilt when integrating
+    a handler discovered under one of them. Intersection is also immune to
+    FastAPI/Starlette adding ``HEAD`` alongside ``GET`` — an extra verb on
+    the route side can never turn a real match into a miss, and cannot create
+    one either, since ``HEAD`` never appears alone on the call side.
+
+    An empty collection on either side means "unconstrained" and matches, so
+    route objects that carry no ``methods`` at all (websocket routes, which
+    the ``APIRoute`` guard below rejects by design) keep reaching that guard
+    instead of being silently skipped.
+    """
+    route_verbs = {str(m).upper() for m in route_methods or ()}
+    call_verbs = {str(m).upper() for m in call_methods or ()}
+    if not route_verbs or not call_verbs:
+        return True
+    return not route_verbs.isdisjoint(call_verbs)
+
+
 def _resolve_user_function(handler: Any) -> Any:
     """Return the user-authored function underneath a possibly wrapped handler.
 
@@ -673,6 +702,13 @@ class RouteIntegrationStep(PipelineStep):
         dispatch state instead of mesh hand-patching it through private
         internals.
 
+        Every registration of ``original_handler`` at ``path`` whose verbs
+        this call covers is rebuilt, not just the first one found: the same
+        function can be registered twice at one path under different verbs
+        (``add_api_route(..., methods=["GET"])`` then ``methods=["POST"]``),
+        which produces two ``APIRoute`` objects that are indistinguishable by
+        path and endpoint alone.
+
         Args:
             app: FastAPI application instance
             path: Route path to find
@@ -681,9 +717,9 @@ class RouteIntegrationStep(PipelineStep):
             wrapped_handler: New wrapped handler function
 
         Returns:
-            True if the route was found and rebuilt. False only when no
-            matching route exists — nothing was modified in that case, so
-            the caller reports the route as not integrated.
+            True if at least one matching route was found and rebuilt. False
+            only when no matching route exists — nothing was modified in that
+            case, so the caller reports the route as not integrated.
 
         Raises:
             RouteRebuildError: The route was found but could not be rebuilt,
@@ -696,17 +732,29 @@ class RouteIntegrationStep(PipelineStep):
         from ...shared.fastapi_routes import invalidate_route_caches, iter_app_routes
 
         try:
-            # Find the matching route among everything the app serves.
+            # Find the matching routes among everything the app serves.
             #
             # ``iter_app_routes`` also reaches routes mounted with
             # ``include_router()``, which stopped being flattened into
             # ``app.router.routes`` in FastAPI 0.139 (issue #1396). It reports
             # each route's EFFECTIVE path, matching what discovery recorded in
             # ``route_info["path"]``, and the mutable list that owns it.
-            for ref in iter_app_routes(app):
-                if ref.path != path or ref.endpoint is not original_handler:
-                    continue
+            #
+            # Matching on the verbs as well as path+endpoint is what keeps a
+            # GET integration from wrapping a same-path POST registration of
+            # the same function (which route it hit was iteration-order
+            # dependent). The walk is snapshotted first, because rebuilding
+            # assigns into the very lists it reads.
+            matches = [
+                ref
+                for ref in iter_app_routes(app)
+                if ref.path == path
+                and ref.endpoint is original_handler
+                and _methods_overlap(ref.methods, methods)
+            ]
 
+            rebuilt = 0
+            for ref in matches:
                 route = ref.route
                 if not isinstance(route, APIRoute):
                     raise RouteRebuildError(
@@ -752,6 +800,10 @@ class RouteIntegrationStep(PipelineStep):
                 # original registration options (response_model,
                 # status_code, tags, dependencies, response_class,
                 # name/unique_id, ...) unchanged.
+                #
+                # The rebuild reads ``ref.route`` — the pre-swap object the
+                # ref captured — so a route reachable twice through the walk
+                # cannot be wrapped on top of its own wrapper.
                 new_route = self._rebuild_api_route(route, wrapped_handler)
                 ref.container[ref.index] = new_route
 
@@ -774,6 +826,9 @@ class RouteIntegrationStep(PipelineStep):
                         f"not be dispatched"
                     )
 
+                rebuilt += 1
+
+            if rebuilt:
                 return True
 
             # If we get here, we didn't find the route

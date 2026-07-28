@@ -28,8 +28,25 @@ from _mcp_mesh.pipeline.api_startup.route_integration import (
     RouteRebuildError,
 )
 from _mcp_mesh.shared import fastapi_routes
-from _mcp_mesh.shared.fastapi_routes import invalidate_route_caches, iter_app_routes
+from _mcp_mesh.shared.fastapi_routes import (
+    RouteRef,
+    invalidate_route_caches,
+    iter_app_routes,
+)
 from _mcp_mesh.shared.server_discovery import ServerDiscoveryUtil
+
+
+@pytest.fixture(autouse=True)
+def _clean_route_wrapper_registry():
+    """Keep the process-wide route-wrapper registry out of other tests.
+
+    Every ``_integrate_single_route`` call in this file registers wrappers
+    there. Clearing on the way in and out unconditionally means a failing
+    assertion cannot leak entries into whatever runs next.
+    """
+    DecoratorRegistry._route_wrapper_registry.clear()
+    yield
+    DecoratorRegistry._route_wrapper_registry.clear()
 
 
 def _build_route_info(handler, path, methods=("POST",), deps=None):
@@ -152,6 +169,9 @@ class TestIterAppRoutes:
 
     def test_app_without_a_router_is_tolerated(self):
         assert list(iter_app_routes(object())) == []
+
+    def test_invalidate_route_caches_is_a_noop_without_routers(self):
+        invalidate_route_caches(object())  # must not raise
 
     def test_no_fastapi_import_in_the_walk(self):
         """The walk is pure duck-typing: it recognises an include_router()
@@ -325,8 +345,130 @@ class TestIntegrationThroughIncludeRouter:
             )
         assert "did not take effect" in str(exc.value)
 
-    def test_invalidate_route_caches_is_a_noop_without_routers(self):
-        invalidate_route_caches(object())  # must not raise
+    def test_route_that_is_not_an_api_route_is_loud(self, monkeypatch):
+        """Only an APIRoute carries the dispatch state mesh rebuilds. Anything
+        else matched at that path must abort startup rather than be left
+        serving with a handler mesh could not install."""
+
+        class SomeOtherRoute:
+            pass
+
+        async def handler():
+            return {}
+
+        app = FastAPI()
+        ref = RouteRef(
+            route=SomeOtherRoute(),
+            path="/x",
+            methods=["POST"],
+            endpoint=handler,
+            container=[None],
+            index=0,
+            included=False,
+        )
+        monkeypatch.setattr(fastapi_routes, "iter_app_routes", lambda app: iter([ref]))
+
+        step = RouteIntegrationStep()
+        with pytest.raises(RouteRebuildError) as exc:
+            step._replace_route_handler(app, "/x", ["POST"], handler, handler)
+        message = str(exc.value)
+        assert "SomeOtherRoute" in message
+        assert "not a FastAPI" in message
+        assert "/x" in message and "POST" in message
+
+    def test_route_whose_owning_list_is_unknown_is_loud(self, monkeypatch):
+        """Without the list that owns the route there is nowhere to put the
+        rebuilt one, so the route would keep dispatching the unwrapped
+        handler — fail instead of reporting a successful integration."""
+
+        async def handler():
+            return {}
+
+        app = FastAPI()
+        app.post("/x")(handler)
+        api_route = next(r.route for r in iter_app_routes(app) if r.path == "/x")
+
+        ref = RouteRef(
+            route=api_route,
+            path="/x",
+            methods=["POST"],
+            endpoint=handler,
+            container=None,
+            index=None,
+            included=True,
+        )
+        monkeypatch.setattr(fastapi_routes, "iter_app_routes", lambda app: iter([ref]))
+
+        step = RouteIntegrationStep()
+        with pytest.raises(RouteRebuildError) as exc:
+            step._replace_route_handler(app, "/x", ["POST"], handler, handler)
+        message = str(exc.value)
+        assert "could not be located" in message
+        assert "/x" in message and "POST" in message
+
+    def test_same_handler_registered_under_two_verbs_wraps_the_right_route(self):
+        """One function registered twice at one path produces two APIRoutes
+        that path+endpoint alone cannot tell apart. Without the verbs in the
+        match, which one gets the wrapper is iteration-order dependent — a GET
+        integration could wrap the POST registration, leaving the verb mesh
+        actually registered serving the unwrapped handler."""
+
+        async def handler():
+            return {"wrapped": False}
+
+        async def wrapper():
+            return {"wrapped": True}
+
+        app = FastAPI()
+        app.add_api_route("/x", handler, methods=["GET"], response_model=None)
+        app.add_api_route("/x", handler, methods=["POST"], response_model=None)
+
+        step = RouteIntegrationStep()
+        assert step._replace_route_handler(app, "/x", ["POST"], handler, wrapper)
+
+        client = TestClient(app)
+        assert client.post("/x").json() == {"wrapped": True}
+        assert client.get("/x").json() == {"wrapped": False}
+
+    def test_every_covered_registration_of_a_handler_is_rebuilt(self):
+        """A call covering both verbs must rebuild both registrations, not
+        stop at the first match."""
+
+        async def handler():
+            return {"wrapped": False}
+
+        async def wrapper():
+            return {"wrapped": True}
+
+        app = FastAPI()
+        app.add_api_route("/x", handler, methods=["GET"], response_model=None)
+        app.add_api_route("/x", handler, methods=["POST"], response_model=None)
+
+        step = RouteIntegrationStep()
+        assert step._replace_route_handler(app, "/x", ["GET", "POST"], handler, wrapper)
+
+        client = TestClient(app)
+        assert client.get("/x").json() == {"wrapped": True}
+        assert client.post("/x").json() == {"wrapped": True}
+
+    def test_no_matching_verb_is_reported_as_not_found(self):
+        """Nothing matched means nothing was modified — the caller reports the
+        route as not integrated rather than raising."""
+
+        async def handler():
+            return {}
+
+        async def wrapper():
+            return {}
+
+        app = FastAPI()
+        app.add_api_route("/x", handler, methods=["GET"], response_model=None)
+
+        step = RouteIntegrationStep()
+        assert (
+            step._replace_route_handler(app, "/x", ["DELETE"], handler, wrapper)
+            is False
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -339,7 +481,6 @@ class TestIncludeRouterEndToEnd:
         """``examples/simple/simple_fastapi_router.py`` in miniature: the
         handler is registered on an APIRouter, mounted with include_router(),
         and must end up wired to the mesh dependency funnel."""
-        DecoratorRegistry._route_wrapper_registry.clear()
 
         @mesh.route(dependencies=["time_service"])
         async def get_time(time_agent: mesh.McpMeshTool = None) -> dict:
@@ -379,5 +520,3 @@ class TestIncludeRouterEndToEnd:
             "dependency_injected": True,
             "time": "2026-07-28T00:00:00Z",
         }
-
-        DecoratorRegistry._route_wrapper_registry.clear()
