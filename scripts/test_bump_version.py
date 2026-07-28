@@ -44,6 +44,44 @@ def test_other_mesh_contexts():
     assert _matches(old, '  tag: "2.8"')  # minor-tag form
 
 
+def _matches_multiline(old: str, text: str) -> bool:
+    return any(p.search(text) for p in bv._guard_multiline_patterns(old))
+
+
+def test_maven_coordinate_guard_needs_the_whole_text():
+    """Three handlers anchor on the io.mcp-mesh groupId/artifactId/version
+    coordinate. It spans three lines, so a per-line scan can never see it —
+    the guard must match against the full file text."""
+    old = "3.3.1"
+    coord = """        <dependency>
+            <groupId>{g}</groupId>
+            <artifactId>mcp-mesh-spring-boot-starter</artifactId>
+            <version>{v}</version>
+        </dependency>
+"""
+    assert not _matches(old, "            <version>3.3.1</version>")
+    assert _matches_multiline(old, coord.format(g="io.mcp-mesh", v="3.3.1"))
+    assert not _matches_multiline(old, coord.format(g="io.mcp-mesh", v="3.4.0"))
+    # A third-party coordinate parked at our version is not a missed bump.
+    assert not _matches_multiline(
+        old, coord.format(g="org.springframework.boot", v="3.3.1")
+    )
+
+
+def test_maven_coordinate_guard_reports_the_version_line():
+    """The match starts on <groupId>, but the survivor must be reported at the
+    <version> line — same offset arithmetic coverage_guard uses."""
+    text = (
+        "<dependencies>\n"
+        "    <groupId>io.mcp-mesh</groupId>\n"
+        "    <artifactId>mcp-mesh-sdk</artifactId>\n"
+        "    <version>3.3.1</version>\n"
+    )
+    m = bv._guard_multiline_patterns("3.3.1")[0].search(text)
+    assert m
+    assert text.count("\n", 0, m.start("hit")) + 1 == 4
+
+
 def test_patch_bump_leaves_minor_tag():
     # The minor image tag (tag: "2.8") intentionally tracks the latest patch,
     # so a patch bump must NOT flag it as stale (to_minor unchanged)...
@@ -133,11 +171,103 @@ def test_overmatch_guard_path_is_not_proof():
     assert len(suspects) == 1, suspects
 
 
+def test_changed_line_keeps_its_own_snapshot():
+    """11 file patterns are touched by more than one handler (docs/**/*.md by
+    four). A record must be windowed against the content it was recorded
+    against, so a later handler that shifts line numbers cannot silently move
+    an earlier record's neighbourhood."""
+    f = bv.PROJECT_ROOT / "docs/guide.md"
+    first_before = "intro\nintro\n<version>3.3.0</version>\nio.mcp-mesh\nend\nend\n"
+    first_after = first_before.replace("3.3.0", "3.3.1")
+    # Second handler deletes the mesh line, shifting everything below it up.
+    second_after = first_after.replace("io.mcp-mesh\n", "")
+
+    bv.reset_change_log()
+    bv.record_changes(f, first_before, first_after, "handler one")
+    assert len(bv._CHANGE_LOG) == 1
+    assert bv._CHANGE_LOG[0].lineno == 3
+    assert bv._CHANGE_LOG[0].snapshot == first_after.splitlines()
+
+    bv.record_changes(f, first_after, second_after, "handler two")
+    # Pure deletion: nothing new recorded, and the first record still owns its
+    # own snapshot rather than the shorter, mesh-free one.
+    assert len(bv._CHANGE_LOG) == 1
+    assert bv._CHANGE_LOG[0].snapshot == first_after.splitlines()
+    # ...so it is still proven by the io.mcp-mesh line that sat next to it.
+    assert not bv.overmatch_guard("3.3.1")
+    # Sanity: that proof really did come from the pre-deletion neighbourhood.
+    assert "mcp-mesh" not in second_after
+
+
+def _literal_anchor(pattern: str) -> str:
+    """The literal characters an allowlist pattern is tied to: the NEW
+    placeholder, regex metacharacters, escape classes (\\s, \\b) and character
+    classes all removed. What is left is real text from the actual construct.
+    A pattern that reduces to '' matches by shape alone (`.+`, `NEW.*`, ...)
+    and is therefore a blanket pass for its glob."""
+    out: list[str] = []
+    p = pattern.replace("NEW", "\x00")
+    i = 0
+    while i < len(p):
+        c = p[i]
+        if c == "\\" and i + 1 < len(p):
+            # \. \" \, -> a literal character; \s \b \d -> a class, not literal
+            if not p[i + 1].isalnum():
+                out.append(p[i + 1])
+            i += 2
+        elif c == "[":  # character class: matches a set, anchors nothing
+            close = p.find("]", i + 1)
+            i = len(p) if close == -1 else close + 1
+        elif c in ".*+?^$(){}|\x00":
+            i += 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out).strip()
+
+
 def test_overmatch_allowlist_entries_are_narrow():
-    # Every exemption must state a reason and must not be a bare path pass.
+    """An exemption suppresses the guard, so each one must be pinned to a
+    specific file AND to specific literal text. Anything that passes by shape
+    alone (`**` + `.+`, `NEW.*`, ...) reopens the hole the guard closes."""
     for e in bv.OVERMATCH_ALLOWLIST:
-        assert e.reason.strip(), e
-        assert e.pattern not in ("", ".*", "NEW"), e
+        assert e.reason.strip(), f"{e.glob}: exemptions must state a reason"
+
+        # Glob: must name something. A pure-wildcard glob is a path pass.
+        assert set(e.glob) - set("*/?"), f"{e.glob}: glob matches everything"
+        assert e.glob not in ("", "*", "**", "*/*", "**/*", "**/**"), (
+            f"{e.glob}: glob matches everything"
+        )
+
+        # Pattern: must carry literal text beyond the NEW placeholder.
+        anchor = _literal_anchor(e.pattern)
+        assert anchor, (
+            f"{e.glob}: pattern {e.pattern!r} has no literal anchor — it "
+            "exempts any changed line carrying the new version"
+        )
+
+
+def test_overmatch_allowlist_narrowness_check_rejects_broad_entries():
+    """The narrowness check itself must bite: each of these would sail past
+    the old `pattern not in ('', '.*', 'NEW')` assertion."""
+    broad = [
+        bv.Exemption(glob="**", pattern=".+", reason="r"),
+        bv.Exemption(glob="docs/index.md", pattern="NEW.*", reason="r"),
+        bv.Exemption(glob="docs/index.md", pattern=".*NEW.*", reason="r"),
+        bv.Exemption(glob="**/*", pattern=r"\bvNEW\b", reason="r"),
+        bv.Exemption(glob="docs/index.md", pattern=r"\s*NEW\s*", reason="r"),
+    ]
+    original = list(bv.OVERMATCH_ALLOWLIST)
+    try:
+        for e in broad:
+            bv.OVERMATCH_ALLOWLIST[:] = original + [e]
+            try:
+                test_overmatch_allowlist_entries_are_narrow()
+            except AssertionError:
+                continue
+            raise AssertionError(f"narrowness check accepted broad entry: {e}")
+    finally:
+        bv.OVERMATCH_ALLOWLIST[:] = original
 
 
 def _apply_handler(name: str, text: str, old="3.3.1", new="3.4.0") -> str:
@@ -243,7 +373,6 @@ def test_anchored_patterns_skip_third_party_pins():
     cases = [
         (
             "Rust Cargo.toml",
-            "Cargo.toml",
             '[package]\nversion = "3.3.1"\n\n[dependencies]\n'
             'pyo3 = { version = "3.3.1" }\n',
             '[package]\nversion = "3.4.0"\n\n[dependencies]\n'
@@ -251,7 +380,6 @@ def test_anchored_patterns_skip_third_party_pins():
         ),
         (
             "Python Packages (pyproject.toml)",
-            "pyproject.toml",
             '[project]\nversion = "3.3.1"\n\n[tool.black]\n'
             'target-version = "3.3.1"\n',
             '[project]\nversion = "3.4.0"\n\n[tool.black]\n'
@@ -259,25 +387,15 @@ def test_anchored_patterns_skip_third_party_pins():
         ),
         (
             "TypeScript/Node.js Packages",
-            "package.json",
             '{\n  "version": "3.3.1",\n  "scripts": {\n'
             '    "version": "3.3.1"\n  }\n}\n',
             '{\n  "version": "3.4.0",\n  "scripts": {\n'
             '    "version": "3.3.1"\n  }\n}\n',
         ),
     ]
-    handlers = {h.name: h for h in bv.HANDLERS}
-    for name, filename, before, expected in cases:
-        handler = handlers[name]
-        pattern = handler.pattern.replace("OLD", "3\\.3\\.1")
-        replacement = handler.replacement.replace("NEW", "3.4.0")
-        with tempfile.TemporaryDirectory() as d:
-            f = pathlib.Path(d) / filename
-            f.write_text(before)
-            bv.reset_change_log()
-            bv.replace_in_file(f, pattern, replacement, dry_run=False,
-                               flags=handler.flags)
-            assert f.read_text() == expected, f"{name}: got\n{f.read_text()}"
+    for name, before, expected in cases:
+        out = _apply_handler(name, before)
+        assert out == expected, f"{name}: got\n{out}"
 
 
 if __name__ == "__main__":

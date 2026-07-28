@@ -92,21 +92,24 @@ class ChangedLine:
     lineno: int  # 1-based line number in the post-bump content
     text: str  # the line as it reads AFTER the replacement
     source: str  # handler / bespoke-step label that rewrote it
+    # The file's content (as a line list) right after THIS replacement, so the
+    # over-match guard can read a changed line's neighbours even under
+    # --dry-run. Held per record rather than in a file-keyed dict: 11 file
+    # patterns are targeted by more than one handler (docs/**/*.md by four),
+    # and a shared dict would resolve an earlier handler's line numbers
+    # against a later handler's content. `record_changes` builds a fresh list
+    # per replacement and never mutates it, so sharing the reference is safe.
+    # Excluded from eq/hash so ChangedLine stays hashable and comparable.
+    snapshot: list[str] = field(default_factory=list, compare=False, repr=False)
 
 
 # Every line any handler rewrote, in application order.
 _CHANGE_LOG: list[ChangedLine] = []
 
-# Post-bump content (as a line list) of every file we touched. Kept in memory
-# so the over-match guard can inspect a changed line's neighbours even under
-# --dry-run, where nothing was written to disk.
-_FILE_SNAPSHOTS: dict[str, list[str]] = {}
-
 
 def reset_change_log() -> None:
     """Clear the recorded changes. Call once at the start of a bump."""
     _CHANGE_LOG.clear()
-    _FILE_SNAPSHOTS.clear()
 
 
 def record_changes(
@@ -123,14 +126,15 @@ def record_changes(
     except ValueError:
         rel = str(filepath)
     new_lines = new_content.splitlines()
-    _FILE_SNAPSHOTS[rel] = new_lines
     matcher = difflib.SequenceMatcher(
         a=old_content.splitlines(), b=new_lines, autojunk=False
     )
     for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
         if tag in ("replace", "insert"):
             for j in range(j1, j2):
-                _CHANGE_LOG.append(ChangedLine(rel, j + 1, new_lines[j], source))
+                _CHANGE_LOG.append(
+                    ChangedLine(rel, j + 1, new_lines[j], source, new_lines)
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -938,6 +942,31 @@ def _guard_patterns(old: str, new: str | None = None) -> list[re.Pattern]:
     return patterns
 
 
+def _guard_multiline_patterns(old: str) -> list[re.Pattern]:
+    """Mesh-shaped contexts that genuinely span several lines.
+
+    The Maven coordinate — ``<groupId>io.mcp-mesh</groupId>`` /
+    ``<artifactId>…</artifactId>`` / ``<version>OLD</version>`` — is three
+    lines, so the per-line scan in `coverage_guard` can never see it. Three
+    handlers now anchor on exactly this shape (the Java POM handler, the
+    documentation ``<version>`` handler and the java_handler.go template), so
+    without this pass a pattern of theirs that is too tight would skip a real
+    site with nothing to catch it — the false negative the guard exists for.
+
+    Each pattern puts the version itself in a group named ``hit`` so the
+    reported line number points at the ``<version>`` line rather than the
+    ``<groupId>`` line the match starts on.
+    """
+    o = re.escape(old)
+    return [
+        re.compile(
+            r"<groupId>io\.mcp-mesh</groupId>\s*"
+            r"<artifactId>[^<]+</artifactId>\s*"
+            r"(?P<hit><version>" + o + r"</version>)"
+        ),
+    ]
+
+
 def coverage_guard(old: str, new: str) -> tuple[bool, list[str]]:
     """Final safety net: after a bump, scan every tracked file for mesh-shaped
     references that still carry the OLD version.
@@ -960,6 +989,7 @@ def coverage_guard(old: str, new: str) -> tuple[bool, list[str]]:
         return (False, [])
 
     patterns = _guard_patterns(old, new)
+    ml_patterns = _guard_multiline_patterns(old)
     survivors: list[str] = []
     for rel in out.splitlines():
         if not rel:
@@ -970,11 +1000,27 @@ def coverage_guard(old: str, new: str) -> tuple[bool, list[str]]:
             text = (PROJECT_ROOT / rel).read_text()
         except (OSError, UnicodeDecodeError):
             continue
-        for lineno, line in enumerate(text.splitlines(), start=1):
+        lines = text.splitlines()
+        flagged: set[int] = set()
+        for lineno, line in enumerate(lines, start=1):
             if any(tok in line for tok in _GUARD_ALLOWLIST_TOKENS):
                 continue
             if any(p.search(line) for p in patterns):
                 survivors.append(f"{rel}:{lineno}: {line.strip()}")
+                flagged.add(lineno)
+        # Second pass over the whole file text for the multi-line shapes,
+        # reporting the line the version itself sits on and skipping anything
+        # the per-line pass already flagged.
+        for p in ml_patterns:
+            for m in p.finditer(text):
+                lineno = text.count("\n", 0, m.start("hit")) + 1
+                if lineno in flagged or lineno > len(lines):
+                    continue
+                line = lines[lineno - 1]
+                if any(tok in line for tok in _GUARD_ALLOWLIST_TOKENS):
+                    continue
+                survivors.append(f"{rel}:{lineno}: {line.strip()}")
+                flagged.add(lineno)
     return (True, survivors)
 
 
@@ -1155,7 +1201,7 @@ def overmatch_guard(new: str) -> list[ChangedLine]:
         if _MESH_TOKEN.search(change.text):
             continue
 
-        lines = _FILE_SNAPSHOTS.get(change.path, [])
+        lines = change.snapshot
         lo = max(0, change.lineno - 1 - _CONTEXT_RADIUS)
         hi = min(len(lines), change.lineno + _CONTEXT_RADIUS)
         window = "\n".join(lines[lo:hi])
