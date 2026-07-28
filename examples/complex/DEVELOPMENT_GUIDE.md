@@ -136,7 +136,7 @@ version = "1.0.0"
 description = "Production MCP Mesh Agent"
 dependencies = [
     "mcp-mesh>=0.1.0,<0.2.0",
-    "fastmcp>=0.9.1",
+    "fastmcp>=3.0.0,<4.0.0",
     # Add your specific dependencies
 ]
 
