@@ -11,6 +11,8 @@ import socket
 import threading
 from typing import Any, Dict, List, Optional, Tuple
 
+from .fastapi_routes import iter_app_routes
+
 logger = logging.getLogger(__name__)
 
 
@@ -295,24 +297,29 @@ class ServerDiscoveryUtil:
 
     @staticmethod
     def _extract_route_info(app) -> List[Dict[str, Any]]:
-        """Extract route information from FastAPI app without modifying it."""
+        """Extract route information from FastAPI app without modifying it.
+
+        Walks via ``iter_app_routes`` rather than ``app.router.routes``, so
+        handlers mounted with ``include_router()`` are seen on FastAPI >=
+        0.139 (issue #1396) — they are no longer flattened into the app's own
+        list. ``path`` is the effective path the app serves, so downstream
+        consumers (route integration's match, and the ``METHOD:path`` route
+        ids the heartbeat ships to the registry) stay correct at any include
+        depth.
+        """
         routes = []
 
         try:
-            for route in app.router.routes:
-                if hasattr(route, "endpoint") and hasattr(route, "path"):
-                    route_info = {
-                        "path": route.path,
-                        "methods": (
-                            list(route.methods) if hasattr(route, "methods") else []
-                        ),
-                        "endpoint": route.endpoint,
-                        "endpoint_name": getattr(route.endpoint, "__name__", "unknown"),
-                        "has_mesh_route": hasattr(
-                            route.endpoint, "_mesh_route_metadata"
-                        ),
+            for ref in iter_app_routes(app):
+                routes.append(
+                    {
+                        "path": ref.path,
+                        "methods": ref.methods,
+                        "endpoint": ref.endpoint,
+                        "endpoint_name": getattr(ref.endpoint, "__name__", "unknown"),
+                        "has_mesh_route": hasattr(ref.endpoint, "_mesh_route_metadata"),
                     }
-                    routes.append(route_info)
+                )
 
         except Exception as e:
             logger.warning(f"Error extracting route info: {e}")
