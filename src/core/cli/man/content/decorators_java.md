@@ -78,6 +78,8 @@ public GreetingResponse greet(
 
 **Note**: Dependencies are injected as `McpMeshTool<T>` parameters on the method. They may be `null` if unavailable.
 
+**Note**: `dependencies` entries pair with the method's `McpMeshTool<T>` (and `MeshJob`) parameters in declaration order, and parameter names are yours to choose. See `meshctl man dependency-injection --java` for the full pairing rule, including where a `MeshJob` parameter fits and how `@MeshRoute` differs.
+
 ### Schema-aware capabilities (issue #547)
 
 The mesh can match producers and consumers by their canonical response schemas, not just by capability name. This is opt-in per tool/selector.
@@ -125,7 +127,8 @@ public Report hrReport(McpMeshTool<Employee> employeeLookup) { ... }
     )
 })
 @PostMapping("/report")
-public ResponseEntity<Report> report(McpMeshTool<Employee> employeeLookup) { ... }
+public ResponseEntity<Report> report(
+        @MeshInject("lookup_employee") McpMeshTool<Employee> employeeLookup) { ... }
 ```
 
 **Per-tool strict knob** — set `outputSchemaStrict = false` on `@MeshTool` to demote a BLOCK schema verdict to a WARN for that one tool. Wins even when the cluster-wide `MCP_MESH_SCHEMA_STRICT=true` env var promotes WARN→BLOCK.
@@ -357,11 +360,11 @@ public class ClaudeProviderApplication {
 Enables mesh dependency injection in REST endpoint handlers.
 
 ```java
-@MeshRoute(dependencies = @Selector(capability = "avatar_chat"))
+@MeshRoute(dependencies = @MeshDependency(capability = "avatar_chat"))
 @PostMapping("/chat")
 public ResponseEntity<ChatResponse> chat(
         @RequestBody ChatRequest request,
-        McpMeshTool<String> avatarChat) {
+        @MeshInject("avatar_chat") McpMeshTool<String> avatarChat) {
     if (avatarChat == null || !avatarChat.isAvailable()) {
         return ResponseEntity.status(503)
             .body(new ChatResponse("Service unavailable"));

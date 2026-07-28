@@ -217,7 +217,7 @@ async def chat_endpoint(
 
 **Note**: `@mesh.route` is for FastAPI backends that _consume_ mesh capabilities. Use `@mesh.tool` for MCP agents that _provide_ capabilities.
 
-**Note**: Both `@mesh.tool` and `@mesh.route` inject dependencies POSITIONALLY into `McpMeshTool`-typed parameters — pairing the order of `McpMeshTool` parameters in the function signature against the order of `dependencies=[...]` (the runtime takes `mesh_positions[: len(dependencies)]`). Parameter names like `date_service` in examples are reader-friendly only — they don't match against the dependency capability name. The same rule applies in TypeScript (`addTool({ dependencies: [...] })`, injected positionally) and Java (`@MeshTool(dependencies = @Selector(...))`, parameter order). A `MeshJob` slot (one per tool) is detected by parameter type but counts as an eligible position in this same positional pairing — it pairs with its own `dependencies=[...]` entry, and that dependency is bound as the job's submitter — see `meshctl man jobs`.
+**Note**: In both `@mesh.tool` and `@mesh.route`, `dependencies=[...]` pairs with your `McpMeshTool`-typed parameters in declaration order, and parameter names are yours to choose. See `meshctl man dependency-injection` for the full pairing rule, including where a `MeshJob` parameter fits.
 
 See `meshctl man api` for complete FastAPI integration guide.
 

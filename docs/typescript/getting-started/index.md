@@ -99,7 +99,7 @@ agent.addTool({
   parameters: z.object({ name: z.string() }),
   execute: async (
     { name },
-    greeting: McpMeshTool | null = null, // Injected positionally!
+    greeting: McpMeshTool | null = null, // Injected positionally, in declaration order
   ) => {
     if (greeting) {
       const baseGreeting = await greeting({ name });

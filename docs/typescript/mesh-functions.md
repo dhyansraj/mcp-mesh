@@ -77,7 +77,7 @@ agent.addTool({
 });
 ```
 
-**Note**: Dependencies are injected **positionally** as `McpMeshTool | null` parameters after the first `args` parameter, in declaration order (`dependencies[0]`, `dependencies[1]`, ...). They may be `null` if unavailable.
+**Note**: Dependencies are injected positionally as `McpMeshTool | null` parameters after the first `args` parameter, in declaration order, and parameter names are yours to choose. See the [Dependency Injection](dependency-injection.md) guide for the full pairing rule.
 
 ### Dependency Injection Types
 

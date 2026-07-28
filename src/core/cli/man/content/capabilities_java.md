@@ -25,7 +25,7 @@ record WeatherResponse(String city, int temp, String conditions) {}
 
 ## Capability Selector Syntax
 
-MCP Mesh uses the `@Selector` annotation for selecting capabilities. This same pattern appears in `dependencies`, `@MeshLlm` provider/filter, and `@MeshRoute`.
+MCP Mesh uses the `@Selector` annotation for selecting capabilities. This same pattern appears in `@MeshTool` `dependencies` and in the `@MeshLlm` provider/filter. Spring web routes use `@MeshDependency` instead, with the same `capability` / `tags` / `version` fields.
 
 ### Selector Fields
 
@@ -65,7 +65,7 @@ dependencies = @Selector(capability = "api_client", version = ">=2.0.0")
 | `@MeshTool` dependencies  | `dependencies = @Selector(capability = "svc")`                 |
 | `@MeshLlm` provider       | `providerSelector = @Selector(capability = "llm")`             |
 | `@MeshLlm` filter         | `filter = @Selector(tags = {"tools"})`                         |
-| `@MeshRoute` dependencies | `dependencies = @Selector(capability = "api", tags = {"+v2"})` |
+| `@MeshRoute` dependencies | `dependencies = @MeshDependency(capability = "api", tags = {"+v2"})` |
 
 ### Tag Operators
 
