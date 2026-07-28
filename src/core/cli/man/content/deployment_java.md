@@ -242,7 +242,7 @@ resources:
 ```bash
 # 1. Build and push Docker image
 cd my-agent
-docker buildx build --platform linux/amd64 -t your-registry/my-agent:v3.3.1 --push .
+docker buildx build --platform linux/amd64 -t your-registry/my-agent:v1.0.0 --push .
 
 # 2. Deploy with Helm
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
@@ -250,7 +250,7 @@ helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
   -n mcp-mesh \
   -f helm-values.yaml \
   --set image.repository=your-registry/my-agent \
-  --set image.tag=v3.3.1
+  --set image.tag=v1.0.0
 ```
 
 ## Port Strategy

@@ -256,7 +256,7 @@ meshctl scaffold basic --name my-agent
 
 # 2. Build and push Docker image (works on all platforms)
 cd my-agent
-docker buildx build --platform linux/amd64 -t your-registry/my-agent:v3.3.1 --push .
+docker buildx build --platform linux/amd64 -t your-registry/my-agent:v1.0.0 --push .
 
 # 3. Update helm-values.yaml with your image repository
 # 4. Deploy with Helm
@@ -265,7 +265,7 @@ helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
   -n mcp-mesh \
   -f helm-values.yaml \
   --set image.repository=your-registry/my-agent \
-  --set image.tag=v3.3.1
+  --set image.tag=v1.0.0
 ```
 
 ### Disable Optional Components

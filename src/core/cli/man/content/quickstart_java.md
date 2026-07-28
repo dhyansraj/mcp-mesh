@@ -75,7 +75,7 @@ Create `pom.xml`:
 
     <groupId>com.example</groupId>
     <artifactId>greeter-agent</artifactId>
-    <version>3.3.1</version>
+    <version>1.0.0</version>
 
     <dependencies>
         <dependency>

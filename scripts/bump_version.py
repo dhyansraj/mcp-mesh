@@ -515,13 +515,22 @@ HANDLERS: list[Handler] = [
         pattern=r"(--version\s+)OLD",
         replacement=r"\g<1>NEW",
     ),
+    # Anchored to the io.mcp-mesh coordinate, exactly like the POM handler.
+    # These docs quote whole POMs, third-party pins included:
+    # spring-boot-starter-parent sits at <version>4.0.2</version> in six of
+    # them, so the blind form was #1379's twin waiting for mesh to reach 4.0.2.
+    # The reader's OWN project version in those listings is deliberately not
+    # matched — a tutorial app's version is not ours to bump.
     Handler(
         name="Documentation (<version>OLD</version>)",
         globs=[
             "docs/**/*.md",
             "src/core/cli/man/content/**/*.md",
         ],
-        pattern=r"(<version>)OLD(</version>)",
+        pattern=(
+            r"(<groupId>io\.mcp-mesh</groupId>\s*"
+            r"<artifactId>[^<]+</artifactId>\s*<version>)OLD(</version>)"
+        ),
         replacement=r"\g<1>NEW\2",
     ),
     Handler(
@@ -530,8 +539,11 @@ HANDLERS: list[Handler] = [
             "docs/**/*.md",
             "src/core/cli/man/content/**/*.md",
         ],
-        # Word boundary, not preceded by / so URLs aren't touched.
-        pattern=r"(?<!/)vOLD(?=[\s,\)\]\"']|$)",
+        # Word boundary; not preceded by `/` so URLs aren't touched, and not
+        # preceded by `:` so a docker tag isn't either. A tag like
+        # `your-registry/my-agent:vX` belongs to the READER's image — the `/`
+        # guard missed it because the colon sits between.
+        pattern=r"(?<![/:])vOLD(?=[\s,\)\]\"']|$)",
         replacement=r"vNEW",
         flags=re.MULTILINE,
     ),
@@ -604,12 +616,20 @@ HANDLERS: list[Handler] = [
         replacement=r"\g<1>NEW\2",
     ),
     # --- Category 20: Docker Image Tags (Scaffold Dockerfile templates) --
-    # Dockerfile templates use full version tags (mcpmesh/python-runtime:1.3.0)
+    # Dockerfile templates use full version tags (mcpmesh/python-runtime:1.3.0).
+    # This used to replace `[^\s]+` — whatever tag was there, whether or not it
+    # was OLD. That silently clobbers any deliberately different tag (a pinned
+    # older runtime, `:latest`, a build-arg), which is a distinct failure mode
+    # from the over-match class and one the over-match guard cannot flag: the
+    # line does name a mesh image, so it reads as ours. Now OLD-matching like
+    # every other handler; a template left behind is caught by coverage_guard,
+    # which already scans for a surviving `mcpmesh/<image>:OLD`.
     Handler(
         name="Docker Image Tags (Scaffold Dockerfile.tmpl)",
         globs=["cmd/meshctl/templates/*/*/Dockerfile.tmpl"],
         pattern=(
-            r"(mcpmesh/(?:python-runtime|typescript-runtime|java-runtime):)[^\s]+"
+            r"(mcpmesh/(?:python-runtime|typescript-runtime"
+            r"|java-runtime):)OLD(?![\d.\-+])"
         ),
         replacement=r"\g<1>NEW",
     ),
@@ -1045,34 +1065,12 @@ OVERMATCH_ALLOWLIST: list[Exemption] = [
             "in docs/ is still challenged."
         ),
     ),
-    Exemption(
-        glob="docs/java/getting-started/index.md",
-        pattern=r"<version>NEW</version>",
-        context=r"<artifactId>greeter-agent</artifactId>",
-        reason=(
-            "the tutorial project's OWN <version> (com.example:greeter-agent), "
-            "which our docs keep in step with the mesh release. Not a mesh "
-            "coordinate, so the context check pins it to the greeter-agent "
-            "artifactId — a third-party <version> in the same POM listing is "
-            "still challenged."
-        ),
-    ),
-    Exemption(
-        glob="src/core/cli/man/content/quickstart_java.md",
-        pattern=r"<version>NEW</version>",
-        context=r"<artifactId>greeter-agent</artifactId>",
-        reason="man-page copy of the same tutorial POM; see above.",
-    ),
-    Exemption(
-        glob="src/core/cli/man/content/deployment*.md",
-        pattern=r"your-registry/my-agent:vNEW",
-        reason=(
-            "a `docker buildx build -t your-registry/my-agent:vX` example. The "
-            "tag names the READER's registry and app; it carries our version "
-            "only because the walkthrough continues into a helm install of "
-            "the matching chart."
-        ),
-    ),
+    # NOTE: the three sites that used to live here — the tutorial POM's own
+    # <version> in docs/java/getting-started/index.md and quickstart_java.md,
+    # and `your-registry/my-agent:vX` in the deployment man pages — were not
+    # exemptions worth keeping. They are the READER's version, not ours, and
+    # only tracked our release because the patterns were loose. The docs now
+    # pin them to a neutral 1.0.0 and the patterns no longer match them.
     Exemption(
         glob="src/runtime/python/mesh/__init__.py",
         pattern=r'^__version__\s*=\s*"NEW"',

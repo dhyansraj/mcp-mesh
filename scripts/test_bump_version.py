@@ -11,6 +11,7 @@ that happens to sit at our version — cannot regress either.
 
 import importlib.util
 import pathlib
+import re
 import tempfile
 
 _spec = importlib.util.spec_from_file_location(
@@ -137,6 +138,103 @@ def test_overmatch_allowlist_entries_are_narrow():
     for e in bv.OVERMATCH_ALLOWLIST:
         assert e.reason.strip(), e
         assert e.pattern not in ("", ".*", "NEW"), e
+
+
+def _apply_handler(name: str, text: str, old="3.3.1", new="3.4.0") -> str:
+    """Run one named handler's regex over `text` and return the result."""
+    handler = {h.name: h for h in bv.HANDLERS}[name]
+    old_v = bv.format_version(old, handler.version_format)
+    new_v = bv.format_version(new, handler.version_format)
+    with tempfile.TemporaryDirectory() as d:
+        f = pathlib.Path(d) / "sample"
+        f.write_text(text)
+        bv.reset_change_log()
+        bv.replace_in_file(
+            f,
+            handler.pattern.replace("OLD", re.escape(old_v)),
+            handler.replacement.replace("NEW", new_v),
+            dry_run=False,
+            flags=handler.flags,
+        )
+        return f.read_text()
+
+
+def test_docs_version_handler_skips_third_party_maven_pin():
+    """docs/ quote whole POMs. spring-boot-starter-parent is pinned 4.0.2 in
+    six of them, so the blind <version>OLD</version> form was #1379's twin
+    waiting for mesh to reach 4.0.2 — mesh is on a 3.x -> 4.x trajectory."""
+    pom = """    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.3.1</version>
+    </parent>
+
+    <groupId>com.example</groupId>
+    <artifactId>greeter-agent</artifactId>
+    <version>3.3.1</version>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.mcp-mesh</groupId>
+            <artifactId>mcp-mesh-spring-boot-starter</artifactId>
+            <version>{starter}</version>
+        </dependency>
+    </dependencies>
+"""
+    out = _apply_handler("Documentation (<version>OLD</version>)",
+                         pom.format(starter="3.3.1"))
+    # Only the io.mcp-mesh dependency moves; Spring Boot's pin and the
+    # reader's own project version are left exactly where they were.
+    assert out == pom.format(starter="3.4.0"), out
+
+
+def test_overmatch_guard_would_catch_a_loosened_docs_version_handler():
+    """If the anchoring above were ever reverted, the guard must surface the
+    Spring Boot line — no mesh identifier on it or within 3 lines."""
+    before = """    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.0.2</version>
+    </parent>
+"""
+    suspects = _guard_on(
+        "docs/java/getting-started/index.md",
+        before,
+        before.replace("4.0.2", "4.0.3"),
+        new="4.0.3",
+    )
+    assert len(suspects) == 1, suspects
+    assert suspects[0].text.strip() == "<version>4.0.3</version>"
+
+
+def test_docs_v_prefix_handler_skips_docker_tags():
+    """`(?<!/)` did not stop `your-registry/my-agent:v3.3.1` — the colon sits
+    between the slash and the v. That tag is the READER's image."""
+    text = (
+        "docker buildx build -t your-registry/my-agent:v3.3.1 --push .\n"
+        "MCP Mesh v3.3.1 adds a media pipeline\n"
+        "see https://example.com/v3.3.1 for details\n"
+    )
+    assert _apply_handler("Documentation (vOLD)", text) == (
+        "docker buildx build -t your-registry/my-agent:v3.3.1 --push .\n"
+        "MCP Mesh v3.4.0 adds a media pipeline\n"  # prose still updates
+        "see https://example.com/v3.3.1 for details\n"  # URL still skipped
+    )
+
+
+def test_scaffold_dockerfile_handler_matches_old_only():
+    """Used to replace `[^\\s]+` — any tag, whether or not it was OLD, which
+    silently clobbers a deliberately different pin."""
+    text = (
+        "FROM mcpmesh/python-runtime:3.3.1\n"
+        "FROM mcpmesh/java-runtime:latest\n"
+        "FROM mcpmesh/typescript-runtime:${RUNTIME_TAG}\n"
+    )
+    assert _apply_handler("Docker Image Tags (Scaffold Dockerfile.tmpl)", text) == (
+        "FROM mcpmesh/python-runtime:3.4.0\n"
+        "FROM mcpmesh/java-runtime:latest\n"
+        "FROM mcpmesh/typescript-runtime:${RUNTIME_TAG}\n"
+    )
 
 
 def test_anchored_patterns_skip_third_party_pins():
