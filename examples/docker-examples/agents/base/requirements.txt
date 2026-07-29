@@ -2,7 +2,7 @@
 # The main mcp_mesh package is installed from source in the Dockerfile
 
 # FastAPI and HTTP server
-fastapi>=0.104.0
+fastapi>=0.135.0
 uvicorn>=0.24.0
 
 # HTTP client for inter-agent communication

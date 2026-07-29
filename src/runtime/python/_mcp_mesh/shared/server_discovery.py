@@ -301,7 +301,7 @@ class ServerDiscoveryUtil:
 
         Walks via ``iter_app_routes`` rather than ``app.router.routes``, so
         handlers mounted with ``include_router()`` are seen on FastAPI >=
-        0.139 (issue #1396) — they are no longer flattened into the app's own
+        0.137.0 (issue #1396) — they are no longer flattened into the app's own
         list. ``path`` is the effective path the app serves, so downstream
         consumers (route integration's match, and the ``METHOD:path`` route
         ids the heartbeat ships to the registry) stay correct at any include

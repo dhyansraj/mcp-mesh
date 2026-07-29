@@ -2,7 +2,7 @@
 
 Historically ``app.router.routes`` was a flat list: ``include_router()``
 copied every ``APIRoute`` off the mounted ``APIRouter`` into it, so walking
-that one list saw everything the app served. FastAPI 0.139 changed the
+that one list saw everything the app served. FastAPI 0.137.0 changed the
 representation — ``include_router()`` now appends a *single* entry that keeps
 a live reference to the user's ``APIRouter`` and derives the served
 ("effective") routes from it lazily. The mounted ``APIRoute`` objects are no
@@ -43,7 +43,7 @@ routes are not this app's ``@mesh.route`` surface, and mesh itself mounts the
 FastMCP app as a catch-all at ``""``. Requiring ``original_router`` keeps
 them out.
 
-On FastAPI < 0.139 nothing exposes ``original_router``, so the walk collapses
+On FastAPI < 0.137.0 nothing exposes ``original_router``, so the walk collapses
 to precisely the old flat iteration — no version branching anywhere.
 """
 
@@ -236,7 +236,7 @@ def invalidate_route_caches(app: Any) -> None:
     own view picked the rebuilt route up, and fails loudly if it did not
     (#1387's rule).
 
-    No-op on FastAPI < 0.139, which has no such cache.
+    No-op on FastAPI < 0.137.0, which has no such cache.
     """
     for router in iter_routers(app):
         mark = getattr(router, "_mark_routes_changed", None)
