@@ -110,6 +110,25 @@ def test_maven_coordinate_guard_reports_the_version_line():
     assert text.count("\n", 0, m.start("hit")) + 1 == 4
 
 
+def test_coverage_guard_catches_a_frozen_release_coordinate():
+    """#1405 gave the matcher the power to VETO a rewrite, which converts a
+    loud failure (a doc reads the wrong version) into a silent one (a
+    coordinate quietly stops tracking). An over-broad PROVENANCE_PROSE entry
+    would leave the docs landing page advertising the previous release while
+    the bump completes and both guards print green.
+
+    None of the other guard patterns matches a bare `vX` in prose, so this one
+    is the only thing standing between an over-veto and a bad release."""
+    old = "3.3.1"
+    assert _matches(old, "- **Latest Release**: v3.3.1")
+    assert _matches(old, "- **Latest Release**: 3.3.1")  # `v` optional
+    # ...and it clears once the bump has actually landed.
+    assert not _matches(old, "- **Latest Release**: v3.3.2")
+    # Whole-version token only: a longer version is not a stale 3.3.1.
+    assert not _matches(old, "- **Latest Release**: v3.3.10")
+    assert not _matches(old, "- **Latest Release**: v3.3.1rc1")
+
+
 def test_patch_bump_leaves_minor_tag():
     # The minor image tag (tag: "2.8") intentionally tracks the latest patch,
     # so a patch bump must NOT flag it as stale (to_minor unchanged)...
@@ -181,6 +200,12 @@ def test_overmatch_guard_clears_line_level_token():
     )
     # Prose form: "MCP Mesh v3.3.1 adds ..." — the space-separated spelling
     # counts, which is what keeps narrative docs out of the report.
+    #
+    # It is also why the guard is structurally blind to #1405: this exact line
+    # is a corrupted provenance claim (it read v1.0.0 when written), yet it
+    # clears, correctly, because the line really is about mesh. Ownership is
+    # not the question a dated claim raises. Only the matcher can answer it,
+    # which is why PROVENANCE_PROSE exists and no exemption was added.
     assert not _guard_on(
         "docs/concepts/architecture.md",
         "MCP Mesh v3.3.0 adds a media pipeline\n",
@@ -313,6 +338,7 @@ def _apply_handler(name: str, text: str, old="3.3.1", new="3.4.0") -> str:
             handler.replacement.replace("NEW", new_v),
             dry_run=False,
             flags=handler.flags,
+            line_excludes=handler.line_excludes,
         )
         return f.read_text()
 
@@ -370,14 +396,141 @@ def test_docs_v_prefix_handler_skips_docker_tags():
     between the slash and the v. That tag is the READER's image."""
     text = (
         "docker buildx build -t your-registry/my-agent:v3.3.1 --push .\n"
-        "MCP Mesh v3.3.1 adds a media pipeline\n"
+        "Install MCP Mesh v3.3.1 to get started\n"
         "see https://example.com/v3.3.1 for details\n"
     )
     assert _apply_handler("Documentation (vOLD)", text) == (
         "docker buildx build -t your-registry/my-agent:v3.3.1 --push .\n"
-        "MCP Mesh v3.4.0 adds a media pipeline\n"  # prose still updates
+        "Install MCP Mesh v3.4.0 to get started\n"  # undated prose still moves
         "see https://example.com/v3.3.1 for details\n"  # URL still skipped
     )
+
+
+def test_docs_v_prefix_handler_leaves_provenance_prose_alone():
+    """#1405. A sentence that DATES a behaviour states when it shipped — a
+    historical fact, not a coordinate. Bumping it is always wrong, and it
+    ratchets: four such sentences walked forward on every release for eight
+    releases, one of them since v1.0.0, until they claimed a v2.2.4 behaviour
+    had landed in whatever release was being cut."""
+    text = (
+        "Since v3.3.1, tool dispatch runs on a single-user loop.\n"
+        "Because v3.3.1 runs your lifespan on the user loop, this works.\n"
+        "### Matching semantics (as of v3.3.1)\n"
+        "Prior to v3.3.1, all entries used prefix matching.\n"
+        "The channel shipped in v3.3.1 and has not changed.\n"
+        "MCP Mesh v3.3.1 adds a media pipeline.\n"
+        "This was introduced in v3.3.1 and refined later.\n"
+        "Available since v3.3.1 on every runtime.\n"
+        "Starting with v3.3.1, the default flipped.\n"
+    )
+    assert _apply_handler("Documentation (vOLD)", text) == text
+
+
+def test_provenance_lead_in_tolerates_the_spellings_our_docs_use():
+    """The lead-in list is only useful if it matches how the docs are actually
+    written. `Since MCP Mesh vX` is the spelling docs/concepts/architecture.md
+    uses, and that file carried the longest-running corruption of the four —
+    a bare `\\s+v?\\d` lead-in would have kept right on ratcheting it.
+
+    The `<verb> in` entries mirror the trailing verb list: the two forms are
+    the same claim with the version on the other side of the verb, so a verb
+    covered in one direction and not the other is an arbitrary hole."""
+    text = (
+        # Filler between the lead-in and the version.
+        "Since MCP Mesh v3.3.1, tools share one loop.\n"
+        "Since mcp-mesh v3.3.1, tools share one loop.\n"
+        "As of the v3.3.1 release, this is the default.\n"
+        "Since the v3.3.1 release, this is the default.\n"
+        # Lead-in verbs mirrored from the trailing list.
+        "The flag was removed in v3.3.1 and has no replacement.\n"
+        "The flag was deprecated in v3.3.1.\n"
+        "The default was changed in v3.3.1.\n"
+        "The leak was fixed in v3.3.1.\n"
+        "The feature was released in v3.3.1.\n"
+        "The env var was renamed in v3.3.1.\n"
+        # Availability window.
+        "Supported in v3.3.1 and later on every runtime.\n"
+        "Supported in v3.3.1 or newer on every runtime.\n"
+        "Available from v3.3.1 onwards.\n"
+        # Hyphenated relative form (docs/environment-variables.md:421).
+        "# revert to pre-v3.3.1 immediate cancel-forward\n"
+        "This is post-v3.3.1 behaviour.\n"
+    )
+    assert _apply_handler("Documentation (vOLD)", text) == text
+
+
+def test_provenance_covers_parenthesised_version_labels():
+    """A version in parentheses labels WHICH release a heading, example or
+    column applies to — provenance in heading form.
+
+    The bare parenthetical is the genuinely exposed shape: `)` and `,` are
+    both in the handler's trailing character class. It is live today at
+    src/core/cli/man/content/headers.md:51 and :62, safe only because those
+    versions are historical. (An earlier `vX+` plus-suffix pattern could never
+    fire at all — `+` falls outside that class, so `(v3.3.1+)` never produced
+    a match to suppress.)"""
+    text = (
+        "### Migration note (v3.3.1 → v3.4.9)\n"
+        "# Before (v3.3.1):                    After (v3.4.9, pick one):\n"
+        "## Loop topology (v3.3.1+)\n"
+        "**Tag-Level OR** (v3.3.1+):\n"
+        "### Matching semantics (v3.3.1)\n"
+    )
+    assert _apply_handler("Documentation (vOLD)", text) == text
+    # The arrow's right-hand side has no preceding paren of its own, so the
+    # arrow rule is what protects it — check it in isolation.
+    assert (
+        _apply_handler("Documentation (vOLD)", "upgrade path v2.2.4 -> v3.3.1\n")
+        == "upgrade path v2.2.4 -> v3.3.1\n"
+    )
+
+
+def test_docs_v_prefix_handler_still_bumps_the_release_coordinate():
+    """The inverse risk, and the reason the exclusion tests overlap with the
+    matched version rather than the whole line: an over-broad rule would
+    silently freeze a genuine coordinate, and the docs landing page's
+    `**Latest Release**` line is exactly that — it names the CURRENT release
+    and must track every bump."""
+    assert _apply_handler(
+        "Documentation (vOLD)", "- **Latest Release**: v3.3.1\n"
+    ) == "- **Latest Release**: v3.4.0\n"
+    # Mixed line: the dated claim is pinned, the coordinate beside it is not.
+    assert _apply_handler(
+        "Documentation (vOLD)",
+        "Since v2.2.4 this is the default; upgrade to v3.3.1 to get it.\n",
+    ) == "Since v2.2.4 this is the default; upgrade to v3.4.0 to get it.\n"
+    # A dated claim naming the version being bumped is still pinned, even
+    # though the two versions are then identical.
+    assert _apply_handler(
+        "Documentation (vOLD)",
+        "Since v3.3.1 this is the default; upgrade to v3.3.1 to get it.\n",
+    ) == "Since v3.3.1 this is the default; upgrade to v3.4.0 to get it.\n"
+
+
+def test_provenance_exclusion_is_wired_to_the_prose_handler():
+    """The exclusion only works if it is actually attached. `Documentation
+    (vOLD)` is the sole handler that rewrites a bare version in running prose,
+    so it is the sole handler that can corrupt a dated claim — if a refactor
+    drops `line_excludes` from it, the ratchet silently resumes."""
+    handler = {h.name: h for h in bv.HANDLERS}["Documentation (vOLD)"]
+    assert handler.line_excludes is bv.PROVENANCE_PROSE
+    assert "docs/**/*.md" in handler.globs
+    assert "src/core/cli/man/content/**/*.md" in handler.globs
+
+
+def test_no_exemption_covers_bare_prose_versions():
+    """#1395 exempted `\\bvNEW\\b` in docs/concepts/stateful-agents.md, which
+    told the guard to stop reporting a rewrite that was itself wrong. An
+    exemption is only ever right when the rewrite is CORRECT but unprovable;
+    reaching for one to quiet a genuine mis-rewrite is what let #1405 run for
+    eight releases."""
+    for e in bv.OVERMATCH_ALLOWLIST:
+        anchor = _literal_anchor(e.pattern)
+        assert anchor not in ("v", ""), (
+            f"{e.glob}: pattern {e.pattern!r} exempts any bare prose version. "
+            "If a bare vX is being rewritten wrongly, fix the matcher "
+            "(PROVENANCE_PROSE), not the guard."
+        )
 
 
 def test_scaffold_dockerfile_handler_matches_old_only():

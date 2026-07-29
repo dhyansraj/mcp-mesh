@@ -412,7 +412,7 @@ A `kubectl`-style command-line tool that follows you from first agent to product
 
 ## :star: Project Status
 
-- **Latest Release**: v3.3.1 (March 2026)
+- **Latest Release**: v3.3.1
 - **License**: MIT
 - **Languages**: Python 3.11+, TypeScript/Node.js 18+, and Java 17+ (runtime), Go 1.23+ (registry)
 - **Status**: Production-ready, actively developed
