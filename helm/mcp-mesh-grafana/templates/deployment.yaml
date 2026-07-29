@@ -17,6 +17,10 @@ metadata:
     {{- include "mcp-mesh-grafana.labels" . | nindent 4 }}
 spec:
   replicas: 1
+  {{- with .Values.grafana.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "mcp-mesh-grafana.selectorLabels" . | nindent 6 }}

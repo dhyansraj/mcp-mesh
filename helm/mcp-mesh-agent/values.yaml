@@ -134,6 +134,35 @@ autoscaling:
   targetCPUUtilizationPercentage: 80
   targetMemoryUtilizationPercentage: 80
 
+# Deployment update strategy. Empty leaves the field unset, so Kubernetes
+# applies its own default (RollingUpdate) — right for the stateless default.
+# Set Recreate when the agent mounts a ReadWriteOnce volume (see persistence
+# below, whose accessMode defaults to ReadWriteOnce). RollingUpdate starts the
+# incoming pod before the outgoing one is gone; if the scheduler places it on
+# another node it cannot mount a ReadWriteOnce claim the outgoing pod still
+# holds, and the rollout deadlocks until someone deletes the old pod. Both
+# pods landing on one node is why single-node dev clusters never see this.
+#
+# Recreate trades that for a gap in service while the old pod terminates, and
+# with autoscaling.enabled the gap covers every replica at once, because
+# Recreate tears the whole set down before scheduling any replacement. Note
+# that persistence creates a single claim for the whole release, so
+# ReadWriteOnce is not compatible with more than one replica under either
+# strategy: with replicaCount > 1 or an active HPA, every replica scheduled
+# off the claim's node stays Pending. Recreate does not fix that combination —
+# use ReadWriteMany, or keep the agent at one replica.
+#
+# Set it at install time if you can. Switching an already-installed release
+# from RollingUpdate to Recreate is rejected by the API server, which
+# defaulted .spec.strategy.rollingUpdate on the live object: rollingUpdate
+# "may not be specified when strategy `type` is 'Recreate'". Under Helm 4 the
+# default server-side apply does not clear it and --force-conflicts does not
+# help, so run that one switch with `helm upgrade --server-side=false`; Helm 3
+# patches client-side and needs no flag. Deleting the Deployment and letting
+# Helm recreate it also works.
+strategy: {}
+  # type: Recreate
+
 nodeSelector: {}
 
 tolerations: []
