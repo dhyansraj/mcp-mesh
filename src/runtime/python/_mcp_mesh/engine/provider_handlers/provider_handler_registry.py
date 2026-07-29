@@ -52,7 +52,16 @@ class ProviderHandlerRegistry:
         ProviderHandlerRegistry.register("cohere", CohereHandler)
     """
 
-    # Built-in vendor mappings
+    # Built-in vendor mappings.
+    #
+    # !! CROSS-LANGUAGE DUPLICATE (issue #1383) !!
+    # ``meshctl scaffold`` re-implements this vendor -> native/LiteLLM split in
+    # Go (``nativeVendorPrefixes`` in ``src/core/cli/scaffold/model_dispatch.go``)
+    # so it can decide whether a generated ``requirements.txt`` needs the
+    # optional ``mcp-mesh[litellm]`` pin. Any vendor added or removed here must
+    # be mirrored there — a vendor that is native here but long-tail there
+    # installs 30MB it never uses; the reverse ships an agent that ImportErrors
+    # on its first request.
     _handlers: dict[str, type[BaseProviderHandler]] = {
         "anthropic": ClaudeHandler,
         "openai": OpenAIHandler,

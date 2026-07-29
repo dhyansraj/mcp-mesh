@@ -458,7 +458,8 @@ HANDLERS: list[Handler] = [
     Handler(
         name="Go Handler Templates (python_handler.go pip dep)",
         globs=["src/core/cli/handlers/python_handler.go"],
-        pattern=r"(mcp-mesh>=)OLD",
+        # Terminal boundary, same reason as the litellm pin below.
+        pattern=r"(mcp-mesh>=)OLD(?![\w.\-+])",
         replacement=r"\g<1>NEW",
         version_format="pep440",
     ),
@@ -483,7 +484,8 @@ HANDLERS: list[Handler] = [
     Handler(
         name="Go Handler Templates (language_test.go pip dep)",
         globs=["src/core/cli/handlers/language_test.go"],
-        pattern=r"(mcp-mesh==)OLD",
+        # Terminal boundary, same reason as the litellm pin below.
+        pattern=r"(mcp-mesh==)OLD(?![\w.\-+])",
         replacement=r"\g<1>NEW",
         version_format="pep440",
     ),
@@ -499,6 +501,22 @@ HANDLERS: list[Handler] = [
         globs=["cmd/meshctl/templates/typescript/*/package.json.tmpl"],
         pattern=r'("@mcpmesh/sdk":\s*"\^)OLD(")',
         replacement=r"\g<1>NEW\2",
+    ),
+    # The generated requirements.txt pins the optional LiteLLM extra for
+    # long-tail models (#1383). The version literal lives in the template — the
+    # same mechanism Dockerfile.tmpl uses one directory over — so both files in
+    # a scaffolded agent are bumped from here and can never disagree about
+    # which mesh version the image and its pip layer target.
+    Handler(
+        name="Scaffold Templates (Python requirements.txt.tmpl litellm extra)",
+        globs=["cmd/meshctl/templates/python/*/requirements.txt.tmpl"],
+        # Terminal boundary: without it OLD matches a PREFIX of a longer
+        # version, so a 3.3.1 -> 3.3.2 bump rewrites a `==3.3.10` pin into the
+        # nonexistent `==3.3.20`. Letters are excluded too — `3.3.1rc1` is a
+        # different PEP 440 version, not our pin.
+        pattern=r"(mcp-mesh\[litellm\]==)OLD(?![\w.\-+])",
+        replacement=r"\g<1>NEW",
+        version_format="pep440",
     ),
     # --- Category 12: Documentation (markdown) ----------------------------
     # Three patterns: --version OLD, <version>OLD</version>, vOLD.
@@ -555,7 +573,8 @@ HANDLERS: list[Handler] = [
     Handler(
         name="Example Requirements (requirements.txt)",
         globs=["examples/docker-examples/agents/*/requirements.txt"],
-        pattern=r"(mcp-mesh>=)OLD",
+        # Terminal boundary, same reason as the litellm pin above.
+        pattern=r"(mcp-mesh>=)OLD(?![\w.\-+])",
         replacement=r"\g<1>NEW",
         version_format="pep440",
     ),
@@ -923,10 +942,18 @@ def _guard_patterns(old: str, new: str | None = None) -> list[re.Pattern]:
         r"mcpmesh/(?:registry|python-runtime|typescript-runtime"
         r"|java-runtime|ui|cli):"
     )
-    boundary = r"(?![\d.\-+])"
+    # OLD must be the WHOLE version token, never a prefix of a longer one.
+    # Alphanumerics are excluded alongside `. - +` because a release segment
+    # can be followed directly by a letter: `2.8.0rc1` / `2.8.0b1` are
+    # different versions under PEP 440, and no handler would rewrite them, so
+    # flagging one as a stale `2.8.0` is a survivor the bump cannot clear.
+    boundary = r"(?![\w.\-+])"
     patterns = [
         re.compile(img + o + boundary),
-        re.compile(r"mcp-mesh(?:>=|==)" + op),
+        # Optional `[extras]` between the name and the specifier: a pip
+        # requirement may be written `mcp-mesh[litellm]==X` (#1383), and
+        # without the bracket group the guard reads straight past a stale one.
+        re.compile(r"mcp-mesh(?:\[[^\]]*\])?(?:>=|==)" + op + boundary),
         # package.json: "@mcpmesh/sdk": "^X" / "@mcpmesh/core": "X" (the key
         # quote, ": ", then the value's opening quote sit between the package
         # name and the version), plus the npm `@mcpmesh/sdk@^X` shorthand.

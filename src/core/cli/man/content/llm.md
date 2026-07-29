@@ -8,11 +8,11 @@ MCP Mesh provides first-class support for LLM-powered agents through the `@mesh.
 
 ## What's Included
 
-The `mcp-mesh` package includes LLM support out of the box via LiteLLM:
+The `mcp-mesh` package includes LLM support out of the box:
 
-- **Claude** (Anthropic)
-- **GPT** (OpenAI)
-- **And 100+ other providers** via LiteLLM
+- **Claude** (Anthropic), **GPT** (OpenAI) and **Gemini** (Google) dispatch
+  through bundled native SDK adapters
+- **100+ other providers** (Bedrock, Cohere, Ollama, …) dispatch through LiteLLM
 
 No additional packages needed. Just set your API keys:
 
@@ -20,6 +20,17 @@ No additional packages needed. Just set your API keys:
 export ANTHROPIC_API_KEY=sk-ant-...
 export OPENAI_API_KEY=sk-...
 ```
+
+**Note on LiteLLM**: the big-3 vendors above need nothing beyond the base
+install. LiteLLM is also part of the base install today, so long-tail providers
+work with no extra step either — but it is moving to an opt-in extra in a future
+major release. Declaring `mcp-mesh[litellm]` now is a no-op today and keeps a
+long-tail agent working across that change; `meshctl scaffold` already writes
+that pin into the generated `requirements.txt` when the selected model is not
+Anthropic, OpenAI, Gemini or Vertex AI. `vertex_ai/*` is native despite the
+long-tail-looking name: it runs the same Gemini models through the same bundled
+SDK, only the auth differs (ADC / Workload Identity instead of an AI Studio API
+key).
 
 ## @mesh.llm Decorator
 

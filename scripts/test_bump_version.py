@@ -44,6 +44,34 @@ def test_other_mesh_contexts():
     assert _matches(old, '  tag: "2.8"')  # minor-tag form
 
 
+def test_pip_requirement_with_extras():
+    """`mcp-mesh[litellm]==X` (#1383) is a pip requirement like any other —
+    the bracketed extras sit between the name and the specifier, which the
+    first cut of this pattern read straight past."""
+    old = "2.8.0"
+    assert _matches(old, "mcp-mesh[litellm]==2.8.0")
+    assert _matches(old, "pip install 'mcp-mesh[litellm]==2.8.0'")
+    assert _matches(old, "mcp-mesh[litellm,vertex]>=2.8.0")
+    assert _matches(old, "mcp-mesh==2.8.0")  # bare form still matches
+
+
+def test_pip_requirement_needs_a_whole_version_token():
+    """OLD must be the whole version, never a prefix of a longer one: without
+    a terminal boundary the guard reads `==2.8.00` as a stale `2.8.0`. Letters
+    count too — `2.8.0rc1` is a different version under PEP 440, and no
+    handler would rewrite it, so flagging it is a survivor nobody can clear."""
+    old = "2.8.0"
+    assert not _matches(old, "mcp-mesh[litellm]==2.8.00")
+    assert not _matches(old, "mcp-mesh[litellm]==2.8.0rc1")
+    assert not _matches(old, "mcp-mesh==2.8.0.post1")
+    # The same widened boundary is shared with the image-tag, npm and
+    # --version patterns; they must not regress on the exact form either.
+    assert not _matches(old, "FROM mcpmesh/cli:2.8.0rc1")
+    assert not _matches(old, "helm upgrade --version 2.8.0rc1")
+    assert _matches(old, "FROM mcpmesh/cli:2.8.0")
+    assert _matches(old, "helm upgrade --version 2.8.0")
+
+
 def _matches_multiline(old: str, text: str) -> bool:
     return any(p.search(text) for p in bv._guard_multiline_patterns(old))
 
@@ -365,6 +393,57 @@ def test_scaffold_dockerfile_handler_matches_old_only():
         "FROM mcpmesh/java-runtime:latest\n"
         "FROM mcpmesh/typescript-runtime:${RUNTIME_TAG}\n"
     )
+
+
+def test_scaffold_requirements_litellm_extra_handler():
+    """The generated requirements.txt pins the optional LiteLLM extra (#1383).
+    Only OUR pin moves — a user's third-party pin sitting at the same version
+    is not ours to bump."""
+    text = (
+        "# my-provider dependencies\n"
+        "mcp-mesh[litellm]==3.3.1\n"
+        "some-vendor-sdk==3.3.1\n"
+    )
+    assert _apply_handler(
+        "Scaffold Templates (Python requirements.txt.tmpl litellm extra)", text
+    ) == (
+        "# my-provider dependencies\n"
+        "mcp-mesh[litellm]==3.4.0\n"
+        "some-vendor-sdk==3.3.1\n"
+    )
+
+
+def test_scaffold_requirements_litellm_extra_is_not_prefix_matched():
+    """Terminal boundary: a 3.3.1 -> 3.3.2 bump used to rewrite the PREFIX of
+    a longer pin, turning `==3.3.10` into the nonexistent `==3.3.20`."""
+    text = "mcp-mesh[litellm]==3.3.10\nmcp-mesh[litellm]==3.3.1rc1\n"
+    assert (
+        _apply_handler(
+            "Scaffold Templates (Python requirements.txt.tmpl litellm extra)",
+            text,
+            old="3.3.1",
+            new="3.3.2",
+        )
+        == text
+    )
+
+
+def test_pip_pin_handlers_are_not_prefix_matched():
+    """The three sibling pip-pin handlers carried the same unbounded prefix
+    match: each must leave a longer version alone, and still bump its own."""
+    cases = [
+        ("Go Handler Templates (python_handler.go pip dep)", "mcp-mesh>="),
+        ("Go Handler Templates (language_test.go pip dep)", "mcp-mesh=="),
+        ("Example Requirements (requirements.txt)", "mcp-mesh>="),
+    ]
+    for name, prefix in cases:
+        skipped = f"{prefix}3.3.10\n{prefix}3.3.1rc1\n"
+        assert _apply_handler(name, skipped, old="3.3.1", new="3.3.2") == skipped, name
+        # The boundary must not over-block: the genuine pin still moves.
+        assert (
+            _apply_handler(name, f"{prefix}3.3.1\n", old="3.3.1", new="3.3.2")
+            == f"{prefix}3.3.2\n"
+        ), name
 
 
 def test_anchored_patterns_skip_third_party_pins():
