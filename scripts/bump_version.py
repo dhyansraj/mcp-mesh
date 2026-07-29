@@ -142,6 +142,123 @@ def record_changes(
 # ---------------------------------------------------------------------------
 
 
+# Sentences that DATE a behaviour — "Since v2.2.4, tool dispatch runs on a
+# single user loop", "MCP Mesh v1.0.0 adds a media pipeline". The version is a
+# historical fact recording when something shipped, not a coordinate that
+# tracks the current release, so rewriting it is always wrong.
+#
+# Left unprotected it also RATCHETS: every release walks the claim forward one
+# version, so it permanently reads "new in whatever you happen to be reading
+# about" and can never mark a real upgrade boundary. Four sentences ratcheted
+# this way for eight releases before #1405 caught them; one had been walking
+# since v1.0.0.
+#
+# Neither guard can catch this class. The line genuinely is mesh-related — it
+# is usually mesh prose, with "MCP Mesh" written out — so the over-match guard
+# clears it, and the coverage guard only looks for versions we MISSED. The fix
+# has to live here, in the matcher.
+#
+# Each pattern must span the version token itself: the exclusion is applied by
+# OVERLAP with the matched version (see `_sub_skipping_provenance`), not by
+# line. A line may carry both a provenance claim and a genuine current-version
+# coordinate, and only the claim is protected.
+# A version token as it appears in prose. `v` optional so a paren/hyphen form
+# still anchors when the handler's own `v` is the character being protected.
+_PV = r"v?\d+\.\d+(?:\.\d+)?"
+# Filler the lead-in phrases tolerate before the version. "Since MCP Mesh
+# v1.0.0 adds..." is the spelling docs/concepts/architecture.md actually uses,
+# and it was the longest-running corruption of the four.
+_PV_FILLER = r"(?:the\s+)?(?:mcp[-\s]?mesh\s+)?"
+
+PROVENANCE_PROSE: list[str] = [
+    # Lead-in form: a phrase introduces the version.
+    #   "Since v2.2.4, ..." / "(as of v1.4)" / "Prior to v1.4, ..."
+    #   "Since MCP Mesh v1.0.0, ..." / "As of the v3.4.0 release, ..."
+    # The `<verb> in` list mirrors the trailing verb list below — the two forms
+    # are the same claim with the version on the other side of the verb, so a
+    # verb covered in one direction and not the other is an arbitrary hole.
+    r"\b(?:since|because|as\s+of|new\s+in|prior\s+to|before|until"
+    r"|starting\s+(?:with|in|from)"
+    r"|available\s+(?:since|in|from)"
+    r"|(?:introduced|added|shipped|landed|released|removed|deprecated"
+    r"|changed|fixed|renamed|replaced|split|merged|gated|enabled|disabled"
+    r")\s+in"
+    r")\s+" + _PV_FILLER + _PV,
+    # Trailing form: the version is the subject of a "this release did X" verb.
+    #   "MCP Mesh v1.0.0 adds a media pipeline"
+    #   "Because v2.2.4 runs your lifespan AND your tools on the same loop"
+    _PV + r"\s+(?:adds|added|introduces|introduced|brings|brought|ships"
+    r"|shipped|gains|gained|changes|changed|drops|dropped|removes|removed"
+    r"|replaces|replaced|fixes|fixed|makes|made|runs|ran|moves|moved"
+    r"|switches|switched|deprecates|deprecated)\b",
+    # Availability window: "supported in v2.2 and later", "v2.2 onwards".
+    # Both readings of this form argue against bumping. As an availability
+    # claim it is provenance outright; as a minimum-requirement floor
+    # ("requires vX or newer") auto-bumping is still wrong, because it would
+    # assert that every release raises the floor. There is no reading under
+    # which the current release is the right answer, so no ambiguity to weigh.
+    _PV + r"\s+(?:and|or)\s+(?:later|newer|above|higher|greater|earlier"
+    r"|older|below)\b",
+    _PV + r"\s+onwards?\b",
+    # Hyphenated relative form: "pre-v2.2 immediate cancel-forward behavior"
+    # (docs/environment-variables.md, src/core/cli/man/content/environment.md).
+    r"\b(?:pre|post)-" + _PV,
+    # Parenthesised version label: "## Loop topology (v2.2.4+)",
+    # "### Migration note (v1.3 → v1.4)", "# Before (v1.3):",
+    # "After (v1.4, pick one):", "**Tag-Level OR** (v0.9.1+)".
+    #
+    # A version in parentheses labels WHICH release a heading, example or
+    # column applies to. That is provenance in heading form.
+    #
+    # This replaces an earlier `vX+` plus-suffix pattern that could never fire:
+    # `+` falls outside the handler's trailing character class, so `(v2.2.4+)`
+    # never produced a match to suppress. The genuinely exposed form is the
+    # BARE parenthetical — `)` and `,` are both in that class — which is live
+    # today at src/core/cli/man/content/headers.md:51 and :62 and safe only
+    # because those versions are historical.
+    #
+    # Checked against every `v\d+\.\d+` under this handler's globs: the sole
+    # live coordinate, `**Latest Release**: vX`, carries no parentheses, and
+    # coverage_guard now watches that line specifically in case it ever does.
+    r"\(\s*" + _PV,
+    # Migration arrow, whose right-hand side no paren precedes.
+    _PV + r"\s*(?:→|->)\s*" + _PV,
+]
+
+
+def _sub_skipping_provenance(
+    pattern: str,
+    replacement: str,
+    content: str,
+    flags: int,
+    line_excludes: list[str],
+) -> str:
+    """`re.sub`, except a match is left alone when an exclusion regex matches
+    the SAME characters on that line.
+
+    Overlap, not line membership, is the test. A line reading
+    ``Since v2.2.4 ... upgrade to mcp-mesh v3.3.1`` protects only the dated
+    claim; the trailing coordinate still bumps.
+    """
+    if not line_excludes:
+        return re.sub(pattern, replacement, content, flags=flags)
+
+    compiled = [re.compile(p, re.IGNORECASE) for p in line_excludes]
+
+    def _repl(m: re.Match) -> str:
+        line_start = content.rfind("\n", 0, m.start()) + 1
+        line_end = content.find("\n", m.end())
+        line = content[line_start:] if line_end == -1 else content[line_start:line_end]
+        lo, hi = m.start() - line_start, m.end() - line_start
+        for rgx in compiled:
+            for em in rgx.finditer(line):
+                if em.start() < hi and em.end() > lo:
+                    return m.group(0)
+        return m.expand(replacement)
+
+    return re.sub(pattern, _repl, content, flags=flags)
+
+
 def replace_in_file(
     filepath: Path,
     pattern: str,
@@ -149,12 +266,15 @@ def replace_in_file(
     dry_run: bool,
     flags: int = 0,
     source: str = "",
+    line_excludes: list[str] | None = None,
 ) -> bool:
     """Apply a regex replacement in a file. Returns True if changes were made."""
     if not filepath.exists():
         return False
     content = filepath.read_text()
-    new_content = re.sub(pattern, replacement, content, flags=flags)
+    new_content = _sub_skipping_provenance(
+        pattern, replacement, content, flags, line_excludes or []
+    )
     if new_content == content:
         return False
     record_changes(filepath, content, new_content, source or pattern)
@@ -181,6 +301,12 @@ class Handler:
     # when two handlers update the same file but you want to disambiguate
     # them in the report (e.g. the mcp-mesh-core dep entry in pypi).
     report_suffix: str = ""
+    # Regexes that VETO a replacement: if one of them matches the same
+    # characters as the version match, that occurrence is left alone. Only
+    # loose, prose-facing patterns need this — a handler anchored to a
+    # structural coordinate (`--version X`, `<version>X</version>`,
+    # `mcpmesh/registry:X`) cannot collide with prose in the first place.
+    line_excludes: list[str] = field(default_factory=list)
 
 
 def _glob_to_regex(pattern: str) -> re.Pattern:
@@ -307,6 +433,7 @@ def run_handler(handler: Handler, old: str, new: str, dry_run: bool) -> list[str
             dry_run,
             flags=handler.flags,
             source=handler.name,
+            line_excludes=handler.line_excludes,
         ):
             label = str(f.relative_to(PROJECT_ROOT))
             if handler.report_suffix:
@@ -568,6 +695,11 @@ HANDLERS: list[Handler] = [
         pattern=r"(?<![/:])vOLD(?=[\s,\)\]\"']|$)",
         replacement=r"vNEW",
         flags=re.MULTILINE,
+        # This is the only handler that rewrites a bare version in running
+        # prose, so it is the only one that can corrupt a dated claim (#1405).
+        # What survives is the genuine coordinate — `**Latest Release**: vX`
+        # on the docs landing page — which carries no dating phrase.
+        line_excludes=PROVENANCE_PROSE,
     ),
     # --- Category 14: Example agent requirements.txt ---------------------
     Handler(
@@ -963,6 +1095,20 @@ def _guard_patterns(old: str, new: str | None = None) -> list[re.Pattern]:
         re.compile(r"<mcp-mesh\.version>" + o + r"</mcp-mesh\.version>"),
         re.compile(r"--version\s+v?" + o + boundary),
         re.compile(r'tag:\s*"' + o + r'"'),
+        # The docs landing page's release coordinate — the one bare-prose
+        # version under docs/ that MUST track the release.
+        #
+        # PROVENANCE_PROSE (#1405) gives the matcher the power to VETO a
+        # rewrite, which converts a loud failure mode into a silent one: an
+        # over-broad veto would leave this line on the previous release while
+        # the bump completes and both guards print green. None of the patterns
+        # above matches a bare `vX` in prose, so nothing else would notice.
+        #
+        # This is the mirror image of the OVERMATCH_ALLOWLIST entry that
+        # anchors the same line from the opposite direction: that one says the
+        # rewrite is legitimate, this one says it is mandatory. Between them
+        # the new veto mechanism fails loud in both directions.
+        re.compile(r"\*\*Latest Release\*\*:\s*v?" + o + boundary),
     ]
     if new is None or to_minor(old) != to_minor(new):
         patterns.append(re.compile(r'tag:\s*"' + om + r'"'))
@@ -1127,17 +1273,20 @@ OVERMATCH_ALLOWLIST: list[Exemption] = [
             "the release, not an artifact."
         ),
     ),
-    Exemption(
-        glob="docs/concepts/stateful-agents.md",
-        pattern=r"\bvNEW\b",
-        reason=(
-            "narrative prose ('Since vX, lifespan and all tool bodies share "
-            "one loop') dating a runtime behavior change. The document is "
-            "about the mesh runtime, but these two sentences carry no "
-            "coordinate. Scoped to this one file so a bare vX anywhere else "
-            "in docs/ is still challenged."
-        ),
-    ),
+    # NOTE: there is deliberately no entry for the 'Since vX, lifespan and all
+    # tool bodies share one loop' prose in docs/concepts/stateful-agents.md.
+    # An exemption was added for it in #1395 and made things worse: the guard
+    # had correctly flagged a sentence its own reason text described as
+    # "dating a runtime behavior change" — which is precisely the signal that
+    # it must not be bumped. Silencing the guard left the handler free to keep
+    # corrupting the file, which is how the ratchet survived eight releases
+    # (#1405). The sentence is now protected in the matcher instead, by
+    # PROVENANCE_PROSE, so no exemption is needed: the line never changes.
+    #
+    # The general rule: an exemption is only ever the right answer when the
+    # rewrite is CORRECT but unprovable. If the guard fires on a rewrite that
+    # is itself wrong, fix the handler.
+    #
     # NOTE: the three sites that used to live here — the tutorial POM's own
     # <version> in docs/java/getting-started/index.md and quickstart_java.md,
     # and `your-registry/my-agent:vX` in the deployment man pages — were not
