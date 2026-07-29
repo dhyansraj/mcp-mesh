@@ -89,7 +89,7 @@ Create `pom.xml`:
         <dependency>
             <groupId>io.mcp-mesh</groupId>
             <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-            <version>3.3.1</version>
+            <version>3.3.2</version>
         </dependency>
     </dependencies>
 </project>

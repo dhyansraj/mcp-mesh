@@ -1,10 +1,55 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.3.1...HEAD)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.3.2...HEAD)
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.3.1...v3.3.2)
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.3.0...v3.3.1)
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.2.3...v3.3.0)
+
+## v3.3.2 (2026-07-28)
+
+A patch release, and an important one for Python `@mesh.route` users: **v3.3.1's declared FastAPI range resolves to versions where routes are silently broken.** On current FastAPI, SSE routes degrade to `application/jsonl` instead of `text/event-stream`, and handlers mounted with `include_router()` are never discovered at all, so they serve without mesh dependency injection. Neither failure is loud — startup succeeds, health checks pass, and the logs still claim success. Both are fixed here, alongside a published-manifest reconciliation and the first half of LiteLLM's move to an optional install. No wire, registry, resolution, or declaration-syntax changes.
+
+> **⚠️ Upgrade if you use `@mesh.route` on Python.** The declared FastAPI range is unchanged from 3.3.1 apart from a floor raise — what changed is that the code now works across it. Route integration is also fail-fast now, so an agent that started on 3.3.1 while serving a degraded route can refuse to start on 3.3.2; stage the rollout and see Notes.
+
+### 🌐 HTTP routes
+
+- **SSE `@mesh.route` endpoints no longer degrade to JSON on current FastAPI (#1387, #1389).** Route rebuilding depended on five private FastAPI internals, one of which was renamed in 0.140.5, and the resulting `ImportError` was swallowed by a broad `except` that then reported success. Rebuilding now goes through the public `APIRoute` constructor with zero private imports, and a rebuild failure aborts startup instead of being absorbed. Route-level `dependencies=[Depends(...)]`, silently dropped by the old hand-rebuild, are now preserved; verified across FastAPI 0.136.1 → 0.140.11, and an older-FastAPI regression job pinned at 0.136.1 now runs the route files in CI so both ends of the range are exercised.
+- **`@mesh.route` handlers mounted via `include_router()` are discovered again (#1396).** FastAPI stopped flattening included routers into the app's route list in 0.137.0, so those handlers — a documented pattern with its own example — ran as plain endpoints with no mesh dependency injection. Route walking now traverses included and nested routers using FastAPI's own effective paths, and an integration that doesn't take effect aborts startup rather than passing silently. Pre-existing rather than fallout from the fix above — it was broken in the configurations CI was green on, which is why it survived several releases.
+
+### 📦 Packaging and dependencies
+
+- **The published manifest is reconciled with the source manifest (#1385).** `packaging/pypi/pyproject.toml` — what `pip install mcp-mesh` resolves against — had drifted from the runtime's own: `jsonschema` (imported unguarded at module scope in `mesh/helpers.py`, so `mesh.llm_provider` fails without it) and `orjson` are now declared in base, and the `anthropic` and `google-genai` floors now match the versions that gate native structured output rather than silently degrading below them. ⚠️ This changes what a fresh install resolves — see Notes.
+- **The declared FastAPI floor is now a version that can actually be installed (#1402).** `fastapi>=0.104.0` was a compatibility claim the package could not honour: anything below 0.133 is unresolvable against the pinned `mcp`/`fastmcp`, which require a newer `starlette` and `anyio` than old FastAPI permits. The floor is now `>=0.135.0`, the first version where the route suite is green. This is a metadata correction, not fallout from the route rework — a sweep across 15 FastAPI versions found no degradation at any of them once the two fixes above were in.
+
+### 🤖 LLM
+
+- **LiteLLM is no longer required to use Anthropic, OpenAI or Gemini (#1383).** Those vendors already dispatch through mesh's bundled native SDK adapters, but six `import litellm` statements sat at function top in the provider entry points and executed before native dispatch was ever consulted. They now resolve at the point of genuine use, and when LiteLLM really is needed and missing, the failure is an actionable `ImportError` naming the model, the resolved vendor and the install command — instead of a bare `ModuleNotFoundError` at the first LLM call.
+- **A `mcp-mesh[litellm]` extra now exists, and `meshctl scaffold` pins it only for models that need it (#1383).** Nothing to do today: `litellm` remains a base dependency, so a plain `pip install mcp-mesh` is unchanged and installing the extra resolves to an identical package set. The extra exists so the guidance in the error above resolves rather than warning that no such extra is provided, and so that removing LiteLLM from the base install at the next major needs no further change on your side.
+
+### 🛠 CLI
+
+- **`meshctl man` was corrupting code spans and never styling list items (#1392).** The italic pass ran after backticks were stripped, so an underscore in one code span paired with the underscore in the next and injected ANSI mid-identifier — pervasive, given snake_case capabilities — while the list branches bypassed inline styling entirely. Code spans and links are now styled and stashed before the bold and italic passes, and list content is styled with markers left byte-identical. 83 corrupted code spans and 432 unstyled list lines, all now clear.
+
+### 📝 Docs
+
+- **The positional dependency-injection contract is restated, and broken Java examples fixed (#1384).** The rule was written in an apologetic register that read like a defect report; it is now stated plainly as one side of a real design fork, de-duplicated to a canonical note, and added to the Java `meshctl man` surface, which never carried it. Several Java snippets that did not compile or would not bind were corrected against the real annotations, and the load-bearing property — an unresolved dependency leaves its own slot null without shifting the others — is now pinned by tests in TypeScript and Java as well as Python.
+- **Four documentation sentences were misdating a behaviour change (#1405).** They record when a behaviour shipped ("Since vX, …"), but `bump_version.py` treated them as version coordinates and ratcheted them forward on every release; the loop-topology and architecture notes now correctly read v2.2.4 and v1.0.0. The bumper no longer rewrites this form of prose.
+
+### 🔧 Release tooling
+
+- **`bump_version.py` gains an over-match guard, so a release bump can no longer silently rewrite a third-party pin (#1394).** That failure mode took down the v3.3.1 Java publish after PyPI, npm and crates had already gone out; every changed line must now be provably mesh-owned, nine patterns are anchored, and three historical artifacts still in the tree are reverted — including `maven-surefire-plugin`, restored to its genuine `3.2.2` pin (build-time only, not consumer-facing). Anchoring also stopped five documentation sites from telling readers to tag *their own* agent with mcp-mesh's version.
+
+### ⚠️ Notes
+
+- **Upgrade if you use `@mesh.route` on Python.** Both route defects fail silently on 3.3.1 against current FastAPI. Other runtimes, and Python agents that don't use `@mesh.route`, are unaffected.
+- **⚠️ Route integration is now fail-fast.** A `@mesh.route` that mesh cannot rebuild — including one whose owning route list it cannot locate, and one whose rebuild does not take effect — now aborts startup instead of being counted and discarded. An agent that started on 3.3.1 while serving a silently degraded route can therefore refuse to start on 3.3.2, so stage the rollout rather than treating this as a drop-in patch.
+- **Fresh installs resolve differently.** In the published manifest that `pip install mcp-mesh` resolves against: `anthropic` `>=0.42` → `>=0.77`, `google-genai` `>=0.8.0` → `>=1.22`, `fastapi` `>=0.104.0` → `>=0.135.0` (below 0.133 was never installable against the pinned `mcp`/`fastmcp`), and `typer` is loosened `>=0.9.1` → `>=0.9.0`. `orjson` is now declared in base, so a fresh install gains a package it never received transitively. Existing environments are unchanged until you reinstall, and editable installs from source already carried the newer floors.
+- **The FastAPI upper bound is unchanged.** A `<0.140.5` ceiling was added and removed inside this release window and never shipped, so the declared range differs from 3.3.1 only by the floor.
+- **The `[litellm]` extra requires no action.** `litellm` is still installed by default; the extra is additive today and only becomes load-bearing when the base dependency is removed at a future major.
+- **No wire, registry, resolution, or declaration-syntax changes.**
 
 ## v3.3.1 (2026-07-23)
 
