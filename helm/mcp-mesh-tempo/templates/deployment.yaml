@@ -17,6 +17,10 @@ metadata:
     {{- include "mcp-mesh-tempo.labels" . | nindent 4 }}
 spec:
   replicas: 1
+  {{- with .Values.tempo.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "mcp-mesh-tempo.selectorLabels" . | nindent 6 }}

@@ -102,6 +102,7 @@ helm uninstall my-agent -n mcp-mesh
 | Parameter                   | Description                            | Default                    |
 | --------------------------- | -------------------------------------- | -------------------------- |
 | `replicaCount`              | Number of replicas                     | `1`                        |
+| `strategy`                  | Deployment update strategy (unset = Kubernetes default `RollingUpdate`; set `{type: Recreate}` for ReadWriteOnce `persistence`) | `{}` |
 | `image.repository`          | Container image repository             | `"mcpmesh/python-runtime"` |
 | `image.pullPolicy`          | Image pull policy                      | `IfNotPresent`             |
 | `image.tag`                 | Image tag (overrides chart appVersion) | `"0.9"`                    |
@@ -109,6 +110,12 @@ helm uninstall my-agent -n mcp-mesh
 | `resources.limits.memory`   | Memory limit                           | `1Gi`                      |
 | `resources.requests.cpu`    | CPU request                            | `100m`                     |
 | `resources.requests.memory` | Memory request                         | `256Mi`                    |
+
+> **`strategy` and ReadWriteOnce volumes:** with the default `RollingUpdate`, Kubernetes starts the incoming pod before the outgoing one is gone. If the scheduler places it on another node it cannot mount a ReadWriteOnce claim the outgoing pod still holds, and the rollout deadlocks until someone deletes the old pod. Both pods landing on one node is why single-node dev clusters (kind, minikube, Docker Desktop) never see this. Set `strategy: {type: Recreate}` whenever `persistence.enabled` is true with the default `accessMode: ReadWriteOnce`.
+>
+> `Recreate` costs a gap in service while the old pod terminates, and when `autoscaling.enabled` is true that gap covers every replica at once, since `Recreate` tears the whole set down before scheduling any replacement. Note that `persistence` creates a **single** claim for the whole release, so ReadWriteOnce is not compatible with more than one replica under either strategy: with `replicaCount > 1` or an active HPA, every replica scheduled off the claim's node stays `Pending`. `Recreate` does not fix that combination — use ReadWriteMany, or keep the agent at one replica.
+>
+> Set it at install time if you can. Switching an **already-installed** release from `RollingUpdate` to `Recreate` is rejected by the API server — it defaulted `.spec.strategy.rollingUpdate` on the live object, and `rollingUpdate` "may not be specified when strategy `type` is 'Recreate'". Under **Helm 4** the default server-side apply does not clear it and `--force-conflicts` does not help, so run that one switch with `helm upgrade --server-side=false`; **Helm 3** patches client-side and needs no flag. Deleting the Deployment and letting Helm recreate it also works.
 
 > **Upgrade note:** `podSecurityContext` (runAsNonRoot, uid/gid 999, fsGroup 999, RuntimeDefault seccomp) is now always applied — it was previously gated behind the removed `podSecurityPolicy.enabled` flag and never rendered. It covers user-supplied `initContainers` (an init container that must run as root needs its own `securityContext`, which overrides the pod level), and `fsGroup: 999` changes group ownership of mounted volumes, including PVCs from `extraVolumes`.
 

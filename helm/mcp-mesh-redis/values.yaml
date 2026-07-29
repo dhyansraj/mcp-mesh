@@ -38,6 +38,29 @@ persistence:
   size: 8Gi
   annotations: {}
 
+# Deployment update strategy. Empty leaves the field unset, so Kubernetes
+# applies its own default (RollingUpdate), which is right for this chart: the
+# redis-data mount is an emptyDir cache, so a pod swap contends over nothing
+# and there is no reason to change this.
+#
+# The key is a passthrough for the case where you have pointed this Deployment
+# at a ReadWriteOnce volume yourself — set Recreate there. RollingUpdate starts
+# the incoming pod before the outgoing one is gone; if the scheduler places it
+# on another node it cannot mount a ReadWriteOnce claim the outgoing pod still
+# holds, and the rollout deadlocks until someone deletes the old pod. Both pods
+# landing on one node is why single-node dev clusters never see this.
+#
+# Set it at install time if you can. Switching an already-installed release
+# from RollingUpdate to Recreate is rejected by the API server, which
+# defaulted .spec.strategy.rollingUpdate on the live object: rollingUpdate
+# "may not be specified when strategy `type` is 'Recreate'". Under Helm 4 the
+# default server-side apply does not clear it and --force-conflicts does not
+# help, so run that one switch with `helm upgrade --server-side=false`; Helm 3
+# patches client-side and needs no flag. Deleting the Deployment and letting
+# Helm recreate it also works.
+strategy: {}
+  # type: Recreate
+
 # Resource limits
 resources:
   limits:
