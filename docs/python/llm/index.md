@@ -38,7 +38,10 @@ export OPENAI_API_KEY=sk-...
     release. Declaring `mcp-mesh[litellm]` now is a no-op today and keeps a
     long-tail agent working across that change; `meshctl scaffold` already
     writes that pin into the generated `requirements.txt` when the selected
-    model is not Anthropic, OpenAI or Gemini.
+    model is not Anthropic, OpenAI, Gemini or Vertex AI. `vertex_ai/*` is
+    native despite the long-tail-looking name: it runs the same Gemini models
+    through the same bundled SDK, only the auth differs (ADC / Workload
+    Identity instead of an AI Studio API key).
 
 ## @mesh.llm Decorator
 

@@ -115,9 +115,10 @@ LLM agent flags (`llm` and `llm-provider` subcommands):
 | `--filter-mode`     | Filter mode: `all` (default), `best_match`, `*` (wildcard) — companion to `--filter` |
 
 Python `llm-provider` agents get a `mcp-mesh[litellm]` pin in the generated
-`requirements.txt` when `--model` names a vendor outside Anthropic, OpenAI and
-Gemini (those three dispatch through bundled native SDK adapters). See
-`meshctl man llm`.
+`requirements.txt` when `--model` names a vendor outside Anthropic, OpenAI,
+Gemini and Vertex AI (those dispatch through bundled native SDK adapters —
+`vertex_ai/*` runs the same Gemini models through the same SDK, only the auth
+differs). See `meshctl man llm`.
 
 Docker compose flags (top-level scaffold, no subcommand):
 
