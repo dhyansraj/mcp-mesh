@@ -175,6 +175,12 @@ helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
 Service hostnames use short names (e.g., `mcp-core-mcp-mesh-registry`) that resolve
 within the same namespace automatically. No FQDN changes needed.
 
+Matching the two matters: `-n` is where every component is deployed, while
+`global.namespace` names the `Namespace` object the core chart renders
+(`namespaceCreate`, default `true`). Leave them mismatched and you get a stray,
+empty `mcp-mesh` namespace alongside the one you deployed into — and multiple
+core releases will contend for that one shared object.
+
 For **multi-tenant** clusters (separate core per team), deploy each core to its own namespace:
 
 ```bash

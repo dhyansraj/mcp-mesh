@@ -263,6 +263,13 @@ DIVERGING value — user intent that would silently no-op — fails.
 - security.tls.certFile/keyFile: never consumed; the cert and key paths are
   fixed (/etc/tls/<certKey|keyKey>). Shipped as "" in the old values.yaml,
   so empty is tolerated; only a non-empty value fails.
+- createNamespace: unlike the rest of this list this key WAS consumed, by a
+  templates/namespace.yaml that rendered a release-owned Namespace. It was
+  never declared in values.yaml and never documented, so it only ever fired
+  for someone who set it deliberately. The template is gone — an owned
+  Namespace makes `helm uninstall` cascade to every resource in it — so a
+  carried value would now silently no-op. Only a truthy value fails;
+  createNamespace: false is a no-op either way.
 */}}
 {{- define "mcp-mesh-registry.validateNoRemovedKeys" -}}
 {{/* Old shipped defaults, verbatim from the v2.4.0 umbrella values.yaml. */}}
@@ -323,6 +330,9 @@ DIVERGING value — user intent that would silently no-op — fails.
 {{- if get $tls $key -}}
 {{- fail (printf "registry.security.tls.%s was never consumed and has been removed (set to %q, so it would silently no-op); the cert and key are mounted from registry.security.tls.secretName at /etc/tls/<certKey|keyKey>" $key (toString (get $tls $key))) -}}
 {{- end -}}
+{{- end -}}
+{{- if .Values.createNamespace -}}
+{{- fail "createNamespace has been removed; it rendered a release-owned Namespace, which makes `helm uninstall` delete the namespace and cascade to every resource in it. Create the namespace out of band instead: `helm install --create-namespace` or Argo CD's `syncOptions: CreateNamespace=true` — neither ties the namespace to the release" -}}
 {{- end -}}
 {{- end }}
 
