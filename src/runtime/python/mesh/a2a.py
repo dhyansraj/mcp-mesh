@@ -1469,7 +1469,7 @@ def mount(
         # this agent — clients would then call the wrong handler.
         #
         # The scan covers include_router() mounts too (issue #1396): those
-        # stopped being flattened into ``app.router.routes`` in FastAPI 0.139,
+        # stopped being flattened into ``app.router.routes`` in FastAPI 0.137.0,
         # so a top-level-only scan was blind to exactly the foreign route this
         # guard exists to catch, and ``add_api_route`` below would have added
         # a second registration for the same path.

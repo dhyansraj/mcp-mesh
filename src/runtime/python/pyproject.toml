@@ -57,7 +57,13 @@ requires-python = ">=3.11"
 # native google-genai SDK; without it they would silently fall back to
 # LiteLLM.
 dependencies = [
-    "fastapi>=0.104.0",
+    # Floor raised to 0.135.0 (#1402). Below 0.133.0 FastAPI is unresolvable
+    # against our own mcp/fastmcp pins (mcp==1.28.1 needs anyio>=4.5 vs old
+    # FastAPI's anyio<4.0.0; fastmcp==3.4.3 needs starlette>=1.0.1 vs
+    # FastAPI's starlette<1.0.0 cap, lifted in 0.133.0). 0.133/0.134 install
+    # but the route/SSE suite is not green until 0.135.0, where is_sse_stream
+    # lands.
+    "fastapi>=0.135.0",
     "uvicorn>=0.24.0",
     "httpx>=0.25.0",
     "aiohttp>=3.8.0",

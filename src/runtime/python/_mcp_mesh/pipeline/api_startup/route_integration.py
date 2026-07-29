@@ -736,7 +736,7 @@ class RouteIntegrationStep(PipelineStep):
             #
             # ``iter_app_routes`` also reaches routes mounted with
             # ``include_router()``, which stopped being flattened into
-            # ``app.router.routes`` in FastAPI 0.139 (issue #1396). It reports
+            # ``app.router.routes`` in FastAPI 0.137.0 (issue #1396). It reports
             # each route's EFFECTIVE path, matching what discovery recorded in
             # ``route_info["path"]``, and the mutable list that owns it.
             #

@@ -1,6 +1,6 @@
 """Regression tests for issue #1396 — @mesh.route through ``include_router()``.
 
-FastAPI 0.139 stopped flattening an included ``APIRouter``'s ``APIRoute``
+FastAPI 0.137.0 stopped flattening an included ``APIRouter``'s ``APIRoute``
 objects into ``app.router.routes``; the app now holds a single entry that
 derives the served routes from the router lazily. Every mesh site that walked
 ``app.router.routes`` went blind to those handlers, so ``@mesh.route`` on an
@@ -64,7 +64,7 @@ def _paths(app):
 
 
 def _flattens_included_routers(app) -> bool:
-    """True on FastAPI < 0.139, where include_router() copies routes over."""
+    """True on FastAPI < 0.137.0, where include_router() copies routes over."""
     return not any(hasattr(entry, "original_router") for entry in app.router.routes)
 
 
