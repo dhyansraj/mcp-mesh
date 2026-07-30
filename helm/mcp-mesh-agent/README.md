@@ -102,7 +102,7 @@ helm uninstall my-agent -n mcp-mesh
 | Parameter                   | Description                            | Default                    |
 | --------------------------- | -------------------------------------- | -------------------------- |
 | `replicaCount`              | Number of replicas                     | `1`                        |
-| `strategy`                  | Deployment update strategy (unset = Kubernetes default `RollingUpdate`; set `{type: Recreate}` for ReadWriteOnce `persistence`) | `{}` |
+| `strategy`                  | Deployment update strategy (unset = Kubernetes default `RollingUpdate`; pin `rollingUpdate.maxSurge: 0` for ReadWriteOnce `persistence`) | `{}` |
 | `image.repository`          | Container image repository             | `"mcpmesh/python-runtime"` |
 | `image.pullPolicy`          | Image pull policy                      | `IfNotPresent`             |
 | `image.tag`                 | Image tag (overrides chart appVersion) | `"0.9"`                    |
@@ -111,13 +111,21 @@ helm uninstall my-agent -n mcp-mesh
 | `resources.requests.cpu`    | CPU request                            | `100m`                     |
 | `resources.requests.memory` | Memory request                         | `256Mi`                    |
 
-> **`strategy` and ReadWriteOnce volumes:** with the default `RollingUpdate`, Kubernetes starts the incoming pod before the outgoing one is gone. If the scheduler places it on another node it cannot mount a ReadWriteOnce claim the outgoing pod still holds, and the rollout deadlocks until someone deletes the old pod. Both pods landing on one node is why single-node dev clusters (kind, minikube, Docker Desktop) never see this. Set `strategy: {type: Recreate}` whenever `persistence.enabled` is true with the default `accessMode: ReadWriteOnce`.
+> **`strategy` and ReadWriteOnce volumes:** the unset default gets Kubernetes' `RollingUpdate` with `maxSurge: 25%`, which starts the incoming pod before the outgoing one is gone — correct for a stateless agent, wrong the moment one mounts a ReadWriteOnce claim. If the scheduler places the incoming pod on another node it cannot mount the claim the outgoing pod still holds, and the rollout hangs indefinitely on a `Multi-Attach` error. Both pods landing on one node is why single-node dev clusters (kind, minikube, Docker Desktop) never see this. Whenever `persistence.enabled` is true with the default `accessMode: ReadWriteOnce`, pin the surge to zero:
 >
-> `Recreate` costs a gap in service while the old pod terminates, and when `autoscaling.enabled` is true that gap covers every replica at once, since `Recreate` tears the whole set down before scheduling any replacement. Note that `persistence` creates a **single** claim for the whole release, so ReadWriteOnce is not compatible with more than one replica under either strategy: with `replicaCount > 1` or an active HPA, every replica scheduled off the claim's node stays `Pending`. `Recreate` does not fix that combination — use ReadWriteMany, or keep the agent at one replica.
+> ```yaml
+> strategy:
+>   type: RollingUpdate
+>   rollingUpdate:
+>     maxSurge: 0
+>     maxUnavailable: 1
+> ```
 >
-> Set it at install time if you can. Switching an **already-installed** release from `RollingUpdate` to `Recreate` is rejected by the API server — it defaulted `.spec.strategy.rollingUpdate` on the live object, and `rollingUpdate` "may not be specified when strategy `type` is 'Recreate'". Under **Helm 4** the default server-side apply does not clear it and `--force-conflicts` does not help, so run that one switch with `helm upgrade --server-side=false`; **Helm 3** patches client-side and needs no flag. Deleting the Deployment and letting Helm recreate it also works.
+> `maxUnavailable` must stay non-zero — the API server rejects `maxSurge` and `maxUnavailable` both being `0`. This applies cleanly to an already-installed release under both Helm 3 and Helm 4, with no extra flags, because it replaces the API-defaulted `rollingUpdate` block rather than trying to remove it. It costs a gap in service while the old pod terminates, plus one transient `FailedAttachVolume`/`Multi-Attach` event per rollout — the scale-down and the scale-up are issued in the same second, so the replacement is created while the CSI driver is still detaching. It clears once the detach completes and the rollout converges without intervention. (This is what `mcp-mesh-grafana` and `mcp-mesh-tempo` ship as their default, since both are single-replica with a ReadWriteOnce claim enabled out of the box.)
+>
+> This only makes ReadWriteOnce safe at one replica. `persistence` creates a **single** claim for the whole release, so with `replicaCount > 1` or an active HPA, every replica scheduled off the claim's node stays `Pending` no matter what strategy is set — use ReadWriteMany, or keep the agent at one replica.
 
-> **Upgrade note:** `podSecurityContext` (runAsNonRoot, uid/gid 999, fsGroup 999, RuntimeDefault seccomp) is now always applied — it was previously gated behind the removed `podSecurityPolicy.enabled` flag and never rendered. It covers user-supplied `initContainers` (an init container that must run as root needs its own `securityContext`, which overrides the pod level), and `fsGroup: 999` changes group ownership of mounted volumes, including PVCs from `extraVolumes`.
+> **Upgrade note:** `podSecurityContext` (runAsNonRoot, uid/gid 999, fsGroup 999, RuntimeDefault seccomp) is now always applied — it was previously gated behind the removed `podSecurityPolicy.enabled` flag and never rendered. It covers user-supplied `initContainers` (an init container that must run as root needs both `runAsUser: 0` and `runAsNonRoot: false` in its own `securityContext`, because a container-level context overrides only the fields it sets — `runAsUser: 0` alone still inherits the pod's `runAsNonRoot: true`, and the kubelet refuses to start it with `container has runAsNonRoot and image will run as root` — and only where the namespace's Pod Security Standards level and any cluster policy permit running as root), and `fsGroup: 999` changes group ownership of mounted volumes, including PVCs from `extraVolumes`.
 
 ### Agent Code Configuration
 

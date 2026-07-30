@@ -44,22 +44,25 @@ persistence:
 # and there is no reason to change this.
 #
 # The key is a passthrough for the case where you have pointed this Deployment
-# at a ReadWriteOnce volume yourself — set Recreate there. RollingUpdate starts
-# the incoming pod before the outgoing one is gone; if the scheduler places it
-# on another node it cannot mount a ReadWriteOnce claim the outgoing pod still
-# holds, and the rollout deadlocks until someone deletes the old pod. Both pods
-# landing on one node is why single-node dev clusters never see this.
+# at a ReadWriteOnce volume yourself. Any maxSurge starts the incoming pod
+# before the outgoing one is gone; if the scheduler places it on another node it
+# cannot mount the claim the outgoing pod still holds, and the rollout hangs
+# indefinitely on a Multi-Attach error. Both pods landing on one node is why
+# single-node dev clusters never see this. For that case pin the surge to zero:
 #
-# Set it at install time if you can. Switching an already-installed release
-# from RollingUpdate to Recreate is rejected by the API server, which
-# defaulted .spec.strategy.rollingUpdate on the live object: rollingUpdate
-# "may not be specified when strategy `type` is 'Recreate'". Under Helm 4 the
-# default server-side apply does not clear it and --force-conflicts does not
-# help, so run that one switch with `helm upgrade --server-side=false`; Helm 3
-# patches client-side and needs no flag. Deleting the Deployment and letting
-# Helm recreate it also works.
+#   strategy:
+#     type: RollingUpdate
+#     rollingUpdate:
+#       maxSurge: 0
+#       maxUnavailable: 1
+#
+# maxUnavailable must stay non-zero — the API server rejects both being 0. This
+# applies cleanly to an already-installed release under both Helm 3 and Helm 4
+# with no extra flags, because it replaces the API-defaulted rollingUpdate block
+# rather than trying to remove it. Expect one transient
+# FailedAttachVolume/Multi-Attach event per rollout while the CSI driver
+# detaches; it clears on its own.
 strategy: {}
-  # type: Recreate
 
 # Resource limits
 resources:

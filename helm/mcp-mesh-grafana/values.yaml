@@ -31,30 +31,32 @@ grafana:
     accessModes:
       - ReadWriteOnce
 
-  # Deployment update strategy. Empty leaves the field unset, so Kubernetes
-  # applies its own default (RollingUpdate).
+  # Deployment update strategy. Empty gets the chart's default: RollingUpdate
+  # with maxSurge: 0 and maxUnavailable: 1, which terminates the outgoing pod
+  # before scheduling its replacement. That ordering is required, not tuning —
+  # this chart runs a single replica against the ReadWriteOnce volume above, and
+  # with any maxSurge the incoming pod can be scheduled to another node, where
+  # it hangs indefinitely on a Multi-Attach error waiting for a claim the
+  # outgoing pod still holds. On a single-node cluster it mounts instead, which
+  # is worse rather than better: two Grafana processes briefly write the same
+  # SQLite database. At one replica there is no availability to preserve, so the
+  # only cost of ordering the swap is a gap in dashboards while the old pod
+  # terminates. `type: Recreate` is redundant here — maxSurge: 0 already orders
+  # the swap, and leaving type as RollingUpdate keeps .spec.strategy freely
+  # transitionable on later upgrades.
   #
-  # On a multi-node cluster you almost certainly want Recreate here, because
-  # this chart runs a single replica against the ReadWriteOnce volume above.
-  # RollingUpdate starts the incoming pod before the outgoing one is gone; if
-  # the scheduler places it on another node it cannot mount a ReadWriteOnce
-  # claim the outgoing pod still holds, and the rollout deadlocks until someone
-  # deletes the old pod. Both pods landing on one node is why single-node dev
-  # clusters never see this — and in that case it is still wrong, because two
-  # Grafana processes would write the same SQLite database. With replicas fixed
-  # at 1 there is no availability to preserve either way, so Recreate costs
-  # only a gap in dashboards while the old pod terminates.
+  # Expect one transient FailedAttachVolume/Multi-Attach event per pod-template
+  # change: Kubernetes issues the scale-down and the scale-up in the same
+  # second, so the replacement is created while the CSI driver is still
+  # detaching the volume from the old node. It clears once the detach completes
+  # — under a minute in practice, bounded by terminationGracePeriodSeconds plus
+  # detach time — and the rollout converges with no intervention. The event is
+  # logged, not silent.
   #
-  # It is not the default because switching an already-installed release from
-  # RollingUpdate to Recreate is rejected by the API server, which defaulted
-  # .spec.strategy.rollingUpdate on the live object: rollingUpdate "may not be
-  # specified when strategy `type` is 'Recreate'". Under Helm 4 the default
-  # server-side apply does not clear it and --force-conflicts does not help, so
-  # run that one switch with `helm upgrade --server-side=false`; Helm 3 patches
-  # client-side and needs no flag. Deleting the Deployment and letting Helm
-  # recreate it also works. Setting it at install time avoids all of this.
+  # Overrides are deep-merged into the above, so set only the keys you mean to
+  # change. Note that maxUnavailable must stay non-zero while maxSurge is 0:
+  # the API server rejects both being 0.
   strategy: {}
-    # type: Recreate
 
   service:
     type: ClusterIP

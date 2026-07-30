@@ -17,10 +17,25 @@ metadata:
     {{- include "mcp-mesh-tempo.labels" . | nindent 4 }}
 spec:
   replicas: 1
-  {{- with .Values.tempo.strategy }}
+  {{- /* One replica against a ReadWriteOnce claim: the incoming pod must not
+         start before the outgoing one has released the volume, or it hangs on
+         Multi-Attach when the scheduler picks another node. maxSurge: 0 gets
+         that ordering while leaving type as RollingUpdate, so there is no
+         API-defaulted .rollingUpdate block to clear on upgrade (which is what
+         makes a switch to Recreate fail). Defaults are derived here rather
+         than in values.yaml because strategy is deep-merged: an operator who
+         sets only type would otherwise inherit rollingUpdate too and be
+         rejected with "may not be specified when strategy `type` is
+         'Recreate'". */}}
+  {{- $st := .Values.tempo.strategy | default dict }}
+  {{- $type := $st.type | default "RollingUpdate" }}
   strategy:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
+    type: {{ $type }}
+    {{- if eq $type "RollingUpdate" }}
+    rollingUpdate:
+      maxSurge: {{ dig "rollingUpdate" "maxSurge" 0 $st }}
+      maxUnavailable: {{ dig "rollingUpdate" "maxUnavailable" 1 $st }}
+    {{- end }}
   selector:
     matchLabels:
       {{- include "mcp-mesh-tempo.selectorLabels" . | nindent 6 }}
