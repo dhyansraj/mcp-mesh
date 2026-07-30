@@ -399,6 +399,25 @@ public class MeshToolWrapper implements McpToolHandler {
         this.slotToDepIndex = binding.slotToDepIndex();
         this.meshJobDepIndex = binding.jobDepIndex();
 
+        // Issue #1401: arity check at parity with Python's
+        // validate_mesh_dependencies. WARN by default, boot failure under
+        // MCP_MESH_STRICT_DI. The binding carries explicitDepCount as its
+        // pairable count, so @MeshService view edges — which own no injectable
+        // parameter — cannot read as phantom excess dependencies. MeshLlmAgent
+        // parameters are absent from both sides by construction: @MeshLlm has
+        // no dependencies member, so an LLM slot consumes no declared index.
+        //
+        // A MeshJob parameter on a task=true tool is the PRODUCER's inbound job
+        // controller, filled by the dispatch path — JobsRuntimeManager.wireConsumers
+        // skips task() tools outright, so a producer normally declares nothing for
+        // it. It MAY still declare a capability at the job slot's index (the
+        // pairing table honours the resulting skew), so both counts are sound and
+        // the check takes a range. A CONSUMER's MeshJob slot is a submitter proxy
+        // and must be backed: the declared capability is what it binds to.
+        int slotCount = binding.slots().size();
+        int minSlots = (task && meshJobParamIndex != null) ? slotCount - 1 : slotCount;
+        MeshDiValidator.checkArity("@MeshTool", binding, minSlots, slotCount);
+
         // Generate input schema (excluding injected params)
         this.inputSchema = generateInputSchema();
 

@@ -620,7 +620,10 @@ public class MeshA2ADispatcher {
         for (int i = 0; i < params.length; i++) {
             Parameter p = params[i];
             MeshInject inj = p.getAnnotation(MeshInject.class);
-            if (inj != null || McpMeshTool.class.isAssignableFrom(p.getType())) {
+            // Slot classification lives in MeshInjectableSlots (issue #1401)
+            // so the boot-time legacy-shape detector sees exactly the set of
+            // parameters this loop treats as dependency slots.
+            if (MeshInjectableSlots.isA2AInjectable(p)) {
                 args[i] = resolveDependency(surface, p, inj);
             } else if (MeshJobSubmitter.class.isAssignableFrom(p.getType())) {
                 // Issue #936: framework-injected MeshJobSubmitter for
