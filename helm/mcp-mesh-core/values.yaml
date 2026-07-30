@@ -271,14 +271,11 @@ mcp-mesh-grafana:
       enabled: true
       size: 2Gi
 
-    # This claim is ReadWriteOnce and Grafana runs a single replica, so on a
-    # multi-node cluster you want the Deployment replaced rather than rolled —
-    # otherwise the incoming pod can land on another node and hang waiting for
-    # a claim the outgoing pod still holds. Set it at install time; see
-    # mcp-mesh-grafana/values.yaml for the migration path on an existing
-    # release. Full path: mcp-mesh-grafana.grafana.strategy
-    # strategy:
-    #   type: Recreate
+    # This claim is ReadWriteOnce and Grafana runs a single replica, so the
+    # subchart already defaults to a strategy that terminates the outgoing pod
+    # before scheduling its replacement (RollingUpdate, maxSurge: 0). Nothing
+    # to set here — see mcp-mesh-grafana/values.yaml before overriding.
+    # Full path: mcp-mesh-grafana.grafana.strategy
 
     resources:
       requests:
@@ -303,14 +300,11 @@ mcp-mesh-tempo:
       enabled: true
       size: 5Gi
 
-    # This claim is ReadWriteOnce and Tempo runs a single replica, so on a
-    # multi-node cluster you want the Deployment replaced rather than rolled —
-    # otherwise the incoming pod can land on another node and hang waiting for
-    # a claim the outgoing pod still holds. Set it at install time; see
-    # mcp-mesh-tempo/values.yaml for the migration path on an existing release.
+    # This claim is ReadWriteOnce and Tempo runs a single replica, so the
+    # subchart already defaults to a strategy that terminates the outgoing pod
+    # before scheduling its replacement (RollingUpdate, maxSurge: 0). Nothing
+    # to set here — see mcp-mesh-tempo/values.yaml before overriding.
     # Full path: mcp-mesh-tempo.tempo.strategy
-    # strategy:
-    #   type: Recreate
 
     resources:
       requests:
