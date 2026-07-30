@@ -305,6 +305,136 @@ jobs:
             tests/unit/test_sse_strips_mcp_mesh_tool_params.py \
             tests/unit/test_stream_settle.py -q
 
+  # Issue #1399: scripts/test_bump_version.py was referenced by nothing — not a
+  # workflow, not the Makefile, not the docs. It is the only regression net for
+  # two defect classes bump_version.py's own guards structurally cannot see
+  # (prefix corruption of our own pins, and provenance prose being rewritten),
+  # and the guards it covers only run during a release bump. So a weakened guard
+  # would have surfaced at the same moment #1379 did: mid-release.
+  #
+  # Discovers the whole directory rather than naming one file, so the next
+  # scripts/test_*.py is enforced the day it lands instead of the day someone
+  # remembers to add a line here. It is stdlib-only and finishes in well under a
+  # second; the job cost is almost entirely the Python setup.
+  scripts-test:
+    name: Repo Script Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Run scripts/ tests
+        run: python3 -m pytest scripts/ -v
+
+      # The file documents `python scripts/test_bump_version.py` as a supported
+      # entry point, and that __main__ runner collects tests by a different rule
+      # than pytest does. Run it too so it cannot rot into a no-op.
+      - name: Run the direct entry point
+        run: python3 scripts/test_bump_version.py
+
+  # Issue #1421: helm lint and the PSS render used to run in exactly one place —
+  # helm-release.yml, on a `v*` tag — so a chart change met its first automated
+  # check during the release that published it. Six chart PRs merged with green
+  # walls containing zero chart validation; every defect in them was caught by
+  # hand.
+  #
+  # No `paths:` filter, deliberately. The job takes under a minute, and a
+  # skipped job reports the same green check as a passing one — a status wall
+  # that cannot distinguish "validated" from "not looked at" is the exact
+  # failure this job exists to fix. A filter would also have to enumerate every
+  # input to the render (helm/**, observability/grafana/dashboards/**, and the
+  # scripts/ checkers themselves), and would go quietly inert the day something
+  # new feeds the render and nobody updates the list.
+  helm-charts:
+    name: Helm Charts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The render diff needs the merge base, so it needs history and the
+          # base branch ref.
+          fetch-depth: 0
+
+      # Same version helm-release.yml packages with: this job is only worth
+      # having if it renders what the release will render.
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: v3.13.0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PyYAML
+        run: pip install pyyaml==6.0.3
+
+      # Mirrors helm-release.yml. The dashboard ConfigMap only renders when the
+      # JSON is present, so without this step CI would validate a variant of the
+      # chart that is never released.
+      - name: Sync observability configs to Helm charts
+        run: |
+          mkdir -p helm/mcp-mesh-grafana/files/dashboards
+          cp observability/grafana/dashboards/*.json \
+             helm/mcp-mesh-grafana/files/dashboards/
+          ls -la helm/mcp-mesh-grafana/files/dashboards/
+
+      # helm/*/charts/*.tgz is gitignored, so a fresh checkout has no subchart
+      # archives at all and the umbrella cannot render until they are built.
+      - name: Update Helm chart dependencies
+        run: helm dependency update helm/mcp-mesh-core
+
+      - name: Lint Helm charts
+        run: |
+          for chart in helm/mcp-mesh-*; do
+            if [ -f "$chart/Chart.yaml" ]; then
+              echo "Linting $chart..."
+              helm lint "$chart"
+            fi
+          done
+
+      # lint parses templates; it says nothing about what they render. This
+      # renders every chart and asserts the PSS "restricted" profile, which is
+      # what catches valid-but-wrong YAML.
+      - name: Check Pod Security Standards compliance
+        run: python3 scripts/check_helm_pss.py
+
+      # ...and the PSS check renders defaults only. Template-time guards are
+      # inert on the default path by construction, so a deleted or inverted
+      # guard stays green through both steps above. This one renders each
+      # guard's fail path and the pass path next to it.
+      - name: Render chart guards with non-default values
+        run: python3 scripts/check_helm_render_matrix.py
+
+      # Reviewer aid, not a gate — see the header of the script for why CI
+      # cannot decide whether a chart delta is intended.
+      - name: Diff the rendered umbrella against the merge base
+        run: |
+          if [ -n "${{ github.base_ref }}" ]; then
+            BASE="origin/${{ github.base_ref }}"
+          else
+            BASE="HEAD^"
+          fi
+          scripts/helm_render_diff.sh "$BASE" | tee /tmp/render-diff.txt
+          {
+            echo '### Rendered umbrella diff'
+            echo
+            echo '```diff'
+            head -n 400 /tmp/render-diff.txt
+            if [ "$(wc -l < /tmp/render-diff.txt)" -gt 400 ]; then
+              echo "... truncated; see the step log for the full diff"
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   security-scan:
     name: Security Scanning
     runs-on: ubuntu-latest
@@ -388,6 +518,8 @@ jobs:
         typescript-test,
         java-test,
         ui-test,
+        scripts-test,
+        helm-charts,
         build-and-package,
       ]
     if: always()
@@ -403,6 +535,8 @@ jobs:
           echo "TypeScript Tests: ${{ needs.typescript-test.result }}"
           echo "Java Tests: ${{ needs.java-test.result }}"
           echo "UI Dashboard Tests: ${{ needs.ui-test.result }}"
+          echo "Repo Script Tests: ${{ needs.scripts-test.result }}"
+          echo "Helm Charts: ${{ needs.helm-charts.result }}"
           echo "Build and Package: ${{ needs.build-and-package.result }}"
 
           # Allow skipped status for temporarily disabled jobs
@@ -412,6 +546,8 @@ jobs:
              [[ "${{ needs.typescript-test.result }}" != "success" ]] || \
              [[ "${{ needs.java-test.result }}" != "success" ]] || \
              [[ "${{ needs.ui-test.result }}" != "success" ]] || \
+             [[ "${{ needs.scripts-test.result }}" != "success" ]] || \
+             [[ "${{ needs.helm-charts.result }}" != "success" ]] || \
              [[ "${{ needs.build-and-package.result }}" != "success" ]]; then
             echo "❌ CI pipeline failed"
             exit 1
