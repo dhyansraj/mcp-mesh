@@ -651,74 +651,214 @@ def _version_continuations_admitted(pattern: str) -> list[str]:
     return [c for c in _VERSION_CONTINUATION if compiled.match(c)]
 
 
-def test_pep440_handlers_terminally_bound_the_version():
-    """Every pep440 handler must terminate its version match.
+def test_every_handler_terminally_bounds_the_version():
+    """EVERY handler must terminate its version match.
 
-    The four pip-pin handlers carry `(?![\\w.\\-+])` because someone remembered
-    to add it after `==3.3.10` was rewritten into the nonexistent `==3.3.20`;
-    the other three end at a closing quote, which bounds it just as well. Both
-    are fine — what must not happen is a NEW pep440 handler, or a refactor of an
-    old one, that ends the pattern at OLD and re-opens prefix matching. Nothing
-    else notices: the handler still bumps our pin correctly, and the corruption
-    only appears in whichever release first sits next to a longer version.
+    The pip-pin handlers carry `(?![\\w.\\-+])` because someone remembered to
+    add it after `==3.3.10` was rewritten into the nonexistent `==3.3.20`;
+    others end at a closing quote or `</version>`, which bounds it just as
+    well. Both are fine — what must not happen is a NEW handler, or a refactor
+    of an old one, that ends the pattern at OLD and re-opens prefix matching.
+    Nothing else notices: the handler still bumps our pin correctly, and the
+    corruption only appears in whichever release first sits next to a longer
+    version.
 
-    Scoped to pep440 because that is the projection used for pip requirements,
-    where a longer version genuinely coexists. The `raw` image-tag handlers
-    carry a deliberately narrower `(?![\\d.\\-+])` boundary and are left alone
-    here."""
+    #1409 widened this from pep440-only to every handler, and that immediately
+    found three `raw` handlers that ended at OLD with no boundary at all —
+    `--version OLD` (docs and the docker-example helm values) and
+    `e.g., vOLD` (the release workflows). Every site in the tree carries the
+    exact version today, so nothing was corrupted; the exposure was identical
+    to the pip pins' and had simply never been looked for, because the scope
+    line in this test said not to look.
+
+    The pep440/raw split the old scope rested on does not survive contact: a
+    version's continuation characters are a property of versions, not of which
+    projection a handler substitutes."""
     offenders = {}
     for h in bv.HANDLERS:
-        if h.version_format != "pep440":
-            continue
         admitted = _version_continuations_admitted(h.pattern)
         if admitted:
             offenders[h.name] = (h.pattern, admitted)
     assert not offenders, (
-        "pep440 handler(s) match a PREFIX of a longer version — add the "
-        "terminal boundary `(?![\\w.\\-+])` after OLD (or end the pattern at a "
+        "handler(s) match a PREFIX of a longer version — add the terminal "
+        "boundary `(?![\\w.\\-+])` after OLD (or end the pattern at a "
         f"delimiter that cannot appear in a version): {offenders}"
     )
+
+
+def test_image_tag_handlers_use_the_wide_boundary():
+    """#1427/#1409: the guard and the handlers must agree on what our version
+    is.
+
+    The image-tag handlers carried `(?![\\d.\\-+])`, which admits LETTERS, so a
+    3.3.1 bump would have rewritten `mcpmesh/cli:3.3.1rc1`. The coverage guard
+    has always used `(?![\\w.\\-+])` and therefore ignored that exact tag —
+    which is asserted directly by
+    `test_pip_requirement_needs_a_whole_version_token`. Guard and handler
+    disagreed about whether `3.3.1rc1` is ours.
+
+    The guard is right. A letter-suffixed tag is a different version, and there
+    is no rewrite of one a bump could get right: `3.3.1rc1` -> `3.3.2rc1` names
+    a release candidate that may never exist. The handlers now use the wide
+    form, so a tag the guard ignores is a tag the handler leaves alone."""
+    narrow = r"(?![\d.\-+])"
+    offenders = [h.name for h in bv.HANDLERS if h.pattern.endswith("OLD" + narrow)]
+    assert not offenders, (
+        "handler(s) still use the digits-only boundary, which admits letters "
+        "and so rewrites versions the coverage guard does not consider ours: "
+        f"{offenders}"
+    )
+
+
+def test_image_tag_handler_leaves_a_letter_suffixed_tag_alone():
+    """The behavioural half of the assertion above, on the exact tag
+    test_pip_requirement_needs_a_whole_version_token pins the guard against."""
+    text = (
+        "FROM mcpmesh/python-runtime:3.3.1\n"
+        "FROM mcpmesh/python-runtime:3.3.1rc1\n"
+        "FROM mcpmesh/python-runtime:3.3.10\n"
+    )
+    assert _apply_handler(
+        "Docker Image Tags in Dockerfiles", text, old="3.3.1", new="3.3.2"
+    ) == (
+        "FROM mcpmesh/python-runtime:3.3.2\n"
+        "FROM mcpmesh/python-runtime:3.3.1rc1\n"
+        "FROM mcpmesh/python-runtime:3.3.10\n"
+    )
+    # ...and the guard agrees the two skipped tags are not stale copies of ours.
+    assert not _matches("3.3.1", "FROM mcpmesh/python-runtime:3.3.1rc1")
+    assert not _matches("3.3.1", "FROM mcpmesh/python-runtime:3.3.10")
+    assert _matches("3.3.1", "FROM mcpmesh/python-runtime:3.3.1")
+
+
+def test_version_flag_handlers_are_not_prefix_matched():
+    """The three handlers #1409 found unbounded. `--version 3.3.10` must not be
+    read as a `3.3.1` that needs bumping to `3.3.20`."""
+    for name in (
+        "Documentation (--version OLD)",
+        "Docker Example Helm Values",
+    ):
+        skipped = "  --version 3.3.10 \\\n  --version 3.3.1rc1 \\\n"
+        assert _apply_handler(name, skipped, old="3.3.1", new="3.3.2") == skipped, name
+        assert (
+            _apply_handler(name, "  --version 3.3.1 \\\n", old="3.3.1", new="3.3.2")
+            == "  --version 3.3.2 \\\n"
+        ), name
+
+    ci = 'description: "Version to release (e.g., v3.3.10)"\n'
+    assert _apply_handler(
+        "CI/CD Workflows (e.g., vOLD)", ci, old="3.3.1", new="3.3.2"
+    ) == ci
+    assert _apply_handler(
+        "CI/CD Workflows (e.g., vOLD)",
+        'description: "Version to release (e.g., v3.3.1)"\n',
+        old="3.3.1",
+        new="3.3.2",
+    ) == 'description: "Version to release (e.g., v3.3.2)"\n'
 
 
 def test_terminal_boundary_check_bites():
     """The check above is only worth having if it goes red when the boundary
     goes away, so exercise it against the shapes it exists to reject: no
     boundary at all, and a boundary narrowed until it stops covering the
-    alphabetic suffixes PEP 440 allows."""
+    alphabetic suffixes PEP 440 allows (and the letter-suffixed docker tags the
+    same narrowing let through)."""
     real = r"(mcp-mesh\[litellm\]==)OLD(?![\w.\-+])"
     assert _version_continuations_admitted(real) == []
 
     for broken, why in [
         (r"(mcp-mesh\[litellm\]==)OLD", "boundary deleted"),
         (r"(mcp-mesh\[litellm\]==)OLD(?!\d)", "digits only"),
-        (r"(mcp-mesh\[litellm\]==)OLD(?![\d.\-+])", "the image-tag boundary"),
+        (r"(mcp-mesh\[litellm\]==)OLD(?![\d.\-+])", "the old image-tag boundary"),
         (r"(mcp-mesh\[litellm\]==)OLD(\d*)", "a trailing wildcard"),
     ]:
         assert _version_continuations_admitted(broken), why
 
     # ...and the whole-handler assertion must fail with such a handler present,
-    # not just the helper.
+    # not just the helper. Probed in BOTH projections, because the check no
+    # longer filters on version_format and a regression that reintroduced the
+    # filter would still pass a pep440-only probe.
+    original = list(bv.HANDLERS)
+    for fmt, pattern in (
+        ("pep440", r"(mcp-mesh>=)OLD"),
+        ("raw", r"(mcpmesh/registry:)OLD"),
+        ("raw", r"(mcpmesh/registry:)OLD(?![\d.\-+])"),
+    ):
+        try:
+            bv.HANDLERS.append(
+                bv.Handler(
+                    name=f"unbounded probe ({fmt}: {pattern})",
+                    globs=["does/not/exist"],
+                    pattern=pattern,
+                    replacement=r"\g<1>NEW",
+                    version_format=fmt,
+                )
+            )
+            try:
+                test_every_handler_terminally_bounds_the_version()
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError(
+                    "the boundary check accepted a handler with no terminal "
+                    f"boundary: {pattern}"
+                )
+        finally:
+            bv.HANDLERS[:] = original
+
+
+def test_boundary_check_bites_on_the_narrow_image_tag_form():
+    """`(?![\\d.\\-+])` is not "no boundary" — it stops digits and dots, so the
+    `3.3.10` case is covered. It is specifically the LETTERS it admits, which
+    is what test_image_tag_handlers_use_the_wide_boundary forbids by shape and
+    this exercises through the check itself."""
+    admitted = _version_continuations_admitted(r"(mcpmesh/cli:)OLD(?![\d.\-+])")
+    assert admitted, "the narrow boundary admits nothing?"
+    assert all(c.isalpha() or c == "_" for c in admitted), admitted
+
     original = list(bv.HANDLERS)
     try:
         bv.HANDLERS.append(
             bv.Handler(
-                name="unbounded probe",
+                name="narrow probe",
                 globs=["does/not/exist"],
-                pattern=r"(mcp-mesh>=)OLD",
+                pattern=r"(mcpmesh/cli:)OLD(?![\d.\-+])",
                 replacement=r"\g<1>NEW",
-                version_format="pep440",
             )
         )
         try:
-            test_pep440_handlers_terminally_bound_the_version()
+            test_image_tag_handlers_use_the_wide_boundary()
         except AssertionError:
             pass
         else:
             raise AssertionError(
-                "the boundary check accepted a handler with no terminal boundary"
+                "the wide-boundary check accepted a digits-only boundary"
             )
     finally:
         bv.HANDLERS[:] = original
+
+
+def test_cargo_lock_reminder_is_the_targeted_command():
+    """#1407: the reminder said `cargo generate-lockfile`, which re-resolves the
+    ENTIRE dependency graph rather than refreshing our own version. Operators
+    followed it, so v3.2.3 and v3.3.1 each shipped six third-party crate moves
+    — including the napi chain and cc, which rebuild the native module — under
+    notes claiming no runtime change. Neither guard can see that: both only
+    inspect lines carrying the mesh version.
+
+    The string IS the release checklist for this step, so it is worth pinning
+    like one."""
+    source = (bv.PROJECT_ROOT / "scripts" / "bump_version.py").read_text()
+    # The reminder block, not this test's own prose or the explanatory comment.
+    reminders = [
+        line
+        for line in source.splitlines()
+        if "cargo" in line and not line.lstrip().startswith("#")
+    ]
+    joined = "\n".join(reminders)
+    assert "cargo update --package mcp-mesh-core" in joined, joined
+    assert "Do NOT run 'cargo generate-lockfile'" in joined, joined
+    assert "check_release_lockfiles.py" in source
 
 
 if __name__ == "__main__":

@@ -286,11 +286,21 @@ jobs:
       # mesh reads and rebuilds FastAPI's own route state, so it is the one
       # place a FastAPI release can break us. Testing a single resolved FastAPI
       # is how 0.140.5 shipped as a silent SSE-to-JSON degradation, and how
-      # 0.139's include_router() change shipped as silently-undiscovered
+      # 0.137.0's include_router() change shipped as silently-undiscovered
       # routes. The run above uses whatever pip resolves (latest); re-run the
       # route files against an older FastAPI so both ends of the supported
-      # range are covered — 0.136.1 still flattens included routers, latest
-      # does not, and the same code must handle both.
+      # range are covered — 0.135.0 still flattens included routers (lazy
+      # `original_router` lands in 0.137.0), latest does not, and the same code
+      # must handle both.
+      #
+      # Issue #1409: the pin is the DECLARED FLOOR, not a version near it. It
+      # used to sit at 0.136.1 while the manifests declared >=0.135.0, so the
+      # lowest version a user could legally install was below the lowest one
+      # CI exercised — the same supported-on-paper/untested-in-CI band #1402
+      # fixed, and the band where the attributes the route rebuild keys off are
+      # half-present (is_json_stream lands in 0.134.0, is_sse_stream in
+      # 0.135.0). scripts/test_ci_fastapi_floor.py asserts this literal equals
+      # the manifest floor, so the two cannot drift apart again.
       # Runs last so it cannot perturb coverage/test-result artifacts.
       - name: Route integration tests against older FastAPI
         if: matrix.test-group == 'unit' && matrix.python-version == '3.11'
@@ -298,7 +308,7 @@ jobs:
           MCP_MESH_AUTO_RUN: false
         run: |
           python -c "import fastapi; print('resolved fastapi:', fastapi.__version__)"
-          pip install "fastapi==0.136.1"
+          pip install "fastapi==0.135.0"
           python -c "import fastapi; print('pinned fastapi:', fastapi.__version__)"
           pytest tests/unit/test_route_sse_wrapping.py \
             tests/unit/test_route_include_router_1396.py \
@@ -338,6 +348,43 @@ jobs:
       # than pytest does. Run it too so it cannot rot into a no-op.
       - name: Run the direct entry point
         run: python3 scripts/test_bump_version.py
+
+  # Issue #1407: a version bump must not re-resolve the Rust dependency graph.
+  # The bump reminder used to say `cargo generate-lockfile`, which does exactly
+  # that, so v3.2.3 and v3.3.1 each shipped six third-party crate moves — the
+  # napi chain and cc among them, which rebuild the native module — while
+  # v3.3.1's notes claimed byte-for-byte identical runtime behavior. Neither
+  # bump guard can see it: both only inspect lines carrying the mesh version,
+  # and the churn hides inside a ~450-file release diff.
+  #
+  # The gate fires only when mcp-mesh-core's own version moved, i.e. on a
+  # release-bump PR. A PR that deliberately bumps Rust dependencies — a fine
+  # thing to do as its own reviewed change — leaves our version alone and is
+  # skipped, so this cannot become a check people route around.
+  lockfile-integrity:
+    name: Lockfile Integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The comparison needs the base branch, so it needs history.
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Assert the bump moved only mesh versions in the lockfiles
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ -n "$BASE_REF" ]; then
+            BASE="origin/$BASE_REF"
+          else
+            BASE="HEAD^"
+          fi
+          python3 scripts/check_release_lockfiles.py --base "$BASE"
 
   # Issue #1421: helm lint and the PSS render used to run in exactly one place —
   # helm-release.yml, on a `v*` tag — so a chart change met its first automated
@@ -417,9 +464,11 @@ jobs:
       # Reviewer aid, not a gate — see the header of the script for why CI
       # cannot decide whether a chart delta is intended.
       - name: Diff the rendered umbrella against the merge base
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          if [ -n "${{ github.base_ref }}" ]; then
-            BASE="origin/${{ github.base_ref }}"
+          if [ -n "$BASE_REF" ]; then
+            BASE="origin/$BASE_REF"
           else
             BASE="HEAD^"
           fi
@@ -519,6 +568,7 @@ jobs:
         java-test,
         ui-test,
         scripts-test,
+        lockfile-integrity,
         helm-charts,
         build-and-package,
       ]
@@ -536,6 +586,7 @@ jobs:
           echo "Java Tests: ${{ needs.java-test.result }}"
           echo "UI Dashboard Tests: ${{ needs.ui-test.result }}"
           echo "Repo Script Tests: ${{ needs.scripts-test.result }}"
+          echo "Lockfile Integrity: ${{ needs.lockfile-integrity.result }}"
           echo "Helm Charts: ${{ needs.helm-charts.result }}"
           echo "Build and Package: ${{ needs.build-and-package.result }}"
 
@@ -547,6 +598,7 @@ jobs:
              [[ "${{ needs.java-test.result }}" != "success" ]] || \
              [[ "${{ needs.ui-test.result }}" != "success" ]] || \
              [[ "${{ needs.scripts-test.result }}" != "success" ]] || \
+             [[ "${{ needs.lockfile-integrity.result }}" != "success" ]] || \
              [[ "${{ needs.helm-charts.result }}" != "success" ]] || \
              [[ "${{ needs.build-and-package.result }}" != "success" ]]; then
             echo "❌ CI pipeline failed"
