@@ -70,6 +70,28 @@ password retrieved above into the new secret — Grafana applies a password only
 on first start, so with persistence enabled any other value has no effect until
 the volume is reset.
 {{- end }}
+{{- $gfPersist := dig "grafana" "persistence" (dict) (index .Values "mcp-mesh-grafana" | default dict) }}
+{{- if and .Values.grafana.enabled ($gfPersist.enabled | default false) }}
+
+Grafana keeps its data (dashboards, annotations, users, and API keys authored
+in the UI) on a claim that carries resource-policy: keep:
+
+  PersistentVolumeClaim/{{ include "mcp-mesh-core.grafanaFullname" . }}-pvc
+
+So `helm uninstall` leaves it in place and does NOT reclaim the storage — a
+reinstall under the same release name picks the same volume back up, data
+intact. Reclaim it deliberately with:
+  kubectl scale deploy/{{ include "mcp-mesh-core.grafanaFullname" . }} -n {{ .Release.Namespace }} --replicas=0
+  kubectl delete pvc {{ include "mcp-mesh-core.grafanaFullname" . }}-pvc -n {{ .Release.Namespace }}
+(the scale-down is only needed while a pod still has it mounted). Helm reads
+that policy off the live object, so a release coming from a chart that predates
+the annotation is covered from the NEXT upgrade onward.
+
+The bundled PostgreSQL volume behaves the same way for a different reason: it
+is created by the StatefulSet's claim template, which the release does not own.
+Tempo's volume is NOT kept — it is a rolling trace buffer under active
+retention, so uninstall reclaims it.
+{{- end }}
 {{- /* Only fires on the real remaining hazard: namespaceCreate renders
        global.namespace, which is independent of -n. Uninstall safety itself
        needs no warning — the Namespace carries resource-policy: keep. */}}

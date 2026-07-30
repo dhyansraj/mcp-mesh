@@ -155,6 +155,18 @@ helm get values <release>
   derived is application data: if your own workloads used the bundled PostgreSQL
   or Redis for their own storage, that data is yours to protect before you tear
   anything down.
+- **`helm uninstall` no longer reclaims Grafana's data volume.** The Grafana
+  PVC picks up a `"helm.sh/resource-policy": keep` annotation on upgrade, so
+  Helm skips it on uninstall — `grafana.persistence.enabled` defaults to `true`,
+  and the dashboards, annotations, users, and API keys in `grafana.db` are not
+  derived from anything the mesh can replay. Previously that volume was deleted
+  along with the release. A reinstall under the same release name adopts the
+  existing claim, data intact; reclaim the storage deliberately with
+  `kubectl delete pvc <release>-mcp-mesh-grafana-pvc -n <ns>`. This lands on a
+  plain `helm upgrade` with no pod restart — the claim never leaves the rendered
+  manifest, so it is a metadata-only patch. Tempo's PVC is unchanged and still
+  deleted on uninstall: it is a rolling trace buffer under active retention, not
+  durable storage.
 - **The core release owns its `Namespace`** (`namespaceCreate`, default
   `true`). Older charts let `helm uninstall` delete that namespace and cascade
   to every co-located agent, Secret, and PVC. Upgrading fixes this with no

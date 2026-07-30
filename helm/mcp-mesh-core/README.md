@@ -19,12 +19,12 @@ This umbrella chart deploys the core MCP Mesh infrastructure components:
 
 ```bash
 # Install core infrastructure
-helm install mcp-mesh-core ./mcp-mesh-core \
+helm install mcp-core ./mcp-mesh-core \
   -n mcp-mesh --create-namespace \
   --set namespaceCreate=false
 
 # Or with custom values
-helm install mcp-mesh-core ./mcp-mesh-core \
+helm install mcp-core ./mcp-mesh-core \
   -n mcp-mesh --create-namespace \
   --set namespaceCreate=false \
   -f my-values.yaml
@@ -43,7 +43,7 @@ that already exists, and for what applies to a release that already exists.
 
 ```bash
 # Port forward to access registry
-kubectl port-forward -n mcp-mesh svc/mcp-mesh-core-mcp-mesh-registry 8000:8000
+kubectl port-forward -n mcp-mesh svc/mcp-core-mcp-mesh-registry 8000:8000
 
 # Check health
 curl http://localhost:8000/health
@@ -98,7 +98,7 @@ and install with `--take-ownership` (Helm 3.17+ and Helm 4):
 
 ```bash
 kubectl create namespace mcp-mesh
-helm install mcp-mesh-core ./mcp-mesh-core \
+helm install mcp-core ./mcp-mesh-core \
   -n mcp-mesh --set global.namespace=mcp-mesh --take-ownership
 ```
 
@@ -127,14 +127,14 @@ was rendered by 3.4.0 or later — two separate upgrades:
 
 ```bash
 # 1. Upgrade to >= 3.4.0, leaving namespaceCreate alone.
-helm upgrade mcp-mesh-core ./mcp-mesh-core -n mcp-mesh --reuse-values
+helm upgrade mcp-core ./mcp-mesh-core -n mcp-mesh --reuse-values
 
 # Confirm the live namespace picked up the policy before going further.
 kubectl get ns mcp-mesh -o jsonpath='{.metadata.annotations}'
 #   {"helm.sh/resource-policy":"keep","meta.helm.sh/release-name":...}
 
 # 2. Only then, and only if you want it, drop the Namespace from the release.
-helm upgrade mcp-mesh-core ./mcp-mesh-core -n mcp-mesh --reuse-values \
+helm upgrade mcp-core ./mcp-mesh-core -n mcp-mesh --reuse-values \
   --set namespaceCreate=false
 ```
 
@@ -161,16 +161,16 @@ cascading the release secret with it. Uninstall the wreckage and reinstall with
 the recipe from "Installation":
 
 ```bash
-helm uninstall mcp-mesh-core -n mcp-mesh
-helm install mcp-mesh-core ./mcp-mesh-core \
+helm uninstall mcp-core -n mcp-mesh
+helm install mcp-core ./mcp-mesh-core \
   -n mcp-mesh --set namespaceCreate=false
 ```
 
 The uninstall keeps the namespace (`resource-policy: keep`), so the reinstall
 does not need `--create-namespace`. It also keeps the generated PostgreSQL and
-Grafana Secrets, and the StatefulSet's PVC — all deliberate, and all reused by
-the reinstall. Delete them by hand if you want the install to start from
-scratch.
+Grafana Secrets, Grafana's data PVC, and the StatefulSet's PVC — all
+deliberate, and all reused by the reinstall. Delete them by hand if you want
+the install to start from scratch.
 
 ## Configuration
 
@@ -239,7 +239,11 @@ Lifecycle:
   secret is never applied. Reset it in place
   (`kubectl exec deploy/<release>-mcp-mesh-grafana -- grafana-cli admin
   reset-admin-password <new-password>` — use the generated value from the
-  secret to keep it in sync), or delete the Grafana PVC before upgrading.
+  secret to keep it in sync), or delete the Grafana PVC before upgrading. That
+  PVC also carries `helm.sh/resource-policy: keep`, so deleting it means an
+  explicit `kubectl delete pvc` (see
+  [Adopting `existingSecret`](#adopting-existingsecret-on-an-existing-install)
+  for the ordering) — an uninstall/reinstall cycle will not clear it.
 
 #### Explicit credentials
 
@@ -379,15 +383,21 @@ kubectl exec deploy/mcp-core-mcp-mesh-grafana -n mcp-mesh -- \
   grafana-cli admin reset-admin-password <new-password>
 ```
 
-or reprovision from an empty volume, which requires this order (the PVC is
-release-owned and its deletion blocks on the `pvc-protection` finalizer while a
-pod has it mounted, and nothing recreates the claim by itself):
+or reprovision from an empty volume, which requires this order (deleting the
+claim blocks on the `pvc-protection` finalizer while a pod has it mounted, and
+nothing recreates the claim by itself):
 
 ```bash
 kubectl scale deploy/mcp-core-mcp-mesh-grafana -n mcp-mesh --replicas=0
 kubectl delete pvc mcp-core-mcp-mesh-grafana-pvc -n mcp-mesh
 helm upgrade mcp-core helm/mcp-mesh-core -n mcp-mesh ...  # recreates PVC + pod
 ```
+
+Delete the claim explicitly, as above — `helm uninstall` does not do it for
+you. The PVC carries `helm.sh/resource-policy: keep`, so an uninstall leaves
+the volume behind and a reinstall adopts it along with the `grafana.db` that
+still holds the old password. The annotation only tells Helm to skip the
+object; `kubectl delete pvc` is unaffected.
 
 Grafana then initializes from `GF_SECURITY_ADMIN_PASSWORD`, i.e. your secret.
 All dashboards, users, and annotations stored in `grafana.db` are lost — the
@@ -632,7 +642,7 @@ mcp-mesh-registry:
 ## Uninstall
 
 ```bash
-helm uninstall mcp-mesh-core -n mcp-mesh
+helm uninstall mcp-core -n mcp-mesh
 ```
 
 This removes the core workloads — registry, PostgreSQL, Redis, and, when
@@ -657,6 +667,38 @@ by the StatefulSet's volume claim template, which the release does not own, so
 namespace around it) that destroys the data. Bundled Redis writes to an
 `emptyDir` unless you enable persistence against a PVC you created yourself, so
 treat its contents as ephemeral either way.
+
+### What uninstall leaves behind
+
+`helm uninstall` does not reclaim every volume, and the differences are
+deliberate:
+
+| Object | Kept? | Why |
+| ------ | ----- | --- |
+| `<release>-mcp-mesh-grafana-pvc` | yes (`resource-policy: keep`) | Holds `grafana.db`: dashboards, annotations, users, and API keys authored in the UI. `persistence.enabled` defaults to `true`, and a volume the chart enables by default should not be discarded by a command that reports success |
+| `<release>-mcp-mesh-grafana-secret` | yes (`resource-policy: keep`) | Only record of the admin password Grafana is actually running with — it is applied on first start and then lives in the volume above |
+| `postgres-data-<release>-mcp-mesh-postgres-0` | yes (not release-owned) | Created by the StatefulSet's claim template, so Helm never had it to delete |
+| `<release>-mcp-mesh-postgres-credentials` | yes (`resource-policy: keep`) | Must keep matching the provisioned data directory |
+| `<release>-mcp-mesh-tempo-pvc` | **no** | A rolling trace buffer, not durable storage: `retention` (default `1h`) prunes it continuously, so what it holds is minutes old and already expiring |
+| Namespace | yes (`resource-policy: keep`) | See [Namespace handling](#namespace-handling) |
+
+Reinstalling under the same release name adopts all of the kept objects, with
+their data. To reclaim the storage instead, delete the claims yourself — the
+annotation only stops Helm, not `kubectl`:
+
+```bash
+kubectl delete pvc mcp-core-mcp-mesh-grafana-pvc -n mcp-mesh
+kubectl delete pvc postgres-data-mcp-core-mcp-mesh-postgres-0 -n mcp-mesh
+```
+
+(While a release is still running, scale the owning workload to `0` first — the
+delete otherwise blocks on the `pvc-protection` finalizer until the pod releases
+the volume. Grafana's is a Deployment;
+[Adopting `existingSecret`](#adopting-existingsecret-on-an-existing-install) has
+the full ordering, including the `helm upgrade` that recreates the claim.
+PostgreSQL's is a StatefulSet, so scale
+`statefulset/mcp-core-mcp-mesh-postgres` instead — its volume claim template
+recreates the PVC by itself on the next scale-up.)
 
 The namespace is left in place, whichever way it was created. A release
 installed with `namespaceCreate=false` never owned the namespace in the first

@@ -21,7 +21,8 @@ nameOverride/fullnameOverride desyncing this default derivation.
 {{- end }}
 
 {{/*
-Name of the auto-generated Grafana admin Secret, for NOTES output. The source
+Names of the Grafana objects referenced in NOTES output: the fullname (used for
+the Deployment and the data PVC) and the auto-generated admin Secret. The source
 of truth is "mcp-mesh-grafana.secretName" (+ "mcp-mesh-grafana.fullname") in
 helm/mcp-mesh-grafana/templates/_helpers.tpl; the umbrella cannot call subchart
 helpers, so this reproduces only its RELEASE-NAME branch.
@@ -33,12 +34,16 @@ NotFound. Nothing catches that — unlike postgres, this chart has neither a
 guard nor a generatedSecretName escape hatch (only NOTES text is affected, so
 no workload breaks). Keep the derivations in sync by hand when either changes.
 */}}
-{{- define "mcp-mesh-core.grafanaSecretName" -}}
+{{- define "mcp-mesh-core.grafanaFullname" -}}
 {{- if contains "mcp-mesh-grafana" .Release.Name -}}
-{{- printf "%s-secret" (.Release.Name | trunc 63 | trimSuffix "-") -}}
+{{- .Release.Name | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
-{{- printf "%s-secret" (printf "%s-mcp-mesh-grafana" .Release.Name | trunc 63 | trimSuffix "-") -}}
+{{- printf "%s-mcp-mesh-grafana" .Release.Name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
+{{- end }}
+
+{{- define "mcp-mesh-core.grafanaSecretName" -}}
+{{- printf "%s-secret" (include "mcp-mesh-core.grafanaFullname" .) -}}
 {{- end }}
 
 {{/*

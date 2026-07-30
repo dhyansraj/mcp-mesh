@@ -12,4 +12,25 @@ The generated value is reused on helm upgrade. Grafana applies it only on
 first start — with persistence enabled, the password set at install time
 stays in effect (reset with: grafana-cli admin reset-admin-password).
 {{- end }}
+{{- if .Values.grafana.persistence.enabled }}
+
+Grafana's data volume holds grafana.db — the dashboards, annotations, users,
+and API keys created in the UI:
+
+  PersistentVolumeClaim/{{ include "mcp-mesh-grafana.fullname" . }}-pvc ({{ .Values.grafana.persistence.size }})
+
+It carries "helm.sh/resource-policy": keep, so `helm uninstall` leaves it in
+place and does NOT reclaim that storage. Reinstalling under the same release
+name adopts it, data intact.
+
+To reclaim it deliberately (this destroys everything authored in the UI):
+
+  kubectl scale deploy/{{ include "mcp-mesh-grafana.fullname" . }} -n {{ .Release.Namespace }} --replicas=0
+  kubectl delete pvc {{ include "mcp-mesh-grafana.fullname" . }}-pvc -n {{ .Release.Namespace }}
+
+After an uninstall the Deployment is already gone, so only the second command
+is needed. Helm reads the policy off the live object, so a release installed
+from a chart that predates this annotation is covered from the next
+`helm upgrade` onward.
+{{- end }}
 {{- end }}
