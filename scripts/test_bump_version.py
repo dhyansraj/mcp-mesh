@@ -630,6 +630,97 @@ def test_anchored_patterns_skip_third_party_pins():
         assert out == expected, f"{name}: got\n{out}"
 
 
+# Characters that can legally continue a PEP 440 version. `3.3.1` followed by
+# any of these is a DIFFERENT version (`3.3.10`, `3.3.1rc1`, `3.3.1.post1`,
+# `3.3.1-1`, `3.3.1+local`), never a stale copy of ours.
+_VERSION_CONTINUATION = "0123456789abcrpostABC_.-+"
+
+
+def _version_continuations_admitted(pattern: str) -> list[str]:
+    """Which continuation characters the pattern would still let follow OLD.
+
+    Everything after the OLD placeholder is the terminal boundary, so compile
+    that tail on its own and ask it to match each continuation character. A
+    boundary that is doing its job cannot match one: `(?![\\w.\\-+])` fails the
+    lookahead, and a literal delimiter like `(")` or `(</version>)` fails on the
+    first character. A pattern with no boundary at all leaves an EMPTY tail,
+    which matches zero-width against anything — so every character comes back,
+    which is exactly the prefix over-match this list is here to forbid."""
+    tail = pattern.split("OLD", 1)[1]
+    compiled = re.compile(tail)
+    return [c for c in _VERSION_CONTINUATION if compiled.match(c)]
+
+
+def test_pep440_handlers_terminally_bound_the_version():
+    """Every pep440 handler must terminate its version match.
+
+    The four pip-pin handlers carry `(?![\\w.\\-+])` because someone remembered
+    to add it after `==3.3.10` was rewritten into the nonexistent `==3.3.20`;
+    the other three end at a closing quote, which bounds it just as well. Both
+    are fine — what must not happen is a NEW pep440 handler, or a refactor of an
+    old one, that ends the pattern at OLD and re-opens prefix matching. Nothing
+    else notices: the handler still bumps our pin correctly, and the corruption
+    only appears in whichever release first sits next to a longer version.
+
+    Scoped to pep440 because that is the projection used for pip requirements,
+    where a longer version genuinely coexists. The `raw` image-tag handlers
+    carry a deliberately narrower `(?![\\d.\\-+])` boundary and are left alone
+    here."""
+    offenders = {}
+    for h in bv.HANDLERS:
+        if h.version_format != "pep440":
+            continue
+        admitted = _version_continuations_admitted(h.pattern)
+        if admitted:
+            offenders[h.name] = (h.pattern, admitted)
+    assert not offenders, (
+        "pep440 handler(s) match a PREFIX of a longer version — add the "
+        "terminal boundary `(?![\\w.\\-+])` after OLD (or end the pattern at a "
+        f"delimiter that cannot appear in a version): {offenders}"
+    )
+
+
+def test_terminal_boundary_check_bites():
+    """The check above is only worth having if it goes red when the boundary
+    goes away, so exercise it against the shapes it exists to reject: no
+    boundary at all, and a boundary narrowed until it stops covering the
+    alphabetic suffixes PEP 440 allows."""
+    real = r"(mcp-mesh\[litellm\]==)OLD(?![\w.\-+])"
+    assert _version_continuations_admitted(real) == []
+
+    for broken, why in [
+        (r"(mcp-mesh\[litellm\]==)OLD", "boundary deleted"),
+        (r"(mcp-mesh\[litellm\]==)OLD(?!\d)", "digits only"),
+        (r"(mcp-mesh\[litellm\]==)OLD(?![\d.\-+])", "the image-tag boundary"),
+        (r"(mcp-mesh\[litellm\]==)OLD(\d*)", "a trailing wildcard"),
+    ]:
+        assert _version_continuations_admitted(broken), why
+
+    # ...and the whole-handler assertion must fail with such a handler present,
+    # not just the helper.
+    original = list(bv.HANDLERS)
+    try:
+        bv.HANDLERS.append(
+            bv.Handler(
+                name="unbounded probe",
+                globs=["does/not/exist"],
+                pattern=r"(mcp-mesh>=)OLD",
+                replacement=r"\g<1>NEW",
+                version_format="pep440",
+            )
+        )
+        try:
+            test_pep440_handlers_terminally_bound_the_version()
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError(
+                "the boundary check accepted a handler with no terminal boundary"
+            )
+    finally:
+        bv.HANDLERS[:] = original
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
