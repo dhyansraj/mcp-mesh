@@ -39,8 +39,11 @@ import java.util.Map;
  *
  * <p>The mesh dependency on {@code date_service} demonstrates DDDI
  * inside an A2A handler: at request time the framework resolves the
- * {@link McpMeshTool} proxy through {@link MeshDependency} and injects
- * it at the {@link MeshInject} parameter slot — same wiring used by
+ * {@link McpMeshTool} proxy declared by {@link MeshDependency} and injects
+ * it into the first injectable parameter — dependencies pair with
+ * parameters by POSITION, in signature order. The {@link MeshInject}
+ * annotation does not select the dependency; it asserts the one position
+ * assigns, and startup fails if the two disagree. Same wiring used by
  * {@code @MeshRoute}.
  *
  * <h2>Stack</h2>

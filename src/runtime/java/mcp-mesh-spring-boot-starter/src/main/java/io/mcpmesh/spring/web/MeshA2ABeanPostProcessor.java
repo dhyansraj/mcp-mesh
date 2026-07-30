@@ -70,9 +70,9 @@ public class MeshA2ABeanPostProcessor implements BeanPostProcessor {
                 deps.add(MeshRouteRegistry.DependencySpec.fromAnnotation(dep));
             }
 
-            // Issue #1401: report handlers whose bindings would change when
-            // @MeshA2A moves from name-based to positional pairing. Warning
-            // only — this PR changes no binding behaviour.
+            // Issue #1401: @MeshA2A binds positionally. Fail the boot on a
+            // @MeshInject value that contradicts the position, and warn on a
+            // handler still shaped for the pre-3.4 name-based binding.
             MeshLegacyBindingDetector.inspectA2A(method, deps);
 
             String handlerMethodId = targetClass.getName() + "." + method.getName();

@@ -73,9 +73,9 @@ public class MeshRouteBeanPostProcessor implements BeanPostProcessor {
             // Enrich dependency specs with generic return type info from method parameters
             enrichDependencyReturnTypes(method, deps);
 
-            // Issue #1401: report handlers whose bindings would change when
-            // @MeshRoute moves from name-based to positional pairing. Warning
-            // only — this PR changes no binding behaviour.
+            // Issue #1401: @MeshRoute binds positionally. Fail the boot on a
+            // @MeshInject value that contradicts the position, and warn on a
+            // handler still shaped for the pre-3.4 name-based binding.
             MeshLegacyBindingDetector.inspectRoute(method, deps);
 
             // Register each HTTP method/path combination
@@ -97,25 +97,33 @@ public class MeshRouteBeanPostProcessor implements BeanPostProcessor {
     }
 
     /**
-     * Extract generic type arguments from McpMeshTool parameters and set them
-     * on matching DependencySpec entries.
+     * Extract generic type arguments from {@code McpMeshTool} parameters and set
+     * them on the {@code DependencySpec} each parameter <b>positionally</b>
+     * binds to (issue #1401).
      *
-     * <p>For a parameter like {@code @MeshInject("greeting") McpMeshTool<GreetResponse> tool},
-     * this extracts {@code GreetResponse.class} and sets it on the dependency spec
-     * with capability "greeting".
+     * <p>The Nth injectable parameter's {@code McpMeshTool<T>} argument becomes
+     * the return type of the Nth declared dependency — the same pairing
+     * {@link MeshInjectArgumentResolver} uses to hand that parameter its proxy,
+     * derived from the same {@link MeshInjectableSlots} enumeration.
+     *
+     * <p>This has to move with the resolver, not after it. The type set here
+     * flows through {@code MeshRouteHandlerInterceptor} into
+     * {@code injector.getToolProxy(capability, returnType)}, so it drives
+     * response deserialization and the issue #547 schema-match payload. Matching
+     * it by name while the proxy is chosen by position would deserialize a
+     * reordered handler's response into the wrong type — silently.
      */
     private void enrichDependencyReturnTypes(Method method, List<MeshRouteRegistry.DependencySpec> deps) {
         java.lang.reflect.Type[] genericTypes = method.getGenericParameterTypes();
-        java.lang.reflect.Parameter[] params = method.getParameters();
+        List<io.mcpmesh.spring.MeshPositionalBinder.Slot> slots =
+            MeshInjectableSlots.routeSlots(method);
 
-        for (int i = 0; i < params.length; i++) {
-            if (!McpMeshTool.class.isAssignableFrom(params[i].getType())) {
-                continue;
-            }
+        for (int slot = 0; slot < slots.size(); slot++) {
+            int position = slots.get(slot).parameterPosition();
 
             // Extract generic type argument (e.g., GreetResponse from McpMeshTool<GreetResponse>)
             java.lang.reflect.Type returnType = null;
-            if (genericTypes[i] instanceof java.lang.reflect.ParameterizedType pt) {
+            if (genericTypes[position] instanceof java.lang.reflect.ParameterizedType pt) {
                 java.lang.reflect.Type[] typeArgs = pt.getActualTypeArguments();
                 if (typeArgs.length > 0) {
                     returnType = typeArgs[0];
@@ -126,27 +134,16 @@ public class MeshRouteBeanPostProcessor implements BeanPostProcessor {
                 continue;
             }
 
-            // Match to a DependencySpec by @MeshInject annotation or parameter name
-            MeshInject meshInject = params[i].getAnnotation(MeshInject.class);
-            String matchKey;
-            if (meshInject != null && !meshInject.value().isEmpty()) {
-                matchKey = meshInject.value();
-            } else {
-                matchKey = params[i].getName();
+            if (slot >= deps.size()) {
+                log.warn("@MeshRoute {}.{}: McpMeshTool parameter {} is injectable slot {}, but "
+                        + "only {} dependenc{} declared — its generic type is ignored and the "
+                        + "parameter is injected null. dependencies[i] binds to the i-th "
+                        + "injectable parameter.",
+                    method.getDeclaringClass().getSimpleName(), method.getName(), position, slot,
+                    deps.size(), deps.size() == 1 ? "y is" : "ies are");
+                continue;
             }
-            // Find matching dep by capability or parameterName
-            boolean matched = false;
-            for (MeshRouteRegistry.DependencySpec dep : deps) {
-                if (dep.getCapability().equals(matchKey) || matchKey.equals(dep.getParameterName())) {
-                    dep.setReturnType(returnType);
-                    matched = true;
-                    break;
-                }
-            }
-            if (!matched) {
-                log.warn("No matching dependency spec for McpMeshTool parameter '{}' in method {}",
-                    matchKey, method.getName());
-            }
+            deps.get(slot).setReturnType(returnType);
         }
     }
 

@@ -22,17 +22,22 @@ import java.util.List;
  * {@code @A2AConsumer} checks. Re-deriving them in the binder would duplicate
  * that classification.
  *
- * <p>The legacy-shape detector ({@link MeshLegacyBindingDetector}) needs the
- * same question answered for route and A2A handlers at boot, and the live
- * resolvers answer it at request time. Writing the predicate twice is exactly
- * the drift surface #1401 exists to close, so it is written once — here — and
- * the live resolvers call it:
+ * <p>The boot-time binding checks ({@link MeshLegacyBindingDetector}) need the
+ * same question answered for route and A2A handlers, and the live resolvers
+ * answer it at request time. Under positional binding the answer also fixes the
+ * <i>slot ordinals</i> — which declared dependency each parameter gets — so a
+ * second, subtly different predicate would not merely disagree about a
+ * diagnostic, it would misbind. That is exactly the drift surface #1401 exists
+ * to close, so it is written once — here — and the live resolvers call it:
  *
  * <ul>
  *   <li>{@link MeshInjectArgumentResolver#supportsParameter} →
- *       {@link #isRouteInjectable(Class)}</li>
- *   <li>{@code MeshA2ADispatcher.invokeHandler}'s dependency branch →
- *       {@link #isA2AInjectable(Parameter)}</li>
+ *       {@link #isRouteInjectable(Class)}; its slot ordinals →
+ *       {@link #routeSlots(Method)}</li>
+ *   <li>{@code MeshRouteBeanPostProcessor.enrichDependencyReturnTypes} →
+ *       {@link #routeSlots(Method)}, so the {@code McpMeshTool<T>} generic lands
+ *       on the dependency that parameter actually binds to</li>
+ *   <li>{@code MeshA2ADispatcher.planArguments} → {@link #a2aSlots(Method)}</li>
  * </ul>
  *
  * <h2>The two rules genuinely differ</h2>
@@ -51,12 +56,13 @@ import java.util.List;
  *       the annotation is the user's unambiguous statement of intent.</li>
  * </ul>
  *
- * <p>A2A's message-fallback rule ("the parameter at index 0 takes the message
- * if nothing else claimed it") does not compete with these slots: the
- * dependency branch is evaluated <i>first</i> in {@code invokeHandler}, so a
- * slot always wins index 0. Neither does {@code MeshJobSubmitter}, which is
- * framework-constructed from the surface rather than paired with a declared
- * dependency — it is not a slot here, and it consumes no declared index.
+ * <p>A2A's message-fallback rule ("the parameter at index 0 takes the message if
+ * nothing else claimed it") does compete for index 0 with a slot declared first,
+ * and slots win. That precedence is stated explicitly in
+ * {@code MeshA2ADispatcher.planArguments} rather than left implicit in the order
+ * of an if/else chain. {@code MeshJobSubmitter} does not compete either way: it
+ * is framework-constructed from the surface rather than paired with a declared
+ * dependency — not a slot here, and it consumes no declared index.
  *
  * @see MeshLegacyBindingDetector
  * @see MeshPositionalBinder

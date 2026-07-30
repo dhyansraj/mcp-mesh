@@ -9,42 +9,38 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.context.request.ServletWebRequest;
 
 import java.lang.reflect.Method;
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /**
  * Characterization tests for {@link MeshInjectArgumentResolver} — the
  * {@code @MeshRoute} injection path (issue #1401).
  *
- * <p><b>Why these exist.</b> Before this PR there was no unit test anywhere for
- * this resolver; its only coverage was end-to-end integration fixtures. The
- * conversion of {@code @MeshRoute} from name-based to positional binding touches
- * exactly this code, so today's behaviour is pinned <i>first</i>. These tests
- * describe what the resolver does now, not what it should do — when the
- * conversion lands, the rewrite of this file <b>is</b> the semantic change, made
- * visible in a diff.
+ * <p><b>What changed.</b> This file previously pinned by-NAME binding: the
+ * resolver derived a capability string from {@code @MeshInject}'s value or the
+ * parameter name and looked it up in a capability-keyed map, so declaration
+ * order was irrelevant. It now pins the POSITIONAL contract: the Nth
+ * {@code McpMeshTool} parameter in signature order receives the Nth declared
+ * dependency, and no name — annotation value or parameter name — is consulted at
+ * request time. The diff against the previous revision of this file <b>is</b> the
+ * semantic change.
  *
- * <p><b>The contract being pinned:</b> the resolver derives a capability
- * <i>string</i> — {@code @MeshInject}'s value when non-empty, otherwise the
- * parameter name — and looks it up in the map the interceptor put on the
- * request. Declaration order of {@code dependencies = {...}} is never consulted,
- * so a parameter's position in the signature is irrelevant.
+ * <p>The three cases that used to prove name binding are kept and inverted:
+ * {@code disagreeing} (annotation values reversed), {@code parameterNameFallback}
+ * (no annotation), and {@code camelCasedParameterName}. Each now asserts the
+ * opposite of what it asserted before.
  *
- * <p><b>On the no-{@code -parameters} case.</b> The test harness reproduces it
- * by not installing a {@code ParameterNameDiscoverer} on the
- * {@link MethodParameter}, which is the same null that Spring's
- * {@code StandardReflectionParameterNameDiscoverer} returns for a class compiled
- * without {@code -parameters} (it refuses to fall back on the synthetic
- * {@code arg0} names). This module compiles <i>with</i> {@code -parameters}, so
- * the real bytecode shape cannot be produced in-tree.
+ * <p>{@code @MeshInject} still exists, but as an assertion checked at boot by
+ * {@link MeshLegacyBindingDetector} — nothing in this resolver reads it, which is
+ * what {@link #annotationIsInertAtRequestTime()} pins.
  */
-@DisplayName("MeshInjectArgumentResolver: today's by-NAME binding (issue #1401 characterization)")
+@DisplayName("MeshInjectArgumentResolver: POSITIONAL binding (issue #1401)")
 class MeshInjectArgumentResolverCharacterizationTest {
 
     private final MeshInjectArgumentResolver resolver = new MeshInjectArgumentResolver();
@@ -65,8 +61,8 @@ class MeshInjectArgumentResolverCharacterizationTest {
 
         /**
          * @MeshInject values are the REVERSE of declaration order
-         * [alpha, beta]. Under name binding this is correct code; under
-         * positional binding the two parameters swap.
+         * [alpha, beta]. This shape no longer reaches the resolver — it fails
+         * the boot — but the resolver must still bind by position if it does.
          */
         String disagreeing(
                 @MeshInject("beta") McpMeshTool first,
@@ -79,116 +75,176 @@ class MeshInjectArgumentResolverCharacterizationTest {
             return "";
         }
 
-        /** No annotation — the parameter NAME is the lookup key. */
+        /** No annotation — nothing about the name matters any more. */
         String parameterNameFallback(McpMeshTool alpha) {
             return "";
         }
 
-        /**
-         * No annotation, and the capability is kebab-case: the interceptor also
-         * keys the map by {@code DependencySpec.getParameterName()}, which
-         * defaults to the camelCased capability.
-         */
+        /** A parameter named after the SECOND declared capability, sitting first. */
+        String misleadingName(McpMeshTool beta, McpMeshTool alpha) {
+            return "";
+        }
+
+        /** No annotation, kebab-case capability — no camelCase key to match. */
         String camelCasedParameterName(McpMeshTool baseCap) {
             return "";
         }
 
-        /** @MeshInject present but with an empty value — falls back to the name. */
+        /** @MeshInject present but with an empty value — asserts nothing. */
         String emptyInjectValue(@MeshInject McpMeshTool alpha) {
+            return "";
+        }
+
+        /** Non-injectable parameters between the slots must not shift them. */
+        String interleaved(
+                String body,
+                McpMeshTool first,
+                int count,
+                McpMeshTool second) {
+            return "";
+        }
+
+        /** Three slots — the middle one is the unavailable dependency. */
+        String three(McpMeshTool a, McpMeshTool b, McpMeshTool c) {
+            return "";
+        }
+
+        /** More injectable parameters than declared dependencies. */
+        String moreSlotsThanDeps(McpMeshTool a, McpMeshTool b) {
             return "";
         }
     }
 
     // ─────────────────────────────────────────────────────────────────
-    // The pins
+    // The contract
     // ─────────────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("@MeshInject value agreeing with declaration order: each parameter gets its own proxy")
-    void agreeingInjectValuesResolveToTheirOwnCapability() {
+    @DisplayName("The Nth McpMeshTool parameter receives the Nth declared dependency")
+    void slotOrdinalSelectsTheDependency() {
         McpMeshTool alpha = stub("alpha");
         McpMeshTool beta = stub("beta");
-        ServletWebRequest request = requestWith(deps(alpha, beta));
+        ServletWebRequest request = requestWith(List.of("alpha", "beta"), alpha, beta);
 
         assertSame(alpha, resolve("agreeing", 0, request));
         assertSame(beta, resolve("agreeing", 1, request));
     }
 
     @Test
-    @DisplayName("PIN: @MeshInject value WINS over parameter position — declaration order is ignored")
-    void nameBeatsPositionToday() {
+    @DisplayName("PIN: POSITION wins — a reversed @MeshInject value does not swap the proxies")
+    void positionBeatsName() {
         McpMeshTool alpha = stub("alpha");
         McpMeshTool beta = stub("beta");
-        ServletWebRequest request = requestWith(deps(alpha, beta));
+        ServletWebRequest request = requestWith(List.of("alpha", "beta"), alpha, beta);
 
-        // Declaration order is [alpha, beta]; positional binding would give
-        // parameter 0 the alpha proxy. Today the @MeshInject value decides.
-        assertSame(beta, resolve("disagreeing", 0, request),
-            "parameter 0 is annotated @MeshInject(\"beta\") and must receive the beta proxy today");
-        assertSame(alpha, resolve("disagreeing", 1, request),
-            "parameter 1 is annotated @MeshInject(\"alpha\") and must receive the alpha proxy today");
+        // Declaration order is [alpha, beta]. Parameter 0 is annotated
+        // @MeshInject("beta"), which under the pre-3.4 rule handed it the beta
+        // proxy. Position decides now — and this exact shape is refused at boot
+        // (MeshLegacyBindingDetectorTest), so the value can never be a lie in
+        // practice.
+        assertSame(alpha, resolve("disagreeing", 0, request),
+            "slot 0 takes dependency[0] regardless of what @MeshInject says");
+        assertSame(beta, resolve("disagreeing", 1, request),
+            "slot 1 takes dependency[1] regardless of what @MeshInject says");
     }
 
     @Test
-    @DisplayName("@MeshInject value matching no declared capability: null, no exception")
-    void undeclaredInjectValueResolvesToNull() {
-        ServletWebRequest request = requestWith(deps(stub("alpha"), stub("beta")));
-
-        assertNull(resolve("undeclared", 0, request),
-            "an unmatched capability is a warn-and-inject-null, not a failure");
-    }
-
-    @Test
-    @DisplayName("No @MeshInject: the PARAMETER NAME is the lookup key")
-    void parameterNameIsTheFallbackKey() {
+    @DisplayName("PIN: a parameter NAME matching another capability does not redirect the binding")
+    void parameterNameIsNotConsulted() {
         McpMeshTool alpha = stub("alpha");
-        ServletWebRequest request = requestWith(deps(alpha));
+        McpMeshTool beta = stub("beta");
+        ServletWebRequest request = requestWith(List.of("alpha", "beta"), alpha, beta);
 
-        assertSame(alpha, resolve("parameterNameFallback", 0, request));
+        // Parameter 0 is literally named "beta". Under the pre-3.4 rule it
+        // received the beta proxy; it now receives dependency[0].
+        assertSame(alpha, resolve("misleadingName", 0, request));
+        assertSame(beta, resolve("misleadingName", 1, request));
     }
 
     @Test
-    @DisplayName("No @MeshInject, kebab-case capability: the camelCased DependencySpec name matches")
-    void camelCasedParameterNameKeyMatches() {
-        // The interceptor double-keys the map: capability AND
-        // DependencySpec.getParameterName(), which camelCases "base-cap".
+    @DisplayName("PIN: @MeshInject is inert at request time — the resolver never reads it")
+    void annotationIsInertAtRequestTime() {
+        McpMeshTool alpha = stub("alpha");
+        ServletWebRequest request = requestWith(List.of("alpha"), alpha);
+
+        // Three slot-0 parameters with three different annotation states, one
+        // declared dependency: all three bind identically.
+        assertSame(alpha, resolve("agreeing", 0, request), "@MeshInject(\"alpha\")");
+        assertSame(alpha, resolve("emptyInjectValue", 0, request), "@MeshInject with no value");
+        assertSame(alpha, resolve("parameterNameFallback", 0, request), "no annotation");
+        assertSame(alpha, resolve("undeclared", 0, request),
+            "even a @MeshInject value naming nothing declared binds by position");
+    }
+
+    @Test
+    @DisplayName("A kebab-case capability needs no camelCase parameter name to bind")
+    void kebabCaseCapabilityBindsWithoutANameMatch() {
         McpMeshTool baseCap = stub("base-cap");
-        Map<String, McpMeshTool> map = new LinkedHashMap<>();
-        map.put("base-cap", baseCap);
-        map.put("baseCap", baseCap);
-        ServletWebRequest request = requestWith(map);
+        ServletWebRequest request = requestWith(List.of("base-cap"), baseCap);
 
         assertSame(baseCap, resolve("camelCasedParameterName", 0, request));
     }
 
     @Test
-    @DisplayName("@MeshInject with an empty value falls back to the parameter name")
-    void emptyInjectValueFallsBackToParameterName() {
+    @DisplayName("Non-injectable parameters between slots do not shift the slot ordinals")
+    void onlyInjectableParametersCount() {
         McpMeshTool alpha = stub("alpha");
-        ServletWebRequest request = requestWith(deps(alpha));
+        McpMeshTool beta = stub("beta");
+        ServletWebRequest request = requestWith(List.of("alpha", "beta"), alpha, beta);
 
-        assertSame(alpha, resolve("emptyInjectValue", 0, request));
+        // Signature is (String, McpMeshTool, int, McpMeshTool): the slots are at
+        // positions 1 and 3, but they are ordinals 0 and 1.
+        assertSame(alpha, resolve("interleaved", 1, request));
+        assertSame(beta, resolve("interleaved", 3, request));
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Slot preservation (issue #1390) — the trap positional binding must not
+    // reintroduce
+    // ─────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("SLOT PRESERVATION: an unavailable MIDDLE dependency does not shift the later ones")
+    void unavailableMiddleDependencyHoldsItsOwnSlot() {
+        McpMeshTool a = stub("a");
+        McpMeshTool c = stub("c");
+        // The interceptor null-pads: dependency[1] is unavailable, so index 1
+        // is null and index 2 still holds c.
+        ServletWebRequest request = requestWith(List.of("a", "b", "c"), a, null, c);
+
+        assertSame(a, resolve("three", 0, request), "slot 0 keeps its own proxy");
+        assertNull(resolve("three", 1, request),
+            "the unavailable dependency leaves ITS OWN slot null");
+        assertSame(c, resolve("three", 2, request),
+            "slot 2 must still receive 'c' — it must not slide up into slot 1");
     }
 
     @Test
-    @DisplayName("No @MeshInject and no parameter name (compiled without -parameters): null")
-    void noNameSignalResolvesToNull() {
-        ServletWebRequest request = requestWith(deps(stub("alpha")));
+    @DisplayName("SLOT PRESERVATION: only the middle dependency available fills only the middle slot")
+    void availableMiddleDependencyDoesNotSlideDown() {
+        McpMeshTool b = stub("b");
+        ServletWebRequest request = requestWith(List.of("a", "b", "c"), null, b, null);
 
-        // A class compiled without -parameters cannot be produced in-tree (this
-        // module compiles WITH it), so the shape is reproduced at the resolver's
-        // seam: MethodParameter.getParameterName() returns null. Verified against
-        // Spring 7.0.7 — for a class compiled without -parameters it returns null
-        // both with and without a ParameterNameDiscoverer installed, because
-        // StandardReflectionParameterNameDiscoverer refuses the synthetic argN
-        // names.
-        MethodParameter parameter = mock(MethodParameter.class);
-        when(parameter.getParameterAnnotation(MeshInject.class)).thenReturn(null);
-        when(parameter.getParameterName()).thenReturn(null);
-
-        assertNull(resolver.resolveArgument(parameter, null, request, null),
-            "a parameter with no @MeshInject value and no discoverable name binds to nothing today");
+        assertNull(resolve("three", 0, request));
+        assertSame(b, resolve("three", 1, request),
+            "the single available dependency lands in ITS slot, not slot 0");
+        assertNull(resolve("three", 2, request));
     }
+
+    @Test
+    @DisplayName("More injectable parameters than dependencies: the surplus is null, not shifted")
+    void surplusSlotIsNull() {
+        McpMeshTool alpha = stub("alpha");
+        ServletWebRequest request = requestWith(List.of("alpha"), alpha);
+
+        assertSame(alpha, resolve("moreSlotsThanDeps", 0, request));
+        assertNull(resolve("moreSlotsThanDeps", 1, request),
+            "no dependency is declared at index 1");
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Edges
+    // ─────────────────────────────────────────────────────────────────
 
     @Test
     @DisplayName("No mesh dependencies on the request (not a @MeshRoute handler): null")
@@ -216,6 +272,8 @@ class MeshInjectArgumentResolverCharacterizationTest {
     /**
      * A {@link MethodParameter} with name discovery installed — mirroring what
      * Spring MVC's {@code InvocableHandlerMethod} does before calling a resolver.
+     * Names are now irrelevant to binding; the discoverer stays so the tests
+     * prove that under the same conditions the old rule ran in.
      */
     private static MethodParameter named(Method method, int index) {
         MethodParameter parameter = new MethodParameter(method, index);
@@ -232,19 +290,27 @@ class MeshInjectArgumentResolverCharacterizationTest {
         throw new AssertionError("No such handler: " + name);
     }
 
-    private static ServletWebRequest requestWith(Map<String, McpMeshTool> dependencies) {
-        MockHttpServletRequest request = new MockHttpServletRequest();
-        request.setAttribute(MeshRouteHandlerInterceptor.MESH_DEPENDENCIES_ATTR, dependencies);
-        return new ServletWebRequest(request);
-    }
-
-    /** Build the interceptor's map keyed by capability (names equal capabilities here). */
-    private static Map<String, McpMeshTool> deps(McpMeshTool... tools) {
-        Map<String, McpMeshTool> map = new LinkedHashMap<>();
-        for (McpMeshTool tool : tools) {
-            map.put(tool.toString(), tool);
+    /**
+     * Build a request carrying exactly what {@code MeshRouteHandlerInterceptor}
+     * stores: the route metadata plus a positional, null-padded proxy list whose
+     * length equals the declared dependency count.
+     */
+    private static ServletWebRequest requestWith(
+            List<String> capabilities, McpMeshTool... resolved) {
+        if (capabilities.size() != resolved.length) {
+            throw new AssertionError("the interceptor null-pads to the declared count");
         }
-        return map;
+        List<MeshRouteRegistry.DependencySpec> declared = new ArrayList<>();
+        for (String capability : capabilities) {
+            declared.add(new MeshRouteRegistry.DependencySpec(
+                capability, new String[0], "", capability));
+        }
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setAttribute(MeshRouteHandlerInterceptor.MESH_ROUTE_METADATA_ATTR,
+            new MeshRouteRegistry.RouteMetadata("Handlers.test", declared, "", false));
+        request.setAttribute(MeshRouteHandlerInterceptor.MESH_DEPENDENCIES_ATTR,
+            java.util.Collections.unmodifiableList(Arrays.asList(resolved)));
+        return new ServletWebRequest(request);
     }
 
     /** An identity-bearing {@link McpMeshTool} — the mock's name is its capability. */

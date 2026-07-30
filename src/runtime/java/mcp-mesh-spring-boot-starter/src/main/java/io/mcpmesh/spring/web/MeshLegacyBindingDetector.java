@@ -13,55 +13,68 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * The migration instrument for issue #1401: at boot, tell a user whether their
- * {@code @MeshRoute} / {@code @MeshA2A} handler means something different once
- * those sites move from name-based to positional dependency binding.
+ * Boot-time guard for the positional dependency contract (issue #1401): it
+ * checks {@code @MeshInject} as an <b>assertion</b>, and reports handlers still
+ * shaped for the name-based binding that {@code @MeshRoute} / {@code @MeshA2A}
+ * used before 3.4.
  *
- * <h2>What it compares</h2>
+ * <h2>The contract this enforces</h2>
+ *
+ * <p>Every mesh injection site now pairs dependencies with parameters
+ * <i>positionally</i>: the Nth declared dependency binds to the Nth injectable
+ * parameter in signature order, and <b>parameter names are never consulted</b>.
+ * {@code @MeshTool} always worked this way; as of 3.4 so do {@code @MeshRoute}
+ * and {@code @MeshA2A}, matching Python and TypeScript.
+ *
+ * <h2>Two checks, two severities</h2>
  *
  * <p>For each handler it enumerates the injectable slots in signature order
  * ({@link MeshInjectableSlots}) and pairs them positionally with the declared
- * {@code @MeshDependency} list — the binding of the future. Against that it puts
- * the binding of today: the capability name each slot resolves through, which is
- * {@code @MeshInject}'s value when non-empty and the parameter name otherwise.
- * Four outcomes per slot:
+ * dependency list ({@link MeshPositionalBinder}). Then, per slot:
  *
  * <ul>
- *   <li><b>Agrees</b> — the name resolves to the same dependency the position
- *       would. Positional and by-name binding are identical here; nothing
- *       changes, and nothing is reported (DEBUG).</li>
- *   <li><b>Reordered</b> — the name resolves to a <i>different</i> declared
- *       dependency. The handler was written under name-binding with an order
- *       positional binding would change. <b>WARN</b> today; the conversion PR
- *       makes it fatal.</li>
- *   <li><b>Undeclared</b> — the name matches nothing declared. This is
- *       <i>already</i> broken: {@code MeshInjectArgumentResolver} warns and
- *       injects null at request time. Reported as an <b>ERROR</b>, because a
- *       boot-time error beats a per-request warning.</li>
- *   <li><b>No name available</b> — no {@code @MeshInject} value and the class
- *       was compiled without {@code -parameters}. Spring's
- *       {@code MethodParameter.getParameterName()} returns null (verified: the
- *       reflection {@code Parameter.getName()} yields {@code arg0}, and Spring's
- *       {@code StandardReflectionParameterNameDiscoverer} refuses to use it), so
- *       the route resolver already logs an error and injects null, and the A2A
- *       dispatcher already matches {@code "arg0"} against nothing. <b>There is
- *       no working code in this shape</b> — which is what makes the conversion
- *       safe. Reported as an <b>ERROR</b>.</li>
+ *   <li><b>{@code @MeshInject} carries a value → ERROR unless it names the
+ *       dependency positional pairing assigns.</b> The annotation no longer
+ *       <i>selects</i> a dependency; it <i>asserts</i> the one position already
+ *       chose. Correctly-ordered code is unaffected and gains a compile-time-ish
+ *       safety net; a value that disagrees is a boot failure rather than the
+ *       silent rebinding it would otherwise be. It is deliberately NOT an
+ *       override — an override would put two matching rules back inside one
+ *       annotation family, which is the hazard #1401 exists to close.</li>
+ *   <li><b>No {@code @MeshInject}, but the parameter's NAME resolves to a
+ *       different declared dependency → WARN.</b> This is the 3.3-and-earlier
+ *       shape: the handler was written when the name decided, so it binds
+ *       differently now. It is a warning, not an error, because names carry no
+ *       meaning under the new contract and a coincidence must not fail a boot.
+ *       Adding a {@code @MeshInject} that agrees with the position silences it
+ *       and turns the slot into an asserted one. Applies only to the two sites
+ *       that <i>were</i> name-based — {@code @MeshTool} never consulted names,
+ *       so a name coincidence there is not a migration signal
+ *       ({@link #analyzeTool}).</li>
  * </ul>
+ *
+ * <h2>What is no longer reported</h2>
+ *
+ * <p>PR A (the warning-only predecessor of this class) raised an ERROR for a
+ * parameter with no {@code @MeshInject} value and no name — a class compiled
+ * without {@code -parameters}. Under name binding that parameter bound to
+ * nothing and was injected null; under positional binding it binds correctly,
+ * because names were the only thing missing. That shape is now <b>OK</b>. The
+ * same goes for a parameter whose name happens to match no declared capability.
  *
  * <h2>What it deliberately does not check</h2>
  *
  * <p><b>Arity.</b> Unlike {@code @MeshTool} (see
  * {@link MeshDiValidator#checkArity}), a route or A2A surface with more declared
  * dependencies than injectable parameters is <i>legitimate and documented</i>:
- * {@code MeshRouteUtils.getDependencies(request)} hands the whole resolved map
- * to the handler, and a dependency-declaring surface with zero parameters is the
+ * {@link MeshRouteUtils#getDependencies} hands the resolved set to the handler
+ * by capability, and a dependency-declaring surface with zero parameters is the
  * canonical way to publish a capability edge that a constructor-injected
  * {@code @Qualifier} bean consumes. Reporting arity here would fire on correct
- * code. Every slot that actually goes unbound is caught by the per-slot analysis
- * above instead.
+ * code.
  *
  * @see MeshInjectableSlots
+ * @see MeshPositionalBinder
  * @see MeshDiValidator
  */
 public final class MeshLegacyBindingDetector {
@@ -72,11 +85,18 @@ public final class MeshLegacyBindingDetector {
 
     /** How bad a handler's shape is. */
     public enum Severity {
-        /** Positional and by-name binding agree — nothing changes. */
+        /** Nothing to report: every asserted slot agrees with its position. */
         OK,
-        /** At least one slot's binding changes under positional pairing. */
+        /**
+         * A parameter's NAME points at a different declared dependency than its
+         * position does — the 3.3 shape. Logged; fatal under
+         * {@code MCP_MESH_STRICT_DI}.
+         */
         WARN,
-        /** At least one slot binds to nothing today — already broken. */
+        /**
+         * A {@code @MeshInject} value contradicts positional pairing. Always
+         * fatal.
+         */
         ERROR
     }
 
@@ -84,21 +104,28 @@ public final class MeshLegacyBindingDetector {
      * The verdict for one handler.
      *
      * @param severity worst per-slot outcome
-     * @param message  the human-readable diagnostic; empty when {@code OK}
+     * @param message  the human-readable diagnostic; a DEBUG-grade summary when
+     *                 {@code OK}
      */
     public record Finding(Severity severity, String message) {}
 
     /** Per-slot outcome. */
-    private enum SlotVerdict { AGREES, REORDERED, UNDECLARED, NO_NAME }
+    private enum SlotVerdict {
+        /** Nothing to say about this slot. */
+        OK,
+        /** {@code @MeshInject} names something other than the paired dependency. */
+        ASSERTION_VIOLATED,
+        /** The parameter name resolves to a different declared dependency. */
+        NAME_CROSSOVER
+    }
 
     /**
-     * Inspect a {@code @MeshRoute} handler and report through the logger,
-     * honouring {@code MCP_MESH_STRICT_DI}.
+     * Inspect a {@code @MeshRoute} handler and enforce the contract.
      *
      * @param method the handler method
      * @param deps   the declared dependency specs in declaration order
-     * @throws IllegalStateException when the shape is not {@code OK} and strict
-     *         DI is enabled
+     * @throws IllegalStateException on a {@code @MeshInject} assertion failure,
+     *         or on any finding when {@code MCP_MESH_STRICT_DI} is enabled
      */
     public static void inspectRoute(Method method, List<MeshRouteRegistry.DependencySpec> deps) {
         report(analyze("@MeshRoute", method, MeshInjectableSlots.routeSlots(method), deps),
@@ -106,13 +133,12 @@ public final class MeshLegacyBindingDetector {
     }
 
     /**
-     * Inspect a {@code @MeshA2A} handler and report through the logger,
-     * honouring {@code MCP_MESH_STRICT_DI}.
+     * Inspect a {@code @MeshA2A} handler and enforce the contract.
      *
      * @param method the handler method
      * @param deps   the declared dependency specs in declaration order
-     * @throws IllegalStateException when the shape is not {@code OK} and strict
-     *         DI is enabled
+     * @throws IllegalStateException on a {@code @MeshInject} assertion failure,
+     *         or on any finding when {@code MCP_MESH_STRICT_DI} is enabled
      */
     public static void inspectA2A(Method method, List<MeshRouteRegistry.DependencySpec> deps) {
         report(analyze("@MeshA2A", method, MeshInjectableSlots.a2aSlots(method), deps),
@@ -120,9 +146,24 @@ public final class MeshLegacyBindingDetector {
     }
 
     /**
+     * Inspect a {@code @MeshTool} binding. Only the {@code @MeshInject}
+     * assertion applies here — see {@link #analyzeTool}.
+     *
+     * @param binding the pairing table built by {@link MeshPositionalBinder}
+     * @throws IllegalStateException on a {@code @MeshInject} assertion failure
+     */
+    public static void inspectTool(MeshPositionalBinder.Binding binding) {
+        report(analyzeTool(binding), MeshDiValidator.strictDiEnabled());
+    }
+
+    /**
      * Apply the reporting policy to a finding. Package-private with an explicit
      * strictness flag because {@code MCP_MESH_STRICT_DI} cannot be set
      * in-process, so this is the seam tests drive.
+     *
+     * @param finding the verdict to report
+     * @param strict  whether {@code MCP_MESH_STRICT_DI} is on, promoting WARN to
+     *                a boot failure. {@link Severity#ERROR} is fatal either way
      */
     static void report(Finding finding, boolean strict) {
         switch (finding.severity()) {
@@ -137,86 +178,135 @@ public final class MeshLegacyBindingDetector {
                 }
                 log.warn("{}", finding.message());
             }
-            case ERROR -> {
-                if (strict) {
-                    throw new IllegalStateException(finding.message());
-                }
-                log.error("{}", finding.message());
-            }
+            // A @MeshInject value that contradicts the position is never a
+            // survivable shape: the annotation is an assertion, so a false one
+            // stops the boot regardless of MCP_MESH_STRICT_DI.
+            case ERROR -> throw new IllegalStateException(finding.message());
         }
     }
 
     /**
-     * The pure analysis, with no logging and no strictness policy — the seam
-     * tests use.
+     * The pure analysis for the two formerly name-based sites, with no logging
+     * and no strictness policy — the seam tests use.
      *
      * @param site   the declaration site, e.g. {@code "@MeshRoute"}
      * @param method the handler method
      * @param slots  injectable slots in signature order
      * @param deps   the declared dependency specs in declaration order
      * @return the verdict; {@link Severity#OK} with a DEBUG-grade message when
-     *         today's and tomorrow's bindings are identical
+     *         the handler is already on the positional contract
      */
     public static Finding analyze(
             String site,
             Method method,
             List<MeshPositionalBinder.Slot> slots,
             List<MeshRouteRegistry.DependencySpec> deps) {
+        return analyze(site, method, slots, deps == null ? List.of() : deps, true);
+    }
 
-        List<MeshRouteRegistry.DependencySpec> declared = deps == null ? List.of() : deps;
+    /**
+     * The pure analysis for {@code @MeshTool}.
+     *
+     * <p>Only the {@code @MeshInject} assertion is checked. The name-crossover
+     * warning is a <i>migration</i> signal for the two sites whose binding rule
+     * changed in 3.4; {@code @MeshTool} has always been positional, so a
+     * parameter whose name happens to equal another declared capability says
+     * nothing about that method's history and must not be reported.
+     *
+     * @param binding the pairing table built by {@link MeshPositionalBinder};
+     *                only its {@link MeshPositionalBinder.Binding#pairableDepCount()}
+     *                leading capabilities take part (a {@code @MeshService} view
+     *                edge owns no injectable parameter)
+     * @return the verdict
+     */
+    public static Finding analyzeTool(MeshPositionalBinder.Binding binding) {
+        List<MeshRouteRegistry.DependencySpec> specs = new ArrayList<>();
+        for (String capability : binding.capabilities().subList(0, binding.pairableDepCount())) {
+            specs.add(new MeshRouteRegistry.DependencySpec(
+                capability, new String[0], "", capability));
+        }
+        return analyze("@MeshTool", binding.method(), binding.slots(), specs, false);
+    }
+
+    private static Finding analyze(
+            String site,
+            Method method,
+            List<MeshPositionalBinder.Slot> slots,
+            List<MeshRouteRegistry.DependencySpec> deps,
+            boolean namesUsedToBind) {
+
         Parameter[] params = method.getParameters();
 
         SlotVerdict[] verdicts = new SlotVerdict[slots.size()];
+        String[] assertedKeys = new String[slots.size()];
         String[] nameKeys = new String[slots.size()];
-        boolean[] fromAnnotation = new boolean[slots.size()];
         int[] nameTarget = new int[slots.size()];
 
         Severity severity = Severity.OK;
         for (int k = 0; k < slots.size(); k++) {
             Parameter p = params[slots.get(k).parameterPosition()];
             MeshInject inject = p.getAnnotation(MeshInject.class);
-            String key;
-            if (inject != null && !inject.value().isEmpty()) {
-                key = inject.value();
-                fromAnnotation[k] = true;
-            } else if (p.isNamePresent()) {
-                key = p.getName();
-            } else {
-                key = null;
-            }
-            nameKeys[k] = key;
-            nameTarget[k] = key == null ? -1 : matchIndex(declared, key);
+            nameTarget[k] = -1;
 
-            if (key == null) {
-                verdicts[k] = SlotVerdict.NO_NAME;
-            } else if (nameTarget[k] < 0) {
-                verdicts[k] = SlotVerdict.UNDECLARED;
-            } else if (nameTarget[k] == k) {
-                verdicts[k] = SlotVerdict.AGREES;
+            if (inject != null && !inject.value().isEmpty()) {
+                assertedKeys[k] = inject.value();
+                verdicts[k] = refersTo(deps, k, inject.value())
+                    ? SlotVerdict.OK : SlotVerdict.ASSERTION_VIOLATED;
+                // The assertion diagnostic prints where the value WOULD have
+                // pointed under the old rule, so the reorder can be prescribed.
+                nameTarget[k] = matchIndex(deps, inject.value());
+            } else if (namesUsedToBind && p.isNamePresent()) {
+                nameKeys[k] = p.getName();
+                nameTarget[k] = matchIndex(deps, p.getName());
+                verdicts[k] = (nameTarget[k] >= 0 && nameTarget[k] != k)
+                    ? SlotVerdict.NAME_CROSSOVER : SlotVerdict.OK;
             } else {
-                verdicts[k] = SlotVerdict.REORDERED;
+                // No assertion and no name signal. Under positional binding
+                // this is a perfectly ordinary slot — names are not consulted,
+                // so there is nothing left to disagree about.
+                verdicts[k] = SlotVerdict.OK;
             }
 
             severity = switch (verdicts[k]) {
-                case AGREES -> severity;
-                case REORDERED -> severity == Severity.ERROR ? Severity.ERROR : Severity.WARN;
-                case UNDECLARED, NO_NAME -> Severity.ERROR;
+                case OK -> severity;
+                case NAME_CROSSOVER -> severity == Severity.ERROR ? Severity.ERROR : Severity.WARN;
+                case ASSERTION_VIOLATED -> Severity.ERROR;
             };
         }
 
         return new Finding(severity,
-            buildMessage(site, method, slots, declared, verdicts, nameKeys, fromAnnotation,
+            buildMessage(site, method, slots, deps, verdicts, assertedKeys, nameKeys,
                 nameTarget, severity));
     }
 
     /**
-     * The declared dependency a name key resolves to today.
+     * Whether {@code key} refers to the dependency positional pairing puts at
+     * slot {@code k}.
      *
-     * <p>Mirrors both live lookups: the route path's map is double-keyed by
-     * capability AND by {@code DependencySpec.getParameterName()}
-     * ({@code MeshRouteHandlerInterceptor:155-157}); the A2A path scans the same
-     * two fields in declaration order ({@code MeshA2ADispatcher:779-784}).
-     * First declaration wins on a collision.
+     * <p>The declared {@code @MeshDependency(name = ...)} alias counts as well
+     * as the capability itself: {@code name} is an explicit, user-authored
+     * second spelling of the same edge (and defaults to the camelCased
+     * capability), so accepting it keeps
+     * {@code @MeshDependency(capability = "base-cap") + @MeshInject("baseCap")}
+     * a legal assertion. It never lets the annotation point at a
+     * <i>different</i> dependency — that is the whole check.
+     */
+    private static boolean refersTo(
+            List<MeshRouteRegistry.DependencySpec> deps, int k, String key) {
+        if (k >= deps.size()) {
+            return false;
+        }
+        MeshRouteRegistry.DependencySpec dep = deps.get(k);
+        return key.equals(dep.getCapability()) || key.equals(dep.getParameterName());
+    }
+
+    /**
+     * The declared dependency a name key resolved to under the pre-3.4 rule.
+     *
+     * <p>Mirrors both former lookups: the route path's map was double-keyed by
+     * capability AND by {@code DependencySpec.getParameterName()}; the A2A path
+     * scanned the same two fields in declaration order. First declaration wins
+     * on a collision. Used for diagnostics only — nothing binds this way now.
      */
     private static int matchIndex(List<MeshRouteRegistry.DependencySpec> deps, String key) {
         for (int i = 0; i < deps.size(); i++) {
@@ -234,33 +324,32 @@ public final class MeshLegacyBindingDetector {
             List<MeshPositionalBinder.Slot> slots,
             List<MeshRouteRegistry.DependencySpec> deps,
             SlotVerdict[] verdicts,
+            String[] assertedKeys,
             String[] nameKeys,
-            boolean[] fromAnnotation,
             int[] nameTarget,
             Severity severity) {
 
         String signature = signatureOf(method);
         if (severity == Severity.OK) {
-            return site + " " + signature + ": name-based and positional dependency binding "
-                + "agree for all " + slots.size() + " injectable parameter(s) — issue #1401 will "
-                + "not change this handler.";
+            return site + " " + signature + ": positional dependency binding is consistent for all "
+                + slots.size() + " injectable parameter(s).";
         }
 
         StringBuilder sb = new StringBuilder();
         sb.append(site).append(' ').append(signature).append(": ");
         if (severity == Severity.ERROR) {
-            sb.append("at least one injectable parameter resolves to NO declared dependency and "
-                + "is injected null today.");
+            sb.append("a @MeshInject value contradicts the dependency its parameter's POSITION "
+                + "binds to.");
         } else {
-            sb.append("declaration order disagrees with parameter names, so this handler's "
-                + "bindings WILL CHANGE.");
+            sb.append("parameter names disagree with declaration order, so these parameters do "
+                + "NOT bind the way their names suggest.");
         }
 
-        sb.append("\n  ").append(site).append(" binds mesh dependencies BY NAME today. mcp-mesh is "
-            + "aligning every injection site on the positional contract (issue #1401): the Nth "
-            + "declared dependency binds to the Nth injectable parameter, and names are not "
-            + "consulted. @MeshTool already works this way, as does every Python and TypeScript "
-            + "site.");
+        sb.append("\n  ").append(site).append(" binds mesh dependencies BY POSITION (issue #1401): "
+            + "the Nth declared dependency binds to the Nth injectable parameter, and parameter "
+            + "names are never consulted. @MeshTool, and every Python and TypeScript site, work "
+            + "the same way. @MeshInject no longer SELECTS a dependency — it ASSERTS the one "
+            + "positional pairing assigns.");
 
         sb.append("\n  ").append(deps.size())
             .append(deps.size() == 1 ? " declared dependency: " : " declared dependencies: ")
@@ -273,15 +362,20 @@ public final class MeshLegacyBindingDetector {
                 .append(" = parameter ").append(slots.get(k).parameterPosition())
                 .append(" (").append(p.getType().getSimpleName()).append(' ')
                 .append(p.isNamePresent() ? p.getName() : "<unnamed>").append(')');
-            sb.append("\n        ").append(pad("today (" + todayLabel(nameKeys[k], fromAnnotation[k]) + "):"))
-                .append(todayTarget(deps, nameTarget[k], verdicts[k]));
-            sb.append("\n        ").append(pad("after alignment (by position):"))
+            if (verdicts[k] == SlotVerdict.OK) {
+                sb.append("\n        ").append(pad("binds (by position):"))
+                    .append(positionalTarget(deps, k)).append(" — OK");
+                continue;
+            }
+            sb.append("\n        ").append(pad(claimLabel(assertedKeys[k], nameKeys[k])))
+                .append(claimTarget(deps, nameTarget[k]));
+            sb.append("\n        ").append(pad("binds (by position):"))
                 .append(positionalTarget(deps, k));
         }
 
-        appendPrescription(sb, slots, deps, verdicts, nameTarget);
+        appendPrescription(sb, slots, deps, verdicts, nameTarget, severity);
 
-        if (!MeshDiValidator.strictDiEnabled()) {
+        if (severity == Severity.WARN && !MeshDiValidator.strictDiEnabled()) {
             sb.append("\n  Set ").append(MeshDiValidator.STRICT_DI_ENV)
                 .append("=true to fail startup on this instead of logging it.");
         }
@@ -293,28 +387,12 @@ public final class MeshLegacyBindingDetector {
             List<MeshPositionalBinder.Slot> slots,
             List<MeshRouteRegistry.DependencySpec> deps,
             SlotVerdict[] verdicts,
-            int[] nameTarget) {
+            int[] nameTarget,
+            Severity severity) {
 
-        boolean anyUnbound = false;
-        boolean anyReordered = false;
-        for (SlotVerdict v : verdicts) {
-            anyUnbound |= v == SlotVerdict.UNDECLARED || v == SlotVerdict.NO_NAME;
-            anyReordered |= v == SlotVerdict.REORDERED;
-        }
-
-        if (anyUnbound) {
-            sb.append("\n  Fix the unbound parameter(s) first: give each one a @MeshInject value "
-                + "naming a declared capability, or declare the capability it names in "
-                + "dependencies = {...}. A parameter that binds to nothing today will bind to "
-                + "whatever sits at its position after the alignment.");
-        }
-
-        if (!anyReordered) {
-            return;
-        }
-
-        // A reorder can only express the current bindings when each slot names a
-        // distinct dependency and every slot has a position to sit at.
+        // A reorder can only express what the names/assertions claim when each
+        // slot claims a distinct declared dependency and every slot has a
+        // position to sit at.
         Set<Integer> targets = new LinkedHashSet<>();
         boolean injective = slots.size() <= deps.size();
         for (int k = 0; k < slots.size() && injective; k++) {
@@ -323,7 +401,11 @@ public final class MeshLegacyBindingDetector {
             }
         }
 
-        sb.append("\n  Fix now — behaviour-preserving today, correct after the alignment.");
+        sb.append(severity == Severity.ERROR
+            ? "\n  Fix — pick one:"
+            : "\n  If this handler was written for mcp-mesh 3.3 or earlier (when @MeshRoute and "
+                + "@MeshA2A bound by name), fix it — pick one:");
+
         if (injective) {
             List<String> reordered = new ArrayList<>();
             for (int k = 0; k < slots.size(); k++) {
@@ -334,40 +416,49 @@ public final class MeshLegacyBindingDetector {
                     reordered.add(deps.get(i).getCapability());
                 }
             }
-            sb.append(" Reorder dependencies = {...} to: ");
+            sb.append("\n    • reorder dependencies = {...} to: ");
             for (int i = 0; i < reordered.size(); i++) {
                 sb.append(i == 0 ? "" : ", ")
                     .append('[').append(i).append("] '").append(reordered.get(i)).append('\'');
             }
             sb.append("\n      (move each whole @MeshDependency — keep its tags, version, "
-                + "required and schema attributes with its capability), or reorder the "
-                + "parameters to match the current declaration order.");
+                + "required and schema attributes with its capability)");
         } else {
-            sb.append(" Reorder dependencies = {...} so declaration order matches parameter "
-                + "order, or reorder the parameters to match the declaration.");
+            sb.append("\n    • reorder dependencies = {...} so declaration order matches "
+                + "parameter order");
         }
-        sb.append("\n      Once the two agree, name-based and positional binding are identical "
-            + "and this stops being reported.");
+        sb.append("\n    • or reorder the parameters to match the declaration order");
+
+        boolean anyAssertion = false;
+        boolean anyCrossover = false;
+        for (SlotVerdict v : verdicts) {
+            anyAssertion |= v == SlotVerdict.ASSERTION_VIOLATED;
+            anyCrossover |= v == SlotVerdict.NAME_CROSSOVER;
+        }
+        if (anyAssertion) {
+            sb.append("\n    • or correct the @MeshInject value on each parameter to name the "
+                + "dependency at that parameter's position (@MeshInject is an assertion — "
+                + "dropping it entirely is also valid, and binding is unchanged either way)");
+        }
+        if (anyCrossover) {
+            sb.append("\n    • or, if the current bindings are already what you want, add "
+                + "@MeshInject(\"<capability>\") to each parameter to assert it — that pins "
+                + "the pairing and silences this warning");
+        }
     }
 
-    private static String todayLabel(String key, boolean fromAnnotation) {
-        if (key == null) {
-            return "no @MeshInject value, and no parameter name is available — "
-                + "compiled without -parameters";
+    private static String claimLabel(String assertedKey, String nameKey) {
+        if (assertedKey != null) {
+            return "@MeshInject(\"" + assertedKey + "\") asserts:";
         }
-        return fromAnnotation
-            ? "by name, @MeshInject(\"" + key + "\")"
-            : "by name, parameter name '" + key + "'";
+        return "parameter name '" + nameKey + "' used to bind:";
     }
 
-    private static String todayTarget(
-            List<MeshRouteRegistry.DependencySpec> deps, int target, SlotVerdict verdict) {
-        return switch (verdict) {
-            case NO_NAME -> "injected null (already broken today)";
-            case UNDECLARED -> "NO MATCH among the declared dependencies — "
-                + "injected null (already broken today)";
-            default -> "dependency[" + target + "] '" + deps.get(target).getCapability() + "'";
-        };
+    private static String claimTarget(List<MeshRouteRegistry.DependencySpec> deps, int target) {
+        if (target < 0) {
+            return "NO MATCH among the declared dependencies";
+        }
+        return "dependency[" + target + "] '" + deps.get(target).getCapability() + "'";
     }
 
     private static String positionalTarget(List<MeshRouteRegistry.DependencySpec> deps, int k) {
