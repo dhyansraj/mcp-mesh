@@ -394,7 +394,8 @@ A `kubectl`-style command-line tool that follows you from first agent to product
 === "Helm Charts"
 
     ```bash
-    helm install mcp-mesh oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core
+    helm install mcp-mesh oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+      -n mcp-mesh --create-namespace --set namespaceCreate=false
     ```
 
     Kubernetes deployment with the umbrella chart.

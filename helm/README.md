@@ -36,12 +36,12 @@ Kubernetes deployment charts for MCP Mesh - a distributed agent orchestration fr
 ### Installation
 
 ```bash
-# Create namespace
-kubectl create namespace mcp-mesh
-
 # 1. Install core infrastructure (registry + observability)
+#    --set namespaceCreate=false is required: see "Namespace handling" in
+#    mcp-mesh-core/README.md
 helm dependency update helm/mcp-mesh-core
-helm install mcp-core helm/mcp-mesh-core -n mcp-mesh
+helm install mcp-core helm/mcp-mesh-core -n mcp-mesh --create-namespace \
+  --set namespaceCreate=false
 
 # 2. Install agents (repeat for each agent)
 helm install hello-world helm/mcp-mesh-agent -n mcp-mesh \
@@ -66,12 +66,14 @@ helm install mcp-ingress helm/mcp-mesh-ingress -n mcp-mesh
 
 ```bash
 # Core without observability
-helm install mcp-core helm/mcp-mesh-core -n mcp-mesh \
+helm install mcp-core helm/mcp-mesh-core -n mcp-mesh --create-namespace \
+  --set namespaceCreate=false \
   --set grafana.enabled=false \
   --set tempo.enabled=false
 
 # Core without PostgreSQL (in-memory registry)
-helm install mcp-core helm/mcp-mesh-core -n mcp-mesh \
+helm install mcp-core helm/mcp-mesh-core -n mcp-mesh --create-namespace \
+  --set namespaceCreate=false \
   --set postgres.enabled=false
 ```
 

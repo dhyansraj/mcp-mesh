@@ -168,13 +168,22 @@ helm get values <release>
   `commonAnnotations` value would override it on last-wins, so the chart fails
   the render when the key is set to anything but `keep` — remove it from
   `commonAnnotations`, or set it to `keep`, before upgrading.
-- **Do not set `namespaceCreate=false` on an existing release.** The namespace
-  is already in the release manifest, so dropping it from the rendered output
-  makes the very next `helm upgrade` delete the namespace and everything in it
-  — reporting `STATUS: deployed` and exit 0 while doing so. When
-  `global.namespace` matches the namespace passed to `-n`, the change is also
-  unrecoverable: Helm keeps the release secret in the `-n` namespace, which is
-  the one being deleted, so `helm history` afterward reports `release: not
-  found`. If the two differ, the release metadata survives — but the rendered
-  namespace is deleted either way. Leave `namespaceCreate` alone on releases
-  that already have it enabled.
+- **Do not set `namespaceCreate=false` on an existing release as part of this
+  upgrade.** New installs should set it (the chart cannot create the namespace
+  it installs into — see
+  [Namespace handling](https://github.com/dhyansraj/mcp-mesh/blob/main/helm/mcp-mesh-core/README.md#namespace-handling)),
+  but on a release that already has it enabled the namespace is already in the
+  release manifest, so dropping it from the rendered output makes the very next
+  `helm upgrade` delete the namespace and everything in it — reporting
+  `STATUS: deployed` and exit 0 while doing so. When `global.namespace` matches
+  the namespace passed to `-n`, the change is also unrecoverable: Helm keeps
+  the release secret in the `-n` namespace, which is the one being deleted. A
+  retry while the namespace drains fails with `... is forbidden: ... because it
+  is being terminated`, and once it is gone `helm history` reports
+  `release: not found`.
+  The `keep` annotation above is what makes the flip safe, and Helm reads that
+  policy off the manifest of the revision being replaced — so if you want it,
+  do it as a *second*, separate upgrade, once this one has landed and
+  `kubectl get ns <ns> -o jsonpath='{.metadata.annotations}'` shows
+  `helm.sh/resource-policy: keep`. There is no need to rush it: with the
+  annotation in place, leaving `namespaceCreate` enabled is harmless.

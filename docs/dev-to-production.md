@@ -85,7 +85,8 @@ The [TSuite](https://github.com/dhyansraj/mcp-mesh-test-suite) integration testi
 
     ```bash
     helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-      --version 3.3.2 -n mcp-mesh --create-namespace
+      --version 3.3.2 -n mcp-mesh --create-namespace \
+      --set namespaceCreate=false
 
     helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
       --version 3.3.2 -n mcp-mesh -f helm-values.yaml

@@ -8,8 +8,12 @@
 # and mcp-mesh-agent charts. Each chart ignores keys it does not recognize,
 # so it is safe to pass the same file to both:
 #
-#   helm install mcp-core helm/mcp-mesh-core  -n mcp-mesh -f helm-values-tls.yaml
+#   helm install mcp-core helm/mcp-mesh-core  -n mcp-mesh \
+#     --set namespaceCreate=false -f helm-values-tls.yaml
 #   helm install my-agent helm/mcp-mesh-agent -n mcp-mesh -f helm-values-tls.yaml
+#
+# The core install needs --set namespaceCreate=false because the namespace was
+# created out of band above; see "Namespace handling" in the core chart README.
 #
 # Secret mapping (cert-manager Certificate -> K8s Secret -> Helm value):
 #

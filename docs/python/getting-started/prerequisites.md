@@ -146,7 +146,8 @@ Available from OCI registry (no `helm repo add` needed):
 # Install core infrastructure
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
   --version 3.3.2 \
-  -n mcp-mesh --create-namespace
+  -n mcp-mesh --create-namespace \
+  --set namespaceCreate=false
 
 # Deploy an agent
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
