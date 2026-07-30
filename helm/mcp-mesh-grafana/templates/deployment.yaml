@@ -1,5 +1,6 @@
 {{- if .Values.grafana.enabled }}
 {{- include "mcp-mesh-grafana.validateCredentialSource" . -}}
+{{- include "mcp-mesh-grafana.validateNoRemovedKeys" . -}}
 {{- /* Migration guard: grafana.securityContext used to be the POD security
        context (it carried fsGroup). It is now the CONTAINER security context
        and pod-level settings live under grafana.podSecurityContext — an old
@@ -98,7 +99,7 @@ spec:
         - name: datasources
           mountPath: /etc/grafana/provisioning/datasources
           readOnly: true
-        {{- if .Values.grafana.dashboards.enabled }}
+        {{- if include "mcp-mesh-grafana.dashboardsEnabled" . }}
         - name: dashboards-config
           mountPath: /etc/grafana/provisioning/dashboards
           readOnly: true
@@ -138,7 +139,11 @@ spec:
       - name: datasources
         configMap:
           name: {{ include "mcp-mesh-grafana.fullname" . }}-datasources
-      {{- if .Values.grafana.dashboards.enabled }}
+      {{- /* Gated on dashboardsEnabled, NOT on grafana.dashboards.enabled: both
+             ConfigMaps below are conditional on the dashboard JSON being
+             present, and a volume whose backing object may not render blocks
+             the pod in the kubelet forever. See the helper. */}}
+      {{- if include "mcp-mesh-grafana.dashboardsEnabled" . }}
       - name: dashboards-config
         configMap:
           name: {{ include "mcp-mesh-grafana.fullname" . }}-dashboards-config

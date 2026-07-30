@@ -139,12 +139,23 @@ grafana:
       enabled: true
       url: "http://prometheus:9090"
 
-  # Dashboard configuration references observability/grafana/dashboards/
+  # Provision the bundled MCP Mesh dashboards into Grafana (a ConfigMap holding
+  # the JSON, plus a file provider pointing Grafana at it).
+  #
+  # The dashboard JSON lives in this chart's files/dashboards/, which is copied
+  # from observability/grafana/dashboards/ by the release workflow and is NOT in
+  # source control — so a released chart has it and a source checkout does not.
+  # With the JSON absent, dashboards stay off no matter what this flag says: the
+  # ConfigMaps, the mounts and the default home dashboard all drop out together
+  # and Grafana starts normally without them (previously the mount stayed
+  # behind and the pod never started at all). Everything else — datasources,
+  # persistence, the admin password — is unaffected either way.
+  #
+  # To provision them from a checkout:
+  #   mkdir -p helm/mcp-mesh-grafana/files/dashboards
+  #   cp observability/grafana/dashboards/*.json helm/mcp-mesh-grafana/files/dashboards/
   dashboards:
     enabled: true
-    # References to the centralized dashboard configs
-    configMaps:
-      - mcp-mesh-dashboards
 
   # Pod security context (hardened for Pod Security Standards "restricted").
   # Renamed: this key was previously called securityContext (which is now the

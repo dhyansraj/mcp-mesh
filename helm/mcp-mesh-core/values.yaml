@@ -136,8 +136,10 @@ mcp-mesh-redis:
     maxmemory: "256mb"
     maxmemoryPolicy: "allkeys-lru"
 
-  persistence:
-    enabled: false # Use emptyDir for cache
+  # /data is an emptyDir: this Redis is an evicting cache and a short-lived
+  # session/trace store, not durable storage. The subchart renders no PVC, so
+  # its persistence block mounts a claim you created yourself — see
+  # helm/mcp-mesh-redis/values.yaml.
 
   resources:
     limits:

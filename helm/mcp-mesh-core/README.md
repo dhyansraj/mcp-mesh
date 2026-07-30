@@ -665,8 +665,10 @@ brings it back. Note that the bundled PostgreSQL keeps its data on a PVC created
 by the StatefulSet's volume claim template, which the release does not own, so
 `helm uninstall` leaves the volume behind; it is deleting that PVC (or the
 namespace around it) that destroys the data. Bundled Redis writes to an
-`emptyDir` unless you enable persistence against a PVC you created yourself, so
-treat its contents as ephemeral either way.
+`emptyDir` unless you point it at a PVC you created yourself
+(`mcp-mesh-redis.persistence.enabled` with `persistence.existingClaim` — the
+chart renders no claim of its own), so treat its contents as ephemeral either
+way.
 
 ### What uninstall leaves behind
 

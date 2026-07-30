@@ -86,6 +86,57 @@ compare stringified so both spellings disable generation.
 {{- end }}
 
 {{/*
+Whether the bundled dashboards render at all. Two conditions, not one: the
+operator has to want them (grafana.dashboards.enabled) AND the dashboard JSON
+has to be present.
+
+files/dashboards/ is gitignored and populated by the dashboard-sync step in
+helm-release.yml, so it is in every released tarball and absent from every
+source checkout. The mount used to be conditional on the flag alone while the
+ConfigMap holding the dashboard was also conditional on the file — so from a
+clone the volume referenced a ConfigMap that never rendered and the kubelet
+blocked the pod indefinitely, naming the missing ConfigMap rather than the
+missing file. A mount may not be less conditional than the object backing it.
+
+Everything dashboard-shaped keys off this single helper: the dashboard
+ConfigMap, the provisioning-provider ConfigMap (a file provider pointing at a
+directory that does not exist is a startup error for Grafana, so leaving it
+behind would trade one broken pod for another), grafana.ini's
+default_home_dashboard_path, and both volume/volumeMount pairs.
+
+Released charts are unaffected — the JSON is present, so this is true exactly
+when grafana.dashboards.enabled is.
+*/}}
+{{- define "mcp-mesh-grafana.dashboardsEnabled" -}}
+{{- if and .Values.grafana.dashboards.enabled (.Files.Get "files/dashboards/mcp-mesh-overview.json") -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
+Removed-key guard, same convention as mcp-mesh-registry.validateNoRemovedKeys:
+a key no template ever consumed is deleted rather than left to no-op silently,
+and a values file still carrying it fails with migration guidance instead.
+Invoked unconditionally from the deployment.
+
+- grafana.dashboards.configMaps: read by nothing. It listed a ConfigMap name
+  ("mcp-mesh-dashboards") that no volume, no mount and no provider ever
+  referenced, so extra dashboards named there were never mounted. The chart
+  provisions exactly the dashboards in files/dashboards/. The old shipped
+  default is tolerated verbatim — a values file copied from the chart carries
+  it with no user intent behind it — and only a diverging list fails.
+*/}}
+{{- define "mcp-mesh-grafana.validateNoRemovedKeys" -}}
+{{- $dashboards := .Values.grafana.dashboards | default dict -}}
+{{- if hasKey $dashboards "configMaps" -}}
+{{- $shipped := list "mcp-mesh-dashboards" -}}
+{{- if ne (toString ($dashboards.configMaps | default list)) (toString $shipped) -}}
+{{- fail (printf "grafana.dashboards.configMaps was never consumed and has been removed (set to %v, diverging from the old shipped default %v, so it would silently no-op); no volume, mount or dashboard provider ever referenced the ConfigMaps named there. This chart provisions the dashboards bundled in files/dashboards/ — to add your own, mount them yourself into /var/lib/grafana/dashboards" $dashboards.configMaps $shipped) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Render the image reference as [registry/]repository:tag. The registry prefix
 resolves as grafana.image.registry > global.imageRegistry > "" (implicit Docker Hub).
 The repository path is preserved — mirror images to the same paths in a

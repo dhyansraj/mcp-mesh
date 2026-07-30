@@ -1,4 +1,5 @@
 {{- include "mcp-mesh-redis.validateCredentialSource" . -}}
+{{- include "mcp-mesh-redis.validateNoRemovedKeys" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -22,9 +23,18 @@ spec:
         {{- with .Values.extraLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- with .Values.podAnnotations }}
+      {{- if or .Values.podAnnotations .Values.customConfig }}
       annotations:
+        {{- /* Only when customConfig renders a ConfigMap: an edit to it has to
+               roll the pod, or the new directives sit in the mount unread
+               until something else restarts redis. Gated so the default
+               render carries no annotations at all. */}}
+        {{- if .Values.customConfig }}
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
     spec:
       {{- with include "mcp-mesh-redis.imagePullSecrets" . }}
@@ -88,9 +98,15 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
       volumes:
         - name: redis-data
+          {{- /* This chart provisions no volume — there is no PVC template and
+                 never was. persistence.enabled therefore mounts a claim you
+                 created yourself and named in persistence.existingClaim; the
+                 guard in _helpers.tpl refuses enabled without it, because the
+                 name this used to derive belonged to no object and left the
+                 pod Pending forever (#1412). */}}
           {{- if .Values.persistence.enabled }}
           persistentVolumeClaim:
-            claimName: {{ include "mcp-mesh-redis.fullname" . }}
+            claimName: {{ .Values.persistence.existingClaim }}
           {{- else }}
           emptyDir: {}
           {{- end }}
