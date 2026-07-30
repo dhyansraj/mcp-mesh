@@ -1,9 +1,11 @@
 package ui
 
 import (
+	"log"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"mcp-mesh/src/core/registry/tracing"
 )
@@ -11,6 +13,13 @@ import (
 // MetricsProcessor aggregates dashboard-specific metrics from trace events.
 // It runs as a TraceEventProcessor alongside the TraceAccumulator in the UI server,
 // keeping aggregation logic out of the shared tracing package.
+//
+// Both maps are keyed by a name (agent / model), so they are bounded by
+// cardinality rather than volume (#1424). Each entry carries a lastSeen stamp:
+// entries not written to within bounds.Retention age out, and bounds.MaxEntries
+// is a hard key ceiling evicting least-recently-seen first. Pruning is driven
+// off the write path (gated to tracing.AggregatePruneInterval) rather than a
+// goroutine, so throwaway instances (see replayWindow) need no lifecycle.
 type MetricsProcessor struct {
 	mu sync.RWMutex
 
@@ -19,6 +28,10 @@ type MetricsProcessor struct {
 
 	// Per-model token usage keyed by model name
 	modelMetrics map[string]*modelMetrics
+
+	bounds      tracing.AggregateBounds
+	nextPruneAt time.Time
+	now         func() time.Time // injectable for tests
 }
 
 type agentMetrics struct {
@@ -27,13 +40,18 @@ type agentMetrics struct {
 	TotalOutputTokens  int64
 	TotalRequestBytes  int64
 	TotalResponseBytes int64
+	lastSeen           time.Time
 }
 
 type modelMetrics struct {
 	CallCount    int
 	InputTokens  int64
 	OutputTokens int64
+	lastSeen     time.Time
 }
+
+func agentLastSeen(am *agentMetrics) time.Time { return am.lastSeen }
+func modelLastSeen(mm *modelMetrics) time.Time { return mm.lastSeen }
 
 // AgentMetricsData is the JSON response for per-agent metrics.
 type AgentMetricsData struct {
@@ -55,10 +73,21 @@ type ModelMetricsData struct {
 	TotalTokens  int64  `json:"total_tokens"`
 }
 
+// NewMetricsProcessor creates a processor bounded by the process-wide
+// aggregate bounds (see tracing.DefaultAggregateBounds).
 func NewMetricsProcessor() *MetricsProcessor {
+	return NewMetricsProcessorWithBounds(tracing.DefaultAggregateBounds())
+}
+
+// NewMetricsProcessorWithBounds is NewMetricsProcessor with explicit bounds.
+// Production callers should use NewMetricsProcessor so the operator's env
+// configuration applies; this exists for tests.
+func NewMetricsProcessorWithBounds(bounds tracing.AggregateBounds) *MetricsProcessor {
 	return &MetricsProcessor{
 		agentMetrics: make(map[string]*agentMetrics),
 		modelMetrics: make(map[string]*modelMetrics),
+		bounds:       bounds,
+		now:          time.Now,
 	}
 }
 
@@ -74,6 +103,8 @@ func (mp *MetricsProcessor) ProcessTraceEvent(event *tracing.TraceEvent) error {
 		return nil
 	}
 
+	now := mp.nowFn()
+
 	// Per-agent metrics
 	if event.AgentName != "" {
 		am, exists := mp.agentMetrics[event.AgentName]
@@ -81,6 +112,7 @@ func (mp *MetricsProcessor) ProcessTraceEvent(event *tracing.TraceEvent) error {
 			am = &agentMetrics{}
 			mp.agentMetrics[event.AgentName] = am
 		}
+		am.lastSeen = now
 		am.SpanCount++
 		if event.RequestBytes != nil {
 			am.TotalRequestBytes += *event.RequestBytes
@@ -104,6 +136,7 @@ func (mp *MetricsProcessor) ProcessTraceEvent(event *tracing.TraceEvent) error {
 			mm = &modelMetrics{}
 			mp.modelMetrics[model] = mm
 		}
+		mm.lastSeen = now
 		mm.CallCount++
 		if event.LlmInputTokens != nil {
 			mm.InputTokens += *event.LlmInputTokens
@@ -113,7 +146,55 @@ func (mp *MetricsProcessor) ProcessTraceEvent(event *tracing.TraceEvent) error {
 		}
 	}
 
+	mp.enforceBoundsLocked(now)
 	return nil
+}
+
+// nowFn returns the injected clock, defaulting to time.Now so zero-valued
+// MetricsProcessor literals (none exist today, but the field is unexported and
+// easy to forget) still behave.
+func (mp *MetricsProcessor) nowFn() time.Time {
+	if mp.now != nil {
+		return mp.now()
+	}
+	return time.Now()
+}
+
+// enforceBoundsLocked applies the key ceiling on every write and the age prune
+// at most once per tracing.AggregatePruneInterval. Caller must hold mp.mu.
+//
+// The ceiling is checked unconditionally because it must hold at all times; the
+// age prune is a full map scan, so it is rate-limited rather than run per event.
+func (mp *MetricsProcessor) enforceBoundsLocked(now time.Time) {
+	if mp.bounds.Retention > 0 && !now.Before(mp.nextPruneAt) {
+		mp.nextPruneAt = now.Add(tracing.AggregatePruneInterval)
+		cutoff := now.Add(-mp.bounds.Retention)
+		agents := tracing.PruneOlderThan(mp.agentMetrics, agentLastSeen, cutoff)
+		models := tracing.PruneOlderThan(mp.modelMetrics, modelLastSeen, cutoff)
+		if agents > 0 || models > 0 {
+			log.Printf("[UI-METRICS] Pruned %d agent and %d model aggregates idle longer than %s",
+				agents, models, mp.bounds.Retention)
+		}
+	}
+
+	if n := tracing.EnforceMaxEntries(mp.agentMetrics, agentLastSeen, mp.bounds.MaxEntries); n > 0 {
+		log.Printf("[UI-METRICS] Agent aggregate key cap (%d) reached, evicted %d least-recently-seen agents "+
+			"(raise MCP_MESH_TELEMETRY_AGGREGATE_MAX_ENTRIES or shorten MCP_MESH_TELEMETRY_AGGREGATE_RETENTION)",
+			mp.bounds.MaxEntries, n)
+	}
+	if n := tracing.EnforceMaxEntries(mp.modelMetrics, modelLastSeen, mp.bounds.MaxEntries); n > 0 {
+		log.Printf("[UI-METRICS] Model aggregate key cap (%d) reached, evicted %d least-recently-seen models "+
+			"(raise MCP_MESH_TELEMETRY_AGGREGATE_MAX_ENTRIES or shorten MCP_MESH_TELEMETRY_AGGREGATE_RETENTION)",
+			mp.bounds.MaxEntries, n)
+	}
+}
+
+// AggregateCounts returns the current number of tracked agent and model keys.
+// Exposed for tests and diagnostics.
+func (mp *MetricsProcessor) AggregateCounts() (agents, models int) {
+	mp.mu.RLock()
+	defer mp.mu.RUnlock()
+	return len(mp.agentMetrics), len(mp.modelMetrics)
 }
 
 // GetAgentMetrics returns per-agent aggregated metrics sorted by span count.

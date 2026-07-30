@@ -44,7 +44,12 @@ func NewAccumulatorOnlyManager(config *TracingConfig, extraProcessors ...TraceEv
 	}
 	manager.processor = processor
 
-	// Create consumer with UI-specific consumer group
+	// Create consumer with UI-specific consumer group.
+	//
+	// Retention is passed through so trimming does not depend on the registry
+	// being alive (#1424): meshui reads the same stream through its own
+	// consumer group and trims it to the same window. XTRIM MINID is
+	// idempotent, so both processes trimming concurrently is harmless.
 	consumerConfig := &StreamConsumerConfig{
 		RedisURL:      config.RedisURL,
 		StreamName:    config.StreamName,
@@ -53,6 +58,7 @@ func NewAccumulatorOnlyManager(config *TracingConfig, extraProcessors ...TraceEv
 		BatchSize:     config.BatchSize,
 		BlockTimeout:  config.BlockTimeout,
 		Enabled:       config.Enabled,
+		Retention:     config.TraceRetention,
 	}
 
 	consumer, err := NewStreamConsumer(consumerConfig, manager.processor)
@@ -78,5 +84,11 @@ func NewAccumulatorOnlyManager(config *TracingConfig, extraProcessors ...TraceEv
 
 	manager.logger.Printf("UI tracing: enabled (accumulator-only), redis=%s, group=%s",
 		config.RedisURL, config.ConsumerGroup)
+	if config.TraceRetention > 0 {
+		manager.logger.Printf("Trace stream retention: %s (meshui trims too, so trimming survives a registry outage; override via MCP_MESH_TRACE_RETENTION)",
+			config.TraceRetention)
+	} else {
+		manager.logger.Printf("Trace stream retention disabled (MCP_MESH_TRACE_RETENTION=0); stream %s is never trimmed by meshui either", config.StreamName)
+	}
 	return manager, nil
 }

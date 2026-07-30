@@ -349,9 +349,21 @@ export TELEMETRY_PROTOCOL=grpc                  # OTLP protocol: grpc or http
 # Trace exporter type: otlp, console, json (default: otlp)
 export TRACE_EXPORTER_TYPE=otlp
 
-# Redis trace stream retention — registry trims mesh:trace entries older
-# than this on connect and periodically (default: 24h; 0 disables trimming)
+# Redis trace stream retention — the registry AND meshui trim mesh:trace
+# entries older than this on connect and periodically, so trimming survives
+# either process being down (default: 24h; 0 disables trimming)
 export MCP_MESH_TRACE_RETENTION=24h
+
+# Producer-side XADD MAXLEN ~ ceiling on mesh:trace, applied by every agent
+# runtime so the stream stays bounded with no consumer alive
+# (default: 100000; 0 disables the producer-side cap)
+export MCP_MESH_TRACE_STREAM_MAXLEN=100000
+
+# In-memory dashboard aggregates (per-agent, per-model, per-edge). Keyed by
+# name, so bounded by age first and by a key ceiling as a backstop against
+# name churn (0 disables the respective bound)
+export MCP_MESH_TELEMETRY_AGGREGATE_RETENTION=24h
+export MCP_MESH_TELEMETRY_AGGREGATE_MAX_ENTRIES=10000
 
 # Header propagation across agents (comma-separated prefixes)
 export MCP_MESH_PROPAGATE_HEADERS=x-request-id,x-trace
@@ -534,9 +546,16 @@ export DEFAULT_EVICTION_THRESHOLD=60  # Evict stale agents (seconds)
 # orphan schema_entries (content-addressed schemas no longer referenced
 # by any capability; #842) are retained before the periodic sweep job
 # purges them. Go duration string (e.g. "30m", "2h"). Default: 1h.
-# Set to "0" to disable the sweep entirely (forensic mode — keeps all
-# rows). Event rows are governed by a separate hardcoded 100k row cap.
+# Set to "0" to disable the agent/schema sweep (forensic mode — keeps
+# all agent and schema rows). The registry_events table has its own row
+# cap, MCP_MESH_EVENT_MAX_ROWS, which stays enforced either way.
 export MCP_MESH_RETENTION=1h
+
+# registry_events row cap — a table-size safety limit, not a retention
+# policy. Oldest rows are deleted once the table exceeds this many rows.
+# Enforced independently of MCP_MESH_RETENTION. Default: 100000.
+# Set to "0" to disable the cap deliberately.
+export MCP_MESH_EVENT_MAX_ROWS=100000
 
 # Registry sweep cadence — how often the periodic job/agent sweep runs
 # (reaping, lease recovery, retention purges). Go duration string (e.g.

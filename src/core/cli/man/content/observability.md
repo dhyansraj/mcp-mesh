@@ -103,6 +103,9 @@ Default credentials: `admin` / `admin`
 | `TELEMETRY_PROTOCOL`                   | Protocol        | `grpc`                  |
 | `TEMPO_URL`                            | Tempo query URL | `http://localhost:3200` |
 | `MCP_MESH_TRACE_RETENTION`             | Redis trace stream retention (`0` = no trimming) | `24h` |
+| `MCP_MESH_TRACE_STREAM_MAXLEN`         | Producer-side `XADD MAXLEN ~` ceiling on `mesh:trace` (`0` = no cap) | `100000` |
+| `MCP_MESH_TELEMETRY_AGGREGATE_RETENTION` | Age-out window for in-memory dashboard aggregates (`0` = no age pruning) | `24h` |
+| `MCP_MESH_TELEMETRY_AGGREGATE_MAX_ENTRIES` | Key ceiling per aggregate map, LRU eviction (`0` = no ceiling) | `10000` |
 
 ## Troubleshooting
 

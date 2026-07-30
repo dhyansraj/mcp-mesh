@@ -78,6 +78,11 @@ ui:
     url: ""
   tracing:
     enabled: true
+    # mesh:trace Redis stream retention. meshui trims the stream alongside
+    # the registry so trimming survives either process being down, which
+    # means this must match registry.observability.distributedTracing.retention.
+    # Go duration string; "0" disables trimming from meshui.
+    retention: "24h"
   redis:
     # Full Redis URL. When empty, composed from global.redis.* (rediss:// when
     # global.redis.tls.enabled); an explicit value here always wins. When

@@ -54,8 +54,11 @@ type TraceAccumulator struct {
 	// Active (in-progress) traces keyed by trace ID
 	activeTraces map[string]*activeTrace
 
-	// Per-edge stats keyed by "source -> target"
-	edgeStats map[string]*edgeAccum
+	// Per-edge stats keyed by "source -> target". Bounded by edgeBounds:
+	// each entry carries a LastSeen stamp so idle edges age out, and the
+	// number of keys is capped as a backstop against name churn (#1424).
+	edgeStats  map[string]*edgeAccum
+	edgeBounds AggregateBounds
 
 	// Total number of finalized traces (never resets)
 	totalFinalized int
@@ -99,10 +102,19 @@ type edgeAccum struct {
 	TotalMs     int64
 	MaxMs       int64
 	MinMs       int64
+	LastSeen    time.Time // last observation, drives age-based pruning
 }
 
-// NewTraceAccumulator creates a new accumulator with the given ring buffer size.
+// NewTraceAccumulator creates a new accumulator with the given ring buffer
+// size and the process-wide aggregate bounds (see DefaultAggregateBounds).
 func NewTraceAccumulator(ringSize int, logger *log.Logger) *TraceAccumulator {
+	return NewTraceAccumulatorWithBounds(ringSize, logger, DefaultAggregateBounds())
+}
+
+// NewTraceAccumulatorWithBounds is NewTraceAccumulator with explicit edge-stat
+// bounds. Production callers should use NewTraceAccumulator so the operator's
+// env configuration applies; this exists for tests.
+func NewTraceAccumulatorWithBounds(ringSize int, logger *log.Logger, bounds AggregateBounds) *TraceAccumulator {
 	if ringSize <= 0 {
 		ringSize = 200
 	}
@@ -111,6 +123,7 @@ func NewTraceAccumulator(ringSize int, logger *log.Logger) *TraceAccumulator {
 		ringSize:     ringSize,
 		activeTraces: make(map[string]*activeTrace),
 		edgeStats:    make(map[string]*edgeAccum),
+		edgeBounds:   bounds,
 		liveClients:  make(map[chan *LiveTraceEvent]struct{}),
 		dirtyTraces:  make(map[string]bool),
 		logger:       logger,
@@ -210,6 +223,47 @@ func (ta *TraceAccumulator) recordEdge(source, target string, durationMs int64, 
 	if success != nil && !*success {
 		ea.ErrorCount++
 	}
+	ea.LastSeen = time.Now()
+
+	// Hard key ceiling. Age pruning (pruneEdgeStats) is the primary bound;
+	// this only trips when new edge names appear faster than the retention
+	// window retires them, and it evicts least-recently-seen first.
+	if evicted := EnforceMaxEntries(ta.edgeStats, edgeLastSeen, ta.edgeBounds.MaxEntries); evicted > 0 && ta.logger != nil {
+		ta.logger.Printf("TraceAccumulator: edge-stat key cap (%d) reached, evicted %d least-recently-seen edges "+
+			"(raise MCP_MESH_TELEMETRY_AGGREGATE_MAX_ENTRIES or shorten MCP_MESH_TELEMETRY_AGGREGATE_RETENTION)",
+			ta.edgeBounds.MaxEntries, evicted)
+	}
+}
+
+// edgeLastSeen adapts edgeAccum to the PruneOlderThan/EnforceMaxEntries
+// accessor signature.
+func edgeLastSeen(ea *edgeAccum) time.Time { return ea.LastSeen }
+
+// pruneEdgeStats removes edge entries not observed within the retention
+// window. Mirrors SpanCorrelator.pruneExpiredCompletedTraces: age-based, with
+// a retention <= 0 no-op. Called from cleanupLoop.
+func (ta *TraceAccumulator) pruneEdgeStats() {
+	if ta.edgeBounds.Retention <= 0 {
+		return
+	}
+
+	cutoff := time.Now().Add(-ta.edgeBounds.Retention)
+
+	ta.mu.Lock()
+	removed := PruneOlderThan(ta.edgeStats, edgeLastSeen, cutoff)
+	ta.mu.Unlock()
+
+	if removed > 0 && ta.logger != nil {
+		ta.logger.Printf("TraceAccumulator: pruned %d edge stats idle longer than %s", removed, ta.edgeBounds.Retention)
+	}
+}
+
+// EdgeStatCount returns the current number of tracked edge keys. Exposed for
+// tests and diagnostics.
+func (ta *TraceAccumulator) EdgeStatCount() int {
+	ta.mu.RLock()
+	defer ta.mu.RUnlock()
+	return len(ta.edgeStats)
 }
 
 // finalizeTrace converts an active trace into a RecentTraceSummary and pushes
@@ -523,7 +577,7 @@ func (ta *TraceAccumulator) Stop() {
 
 func (ta *TraceAccumulator) cleanupLoop() {
 	defer ta.wg.Done()
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(AggregatePruneInterval)
 	defer ticker.Stop()
 
 	for {
@@ -532,6 +586,7 @@ func (ta *TraceAccumulator) cleanupLoop() {
 			return
 		case <-ticker.C:
 			ta.cleanupStaleTraces()
+			ta.pruneEdgeStats()
 		}
 	}
 }

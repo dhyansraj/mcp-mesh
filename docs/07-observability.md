@@ -60,7 +60,10 @@ export TEMPO_URL=http://localhost:3200
 | `TELEMETRY_PROTOCOL` | `grpc` | OTLP protocol: `grpc` or `http` |
 | `TRACE_EXPORTER_TYPE` | `otlp` | Exporter: `otlp`, `console`, or `json` |
 | `TEMPO_URL` | `http://localhost:3200` | Tempo query URL for the trace API |
-| `MCP_MESH_TRACE_RETENTION` | `24h` | Redis `mesh:trace` stream retention (`0` disables trimming) |
+| `MCP_MESH_TRACE_RETENTION` | `24h` | Redis `mesh:trace` stream retention (`0` disables trimming). Honoured by both the registry and meshui, so trimming survives either being down |
+| `MCP_MESH_TRACE_STREAM_MAXLEN` | `100000` | Producer-side `XADD MAXLEN ~` ceiling on `mesh:trace`, applied by every agent runtime. Bounds the stream even with no consumer alive (`0` disables) |
+| `MCP_MESH_TELEMETRY_AGGREGATE_RETENTION` | `24h` | Age-out window for the in-memory per-agent / per-model / per-edge dashboard aggregates (`0` disables age pruning) |
+| `MCP_MESH_TELEMETRY_AGGREGATE_MAX_ENTRIES` | `10000` | Hard key ceiling per aggregate map, evicting least-recently-seen first (`0` disables the ceiling) |
 
 See the [environment variables reference](environment-variables.md) for the full list.
 
