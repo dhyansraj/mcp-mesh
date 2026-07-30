@@ -106,6 +106,16 @@ Set explicit values (`global.postgres.password`,
 (`global.postgres.existingSecret`, `...grafana.config.existingSecret`) to
 override — see the [mcp-mesh-core README](./mcp-mesh-core/README.md).
 
+Generation reuses the existing value via `lookup`, which needs a live cluster.
+Rendering without one (`helm template | kubectl apply`, Argo CD, Flux) emits a
+new random password on every render — permanent drift on those Secrets. Use
+pre-created secrets in such pipelines (`global.postgres.existingSecret`,
+`mcp-mesh-grafana.grafana.config.existingSecret` — add
+`...config.generatedSecret: false` to make a missing reference fail the render
+instead of regenerating). Switching an already-installed release over to a
+pre-created secret is a two-step change for Grafana — follow the procedure in
+the [mcp-mesh-core README](./mcp-mesh-core/README.md#adopting-existingsecret-on-an-existing-install).
+
 ## Verify Installation
 
 ```bash

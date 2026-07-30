@@ -66,18 +66,44 @@ grafana:
     #   2. this value (rendered into the chart-managed Secret)
     #   3. empty: auto-generated into the chart-managed Secret
     #      "<fullname>-secret" (key: admin-password). The generated value is
-    #      reused on helm upgrade (lookup). Retrieve it with:
+    #      reused on helm upgrade (lookup) and never deleted by Helm
+    #      (helm.sh/resource-policy: keep), so it stays the record of the
+    #      password Grafana persisted on first start. Retrieve it with:
     #        kubectl get secret <fullname>-secret -o jsonpath='{.data.admin-password}' | base64 -d
-    #      Note: lookup needs a cluster — `helm template | kubectl apply`
-    #      pipelines regenerate the value on every render; use helm
-    #      install/upgrade, or set an explicit password / existingSecret.
+    #      Note: lookup needs a cluster — `helm template | kubectl apply` and
+    #      GitOps renderers (Argo CD, Flux) regenerate the value on every
+    #      render, which surfaces as permanent drift on the Secret. Use helm
+    #      install/upgrade there, or set existingSecret (+ generatedSecret:
+    #      false) — see below.
     #      Grafana applies the password only on first start: with persistence
     #      enabled, later changes to this value do not update a provisioned
     #      instance (use grafana-cli admin reset-admin-password).
     adminPassword: ""
-    # Read the admin password from an existing secret instead.
+    # Read the admin password from an existing secret instead. The chart then
+    # renders no Secret of its own and the Deployment reads
+    # GF_SECURITY_ADMIN_PASSWORD from this one via secretKeyRef — the
+    # render-stable option, and the recommended setting for GitOps.
+    #
+    # Adopting it on an EXISTING install is a TWO-step change. Grafana honours
+    # the password only on first start, so with persistence enabled the
+    # effective password stays the one in "<fullname>-secret" — read it and
+    # seal it into the new secret. And do not combine the chart upgrade with
+    # setting existingSecret: helm.sh/resource-policy: keep is read off the
+    # live object, so on a release from a chart that predates it the same
+    # upgrade would delete "<fullname>-secret" and that password with it.
+    # Upgrade first (check the annotation is on the live secret), adopt second.
+    # To switch to a different password, change it in Grafana afterwards
+    # (grafana-cli admin reset-admin-password) or reprovision from an empty
+    # PVC — see the mcp-mesh-core README for the ordering.
     existingSecret: ""
     existingSecretPasswordKey: "admin-password"
+    # Auto-generate the admin password when neither adminPassword nor
+    # existingSecret is set. Setting false makes the chart refuse to invent
+    # one: templating fails with a message naming both options instead of
+    # emitting a Secret whose value changes on every render. That is the
+    # GitOps-safe posture — set it once alongside existingSecret and no
+    # renderer can silently rotate the password.
+    generatedSecret: true
     allowSignUp: false
     installPlugins: "grafana-piechart-panel"
     # Base path for serving Grafana behind a path prefix

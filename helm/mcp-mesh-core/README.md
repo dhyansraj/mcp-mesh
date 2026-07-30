@@ -169,6 +169,129 @@ credential every consumer connects with. (`existingSecretUrlKey` — full-DSN
 mode — additionally requires `existingSecretPasswordKey`, because
 provisioning needs a bare password key stored alongside the DSN.)
 
+### Grafana admin password
+
+#### Default: auto-generated admin password
+
+With no credential configured, the Grafana chart generates a random password
+into the Secret `<release>-mcp-mesh-grafana-secret` (key: `admin-password`).
+The Deployment reads it via `secretKeyRef` — no password is rendered into the
+pod spec.
+
+```bash
+kubectl get secret mcp-core-mcp-mesh-grafana-secret -n mcp-mesh \
+  -o jsonpath='{.data.admin-password}' | base64 -d
+```
+
+Lifecycle:
+
+- `helm upgrade` reuses the existing value (the Secret is found via `lookup`).
+- The Secret carries `helm.sh/resource-policy: keep`, so Helm never deletes it
+  — not on `helm uninstall`, and not on the upgrade that stops rendering it.
+  That second case is the one that bites: `persistence.enabled` defaults to
+  `true` and Grafana applies `GF_SECURITY_ADMIN_PASSWORD` only on **first
+  start**, so the live password lives in `grafana.db` on the volume and this
+  Secret is the only record of it. Setting `existingSecret` on a running
+  release would otherwise delete the generated password in the same upgrade
+  that introduces a new one Grafana ignores — an admin lockout.
+  (Reinstalling under the same release name adopts the kept Secret and reuses
+  its value via `lookup`.)
+- **The annotation does not protect the upgrade that installs it.** Helm
+  decides whether to skip a delete by reading the policy off the **live**
+  object (and the previous release's stored manifest), and on a release
+  installed from a chart that predates the annotation both are annotation-free.
+  A release is covered only from the upgrade **after** the one that adds it.
+  Check before relying on it:
+
+  ```bash
+  kubectl get secret mcp-core-mcp-mesh-grafana-secret -n mcp-mesh \
+    -o jsonpath='{.metadata.annotations}'
+  ```
+- **Template / GitOps pipelines**: `lookup` needs a live cluster. Pure
+  `helm template | kubectl apply` — and renderers such as Argo CD and Flux,
+  which build manifests without cluster access — produce a **new random
+  password on every render**. The Secret therefore never converges: the
+  Application reports permanent drift on
+  `<release>-mcp-mesh-grafana-secret`, and syncing it silently rotates the
+  admin password. Note that Argo CD caches rendered manifests for an
+  unchanged chart version + values, so an Application can look `Synced` until
+  something invalidates that cache. Use an existing secret in those
+  pipelines (below).
+
+#### Existing secret (recommended for GitOps)
+
+Point the chart at a pre-created Secret. It then renders no Secret of its own,
+the Deployment reads `GF_SECURITY_ADMIN_PASSWORD` from yours via
+`secretKeyRef`, and the rendered output is byte-stable:
+
+```yaml
+mcp-mesh-grafana:
+  grafana:
+    config:
+      existingSecret: "grafana-admin"
+      existingSecretPasswordKey: "admin-password" # default
+      # Refuse to invent a password instead of generating one, so a values
+      # file that loses the reference fails the render rather than starting
+      # to rotate the password on every sync.
+      generatedSecret: false
+```
+
+`generatedSecret: false` without `adminPassword` or `existingSecret` fails at
+template time with a message naming both options.
+
+#### Adopting `existingSecret` on an existing install
+
+Two things make this a **two-step** change, not one commit. Grafana applies the
+admin password only on first start, so with persistence enabled the effective
+password is still the one generated at install time — a different value in your
+new secret has no effect. And on a release from a chart without
+`helm.sh/resource-policy: keep`, the upgrade that sets `existingSecret` deletes
+the generated Secret, destroying the only record of that live password.
+
+1. **Upgrade the chart alone** (no credential changes). This lands the
+   annotation on the Secret; its value is untouched. Verify:
+
+   ```bash
+   kubectl get secret mcp-core-mcp-mesh-grafana-secret -n mcp-mesh \
+     -o jsonpath='{.metadata.annotations}'
+   # must contain "helm.sh/resource-policy":"keep"
+   ```
+
+2. **Read the live password and seal it into your secret**, then set
+   `existingSecret`. Do this even if you intend to change the password later —
+   it is the value Grafana is actually running with:
+
+   ```bash
+   kubectl get secret mcp-core-mcp-mesh-grafana-secret -n mcp-mesh \
+     -o jsonpath='{.data.admin-password}' | base64 -d
+   ```
+
+To make a *different* password authoritative, change it in Grafana after
+adopting the secret — either reset it in place:
+
+```bash
+kubectl exec deploy/mcp-core-mcp-mesh-grafana -n mcp-mesh -- \
+  grafana-cli admin reset-admin-password <new-password>
+```
+
+or reprovision from an empty volume, which requires this order (the PVC is
+release-owned and its deletion blocks on the `pvc-protection` finalizer while a
+pod has it mounted, and nothing recreates the claim by itself):
+
+```bash
+kubectl scale deploy/mcp-core-mcp-mesh-grafana -n mcp-mesh --replicas=0
+kubectl delete pvc mcp-core-mcp-mesh-grafana-pvc -n mcp-mesh
+helm upgrade mcp-core helm/mcp-mesh-core -n mcp-mesh ...  # recreates PVC + pod
+```
+
+Grafana then initializes from `GF_SECURITY_ADMIN_PASSWORD`, i.e. your secret.
+All dashboards, users, and annotations stored in `grafana.db` are lost — the
+provisioned datasources and dashboards from this chart come back.
+
+Inline `mcp-mesh-grafana.grafana.config.adminPassword` also stops the
+per-render rotation (it is rendered verbatim into the chart-managed Secret),
+at the cost of plaintext in your values.
+
 ### External managed datastores
 
 To use a managed PostgreSQL/Redis (RDS, Cloud SQL, ElastiCache, ...), disable
@@ -356,7 +479,7 @@ auto-generated into a Secret or sourced from one you pre-create:
 | Credential          | Default                              | Secret / key                                                  | Override                                                                       |
 | ------------------- | ------------------------------------ | ------------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | PostgreSQL          | auto-generated, shared by all consumers | `<release>-mcp-mesh-postgres-credentials` / `password`      | `global.postgres.password` or `global.postgres.existingSecret` + `existingSecretPasswordKey` (or `existingSecretUrlKey`) |
-| Grafana admin       | auto-generated                       | `<release>-mcp-mesh-grafana-secret` / `admin-password`        | `mcp-mesh-grafana.grafana.config.adminPassword` or `....config.existingSecret` + `existingSecretPasswordKey` |
+| Grafana admin       | auto-generated (`generatedSecret: true`) | `<release>-mcp-mesh-grafana-secret` / `admin-password`     | `mcp-mesh-grafana.grafana.config.adminPassword` or `....config.existingSecret` + `existingSecretPasswordKey` (+ `generatedSecret: false` to refuse generation outright — recommended for GitOps renderers, see "Grafana admin password") |
 | Redis               | none (bundled Redis runs without AUTH) | —                                                            | `global.redis.password` / `global.redis.existingSecret` (external Redis only)  |
 | UI database         | inherits `global.postgres` (see below) | —                                                            | `mcp-mesh-ui.ui.database.url`                                                  |
 

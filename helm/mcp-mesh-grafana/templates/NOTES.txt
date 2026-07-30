@@ -5,7 +5,7 @@ Grafana admin password comes from secret
 {{- else if not .Values.grafana.config.adminPassword }}
 Grafana admin password was auto-generated. Retrieve it with:
 
-  kubectl get secret {{ include "mcp-mesh-grafana.fullname" . }}-secret -n {{ .Release.Namespace }} \
+  kubectl get secret {{ include "mcp-mesh-grafana.secretName" . }} -n {{ .Release.Namespace }} \
     -o jsonpath='{.data.admin-password}' | base64 -d
 
 The generated value is reused on helm upgrade. Grafana applies it only on
