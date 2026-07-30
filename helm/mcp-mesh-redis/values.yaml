@@ -30,13 +30,31 @@ service:
 # Deployment configuration
 replicaCount: 1
 
-# Persistence configuration (using emptyDir for cache)
+# Storage for /data.
+#
+# The default is an emptyDir, and that is the design: this Redis is a cache and
+# a short-lived session/trace store, capped by maxmemory with allkeys-lru
+# eviction, so its contents are ephemeral. Nothing in the mesh treats them as
+# durable — see "Application data" in the mcp-mesh-core README.
+#
+# This chart provisions NO volume: it has no PVC template and never had one.
+# persistence therefore mounts a claim YOU created, named explicitly:
+#
+#   persistence:
+#     enabled: true
+#     existingClaim: my-redis-data
+#
+# enabled without existingClaim fails at template time. It used to derive a
+# claim name from the release instead, which no template ever created, so the
+# pod sat Pending forever on a claim nothing would ever bind.
+#
+# storageClass, accessMode, size and annotations are gone: they configured the
+# PVC this chart does not create, so they were read by nothing. Size and class
+# belong to whatever creates the claim. Once /data is a ReadWriteOnce volume
+# rather than an emptyDir, the strategy note below stops being hypothetical.
 persistence:
   enabled: false
-  storageClass: ""
-  accessMode: ReadWriteOnce
-  size: 8Gi
-  annotations: {}
+  existingClaim: ""
 
 # Deployment update strategy. Empty leaves the field unset, so Kubernetes
 # applies its own default (RollingUpdate), which is right for this chart: the

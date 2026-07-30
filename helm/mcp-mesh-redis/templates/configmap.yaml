@@ -1,0 +1,22 @@
+{{- if .Values.customConfig }}
+{{- /* Backs the "config" volume in the Deployment, which mounts this key at
+       /etc/redis/redis.conf and appends `--include /etc/redis/redis.conf` to
+       the redis-server command line. The Deployment referenced this ConfigMap
+       and the chart never rendered it, so setting customConfig produced a pod
+       the kubelet blocked forever on a missing ConfigMap — the same defect as
+       the Grafana dashboards volume (#1419).
+
+       redis-server applies the include LAST, after the --appendonly /
+       --maxmemory / --maxmemory-policy flags above it, so directives here
+       override the values-driven ones. */}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mcp-mesh-redis.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mcp-mesh-redis.labels" . | nindent 4 }}
+data:
+  redis.conf: |
+    {{- .Values.customConfig | nindent 4 }}
+{{- end }}

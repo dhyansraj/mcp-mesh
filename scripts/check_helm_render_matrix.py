@@ -216,6 +216,58 @@ CASES: list[Case] = [
             "global": {"redis": {"host": "redis.example.internal", "password": "pw"}},
         },
     ),
+    Case(
+        "mcp-mesh-core",
+        "redis persistence enabled with no claim to mount",
+        {"mcp-mesh-redis": {"persistence": {"enabled": True}}},
+        expect_fail="persistence.enabled requires persistence.existingClaim",
+    ),
+    Case(
+        "mcp-mesh-core",
+        "...and the same once an existing claim is named",
+        {
+            "mcp-mesh-redis": {
+                "persistence": {"enabled": True, "existingClaim": "redis-data"}
+            }
+        },
+    ),
+    Case(
+        "mcp-mesh-core",
+        "a redis PVC size that never provisioned anything",
+        {"mcp-mesh-redis": {"persistence": {"size": "20Gi"}}},
+        expect_fail="persistence.size was never consumed",
+    ),
+    Case(
+        "mcp-mesh-core",
+        "the shipped redis persistence defaults are grandfathered",
+        {
+            "mcp-mesh-redis": {
+                "persistence": {
+                    "enabled": False,
+                    "storageClass": "",
+                    "accessMode": "ReadWriteOnce",
+                    "size": "8Gi",
+                    "annotations": {},
+                }
+            }
+        },
+    ),
+    # --- mcp-mesh-grafana: removed dashboard key --------------------------
+    Case(
+        "mcp-mesh-core",
+        "grafana dashboards.configMaps that never mounted anything",
+        {"mcp-mesh-grafana": {"grafana": {"dashboards": {"configMaps": ["mine"]}}}},
+        expect_fail="grafana.dashboards.configMaps was never consumed",
+    ),
+    Case(
+        "mcp-mesh-core",
+        "the shipped dashboards.configMaps default is grandfathered",
+        {
+            "mcp-mesh-grafana": {
+                "grafana": {"dashboards": {"configMaps": ["mcp-mesh-dashboards"]}}
+            }
+        },
+    ),
     # --- mcp-mesh-ui (through the umbrella) -------------------------------
     Case(
         "mcp-mesh-core",

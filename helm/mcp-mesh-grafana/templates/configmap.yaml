@@ -40,8 +40,11 @@ data:
     reporting_enabled = false
     check_for_updates = false
 
+    {{- if include "mcp-mesh-grafana.dashboardsEnabled" . }}
+
     [dashboards]
     default_home_dashboard_path = /var/lib/grafana/dashboards/mcp-mesh-overview.json
+    {{- end }}
 
 ---
 apiVersion: v1
@@ -74,7 +77,7 @@ data:
     {{- end }}
 
 ---
-{{- if .Values.grafana.dashboards.enabled }}
+{{- if include "mcp-mesh-grafana.dashboardsEnabled" . }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

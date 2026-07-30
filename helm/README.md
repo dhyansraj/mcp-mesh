@@ -36,6 +36,14 @@ Kubernetes deployment charts for MCP Mesh - a distributed agent orchestration fr
 ### Installation
 
 ```bash
+# 0. Only when installing from a clone of this repository: copy the Grafana
+#    dashboards into the chart. They live in observability/ and are synced in
+#    when the charts are released, so a released chart has them and a checkout
+#    does not. Skip this and everything still installs and runs — Grafana just
+#    comes up with its datasources and no MCP Mesh dashboards.
+mkdir -p helm/mcp-mesh-grafana/files/dashboards
+cp observability/grafana/dashboards/*.json helm/mcp-mesh-grafana/files/dashboards/
+
 # 1. Install core infrastructure (registry + observability)
 #    --set namespaceCreate=false is required: see "Namespace handling" in
 #    mcp-mesh-core/README.md

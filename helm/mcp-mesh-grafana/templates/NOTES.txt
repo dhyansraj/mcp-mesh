@@ -12,6 +12,19 @@ The generated value is reused on helm upgrade. Grafana applies it only on
 first start — with persistence enabled, the password set at install time
 stays in effect (reset with: grafana-cli admin reset-admin-password).
 {{- end }}
+{{- if and .Values.grafana.dashboards.enabled (not (include "mcp-mesh-grafana.dashboardsEnabled" .)) }}
+
+NOTE: the bundled MCP Mesh dashboards were NOT provisioned. Grafana starts and
+everything else (datasources, persistence, the admin password) works, but
+files/dashboards/mcp-mesh-overview.json is not in this chart — it is copied
+from observability/ when the chart is released, and is not in source control.
+Installing from a git checkout, populate it first:
+
+  mkdir -p helm/mcp-mesh-grafana/files/dashboards
+  cp observability/grafana/dashboards/*.json helm/mcp-mesh-grafana/files/dashboards/
+
+Set grafana.dashboards.enabled=false to silence this.
+{{- end }}
 {{- if .Values.grafana.persistence.enabled }}
 
 Grafana's data volume holds grafana.db — the dashboards, annotations, users,
