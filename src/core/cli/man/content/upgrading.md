@@ -59,7 +59,7 @@ See the **Drain Mode** section of `meshctl man registry` for the full command re
 
 ## Helm Mechanics
 
-For Kubernetes deployments, upgrade **in place** with `helm upgrade` — never `helm uninstall`.
+For Kubernetes deployments, upgrade **in place** with `helm upgrade` — not by uninstalling and reinstalling.
 
 ```bash
 # Preserve the existing release's env/values across the upgrade
@@ -70,4 +70,6 @@ helm get values <release>
 ```
 
 - **`--reuse-values`** carries forward the environment configuration set at install time so an upgrade does not silently reset it. Confirm with `helm get values` that the values you expect are still present.
-- **Never `helm uninstall` the core release.** The core chart owns the Namespace; uninstalling it deletes the namespace and every co-located agent, Secret, and PVC with it. To change the core, always `helm upgrade` the existing release.
+- **Do not use `helm uninstall` as an upgrade mechanism.** To change the core, `helm upgrade` the existing release — uninstalling and reinstalling discards the release's history and values along with the running workloads, for no benefit.
+- **`helm uninstall` is still a legitimate, explicit teardown.** It removes the core workloads (registry, PostgreSQL, Redis, and any observability components), takes the registry offline with them, and leaves the `Namespace` in place — the core chart's `Namespace` carries `"helm.sh/resource-policy": keep`, so Helm skips it on uninstall and the deletion cannot cascade to co-located agents, Secrets, and PVCs. (Releases installed with an older chart pick the annotation up on `helm upgrade`, with no values change.) The registry's contents are derived state: agents re-register on their next heartbeat, so the registry repopulates itself and the cost is a transient topology gap, not data loss. Agents keep serving while it is down — resolved dependencies are never cleared on a registry disconnect. What pauses is topology detection: discovering new capabilities, re-resolving changed ones, and looking up an agent a client has not already resolved. What is *not* derived is application data — if your own workloads used the bundled PostgreSQL or Redis for their own storage, that data is yours to protect before you tear anything down.
+- **`helm.sh/resource-policy` is reserved in `commonAnnotations`.** The chart's `keep` on the `Namespace` is what keeps that cascade from happening and a `commonAnnotations` value would override it on last-wins, so the chart fails the render when the key is set to anything but `keep` — remove it from `commonAnnotations`, or set it to `keep`, before upgrading.

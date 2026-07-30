@@ -19,11 +19,34 @@ This umbrella chart deploys the core MCP Mesh infrastructure components:
 
 ```bash
 # Install core infrastructure
-helm install mcp-mesh-core ./mcp-mesh-core
+helm install mcp-mesh-core ./mcp-mesh-core -n mcp-mesh --create-namespace
 
 # Or with custom values
-helm install mcp-mesh-core ./mcp-mesh-core -f my-values.yaml
+helm install mcp-mesh-core ./mcp-mesh-core -n mcp-mesh --create-namespace -f my-values.yaml
 ```
+
+`--create-namespace` (or Argo CD's `syncOptions: CreateNamespace=true`) is
+**required** when the target namespace does not exist yet, and it creates that
+namespace without tying it to the release. `namespaceCreate` is not a substitute:
+Helm writes the release secret into the `-n` namespace *before* it applies the
+rendered manifest, so a chart-templated `Namespace` can never create the
+namespace its own release is installed into — the install fails with
+`create: failed to create: namespaces "<name>" not found`. It can only
+re-declare a namespace that already exists.
+
+`namespaceCreate` (default `true`) additionally renders a `Namespace` object
+into the release. It creates **`global.namespace` (default `mcp-mesh`), not the
+release namespace** — the two are independent, so installing with
+`-n my-app` while leaving `global.namespace` at its default creates a stray
+`mcp-mesh` namespace that nothing is deployed into. Keep the two matching:
+
+```bash
+helm install mcp-mesh-core ./mcp-mesh-core \
+  -n my-app --create-namespace --set global.namespace=my-app
+```
+
+Do not flip `namespaceCreate` to `false` on an existing release — see
+"Uninstall" below.
 
 ### Access Registry
 
@@ -303,10 +326,14 @@ single-writer local file.
 
 The core infrastructure follows this deployment pattern:
 
-1. **Namespace** - Creates `mcp-mesh` namespace
+1. **Namespace** - Creates `global.namespace` (default `mcp-mesh`) when
+   `namespaceCreate` is enabled
 2. **PostgreSQL** - StatefulSet with persistent storage
 3. **Redis** - Deployment with emptyDir (cache-only)
 4. **Registry** - StatefulSet connected to PostgreSQL
+
+Only step 1 uses `global.namespace`. Every workload deploys into the release
+namespace (`-n`), which is why the two need to match.
 
 ## Monitoring
 
@@ -374,16 +401,55 @@ mcp-mesh-registry:
 ## Uninstall
 
 ```bash
-helm uninstall mcp-mesh-core
+helm uninstall mcp-mesh-core -n mcp-mesh
 ```
 
-Note: This will delete all data in PostgreSQL. Back up data before uninstalling.
+This removes the core workloads — registry, PostgreSQL, Redis, and, when
+enabled, Tempo and Grafana.
+
+There is no mesh data to back up first. The registry's database is **derived
+state**: agents re-register on their next heartbeat, so a registry that comes
+back empty repopulates itself. Losing it costs a transient topology gap, not
+data. Agents also keep serving while the registry is down — dependencies that
+are already resolved are never cleared on a registry disconnect (a deliberate
+resilience invariant; the runtimes only log the event). What pauses is topology
+detection: until the registry is answering heartbeats again, new capabilities
+are not discovered, changed ones are not re-resolved, and a client that has not
+already resolved an agent cannot look it up.
+
+Application data is the part that needs care. If you pointed your own workloads
+at the bundled PostgreSQL or Redis for their own storage — an easy shortcut to
+take — that data is yours to protect. It is not derived, and no heartbeat
+brings it back. Note that the bundled PostgreSQL keeps its data on a PVC created
+by the StatefulSet's volume claim template, which the release does not own, so
+`helm uninstall` leaves the volume behind; it is deleting that PVC (or the
+namespace around it) that destroys the data. Bundled Redis writes to an
+`emptyDir` unless you enable persistence against a PVC you created yourself, so
+treat its contents as ephemeral either way.
+
+The namespace is left in place. `namespaceCreate` (default `true`) makes the
+release own a `Namespace` object, and deleting a namespace cascades to every
+resource in it — agents, Services, Secrets, and PVCs the chart never created.
+The namespace template carries `"helm.sh/resource-policy": keep`, so Helm skips
+it on uninstall and the cascade cannot happen. Releases installed with an older
+chart pick the annotation up automatically on `helm upgrade`; no other action
+is needed.
+
+Do **not** set `namespaceCreate=false` on an existing release to get the same
+effect. The `Namespace` is already recorded in the release manifest, so
+removing it from the rendered output makes the next `helm upgrade` delete the
+namespace and everything in it — while reporting `STATUS: deployed` and exit
+`0`. When `global.namespace` matches the namespace you pass to `-n`, it is also
+unrecoverable: Helm keeps the release secret in the `-n` namespace, which is the
+one being deleted, so `helm history` afterward reports `release: not found`. If
+the two differ, the release metadata survives in the `-n` namespace — but the
+rendered namespace is still deleted, cascade included.
 
 ## Values
 
 | Key                | Type   | Default      | Description                          |
 | ------------------ | ------ | ------------ | ------------------------------------ |
-| `global.namespace` | string | `"mcp-mesh"` | Namespace for all components         |
+| `global.namespace` | string | `"mcp-mesh"` | Name of the `Namespace` object rendered by `namespaceCreate`. Nothing else reads it — components always deploy to the release namespace (`-n`), so keep the two matching |
 | `global.imageRegistry` | string | `""` | Registry prefix applied to every image (repository paths preserved — see "Air-gapped / private registry installs"); per-component `image.registry` overrides win |
 | `global.imagePullSecrets` | list | `[]` | Pull secrets (`- name: ...`) added to every pod spec, merged with each chart's own `imagePullSecrets` and deduplicated by name |
 | `global.postgres.*` | object | bundled postgres | PostgreSQL endpoint/credentials inherited by all consumers (`host`, `port`, `name`, `username`, `password`, `sslmode`, `existingSecret`, `existingSecretUrlKey`, `existingSecretPasswordKey`, `tls.caSecret`, `tls.caKey`) |
@@ -395,7 +461,7 @@ Note: This will delete all data in PostgreSQL. Back up data before uninstalling.
 | `registry.enabled` | bool   | `true`       | Enable Registry deployment           |
 | `grafana.enabled`  | bool   | `true`       | Enable Grafana deployment            |
 | `tempo.enabled`    | bool   | `true`       | Enable Tempo deployment              |
-| `namespaceCreate`  | bool   | `true`       | Create namespace if it doesn't exist |
+| `namespaceCreate`  | bool   | `true`       | Render `global.namespace` as a release-owned `Namespace`, annotated `"helm.sh/resource-policy": keep` so uninstall never deletes it. Safe to disable at install time; never flip it to `false` on an existing release (see "Uninstall") |
 
 ## Service Discovery
 

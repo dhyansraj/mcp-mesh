@@ -181,6 +181,11 @@ helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
   -f helm-values.yaml
 ```
 
+`-n` is where every component is deployed; `global.namespace` names the
+`Namespace` object the core chart renders (`namespaceCreate`, default `true`).
+Mismatched, they leave a stray empty namespace alongside the real one, and
+multiple core releases contend for that one shared object.
+
 For cross-namespace deployments (core and agents in different namespaces),
 override service hostnames with FQDNs:
 

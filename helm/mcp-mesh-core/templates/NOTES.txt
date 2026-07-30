@@ -11,11 +11,14 @@ Components deployed:
 - MCP Mesh Registry: {{ .Release.Name }}-mcp-mesh-registry
 {{- end }}
 
+{{/* Hints use .Release.Namespace, not global.namespace: that is where every
+     component lands, and global.namespace ships a non-empty literal so a
+     `| default .Release.Namespace` fallback there can never fire. */ -}}
 To check the status of your deployment:
-  kubectl get pods -n {{ .Values.global.namespace | default .Release.Namespace }}
+  kubectl get pods -n {{ .Release.Namespace }}
 
 To access the registry:
-  kubectl port-forward -n {{ .Values.global.namespace | default .Release.Namespace }} svc/{{ .Release.Name }}-mcp-mesh-registry 8000:8000
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ .Release.Name }}-mcp-mesh-registry 8000:8000
 
 Then visit: http://localhost:8000/health
 
@@ -44,6 +47,21 @@ Grafana admin password was auto-generated. Retrieve it with:
 Grafana applies the generated value on first start only: if this release was
 upgraded from chart <= 2.4.0 with persistence enabled, the previous admin
 password remains active — see the chart README's upgrade notes.
+{{- end }}
+{{- /* Only fires on the real remaining hazard: namespaceCreate renders
+       global.namespace, which is independent of -n. Uninstall safety itself
+       needs no warning — the Namespace carries resource-policy: keep. */}}
+{{- $nsObject := .Values.global.namespace | default .Release.Namespace }}
+{{- if and .Values.namespaceCreate (ne $nsObject .Release.Namespace) }}
+
+WARNING: namespaceCreate rendered Namespace/{{ $nsObject }}, but this release
+deploys into {{ .Release.Namespace }}. Nothing runs in {{ $nsObject }} — it is a stray
+namespace, and every core release leaving global.namespace at its default
+contends for that same object. Set global.namespace={{ .Release.Namespace }} to match -n.
+
+Do not fix this by setting namespaceCreate=false on an existing release: that
+drops the Namespace from the rendered manifest, and the next `helm upgrade`
+deletes it along with everything inside.
 {{- end }}
 
 For more information, visit: https://github.com/dhyansraj/mcp-mesh

@@ -1,4 +1,10 @@
+{{- /* These are the SOLE invocations of both guards in the chart, and they
+       must stay above the `if` so they run regardless of namespaceCreate.
+       Before deleting this file, or making it render nothing
+       unconditionally, move the includes to a template that always renders —
+       otherwise the guards silently stop firing. */ -}}
 {{- include "mcp-mesh-core.validateNoRemovedKeys" . -}}
+{{- include "mcp-mesh-core.validateNamespaceResourcePolicy" . -}}
 {{- if .Values.namespaceCreate }}
 apiVersion: v1
 kind: Namespace
@@ -9,8 +15,16 @@ metadata:
     {{- with .Values.commonLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
-  {{- with .Values.commonAnnotations }}
   annotations:
+    {{- /* Deleting a Namespace cascades to everything inside it, chart-owned
+           or not. Never let `helm uninstall` garbage-collect this object. */}}
+    "helm.sh/resource-policy": keep
+    {{- /* commonAnnotations is merged after the line above, so a copy of that
+           key there would win (helm renders the duplicate, Kubernetes takes
+           last-wins). Drop it instead of emitting the key twice — an explicit
+           `keep` is a no-op, and anything else is rejected by
+           mcp-mesh-core.validateNamespaceResourcePolicy. */}}
+    {{- with omit (.Values.commonAnnotations | default dict) "helm.sh/resource-policy" }}
     {{- toYaml . | nindent 4 }}
-  {{- end }}
+    {{- end }}
 {{- end }}

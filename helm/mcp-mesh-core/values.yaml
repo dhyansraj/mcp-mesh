@@ -3,8 +3,10 @@
 
 # Global configuration
 global:
-  # Namespace for all components (used by namespaceCreate).
-  # Usually matches the -n flag: helm install ... -n my-namespace --set global.namespace=my-namespace
+  # Name of the Namespace object rendered by namespaceCreate. Nothing else
+  # reads it: every component deploys to .Release.Namespace (the -n flag).
+  # Keep it matching -n, or namespaceCreate creates a stray namespace that
+  # nothing is deployed into.
   namespace: mcp-mesh
 
   # Private/air-gapped registry prefix applied to EVERY image in the stack:
@@ -308,14 +310,27 @@ mcp-mesh-ui:
       url: "http://mcp-core-mcp-mesh-tempo:3200"
       telemetryEndpoint: "mcp-core-mcp-mesh-tempo:4317"
 
-# Namespace creation
+# Render global.namespace as a release-owned Namespace object. Note this is
+# global.namespace (below), NOT the release namespace (-n) — set both to the
+# same value, or the chart creates a stray namespace alongside the one it
+# deploys into.
+#
+# The Namespace carries "helm.sh/resource-policy": keep, so `helm uninstall`
+# leaves it (and everything in it) alone. Do NOT flip this to false on an
+# existing release: the namespace is already in the release manifest, so
+# dropping it from the rendered output makes the next `helm upgrade` delete
+# the namespace and cascade to every resource inside it.
 namespaceCreate: true
 
 # Common labels for all resources
 commonLabels:
   app.kubernetes.io/part-of: mcp-mesh-core
 
-# Common annotations for all resources
+# Common annotations for all resources. In practice the Namespace above is the
+# only resource this chart applies them to, and "helm.sh/resource-policy" is
+# reserved: it always renders as "keep" (an explicit "keep" here is a no-op,
+# any other value is rejected) so the namespace cannot be put back in
+# `helm uninstall`'s blast radius by accident.
 commonAnnotations: {}
 
 # Network policies, service monitors, and pod disruption budgets are
