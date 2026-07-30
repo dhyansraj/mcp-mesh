@@ -3455,6 +3455,11 @@ PostgreSQL, Redis, Tempo, and Grafana as a single Helm release:</p>
     -n trip-planner \
     -f helm/values-core.yaml \
     --wait --timeout 5m</code></pre>
+<p><code>values-core.yaml</code> sets
+<code>namespaceCreate: false</code>, which is what lets the chart
+install into the namespace <code>kubectl</code> created in Part 2.
+Without it the install fails with
+<code>invalid ownership metadata</code>.</p>
 <p>Wait for the registry to become available:</p>
 <pre class="shell"><code>$ kubectl wait --for=condition=available \
     deployment/mcp-core-mcp-mesh-registry \
