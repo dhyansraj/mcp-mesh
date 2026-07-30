@@ -26,7 +26,7 @@ app.post(
   "/plan",
   mesh.route(
     [{ capability: "trip_planning" }],
-    async (req: Request, res: Response, { trip_planning }) => {
+    async (req: Request, res: Response, [trip_planning]) => {
       if (!trip_planning) {
         res.status(503).json({ error: "trip_planning unavailable" });
         return;

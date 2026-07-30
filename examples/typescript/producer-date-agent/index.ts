@@ -22,8 +22,9 @@
  *
  * The mesh dependency on `date_service` demonstrates DDDI inside an
  * A2A handler: at request time the framework resolves the `McpMeshTool`
- * proxy and supplies it under the `deps` argument keyed by capability
- * name — same wiring `mesh.route(...)` uses.
+ * proxy and supplies it in the `deps` argument BY POSITION — `deps[i]`
+ * is `dependencies[i]` (issue #1401) — same wiring `mesh.route(...)`
+ * uses.
  *
  * Stack
  * =====
@@ -72,7 +73,7 @@ const HTTP_PORT = resolveHttpPort();
 process.env.MCP_MESH_AGENT_NAME = process.env.MCP_MESH_AGENT_NAME ?? "date-a2a-agent";
 
 import express from "express";
-import { mesh, type McpMeshTool } from "@mcpmesh/sdk";
+import { mesh } from "@mcpmesh/sdk";
 
 const app = express();
 // `express.json()` is REQUIRED — the A2A dispatcher reads `req.body`
@@ -90,20 +91,20 @@ mesh.a2a.mount(
     tags: ["system", "date"],
     dependencies: ["date_service"],
   },
-  async (deps, _payload) => {
-    // The framework injects resolved McpMeshTool proxies keyed by
-    // capability name — same shape `mesh.route(...)` provides. Until
-    // the registry sees a matching provider the value is `null`; we
-    // emit a local fallback so the example stays runnable solo
-    // (matches Python/Java's defer-resolution behavior).
-    const dateService = deps.date_service as McpMeshTool | null;
+  async ([dateService], _payload) => {
+    // The framework injects resolved McpMeshTool proxies BY POSITION —
+    // deps[i] is the i-th entry of `dependencies` above, the same shape
+    // `mesh.route(...)` provides. Until the registry sees a matching
+    // provider the value is `null`; we emit a local fallback so the
+    // example stays runnable solo (matches Python/Java's
+    // defer-resolution behavior).
     if (dateService === null) {
       return {
         date: new Date().toISOString(),
         note: "date_service not yet resolved — returning local fallback",
       };
     }
-    const result = await dateService.call({});
+    const result = await dateService({});
     return { date: result };
   },
 );

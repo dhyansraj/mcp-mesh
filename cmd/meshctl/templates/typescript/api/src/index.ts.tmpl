@@ -34,14 +34,16 @@ app.get("/health", (req: Request, res: Response) => {
  * GET /api/hello
  *
  * Example endpoint that calls the "hello" mesh capability.
- * The mesh.route() middleware resolves the dependency and injects
- * it into the handler via the deps object.
+ * The mesh.route() middleware resolves the dependency and injects it into
+ * the handler BY POSITION: deps[i] is the i-th declared dependency, so
+ * destructure the deps parameter as an array.
  */
 app.get(
   "/api/hello",
-  mesh.route([{ capability: "hello" }], async (req, res, { hello }) => {
+  mesh.route([{ capability: "hello" }], async (req, res, [hello]) => {
     if (!hello) {
-      return res.status(503).json({ error: "hello capability unavailable" });
+      res.status(503).json({ error: "hello capability unavailable" });
+      return;
     }
 
     try {
@@ -56,20 +58,21 @@ app.get(
 
 // ===== MULTI-DEPENDENCY EXAMPLE (uncomment and adapt) =====
 //
-// Declare multiple dependencies on a single route.
-// Each dependency is available on the deps object by capability name.
+// Declare multiple dependencies on a single route. Dependencies bind BY
+// POSITION — the Nth declared dependency is deps[N] — so destructure them
+// in the same order they are declared.
 //
 // app.get(
 //   "/api/combined",
 //   mesh.route(
 //     [{ capability: "time_service" }, { capability: "system_info" }],
-//     async (req, res, deps) => {
+//     async (req, res, [timeService, systemInfo]) => {
 //       const results: Record<string, unknown> = {};
-//       if (deps.time_service) {
-//         results.time = await deps.time_service({});
+//       if (timeService) {
+//         results.time = await timeService({});
 //       }
-//       if (deps.system_info) {
-//         results.system = await deps.system_info({});
+//       if (systemInfo) {
+//         results.system = await systemInfo({});
 //       }
 //       res.json(results);
 //     }
@@ -82,13 +85,14 @@ app.get(
 //
 // app.post(
 //   "/api/calculate",
-//   mesh.route([{ capability: "add" }], async (req, res, { add }) => {
+//   mesh.route([{ capability: "add" }], async (req, res, [add]) => {
 //     if (!add) {
-//       return res.status(503).json({ error: "Calculator unavailable" });
+//       res.status(503).json({ error: "Calculator unavailable" });
+//       return;
 //     }
 //     const { a, b } = req.body;
 //     const result = await add({ a, b });
-//     res.json({ operation: "add", a, b, result: parseFloat(result) });
+//     res.json({ operation: "add", a, b, result: parseFloat(String(result)) });
 //   })
 // );
 

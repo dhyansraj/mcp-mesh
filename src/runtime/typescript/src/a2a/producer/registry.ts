@@ -45,7 +45,10 @@ export interface A2ASurfaceMetadata {
   /**
    * The `routeId` returned by `RouteRegistry.registerRoute` for this surface's
    * dependencies — used by the dispatcher to look up resolved `McpMeshTool`
-   * proxies by position via `RouteRegistry.getDependenciesForRoute(routeId)`.
+   * proxies via `RouteRegistry.getDependenciesForRoute(routeId)`, which
+   * returns them **by position**, index-aligned with {@link dependencies}
+   * (issue #1401). Before 3.4.0 this comment claimed "by position" while the
+   * lookup was in fact capability-keyed; it is now accurate.
    */
   readonly routeId: string;
 }

@@ -21,7 +21,7 @@
  * // mesh.route() triggers auto-init via nextTick
  * app.post("/compute", mesh.route(
  *   [{ capability: "calculator" }],
- *   async (req, res, { calculator }) => {
+ *   async (req, res, [calculator]) => {
  *     res.json({ result: await calculator({ a: 1, b: 2 }) });
  *   }
  * ));

@@ -117,7 +117,7 @@ The simplest case — the upstream returns within seconds, so there is no parkin
 
     ```typescript
     import express from "express";
-    import { mesh, type McpMeshTool } from "@mcpmesh/sdk";
+    import { mesh } from "@mcpmesh/sdk";
 
     process.env.MCP_MESH_HTTP_PORT = process.env.MCP_MESH_HTTP_PORT ?? "9090";
     process.env.MCP_MESH_AGENT_NAME = process.env.MCP_MESH_AGENT_NAME ?? "date-a2a-agent";
@@ -135,12 +135,13 @@ The simplest case — the upstream returns within seconds, so there is no parkin
         tags: ["system", "date"],
         dependencies: ["date_service"],
       },
-      async (deps, _payload) => {
-        const dateService = deps.date_service as McpMeshTool | null;
+      async ([dateService], _payload) => {
+        // Dependencies bind BY POSITION (#1401): deps[0] is `date_service`.
+        // A slot holds `null` until the registry resolves it.
         if (dateService == null) {
           return { error: "date_service not yet resolved" };
         }
-        return { date: await dateService.call({}) };
+        return { date: await dateService({}) };
       },
     );
 

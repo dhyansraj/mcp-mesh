@@ -23,9 +23,10 @@ app.get("/health", (req, res) => {
  */
 app.get(
   "/api/echo-headers",
-  mesh.route([{ capability: "echo_headers" }], async (req, res, { echo_headers }) => {
+  mesh.route([{ capability: "echo_headers" }], async (req, res, [echo_headers]) => {
     if (!echo_headers) {
-      return res.status(503).json({ error: "echo_headers capability unavailable" });
+      res.status(503).json({ error: "echo_headers capability unavailable" });
+      return;
     }
 
     try {

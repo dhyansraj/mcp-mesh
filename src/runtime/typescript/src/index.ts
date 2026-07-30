@@ -39,7 +39,7 @@
  *
  * app.post("/compute", mesh.route(
  *   [{ capability: "calculator" }],
- *   async (req, res, { calculator }) => {
+ *   async (req, res, [calculator]) => {
  *     const result = await calculator({ a: req.body.a, b: req.body.b });
  *     res.json({ result });
  *   }
@@ -193,6 +193,10 @@ export {
   type MeshRouteConfig,
   type RouteMetadata,
 } from "./route.js";
+
+// Positional dependency injection (issue #1401). `RouteDependencies` and
+// `A2ADependencies` are both aliases of `PositionalDependencies`.
+export type { PositionalDependencies } from "./positional-deps.js";
 
 // Service views (RFC #1280) — consumer view factory + facade types.
 export {

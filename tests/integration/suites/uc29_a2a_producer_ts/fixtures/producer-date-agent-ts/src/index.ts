@@ -20,7 +20,7 @@ const HTTP_PORT = parseInt(
 process.env.MCP_MESH_AGENT_NAME = process.env.MCP_MESH_AGENT_NAME ?? "date-a2a-agent";
 
 import express from "express";
-import { mesh, type McpMeshTool } from "@mcpmesh/sdk";
+import { mesh } from "@mcpmesh/sdk";
 
 const app = express();
 // express.json() is REQUIRED — the A2A dispatcher reads req.body to
@@ -38,8 +38,8 @@ mesh.a2a.mount(
     tags: ["system", "date"],
     dependencies: ["date_service"],
   },
-  async (deps, _payload) => {
-    const dateService = deps.date_service as McpMeshTool | null;
+  async ([dateService], _payload) => {
+    // Dependencies bind BY POSITION (#1401): deps[0] is `date_service`.
     if (dateService === null) {
       // Defer-resolution sentinel: keeps the fixture runnable solo and
       // mirrors the Python/Java producer fallback path.
@@ -48,7 +48,7 @@ mesh.a2a.mount(
         note: "date_service not yet resolved",
       };
     }
-    const result = await dateService.call({});
+    const result = await dateService({});
     return { date: result };
   },
 );

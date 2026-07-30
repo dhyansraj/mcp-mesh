@@ -15,9 +15,10 @@
  * ```typescript
  * import { mesh } from "@mcpmesh/sdk";
  *
- * app.post("/plan", mesh.route(["trip_planner"], async (req, res, { trip_planner }) => {
- *   if (!trip_planner) return res.status(503).end();
- *   await mesh.sseStream(res, trip_planner.stream(req.body));
+ * // Dependencies bind by position: deps[0] is the first declared dependency.
+ * app.post("/plan", mesh.route(["trip_planner"], async (req, res, [tripPlanner]) => {
+ *   if (!tripPlanner) return res.status(503).end();
+ *   await mesh.sseStream(res, tripPlanner.stream(req.body));
  * }));
  * ```
  */

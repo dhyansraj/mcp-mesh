@@ -118,11 +118,7 @@ describe("route perimeter 503 (#1249)", () => {
     await middleware(req, res, next);
 
     expect(res.status).not.toHaveBeenCalled();
-    expect(handler).toHaveBeenCalledWith(
-      req,
-      res,
-      expect.objectContaining({ calculator: mockCalc })
-    );
+    expect(handler).toHaveBeenCalledWith(req, res, [mockCalc]);
   });
 
   it("does NOT 503 for an unavailable OPTIONAL dep (soft-fail preserved)", async () => {
@@ -137,23 +133,25 @@ describe("route perimeter 503 (#1249)", () => {
 
     expect(res.status).not.toHaveBeenCalled();
     // Handler runs with a null proxy — the existing degraded behavior.
-    expect(handler).toHaveBeenCalledWith(
-      req,
-      res,
-      expect.objectContaining({ calculator: null })
-    );
+    expect(handler).toHaveBeenCalledWith(req, res, [null]);
   });
 
-  it("does NOT 503 when a duplicate capability is live in the winning slot", async () => {
-    // A capability declared twice collapses to one capability-keyed `deps`
-    // slot (last resolution wins). The perimeter must judge the same slot the
-    // handler sees — not a dead sibling index — so a live proxy means run.
+  it("503s when a REQUIRED duplicate-capability slot is dead, even if its sibling is live (#1401)", async () => {
+    // BEHAVIOUR CHANGE. Under capability-keyed injection a capability
+    // declared twice collapsed into ONE `deps[cap]` slot (last resolution
+    // won), so the perimeter had to dedupe per capability — 503-ing on a dead
+    // sibling index would have contradicted the live slot the handler read.
+    //
+    // Positionally each declaration owns its own index, so slot 0 really is
+    // null in the handler. Deduping now would wave through a required
+    // dependency the handler will read as `null` — exactly what the #1249
+    // perimeter exists to prevent. The check reverts to per-index.
     const registry = RouteRegistry.getInstance();
     const handler = vi.fn();
     const middleware = route(
       [
         { capability: "calculator", required: true }, // required, its index unresolved
-        { capability: "calculator" }, // optional, this index is live → wins deps[cap]
+        { capability: "calculator" }, // optional, this index is live
       ],
       handler
     ) as ReturnType<typeof route> & { _meshRouteId: string };
@@ -167,12 +165,44 @@ describe("route perimeter 503 (#1249)", () => {
 
     await middleware(req, res, next);
 
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(res.json).toHaveBeenCalledWith({
+      error: "dependency_unavailable",
+      capability: "calculator",
+    });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("does NOT 503 when BOTH duplicate-capability slots are live, and each gets its own proxy (#1401)", async () => {
+    // The other half of the change: two slots declaring the same capability
+    // are two distinct slots, each holding its own resolved proxy — not one
+    // collapsed entry.
+    const registry = RouteRegistry.getInstance();
+    const handler = vi.fn();
+    const middleware = route(
+      [
+        { capability: "calculator", required: true },
+        { capability: "calculator" },
+      ],
+      handler
+    ) as ReturnType<typeof route> & { _meshRouteId: string };
+
+    const first = (async () => "first") as unknown as McpMeshTool;
+    const second = (async () => "second") as unknown as McpMeshTool;
+    registry.setDependency(middleware._meshRouteId, 0, first);
+    registry.setDependency(middleware._meshRouteId, 1, second);
+
+    const req = { method: "POST", path: "/compute", headers: {} } as unknown as Request;
+    const res = mockRes();
+    const next = vi.fn() as NextFunction;
+
+    await middleware(req, res, next);
+
     expect(res.status).not.toHaveBeenCalled();
-    expect(handler).toHaveBeenCalledWith(
-      req,
-      res,
-      expect.objectContaining({ calculator: mockCalc })
-    );
+    const injected = handler.mock.calls[0][2] as Array<McpMeshTool | null>;
+    expect(injected).toHaveLength(2);
+    expect(injected[0]).toBe(first);
+    expect(injected[1]).toBe(second);
   });
 
   it("503s on the first unavailable required dep among a mix", async () => {

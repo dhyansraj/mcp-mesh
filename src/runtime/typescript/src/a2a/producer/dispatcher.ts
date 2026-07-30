@@ -38,8 +38,11 @@ import { randomUUID } from "node:crypto";
 
 import { JobProxy } from "@mcpmesh/core";
 
-import type { McpMeshTool } from "../../types.js";
 import { RouteRegistry } from "../../route.js";
+import {
+  resolvePositionalDeps,
+  type PositionalDependencies,
+} from "../../positional-deps.js";
 import { MeshJobSubmitter } from "../../mesh-job-submitter.js";
 import type { A2ASurfaceMetadata } from "./registry.js";
 import { A2ATaskStore, type TaskRecord } from "./task-store.js";
@@ -63,18 +66,28 @@ export const JSONRPC_METHOD_NOT_FOUND = -32601;
 export const JSONRPC_INVALID_PARAMS = -32602;
 
 /**
- * Dependencies object passed to A2A handlers — keyed by capability name,
- * same shape as `mesh.route()`'s `deps` parameter. Values are `null` when
- * the underlying dependency hasn't been resolved yet (registry has not
- * reported a `dependency_available` event for it).
+ * Dependencies passed to A2A handlers — **positional** as of 3.4.0 (issue
+ * #1401), the same shape as `mesh.route()`'s `deps` parameter. `deps[i]` is
+ * the i-th entry of the mount config's `dependencies[]`, or `null` when it
+ * hasn't been resolved yet (the registry has not reported a
+ * `dependency_available` event for it).
+ *
+ * Before 3.4.0 this was a capability-keyed object. A handler may narrow it
+ * to a tuple for per-slot typing — `mount<[McpMeshTool | null]>(...)`; the
+ * slot type stays nullable because the mount surface has no required-dependency
+ * perimeter to guarantee resolution. An object type argument
+ * (`mount<{ date_service: McpMeshTool }>`) no longer satisfies the
+ * constraint, so an un-migrated mount fails to COMPILE.
  */
-export type A2ADependencies = Record<string, McpMeshTool | null>;
+export type A2ADependencies = PositionalDependencies;
 
 /**
  * Handler signature for `mesh.a2a.mount(...)`. Receives:
  *
- * 1. Resolved dependencies (`deps`) — keyed by capability name, same shape
- *    as `mesh.route()`'s `deps` parameter. Destructure to access individual
+ * 1. Resolved dependencies (`deps`) — **by position**, same shape as
+ *    `mesh.route()`'s `deps` parameter: `deps[i]` is the i-th entry of the
+ *    mount config's `dependencies[]`. Destructure positionally
+ *    (`async ([dateService], payload) => ...`) to access individual
  *    `McpMeshTool` proxies.
  * 2. The raw A2A `tasks/send` `payload` (the `message` object the client
  *    sent).
@@ -132,6 +145,24 @@ export interface DispatcherDeps {
    * handler receives `null` on the third arg.
    */
   readonly jobSubmitterProvider?: () => MeshJobSubmitter | null;
+}
+
+/**
+ * Resolve this surface's dependencies into a positional array (issue #1401),
+ * behind the migration guard.
+ *
+ * Delegates to the shared {@link resolvePositionalDeps} — the same
+ * resolve/pad/wrap `mesh.route()` uses, so the two injection sites cannot
+ * drift. Called per dispatch: dependency resolution is live, so a proxy that
+ * arrives between two `tasks/send` calls must be visible to the second.
+ */
+function buildPositionalDeps(deps: DispatcherDeps): A2ADependencies {
+  return resolvePositionalDeps(
+    deps.routeRegistry,
+    deps.surface.routeId,
+    deps.surface.dependencies.map((dep) => dep.capability),
+    "mesh.a2a.mount"
+  ).deps;
 }
 
 /**
@@ -269,19 +300,9 @@ async function handleTasksSend(
 
   // Resolve dependencies the same way mesh.route() does — via the shared
   // RouteRegistry. The surface registered a synthetic route at mount time
-  // (see mount.ts); resolved McpMeshTool proxies surface here keyed by
-  // capability name.
-  const resolvedDeps = deps.routeRegistry.getDependenciesForRoute(
-    deps.surface.routeId
-  );
-  // Ensure every declared capability key is present (null when unresolved)
-  // — the user's destructure shouldn't crash on a partially-resolved
-  // dependency graph.
-  for (const dep of deps.surface.dependencies) {
-    if (resolvedDeps[dep.capability] === undefined) {
-      resolvedDeps[dep.capability] = null;
-    }
-  }
+  // (see mount.ts); resolved McpMeshTool proxies surface here BY POSITION,
+  // index-aligned with the mount config's `dependencies[]` (issue #1401).
+  const resolvedDeps = buildPositionalDeps(deps);
 
   const jobSubmitter = deps.jobSubmitterProvider
     ? deps.jobSubmitterProvider()
@@ -495,14 +516,7 @@ export async function buildSendSubscribeStream(
     ));
   }
 
-  const resolvedDeps = deps.routeRegistry.getDependenciesForRoute(
-    deps.surface.routeId
-  );
-  for (const dep of deps.surface.dependencies) {
-    if (resolvedDeps[dep.capability] === undefined) {
-      resolvedDeps[dep.capability] = null;
-    }
-  }
+  const resolvedDeps = buildPositionalDeps(deps);
 
   const jobSubmitter = deps.jobSubmitterProvider
     ? deps.jobSubmitterProvider()
