@@ -144,9 +144,11 @@ For production Kubernetes deployment:
 
 ```bash
 # Install core infrastructure
+# --set namespaceCreate=false is required — run `meshctl man deployment`
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
   --version 3.3.2 \
-  -n mcp-mesh --create-namespace
+  -n mcp-mesh --create-namespace \
+  --set namespaceCreate=false
 
 # Deploy TypeScript agent
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
