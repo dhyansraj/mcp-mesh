@@ -4,7 +4,7 @@
   "description": "Probes empty/null round-trips via injected dependencies (issue #1250)",
   "type": "module",
   "engines": {
-    "node": ">=18"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "start": "tsx src/index.ts",

@@ -737,6 +737,7 @@ def test_version_flag_handlers_are_not_prefix_matched():
     for name in (
         "Documentation (--version OLD)",
         "Docker Example Helm Values",
+        "Tutorial Helm Values (--version OLD)",
     ):
         skipped = "  --version 3.3.10 \\\n  --version 3.3.1rc1 \\\n"
         assert _apply_handler(name, skipped, old="3.3.1", new="3.3.2") == skipped, name
@@ -755,6 +756,155 @@ def test_version_flag_handlers_are_not_prefix_matched():
         old="3.3.1",
         new="3.3.2",
     ) == 'description: "Version to release (e.g., v3.3.2)"\n'
+
+
+PROJECT_ROOT = pathlib.Path(__file__).parent.parent
+
+TUTORIAL_INSTALL_SCRIPTS = (
+    "examples/tutorial/trip-planner/day-09/helm/install.sh",
+    "examples/tutorial/trip-planner/day-10/helm/install.sh",
+    "examples/tutorial/trip-planner/final_product/k8s/install.sh",
+)
+
+
+def _chart_version(chart: str) -> str:
+    for line in (PROJECT_ROOT / f"helm/{chart}/Chart.yaml").read_text().splitlines():
+        if line.startswith("version:"):
+            return line.split(":", 1)[1].strip()
+    raise AssertionError(f"helm/{chart}/Chart.yaml declares no version:")
+
+
+def test_tutorial_install_handler_bumps_the_chart_pin():
+    assert (
+        _apply_handler(
+            "Tutorial Install Scripts (CHART_VERSION)",
+            'CHART_VERSION="3.3.1"\n',
+            old="3.3.1",
+            new="3.3.2",
+        )
+        == 'CHART_VERSION="3.3.2"\n'
+    )
+
+
+def test_tutorial_install_handler_is_not_prefix_matched():
+    """Same terminal-boundary rule as every other handler: a 3.3.1 -> 3.3.2
+    bump must not rewrite `3.3.10` into `3.3.20`. Here the closing quote does
+    the bounding rather than a lookahead."""
+    for untouched in ('CHART_VERSION="3.3.10"\n', 'CHART_VERSION="3.3.1rc1"\n'):
+        assert (
+            _apply_handler(
+                "Tutorial Install Scripts (CHART_VERSION)",
+                untouched,
+                old="3.3.1",
+                new="3.3.2",
+            )
+            == untouched
+        )
+
+
+def test_tutorial_install_handler_leaves_the_derived_form_alone():
+    """`.github/workflows/helm-release.yml` computes its own CHART_VERSION from
+    the release tag. It carries no version literal, so neither the handler nor
+    the coverage guard has anything to match — and must not invent one."""
+    derived = 'CHART_VERSION="${VERSION#v}"\n'
+    assert (
+        _apply_handler(
+            "Tutorial Install Scripts (CHART_VERSION)",
+            derived,
+            old="3.3.1",
+            new="3.3.2",
+        )
+        == derived
+    )
+    assert not _matches("3.3.1", derived.strip())
+
+
+def test_coverage_guard_watches_the_tutorial_chart_pin():
+    """#1422: the pin sat at 1.2.0 for eight releases because it reaches helm
+    as `--version "$CHART_VERSION"` — no literal on the `--version` line for
+    the existing pattern to see. A missed rewrite must now be a reported
+    survivor."""
+    old = "3.3.1"
+    assert _matches(old, 'CHART_VERSION="3.3.1"')
+    assert not _matches(old, 'CHART_VERSION="3.3.2"')  # clears once bumped
+    assert not _matches(old, 'CHART_VERSION="3.3.10"')  # whole token only
+
+
+def test_tutorial_install_scripts_are_in_handler_scope():
+    """The handler is worthless if its globs stop matching the real files —
+    a rename or a moved directory would silently take them back out of scope,
+    which is the failure this whole entry exists to prevent."""
+    handler = {h.name: h for h in bv.HANDLERS}["Tutorial Install Scripts (CHART_VERSION)"]
+    in_scope = {
+        str(p.relative_to(PROJECT_ROOT)) for p in bv._glob_files(handler.globs)
+    }
+    missing = set(TUTORIAL_INSTALL_SCRIPTS) - in_scope
+    assert not missing, f"install scripts no longer matched by {handler.globs}: {missing}"
+
+
+def test_tutorial_chart_pin_matches_the_chart_it_installs():
+    """The acceptance criterion of #1422, asserted rather than remembered.
+
+    Each script installs `mcp-mesh-core` and `mcp-mesh-agent` from the OCI
+    registry at `$CHART_VERSION`. That value must be the version this repo
+    actually publishes those charts as — otherwise the tutorial deploys a mesh
+    that does not match the prose beside it, which is exactly what 1.2.0 did
+    (and it still RESOLVES from ghcr.io, so it failed silently rather than
+    loudly)."""
+    want = _chart_version("mcp-mesh-core")
+    assert _chart_version("mcp-mesh-agent") == want, "the two charts disagree"
+
+    pins = {}
+    for rel in TUTORIAL_INSTALL_SCRIPTS:
+        text = (PROJECT_ROOT / rel).read_text()
+        found = re.findall(r'CHART_VERSION="([^"]+)"', text)
+        assert len(found) == 1, f"{rel}: expected one CHART_VERSION, got {found}"
+        pins[rel] = found[0]
+
+    wrong = {rel: v for rel, v in pins.items() if v != want}
+    assert not wrong, (
+        f"tutorial install scripts pin a chart version other than the {want} "
+        f"this repo publishes: {wrong}"
+    )
+
+
+def test_tutorial_values_usage_comments_pin_the_published_chart():
+    """The values files open with a copy-pasteable `helm install ... --version
+    X`. `values-flight-agent.yaml` is snippet-included into
+    docs/tutorial/day-09-kubernetes.md, so a stale pin here renders inside the
+    tutorial page — which is how 1.2.0 came to sit a few lines from prose
+    saying 3.3.2."""
+    want = _chart_version("mcp-mesh-core")
+    handler = {h.name: h for h in bv.HANDLERS}["Tutorial Helm Values (--version OLD)"]
+    files = bv._glob_files(handler.globs)
+    assert files, f"no tutorial values files matched {handler.globs}"
+
+    wrong = {}
+    seen = 0
+    for p in files:
+        for pin in re.findall(r"--version\s+(\d+\.\d+\.\d+)", p.read_text()):
+            seen += 1
+            if pin != want:
+                wrong[str(p.relative_to(PROJECT_ROOT))] = pin
+    assert seen, "no --version pin found in any tutorial values file"
+    assert not wrong, f"tutorial values files pin something other than {want}: {wrong}"
+
+
+def test_tutorial_docs_and_install_scripts_agree():
+    """#1422's visible symptom: the day-09 prose showed `--version 3.3.2`
+    while the script beside it — the one packaged into the downloadable zip —
+    said 1.2.0. A learner reading one and running the other got two different
+    meshes."""
+    doc = PROJECT_ROOT / "docs/tutorial/day-09-kubernetes.md"
+    documented = set(re.findall(r"--version\s+(\d+\.\d+\.\d+)", doc.read_text()))
+    assert documented, f"{doc.name} no longer shows a --version pin"
+
+    script = PROJECT_ROOT / "examples/tutorial/trip-planner/day-09/helm/install.sh"
+    pinned = set(re.findall(r'CHART_VERSION="([^"]+)"', script.read_text()))
+    assert documented == pinned, (
+        f"day-09 prose installs {sorted(documented)} but its install.sh pins "
+        f"{sorted(pinned)}"
+    )
 
 
 def test_terminal_boundary_check_bites():

@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "MCP Mesh structured output consumer for OpenAI cross-runtime testing",
   "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx src/index.ts",
     "build": "tsc",

@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "uc26 TS A2A consumer (alt) — second bridge for failover tests.",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx src/index.ts"
   },

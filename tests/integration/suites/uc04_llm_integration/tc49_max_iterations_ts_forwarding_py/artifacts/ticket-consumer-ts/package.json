@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "MCP Mesh TS consumer with unset maxIterations (issue #1360)",
   "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx src/index.ts",
     "build": "tsc",

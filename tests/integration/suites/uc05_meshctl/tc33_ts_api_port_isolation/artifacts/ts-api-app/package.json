@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Express API for port isolation testing - no mesh() agent",
   "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx src/index.ts"
   },

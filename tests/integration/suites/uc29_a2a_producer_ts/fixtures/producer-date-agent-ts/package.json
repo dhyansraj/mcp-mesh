@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "uc29 TypeScript A2A producer fixture — exposes the get-date skill via mesh.a2a.mount.",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx src/index.ts"
   },

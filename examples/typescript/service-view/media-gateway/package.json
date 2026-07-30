@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Service-view consumer: aggregates media.* behind one typed view",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx index.ts",
     "build": "tsc"

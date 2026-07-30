@@ -800,6 +800,43 @@ HANDLERS: list[Handler] = [
         pattern=r"(--version\s+)OLD(?![\w.\-+])",
         replacement=r"\g<1>NEW",
     ),
+    # --- Category 17b: Tutorial install scripts ---------------------------
+    # The trip-planner tutorial's three install.sh scripts each hold the chart
+    # version in a shell variable that is then passed to `helm upgrade
+    # --install ... --version "$CHART_VERSION"`. Because the literal sits in an
+    # assignment rather than on the `--version` line, neither the docs handler
+    # nor the docker-example handler above could ever see it — so it sat at
+    # 1.2.0 while the prose beside it moved to 3.3.2 release after release
+    # (#1422). Three hand-maintained copies of one version string is why they
+    # drifted; this handler is what stops there being a fourth reason.
+    #
+    # The scripts are packaged into the downloadable per-day zips by
+    # scripts/generate_tutorial_artifacts.sh, so a stale pin here ships to
+    # every learner who downloads the tutorial, not just to readers of the
+    # repo.
+    #
+    # Terminally bounded by the closing quote, which cannot appear inside a
+    # version — the same shape as the package.json handlers.
+    Handler(
+        name="Tutorial Install Scripts (CHART_VERSION)",
+        globs=["examples/tutorial/**/install.sh"],
+        pattern=r'(CHART_VERSION=")OLD(")',
+        replacement=r"\g<1>NEW\2",
+    ),
+    # The same tutorial's values files each open with a copy-pasteable
+    # `helm install ... --version X` in a usage comment, and those had drifted
+    # to 1.2.0 too. They are not cosmetic: `values-flight-agent.yaml` is
+    # snippet-included into docs/tutorial/day-09-kubernetes.md, so the stale
+    # pin rendered on the very page whose prose said 3.3.2.
+    #
+    # Same pattern as the docker-example helm values handler above, including
+    # the terminal boundary; a separate entry only because the glob differs.
+    Handler(
+        name="Tutorial Helm Values (--version OLD)",
+        globs=["examples/tutorial/**/values-*.yaml"],
+        pattern=r"(--version\s+)OLD(?![\w.\-+])",
+        replacement=r"\g<1>NEW",
+    ),
     # --- Category 18: Integration Test Artifacts --------------------------
     Handler(
         name="Integration Test Artifacts (package.json)",
@@ -1122,6 +1159,16 @@ def _guard_patterns(old: str, new: str | None = None) -> list[re.Pattern]:
         ),
         re.compile(r"<mcp-mesh\.version>" + o + r"</mcp-mesh\.version>"),
         re.compile(r"--version\s+v?" + o + boundary),
+        # The tutorial install scripts' chart pin (#1422). The value reaches
+        # helm as `--version "$CHART_VERSION"`, so the `--version` pattern
+        # above never sees a literal and the pin fell eight releases behind in
+        # silence. Watching the assignment is what makes a missed rewrite a
+        # reported survivor instead of a stale tutorial.
+        #
+        # Only a literal is matched: helm-release.yml derives its own
+        # CHART_VERSION from the tag (`CHART_VERSION="${VERSION#v}"`), which
+        # carries no version token and is correctly ignored.
+        re.compile(r'CHART_VERSION="' + o + r'"'),
         re.compile(r'tag:\s*"' + o + r'"'),
         # The docs landing page's release coordinate — the one bare-prose
         # version under docs/ that MUST track the release.

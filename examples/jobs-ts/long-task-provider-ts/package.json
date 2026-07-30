@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "MCP Mesh — TypeScript MeshJob producer example",
   "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx index.ts"
   },

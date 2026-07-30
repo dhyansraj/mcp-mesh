@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Multi-file TypeScript agent for registry tests",
   "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx src/index.ts",
     "build": "tsc",

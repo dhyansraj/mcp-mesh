@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "MCP Mesh — bystander orchestrator agent (uc22 TS)",
   "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx src/index.ts"
   },

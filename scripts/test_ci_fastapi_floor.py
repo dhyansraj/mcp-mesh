@@ -23,6 +23,7 @@ Stdlib only (`tomllib` is 3.11+), matching the scripts-test job, which
 installs nothing but pytest.
 """
 
+import importlib.util
 import pathlib
 import re
 import tomllib
@@ -32,14 +33,43 @@ PROJECT_ROOT = pathlib.Path(__file__).parent.parent
 CI_WORKFLOW = PROJECT_ROOT / ".github/workflows/ci.yml"
 
 # Every place the FastAPI floor is declared. The two package manifests are the
-# contract users install against; the docker example's requirements.txt repeats
-# the same claim for the image it builds, and drifting below the real floor
-# there ships an image whose route suite was never green.
+# contract users install against; any requirements file that repeats the claim
+# must state the same number, because drifting below the real floor there
+# ships an image whose route suite was never green.
 FLOOR_MANIFESTS = (
     "packaging/pypi/pyproject.toml",
     "src/runtime/python/pyproject.toml",
 )
-FLOOR_REQUIREMENTS = ("examples/docker-examples/agents/base/requirements.txt",)
+
+_spec = importlib.util.spec_from_file_location(
+    "test_requirements_hygiene",
+    pathlib.Path(__file__).with_name("test_requirements_hygiene.py"),
+)
+_hygiene = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_hygiene)
+
+
+def floor_requirements() -> tuple[str, ...]:
+    """Requirements files that state a fastapi LOWER BOUND, discovered.
+
+    This used to be a hardcoded one-entry tuple naming
+    `examples/docker-examples/agents/base/requirements.txt`. #1404 deleted
+    that file as orphaned build metadata — nothing copied it, nothing
+    installed it — and a hardcoded list naming a deleted file is a check that
+    fails for the wrong reason. Discovering the set instead means the next
+    example to declare a fastapi floor is covered the day it lands, not the
+    day someone remembers this module exists.
+
+    A bare `fastapi` with no `>=` (as in examples/python/mesh-api) states no
+    floor and therefore cannot disagree with one, so it is not collected.
+    """
+    out = []
+    for path in _hygiene.requirement_files():
+        for line in path.read_text(errors="replace").splitlines():
+            if re.match(r"^fastapi\s*>=\s*[0-9]", line.strip()):
+                out.append(str(path.relative_to(PROJECT_ROOT)))
+                break
+    return tuple(sorted(out))
 
 
 def _manifest_floor(rel: str) -> str:
@@ -53,12 +83,16 @@ def _manifest_floor(rel: str) -> str:
     raise AssertionError(f"{rel}: no fastapi dependency found")
 
 
-def _requirements_floor(rel: str) -> str:
-    for line in (PROJECT_ROOT / rel).read_text().splitlines():
+def _requirements_floor_text(text: str, rel: str = "<text>") -> str:
+    for line in text.splitlines():
         m = re.match(r"^fastapi\s*>=\s*([0-9][^,\s;#]*)", line.strip())
         if m:
             return m.group(1)
     raise AssertionError(f"{rel}: no `fastapi>=` line found")
+
+
+def _requirements_floor(rel: str) -> str:
+    return _requirements_floor_text((PROJECT_ROOT / rel).read_text(), rel)
 
 
 def _ci_pin() -> str:
@@ -86,12 +120,34 @@ def test_ci_older_fastapi_pin_is_the_declared_floor():
 
 
 def test_every_declared_fastapi_floor_agrees():
-    """Two manifests plus the docker example all state the same floor. A split
-    between them is a supported-range claim that depends on which file you
-    read."""
+    """Both manifests, plus every requirements file that names a floor, state
+    the same one. A split between them is a supported-range claim that depends
+    on which file you read."""
     floors = {rel: _manifest_floor(rel) for rel in FLOOR_MANIFESTS}
-    floors.update({rel: _requirements_floor(rel) for rel in FLOOR_REQUIREMENTS})
+    floors.update({rel: _requirements_floor(rel) for rel in floor_requirements()})
     assert len(set(floors.values())) == 1, floors
+
+
+def test_floor_discovery_finds_a_bounded_requirements_file(tmp_path):
+    """The discovery above replaced a hardcoded list, so it has to be shown
+    finding something — an empty result would make the test above pass by
+    scanning nothing, which is how the hardcoded list would have failed
+    silently if it had been quietly emptied instead of deleted."""
+    (tmp_path / "bounded").mkdir()
+    (tmp_path / "bounded" / "requirements.txt").write_text("fastapi>=0.135.0\n")
+    (tmp_path / "bare").mkdir()
+    (tmp_path / "bare" / "requirements.txt").write_text("fastapi\nuvicorn\n")
+
+    matched = [
+        p
+        for p in _hygiene.requirement_files(tmp_path)
+        if any(
+            re.match(r"^fastapi\s*>=\s*[0-9]", ln.strip())
+            for ln in p.read_text().splitlines()
+        )
+    ]
+    assert [p.parent.name for p in matched] == ["bounded"], matched
+    assert _requirements_floor_text("fastapi>=0.135.0\n") == "0.135.0"
 
 
 def test_no_superseded_include_router_version_in_ci_comments():
@@ -113,8 +169,16 @@ def test_no_superseded_include_router_version_in_ci_comments():
 
 
 if __name__ == "__main__":
+    import tempfile
+
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
-        fn()
+        # ci.yml runs this file directly as well as under pytest, so the
+        # __main__ runner has to supply pytest's `tmp_path` fixture itself.
+        if fn.__code__.co_argcount:
+            with tempfile.TemporaryDirectory() as d:
+                fn(pathlib.Path(d))
+        else:
+            fn()
         print(f"ok  {fn.__name__}")
     print(f"\n{len(fns)} checks passed")

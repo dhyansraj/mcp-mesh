@@ -4,6 +4,9 @@
   "description": "MCP Mesh Multimedia Agents - media-producer and media-consumer",
   "type": "module",
   "private": true,
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start:producer": "tsx src/media-producer.ts",
     "start:consumer": "tsx src/media-consumer.ts",

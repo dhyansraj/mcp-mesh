@@ -4,7 +4,7 @@
   "description": "uc38 provider that emits the typed supersession signal (issue #1278)",
   "type": "module",
   "engines": {
-    "node": ">=18"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "start": "tsx src/index.ts",
