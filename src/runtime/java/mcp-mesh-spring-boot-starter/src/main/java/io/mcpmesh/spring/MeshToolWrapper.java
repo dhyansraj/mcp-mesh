@@ -126,15 +126,10 @@ public class MeshToolWrapper implements McpToolHandler {
     private volatile boolean[] dependencyRequired;
 
     // Positional pairing between the DECLARED dependency list and this
-    // method's injectable slots (issue #1193 fix round). Declared
-    // dependencies pair positionally with injectable parameters
-    // (McpMeshTool + MeshJob) in parameter order — the same contract as
-    // Python/TypeScript. The two index spaces differ whenever a MeshJob
-    // dependency is declared: e.g. dependencies = ["job_cap", "db_cap"]
-    // with params (MeshJob job, McpMeshTool db) has db_cap at DECLARED
-    // index 1 but McpMeshTool SLOT ordinal 0. Registry events carry the
-    // declared index; injectedDeps/meshToolReturnTypes are slot-ordinal
-    // arrays — these tables translate between the two.
+    // method's injectable slots (issue #1193 fix round), computed by
+    // MeshPositionalBinder — see that class for the canonical statement of
+    // the positional contract and of the declared-index / slot-ordinal skew
+    // these tables translate across.
     /** Declared dep index → McpMeshTool slot ordinal; -1 = no proxy slot (MeshJob-backed or excess). */
     private final int[] depIndexToSlot;
     /** McpMeshTool slot ordinal → declared dep index; -1 = no declared dependency backs the slot. */
@@ -144,13 +139,12 @@ public class MeshToolWrapper implements McpToolHandler {
      * position, or -1 when this method has no MeshJob slot OR the slot has no
      * declared dependency backing it. The MeshJob param consumes one declared
      * dependency index via the SAME positional pairing the McpMeshTool slots
-     * use (eligible positions = McpMeshTool + MeshJob, sorted, paired to the
-     * declared dependency list). This lets the consumer-side
-     * {@link JobsRuntimeManager} wiring bind the {@link MeshJobSubmitter} to
-     * the EXACT declared capability the user typed {@code MeshJob} for —
-     * mirroring Python, which keys the submitter off the declared dependency
-     * capability at the MeshJob param's dep_index rather than a local
-     * {@code task()} registry probe.
+     * use ({@link MeshPositionalBinder.SlotRole#JOB}). This lets the
+     * consumer-side {@link JobsRuntimeManager} wiring bind the
+     * {@link MeshJobSubmitter} to the EXACT declared capability the user typed
+     * {@code MeshJob} for — mirroring Python, which keys the submitter off the
+     * declared dependency capability at the MeshJob param's dep_index rather
+     * than a local {@code task()} registry probe.
      */
     private final int meshJobDepIndex;
 
@@ -393,30 +387,17 @@ public class MeshToolWrapper implements McpToolHandler {
         }
         this.dependencyRequired = required;
 
-        // Declared-index ↔ McpMeshTool-slot translation (see field javadoc).
-        // ONLY the explicit prefix pairs with eligible positions; view edges
+        // Declared-index ↔ McpMeshTool-slot translation (see MeshPositionalBinder).
+        // ONLY the explicit prefix pairs with injectable slots; view edges
         // (index >= explicitDepCount) keep depIndexToSlot = -1.
-        this.depIndexToSlot = new int[fullSize];
-        this.slotToDepIndex = new int[meshToolPositions.size()];
-        Arrays.fill(this.depIndexToSlot, -1);
-        Arrays.fill(this.slotToDepIndex, -1);
-        List<Integer> eligiblePositions = new ArrayList<>(meshToolPositions);
-        if (meshJobParamIndex != null) {
-            eligiblePositions.add(meshJobParamIndex);
-            Collections.sort(eligiblePositions);
-        }
-        int meshJobDep = -1;
-        for (int k = 0; k < eligiblePositions.size() && k < explicitDepCount; k++) {
-            int paramPos = eligiblePositions.get(k);
-            if (meshJobParamIndex != null && paramPos == meshJobParamIndex) {
-                meshJobDep = k;
-                continue;
-            }
-            int slot = meshToolPositions.indexOf(paramPos);
-            this.depIndexToSlot[k] = slot;
-            this.slotToDepIndex[slot] = k;
-        }
-        this.meshJobDepIndex = meshJobDep;
+        MeshPositionalBinder.Binding binding = MeshPositionalBinder.bind(
+            method,
+            MeshPositionalBinder.slots(meshToolPositions, meshJobParamIndex),
+            fullNames,
+            explicitDepCount);
+        this.depIndexToSlot = binding.depIndexToSlot();
+        this.slotToDepIndex = binding.slotToDepIndex();
+        this.meshJobDepIndex = binding.jobDepIndex();
 
         // Generate input schema (excluding injected params)
         this.inputSchema = generateInputSchema();
