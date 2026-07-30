@@ -1,3 +1,33 @@
+{{- /*
+helm.sh/resource-policy: keep — grafana.persistence.enabled defaults to true,
+and a volume the chart enables by default should not be discarded by a command
+that reports success. Without the annotation this claim is release-owned and
+`helm uninstall` deletes it, taking grafana.db with it: every dashboard,
+annotation, user, and API key authored in the UI. None of that is derived from
+anything the mesh can replay — only the datasources and the ConfigMap-mounted
+dashboards come back on reinstall.
+
+This also makes the chart internally consistent. The admin-password Secret next
+door is already `keep` (see secret.yaml), and Grafana applies
+GF_SECURITY_ADMIN_PASSWORD only on first start — so the Secret is a record of a
+password whose authoritative copy lives in the very database this volume holds.
+Keeping one and dropping the other leaves the credential without the state it
+unlocks. The bundled PostgreSQL reaches the same outcome by accident: its data
+sits on a volumeClaimTemplates PVC the release does not own, so uninstall leaves
+it behind.
+
+Consequence, stated in values.yaml and NOTES.txt: `helm uninstall` no longer
+reclaims this storage. A reinstall under the same release name adopts the
+existing claim (and its data); reclaim it deliberately with
+`kubectl delete pvc <release>-mcp-mesh-grafana-pvc -n <ns>`. The annotation only
+tells Helm to skip the object — an explicit kubectl delete still works, which is
+what the "reprovision from an empty volume" recipe in the mcp-mesh-core README
+relies on.
+
+Unlike the Namespace case, the claim is never dropped from the rendered
+manifest, so the annotation lands on a live PVC through a plain `helm upgrade`
+with no pod churn — metadata-only patch, nothing in the pod template moves.
+*/ -}}
 {{- if and .Values.grafana.enabled .Values.grafana.persistence.enabled }}
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -5,6 +35,8 @@ metadata:
   name: {{ include "mcp-mesh-grafana.fullname" . }}-pvc
   labels:
     {{- include "mcp-mesh-grafana.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/resource-policy": keep
 spec:
   accessModes:
     {{- range .Values.grafana.persistence.accessModes }}

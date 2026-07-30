@@ -24,6 +24,21 @@ grafana:
       memory: "512Mi"
       cpu: "500m"
 
+  # Persistent storage for /var/lib/grafana (grafana.db). Enabled by default, so
+  # dashboards, annotations, users, and API keys authored in the UI survive a
+  # pod restart. Disable it and Grafana runs on an emptyDir: the provisioned
+  # datasources and ConfigMap dashboards still come back, everything authored
+  # in the UI does not.
+  #
+  # The claim carries "helm.sh/resource-policy": keep, so `helm uninstall` does
+  # NOT delete it and does NOT reclaim the storage — a volume enabled by default
+  # is not something an uninstall should discard silently, and the admin-password
+  # Secret in this chart is kept for the same reason. Reinstalling under the same
+  # release name adopts the existing claim with its data intact. To reclaim the
+  # storage, delete the claim yourself (the annotation only stops Helm):
+  #   kubectl delete pvc <release>-mcp-mesh-grafana-pvc -n <namespace>
+  # Scale the Deployment to 0 first — the delete otherwise blocks on the
+  # pvc-protection finalizer while a pod has the volume mounted.
   persistence:
     enabled: true
     size: 2Gi
@@ -96,7 +111,11 @@ grafana:
     # Upgrade first (check the annotation is on the live secret), adopt second.
     # To switch to a different password, change it in Grafana afterwards
     # (grafana-cli admin reset-admin-password) or reprovision from an empty
-    # PVC — see the mcp-mesh-core README for the ordering.
+    # volume. Reprovisioning means deleting the claim explicitly — scale the
+    # Deployment to 0, `kubectl delete pvc`, then upgrade; uninstall/reinstall
+    # does NOT do it, because the claim carries resource-policy: keep and the
+    # reinstall adopts the old database (and with it the old password). See the
+    # mcp-mesh-core README for the exact ordering.
     existingSecret: ""
     existingSecretPasswordKey: "admin-password"
     # Auto-generate the admin password when neither adminPassword nor
