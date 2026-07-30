@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "TypeScript A2A consumer (SSE) — bridges report_a2a_agent.py generate-report as a mesh report_sse capability via tasks/sendSubscribe.",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx index.ts",
     "build": "tsc"

@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "uc26 TypeScript A2A consumer fixture — bridges date_a2a_agent.py get-date as the current-date capability.",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx src/index.ts"
   },

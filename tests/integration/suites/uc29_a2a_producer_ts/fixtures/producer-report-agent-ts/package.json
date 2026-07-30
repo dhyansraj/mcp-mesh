@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "uc29 TypeScript A2A producer fixture (long-running) — exposes generate-report via mesh.a2a.mount on top of the mesh job substrate.",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx src/index.ts"
   },

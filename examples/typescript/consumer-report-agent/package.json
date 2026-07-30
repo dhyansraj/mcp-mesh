@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "TypeScript A2A consumer (long-running) — bridges report_a2a_agent.py generate-report as a mesh report capability via A2A polling + bridge.",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx index.ts",
     "build": "tsc"

@@ -4,7 +4,7 @@
 #
 # Usage:
 #   helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-#     --version 1.2.0 -n trip-planner --create-namespace -f values-core.yaml
+#     --version 3.3.2 -n trip-planner --create-namespace -f values-core.yaml
 
 # install.sh creates the namespace with kubectl, so the chart must not render
 # one of its own — see "Namespace handling" in the mcp-mesh-core chart README.

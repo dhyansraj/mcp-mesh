@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Issue #547 Phase 7 — 12-pattern schema corpus producer (TypeScript)",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx index.ts"
   },

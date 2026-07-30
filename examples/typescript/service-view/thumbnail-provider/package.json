@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Service-view producer sugar: publishes media.thumbnail",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx index.ts",
     "build": "tsc"

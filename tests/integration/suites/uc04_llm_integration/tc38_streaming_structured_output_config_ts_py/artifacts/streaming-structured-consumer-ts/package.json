@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "MCP Mesh streaming + structured output consumer (RFC #1100 validation)",
   "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx src/index.ts",
     "build": "tsc",

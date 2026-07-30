@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Issue #547 schema-registry cross-runtime test fixtures (TypeScript)",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "good": "tsx producer_good.ts",
     "bad": "tsx producer_bad.ts",

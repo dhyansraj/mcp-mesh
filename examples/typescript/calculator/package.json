@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Calculator agent example using @mcpmesh/sdk",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx index.ts"
   },

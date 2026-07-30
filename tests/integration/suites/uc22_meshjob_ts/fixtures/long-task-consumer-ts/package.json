@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "MCP Mesh — TypeScript MeshJob test consumer (uc22)",
   "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx src/index.ts"
   },

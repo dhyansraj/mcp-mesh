@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "TypeScript A2A producer example — exposes a get-date skill via mesh.a2a.mount on a user-owned Express app.",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx index.ts",
     "build": "tsc"

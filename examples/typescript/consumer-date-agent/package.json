@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "TypeScript A2A consumer example — bridges date_a2a_agent.py get-date as a mesh current-date capability.",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx index.ts",
     "build": "tsc"

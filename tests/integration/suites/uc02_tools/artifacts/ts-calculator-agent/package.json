@@ -4,7 +4,7 @@
   "description": "Calculator agent with local tools and multi-dependency calculate()",
   "type": "module",
   "engines": {
-    "node": ">=18"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "start": "tsx src/index.ts",

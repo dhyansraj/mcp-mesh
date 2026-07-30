@@ -4,6 +4,9 @@
   "description": "TypeScript SSE gateway that forwards a Python mesh.Stream[str] producer",
   "type": "module",
   "main": "src/index.ts",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx src/index.ts",
     "build": "tsc",

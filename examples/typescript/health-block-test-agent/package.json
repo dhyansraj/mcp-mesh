@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Reproducer: TS mesh agent /health and /ready stall when a tool blocks the Node event loop",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx src/index.ts"
   },

@@ -4,7 +4,7 @@
   "description": "Express API for header propagation testing via mesh.route()",
   "type": "module",
   "engines": {
-    "node": ">=18"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "start": "tsx index.ts",

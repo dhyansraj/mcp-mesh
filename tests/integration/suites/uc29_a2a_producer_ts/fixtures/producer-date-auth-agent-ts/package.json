@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "uc29 TypeScript A2A producer fixture (bearer auth) — exposes the get-date skill via mesh.a2a.mount with auth=\"bearer\".",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx src/index.ts"
   },

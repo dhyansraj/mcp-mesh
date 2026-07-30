@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Minimal TS mesh agent: Gemini via Vertex AI (IAM auth) using Vercel AI SDK",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx src/index.ts",
     "build": "tsc",
