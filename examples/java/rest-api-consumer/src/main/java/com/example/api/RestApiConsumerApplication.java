@@ -84,8 +84,9 @@ class ApiController {
      * Greet a user via a mesh agent.
      *
      * <p>The @MeshRoute annotation declares a dependency on the "greeting" capability.
-     * At request time, the framework resolves the dependency and injects it as a
-     * McpMeshTool parameter (matched by parameter name).
+     * At request time, the framework resolves it and injects it into the first
+     * McpMeshTool parameter: dependencies pair with McpMeshTool parameters by
+     * POSITION, in signature order. The parameter's name is irrelevant.
      */
     @GetMapping("/greet")
     @MeshRoute(dependencies = @MeshDependency(capability = "greeting"))

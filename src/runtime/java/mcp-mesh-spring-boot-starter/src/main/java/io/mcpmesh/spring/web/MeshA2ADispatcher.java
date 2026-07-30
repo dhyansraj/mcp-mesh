@@ -3,6 +3,7 @@ package io.mcpmesh.spring.web;
 import io.mcpmesh.JobProxy;
 import io.mcpmesh.MeshJobSubmitter;
 import io.mcpmesh.spring.MeshDependencyInjector;
+import io.mcpmesh.spring.MeshPositionalBinder;
 import io.mcpmesh.spring.MeshRuntime;
 import io.mcpmesh.types.McpMeshTool;
 import tools.jackson.databind.JsonNode;
@@ -20,6 +21,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -84,9 +86,13 @@ public class MeshA2ADispatcher {
      * #936: {@code @MeshA2A} handlers may declare a {@link MeshJobSubmitter}
      * parameter that the framework auto-injects at call time. Submitters
      * are stateless after construction (capability + agent id + registry
-     * URL), so one cached instance per surface is correct — we look up
-     * by {@code handlerMethodId} since the same surface can be re-resolved
-     * across requests but always points at the same skill.
+     * URL), so one cached instance per surface is correct — we look up by
+     * the resolved {@link Method}, which identifies the surface exactly.
+     * {@code handlerMethodId} does not: it omits parameter types, so two
+     * overloaded handlers share it and the second would be handed the
+     * first's submitter — targeting the first's capability, since that is
+     * derived from the surface's own dependencies / {@code skillId}. See
+     * {@link #argPlans} for why one {@code Method} backs one surface.
      *
      * <p>This map ONLY contains successfully constructed submitters; the
      * sibling {@link #unbuildableSurfaces} set tracks surfaces we have
@@ -96,17 +102,25 @@ public class MeshA2ADispatcher {
      * identity through any future getter / debug API and keeps class-load
      * independent of {@link MeshJobSubmitter}'s constructor health.
      */
-    private final Map<String, MeshJobSubmitter> jobSubmitterCache = new ConcurrentHashMap<>();
+    private final Map<Method, MeshJobSubmitter> jobSubmitterCache = new ConcurrentHashMap<>();
 
     /**
-     * Set of surface handler IDs we have determined can NEVER produce a
-     * usable {@link MeshJobSubmitter} — either because no capability can
+     * Set of surfaces we have determined can NEVER produce a usable
+     * {@link MeshJobSubmitter} — either because no capability can
      * be derived or because the dispatcher was constructed without a
      * runtime provider. This is the "permanent unbuildable" memo; transient
      * conditions (runtime not yet available, agent id empty, constructor
      * threw) are NOT recorded here so they can be retried on the next call.
+     *
+     * <p>Keyed by {@link Method} for the same reason as
+     * {@link #jobSubmitterCache}: on {@code handlerMethodId} one overload
+     * could veto its same-named sibling. Both entry points here happen to be
+     * surface-independent today (no runtime provider at all) or unreachable
+     * (empty capability — {@code skillId} is validated non-empty), so the
+     * collision is currently latent rather than observable, but the memo must
+     * not out-live a widening of either condition.
      */
-    private final Set<String> unbuildableSurfaces = ConcurrentHashMap.newKeySet();
+    private final Set<Method> unbuildableSurfaces = ConcurrentHashMap.newKeySet();
 
     public MeshA2ADispatcher(
             MeshA2ARegistry registry,
@@ -589,14 +603,152 @@ public class MeshA2ADispatcher {
     // ─────────────────────────────────────────────────────────────────
 
     /**
+     * What a {@code @MeshA2A} handler parameter is for. Roles are assigned in
+     * the order declared here — see {@link #planArguments} for why the
+     * precedence is written down rather than left to branch order.
+     */
+    private enum ParamRole {
+        /** A declared {@code @MeshDependency}, bound positionally. */
+        DEPENDENCY,
+        /** A framework-constructed {@link MeshJobSubmitter} (issue #936). */
+        JOB_SUBMITTER,
+        /** The inbound A2A message. */
+        MESSAGE,
+        /** Nothing binds here; the parameter receives null. */
+        UNBOUND
+    }
+
+    /**
+     * The fixed argument layout of one {@code @MeshA2A} surface.
+     *
+     * @param roles       per signature position
+     * @param slotOrdinal per signature position: the injectable-slot ordinal of
+     *                    a {@link ParamRole#DEPENDENCY} parameter, else -1
+     * @param binding     the positional pairing of declared dependencies with
+     *                    those slots
+     */
+    private record ArgPlan(
+        ParamRole[] roles, int[] slotOrdinal, MeshPositionalBinder.Binding binding) {}
+
+    /**
+     * Per-surface argument layout. Depends only on the handler signature and the
+     * declared dependency list, both fixed at boot.
+     *
+     * <p>Keyed by the resolved {@link Method}, NOT by
+     * {@code handlerMethodId} — that id is {@code "ClassName.methodName"} with
+     * no parameter types, so two overloaded {@code @MeshA2A} handlers collide on
+     * it, and {@link MeshA2ARegistry} dedupes surfaces by {@code path} rather
+     * than by handler id, so both overloads do register. The second overload
+     * would then be invoked with the first one's plan. One {@code Method} backs
+     * at most one surface: {@code @MeshA2A} is not {@code @Repeatable}, so the
+     * path (and the whole dependency list) is fixed by the single annotation the
+     * method carries, and a second registration of the same method is refused by
+     * the registry's path-collision guard. Matches
+     * {@link MeshInjectArgumentResolver}, which is {@code Method}-keyed already.
+     */
+    private final Map<Method, ArgPlan> argPlans = new ConcurrentHashMap<>();
+
+    /**
+     * Assign a role to every parameter of a {@code @MeshA2A} handler.
+     *
+     * <p><b>The precedence is explicit, in passes, rather than implicit in the
+     * order of an if/else chain</b> (issue #1401). The four roles genuinely
+     * compete for the same positions, and one competition is easy to miss: the
+     * message's "parameter 0 takes it if nothing else did" fallback wants index
+     * 0, and so does an {@code McpMeshTool} declared first. Writing the passes
+     * out states which wins instead of leaving it to whichever branch happens to
+     * be tested first.
+     *
+     * <ol>
+     *   <li><b>Dependency slots win outright.</b> {@link MeshInjectableSlots#isA2AInjectable}
+     *       — an {@code McpMeshTool} parameter, or <i>any</i> parameter carrying
+     *       {@link MeshInject}. The A2A rule is wider than the route rule
+     *       because the dispatcher owns the whole argument array; there is no
+     *       Spring MVC resolver chain behind it, so the annotation is an
+     *       unambiguous statement of intent whatever the parameter's type.</li>
+     *   <li><b>Then {@link MeshJobSubmitter}</b>, which is built from the
+     *       surface rather than paired with a declared dependency, and so
+     *       consumes no declared index.</li>
+     *   <li><b>Then the message</b>, at the first parameter no earlier pass
+     *       claimed whose type is a {@link Map} — or, if every {@code Map}
+     *       parameter is already claimed, at parameter 0 when <i>that</i> is
+     *       unclaimed (a handler taking a custom POJO). An occupied index 0
+     *       simply leaves the message unassigned, exactly as before.</li>
+     *   <li><b>Everything else</b> receives null.</li>
+     * </ol>
+     *
+     * <p>Dependency slots then pair with the declared list through
+     * {@link MeshPositionalBinder}: the Nth slot takes the Nth declared
+     * {@code @MeshDependency}, and parameter names are not consulted.
+     */
+    private static ArgPlan planArguments(MeshA2ARegistry.SurfaceMetadata surface) {
+        Method method = surface.method();
+        Parameter[] params = method.getParameters();
+        ParamRole[] roles = new ParamRole[params.length];
+        int[] slotOrdinal = new int[params.length];
+        Arrays.fill(slotOrdinal, -1);
+
+        // Pass 1 — dependency slots.
+        List<MeshPositionalBinder.Slot> slots = MeshInjectableSlots.a2aSlots(method);
+        for (int k = 0; k < slots.size(); k++) {
+            int position = slots.get(k).parameterPosition();
+            roles[position] = ParamRole.DEPENDENCY;
+            slotOrdinal[position] = k;
+        }
+
+        // Pass 2 — framework-constructed job submitter.
+        for (int i = 0; i < params.length; i++) {
+            if (roles[i] == null && MeshJobSubmitter.class.isAssignableFrom(params[i].getType())) {
+                roles[i] = ParamRole.JOB_SUBMITTER;
+            }
+        }
+
+        // Pass 3 — the message.
+        int messageIndex = -1;
+        for (int i = 0; i < params.length; i++) {
+            if (roles[i] == null && Map.class.isAssignableFrom(params[i].getType())) {
+                messageIndex = i;
+                break;
+            }
+        }
+        if (messageIndex < 0 && params.length > 0 && roles[0] == null) {
+            messageIndex = 0;
+        }
+        if (messageIndex >= 0) {
+            roles[messageIndex] = ParamRole.MESSAGE;
+        }
+
+        // Pass 4 — everything else.
+        for (int i = 0; i < params.length; i++) {
+            if (roles[i] == null) {
+                roles[i] = ParamRole.UNBOUND;
+            }
+        }
+
+        List<MeshRouteRegistry.DependencySpec> deps =
+            surface.dependencies() == null ? List.of() : surface.dependencies();
+        List<String> capabilities = new ArrayList<>();
+        for (MeshRouteRegistry.DependencySpec dep : deps) {
+            capabilities.add(dep.getCapability());
+        }
+        MeshPositionalBinder.Binding binding = MeshPositionalBinder.bind(
+            method, slots, capabilities, capabilities.size());
+
+        return new ArgPlan(roles, slotOrdinal, binding);
+    }
+
+    /**
      * Reflectively invoke the user's {@code @MeshA2A} handler with:
      * <ul>
-     *   <li>the A2A {@code message} at the first {@link Map} parameter slot,
-     *       OR at index 0 when none of the params is a {@code Map};</li>
-     *   <li>{@link McpMeshTool} proxies at any parameter annotated
-     *       {@link MeshInject} (or whose type is {@link McpMeshTool}),
-     *       resolved through {@link MeshDependencyInjector} — same DDDI
-     *       wiring used by {@code @MeshRoute} and {@code @A2AConsumer};</li>
+     *   <li>the A2A {@code message} at the first unclaimed {@link Map}
+     *       parameter, OR at index 0 when none of the params is an unclaimed
+     *       {@code Map};</li>
+     *   <li>{@link McpMeshTool} proxies at the dependency slots, bound
+     *       <b>positionally</b> — the Nth injectable parameter receives the Nth
+     *       declared {@code @MeshDependency}, and parameter names are never
+     *       consulted (issue #1401). Resolved through
+     *       {@link MeshDependencyInjector} — same DDDI wiring used by
+     *       {@code @MeshRoute} and {@code @A2AConsumer};</li>
      *   <li>a {@link MeshJobSubmitter} at any parameter typed
      *       {@code MeshJobSubmitter} (issue #936) — auto-constructed by the
      *       framework with the surface's task capability + the local agent
@@ -608,40 +760,26 @@ public class MeshA2ADispatcher {
      *       {@code '_'} (the canonical skill-id-to-capability mapping —
      *       matches the existing examples' usage).</li>
      * </ul>
+     *
+     * <p>The argument array is sized to the parameter count and filled by index,
+     * so an unresolvable dependency nulls its own slot and shifts nothing.
      */
-    @SuppressWarnings("unchecked")
     private Object invokeHandler(MeshA2ARegistry.SurfaceMetadata surface, Map<String, Object> message)
             throws Throwable {
         Method method = surface.method();
-        Parameter[] params = method.getParameters();
-        Object[] args = new Object[params.length];
+        ArgPlan plan = argPlans.computeIfAbsent(method, m -> planArguments(surface));
+        Object[] args = new Object[method.getParameterCount()];
 
-        boolean messageAssigned = false;
-        for (int i = 0; i < params.length; i++) {
-            Parameter p = params[i];
-            MeshInject inj = p.getAnnotation(MeshInject.class);
-            // Slot classification lives in MeshInjectableSlots (issue #1401)
-            // so the boot-time legacy-shape detector sees exactly the set of
-            // parameters this loop treats as dependency slots.
-            if (MeshInjectableSlots.isA2AInjectable(p)) {
-                args[i] = resolveDependency(surface, p, inj);
-            } else if (MeshJobSubmitter.class.isAssignableFrom(p.getType())) {
+        for (int i = 0; i < args.length; i++) {
+            args[i] = switch (plan.roles()[i]) {
+                case DEPENDENCY -> resolveDependency(surface, plan, i);
                 // Issue #936: framework-injected MeshJobSubmitter for
                 // long-running producers. Cache per surface — the submitter
                 // is stateless after construction.
-                args[i] = resolveJobSubmitter(surface);
-            } else if (Map.class.isAssignableFrom(p.getType()) && !messageAssigned) {
-                args[i] = message;
-                messageAssigned = true;
-            } else if (!messageAssigned && i == 0) {
-                // First non-DI parameter takes the message even if it's
-                // not a Map (e.g., user wants a custom POJO — out of scope
-                // for Chunk 1A, but we don't crash).
-                args[i] = message;
-                messageAssigned = true;
-            } else {
-                args[i] = null;
-            }
+                case JOB_SUBMITTER -> resolveJobSubmitter(surface);
+                case MESSAGE -> message;
+                case UNBOUND -> null;
+            };
         }
 
         try {
@@ -674,14 +812,17 @@ public class MeshA2ADispatcher {
      * </ol>
      */
     private MeshJobSubmitter resolveJobSubmitter(MeshA2ARegistry.SurfaceMetadata surface) {
+        // The Method identifies the surface; handlerMethodId is for humans
+        // reading the logs below and is NOT unique across overloads.
+        Method key = surface.method();
         String surfaceId = surface.handlerMethodId();
         // Permanent-unbuildable check first: surfaces marked here will
         // NEVER produce a submitter (no capability, or no runtime provider
         // wired) so short-circuit without touching the runtime provider.
-        if (unbuildableSurfaces.contains(surfaceId)) {
+        if (unbuildableSurfaces.contains(key)) {
             return null;
         }
-        MeshJobSubmitter cached = jobSubmitterCache.get(surfaceId);
+        MeshJobSubmitter cached = jobSubmitterCache.get(key);
         if (cached != null) {
             return cached;
         }
@@ -690,7 +831,7 @@ public class MeshA2ADispatcher {
                 + "constructed without a MeshRuntime provider — injecting null. Use the "
                 + "five-arg MeshA2ADispatcher constructor (the Spring autoconfiguration wires "
                 + "this automatically).", surfaceId);
-            unbuildableSurfaces.add(surfaceId);
+            unbuildableSurfaces.add(key);
             return null;
         }
         MeshRuntime runtime;
@@ -727,12 +868,12 @@ public class MeshA2ADispatcher {
             log.warn("@MeshA2A {} declares MeshJobSubmitter parameter but no capability can be "
                 + "derived (no @MeshDependency declared and skillId is empty) — injecting null.",
                 surfaceId);
-            unbuildableSurfaces.add(surfaceId);
+            unbuildableSurfaces.add(key);
             return null;
         }
         try {
             MeshJobSubmitter submitter = new MeshJobSubmitter(capability, agentId, registryUrl);
-            jobSubmitterCache.put(surfaceId, submitter);
+            jobSubmitterCache.put(key, submitter);
             log.info("@MeshA2A {}: auto-injected MeshJobSubmitter (capability={}, agentId={})",
                 surfaceId, capability, agentId);
             return submitter;
@@ -765,29 +906,42 @@ public class MeshA2ADispatcher {
         return skillId.replace('-', '_');
     }
 
+    /**
+     * Resolve the dependency proxy for the parameter at signature position
+     * {@code position}, which {@link #planArguments} classified as a
+     * {@link ParamRole#DEPENDENCY} slot.
+     *
+     * <p>Positional (issue #1401): the parameter's injectable-slot ordinal
+     * selects the declared {@code @MeshDependency}, through the pairing table
+     * {@link MeshPositionalBinder} built at plan time. The parameter's name and
+     * any {@link MeshInject} value take no part — the annotation is checked as
+     * an assertion at boot ({@link MeshLegacyBindingDetector}), so by the time a
+     * request arrives the two cannot disagree. Resolution goes through the
+     * injector so the proxy lifecycle matches the {@code @MeshRoute} path.
+     */
     private McpMeshTool resolveDependency(
-            MeshA2ARegistry.SurfaceMetadata surface, Parameter param, MeshInject inj) {
+            MeshA2ARegistry.SurfaceMetadata surface, ArgPlan plan, int position) {
+        int ordinal = plan.slotOrdinal()[position];
+        int[] slotToDepIndex = plan.binding().slotToDepIndex();
+        int depIndex = ordinal >= 0 && ordinal < slotToDepIndex.length
+            ? slotToDepIndex[ordinal] : -1;
+        if (depIndex < 0) {
+            log.warn("@MeshA2A {}: parameter {} is injectable slot {}, but only {} "
+                    + "@MeshDependency entr{} declared — injecting null. dependencies[i] binds "
+                    + "to the i-th injectable parameter.",
+                surface.handlerMethodId(), position, ordinal,
+                plan.binding().capabilities().size(),
+                plan.binding().capabilities().size() == 1 ? "y is" : "ies are");
+            return null;
+        }
+
         MeshDependencyInjector injector = injectorProvider.getIfAvailable();
         if (injector == null) {
             log.warn("@MeshA2A {}: MeshDependencyInjector unavailable; injecting null McpMeshTool",
                 surface.handlerMethodId());
             return null;
         }
-        String requestedCapability = (inj != null && !inj.value().isEmpty())
-            ? inj.value() : param.getName();
-        // Match against the declared dependencies — the @MeshInject value
-        // (or parameter name) must align with one of @MeshA2A's
-        // @MeshDependency entries. We resolve through the injector so the
-        // proxy lifecycle matches the @MeshRoute path.
-        for (MeshRouteRegistry.DependencySpec dep : surface.dependencies()) {
-            if (dep.getCapability().equals(requestedCapability)
-                || requestedCapability.equals(dep.getParameterName())) {
-                return injector.getToolProxy(dep.getCapability());
-            }
-        }
-        log.debug("@MeshA2A {}: no @MeshDependency matches parameter '{}'",
-            surface.handlerMethodId(), requestedCapability);
-        return null;
+        return injector.getToolProxy(plan.binding().capabilities().get(depIndex));
     }
 
     // ─────────────────────────────────────────────────────────────────

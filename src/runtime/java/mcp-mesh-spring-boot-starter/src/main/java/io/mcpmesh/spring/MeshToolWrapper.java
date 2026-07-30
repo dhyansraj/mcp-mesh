@@ -418,6 +418,14 @@ public class MeshToolWrapper implements McpToolHandler {
         int minSlots = (task && meshJobParamIndex != null) ? slotCount - 1 : slotCount;
         MeshDiValidator.checkArity("@MeshTool", binding, minSlots, slotCount);
 
+        // Issue #1401: @MeshInject is a checked assertion at EVERY injection
+        // site, not just the web ones. It was silently ignored on @MeshTool
+        // parameters — the wrapper never even imported it — which meant the
+        // annotation quietly meant two different things depending on where it
+        // was written. Here it asserts the dependency positional pairing
+        // assigns; a value that disagrees fails the boot. It never selects.
+        io.mcpmesh.spring.web.MeshLegacyBindingDetector.inspectTool(binding);
+
         // Generate input schema (excluding injected params)
         this.inputSchema = generateInputSchema();
 

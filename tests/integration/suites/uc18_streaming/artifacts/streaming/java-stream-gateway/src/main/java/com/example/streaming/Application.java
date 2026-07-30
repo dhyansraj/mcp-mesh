@@ -56,9 +56,9 @@ class GatewayController {
      * tool's {@code stream(args)} method, mirroring the TS gateway's
      * {@code trip_planning.stream(req.body)}.
      */
-    // Parameter name MUST match the capability name (snake_case → snake_case)
-    // so MeshInjectArgumentResolver resolves the dep by parameter name.
-    // This mirrors the rest-api-consumer example exactly.
+    // The single declared dependency binds to the single McpMeshTool parameter
+    // by POSITION; the parameter name is incidental. This mirrors the
+    // rest-api-consumer example exactly.
     @PostMapping("/plan")
     @MeshRoute(dependencies = @MeshDependency(capability = "trip_planning"))
     public SseEmitter plan(

@@ -15,7 +15,10 @@ import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.HandlerInterceptor;
 import tools.jackson.databind.ObjectMapper;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -45,7 +48,21 @@ public class MeshRouteHandlerInterceptor implements HandlerInterceptor {
     private static final ObjectMapper JSON = MeshObjectMappers.create();
 
     /**
-     * Request attribute key for resolved dependencies map.
+     * Request attribute key for the resolved dependencies.
+     *
+     * <p><b>The value is a {@code List<McpMeshTool>} positionally aligned with
+     * {@code RouteMetadata.getDependencies()}</b> — index {@code i} holds the
+     * proxy for declared dependency {@code i}, or {@code null} when that
+     * dependency is unavailable. The list is pre-sized to the declared count and
+     * assigned by index, never appended to: an unavailable dependency in the
+     * middle of the list must leave every later slot where it is (issue #1390,
+     * the whole point of #1401's positional contract).
+     *
+     * <p>Before 3.4 this held a capability-keyed {@code Map}. Code that wants
+     * capability-keyed access should call
+     * {@link MeshRouteUtils#getDependencies(HttpServletRequest)}, which rebuilds
+     * that view from this list plus {@link #MESH_ROUTE_METADATA_ATTR} — one
+     * source of truth, two views.
      */
     public static final String MESH_DEPENDENCIES_ATTR = "io.mcpmesh.route.dependencies";
 
@@ -118,8 +135,18 @@ public class MeshRouteHandlerInterceptor implements HandlerInterceptor {
         // Store metadata in request for later access
         request.setAttribute(MESH_ROUTE_METADATA_ATTR, metadata);
 
-        // Resolve dependencies
-        Map<String, McpMeshTool> resolvedDeps = new LinkedHashMap<>();
+        // Resolve dependencies.
+        //
+        // POSITIONAL (issue #1401): the list is PRE-SIZED to the declared count
+        // and null-padded, and every store below is an indexed set(). It is
+        // never built with add() — an unavailable dependency must leave its own
+        // slot null and every later slot exactly where it is. Appending only
+        // the available ones would shift each subsequent parameter onto the
+        // wrong proxy, which is the #1390 defect this contract exists to
+        // prevent.
+        List<MeshRouteRegistry.DependencySpec> declared = metadata.getDependencies();
+        List<McpMeshTool> resolvedDeps =
+            new ArrayList<>(Collections.nCopies(declared.size(), (McpMeshTool) null));
         boolean allResolved = true;
         // Issue #1249 perimeter: capability of the first UNAVAILABLE dependency
         // declared required=true. When non-null after resolution, the route
@@ -131,7 +158,8 @@ public class MeshRouteHandlerInterceptor implements HandlerInterceptor {
 
         io.mcpmesh.spring.MeshSettleState settleState =
             io.mcpmesh.spring.MeshSettleState.getInstance();
-        for (MeshRouteRegistry.DependencySpec dep : metadata.getDependencies()) {
+        for (int depIndex = 0; depIndex < declared.size(); depIndex++) {
+            MeshRouteRegistry.DependencySpec dep = declared.get(depIndex);
             try {
                 McpMeshTool tool = resolveDependency(dep);
                 // Settling-window grace (#1193): while the agent is still
@@ -152,10 +180,10 @@ public class MeshRouteHandlerInterceptor implements HandlerInterceptor {
                     tool = resolveDependency(dep);
                 }
                 if (tool != null && tool.isAvailable()) {
-                    resolvedDeps.put(dep.getCapability(), tool);
-                    // Also store by parameter name for @MeshInject
-                    resolvedDeps.put(dep.getParameterName(), tool);
-                    log.debug("Resolved dependency '{}' for route", dep.getCapability());
+                    // Indexed assignment — see the pre-sizing note above.
+                    resolvedDeps.set(depIndex, tool);
+                    log.debug("Resolved dependency[{}] '{}' for route",
+                        depIndex, dep.getCapability());
                 } else {
                     log.warn("Dependency '{}' not available for route {}",
                         dep.getCapability(), handlerMethodId);
@@ -177,8 +205,8 @@ public class MeshRouteHandlerInterceptor implements HandlerInterceptor {
             }
         }
 
-        // Store resolved dependencies in request
-        request.setAttribute(MESH_DEPENDENCIES_ATTR, resolvedDeps);
+        // Store resolved dependencies in request, positionally
+        request.setAttribute(MESH_DEPENDENCIES_ATTR, Collections.unmodifiableList(resolvedDeps));
 
         // Issue #1249 perimeter 503: a dependency declared required=true is
         // unavailable at call time — return 503 with the capability reason
