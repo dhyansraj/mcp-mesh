@@ -10,6 +10,11 @@ data:
   MCP_MESH_REGISTRY_URL: {{ .Values.ui.registryURL | quote }}
   MCP_MESH_LOG_LEVEL: {{ .Values.ui.logLevel | default "INFO" | quote }}
   MCP_MESH_DISTRIBUTED_TRACING_ENABLED: {{ .Values.ui.tracing.enabled | default "true" | quote }}
+  {{- /* hasKey instead of `default` so retention: 0 (disable) is not treated
+         as unset. meshui trims the mesh:trace stream too, so this must be
+         kept equal to registry.observability.distributedTracing.retention or
+         the two processes trim to different windows. */}}
+  MCP_MESH_TRACE_RETENTION: {{ hasKey .Values.ui.tracing "retention" | ternary .Values.ui.tracing.retention "24h" | toString | quote }}
   TEMPO_URL: {{ .Values.ui.tempo.url | quote }}
   TELEMETRY_ENDPOINT: {{ .Values.ui.tempo.telemetryEndpoint | quote }}
   {{- if .Values.ui.basePath }}

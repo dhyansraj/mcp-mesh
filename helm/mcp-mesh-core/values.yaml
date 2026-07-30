@@ -185,7 +185,9 @@ mcp-mesh-registry:
         enabled: true
         # mesh:trace Redis stream retention (XTRIM MINID on connect and
         # periodically); "0" disables trimming. The stream is a transport
-        # buffer — long-term trace history lives in Tempo.
+        # buffer — long-term trace history lives in Tempo. meshui trims to the
+        # same window (see mcp-mesh-ui.ui.tracing.retention below), so trimming
+        # does not depend on the registry being alive.
         retention: "24h"
       telemetryEndpoint: "mcp-core-mcp-mesh-tempo:4317"
 
@@ -323,6 +325,12 @@ mcp-mesh-tempo:
 mcp-mesh-ui:
   ui:
     registryURL: "http://mcp-core-mcp-mesh-registry:8000"
+    tracing:
+      enabled: true
+      # Keep equal to mcp-mesh-registry.registry.observability.distributedTracing.retention
+      # above: both processes trim mesh:trace, so trimming survives either
+      # being down, but only if they agree on the window.
+      retention: "24h"
     basePath: "/ops/dashboard"  # default; override with custom image for different path
     tempo:
       url: "http://mcp-core-mcp-mesh-tempo:3200"

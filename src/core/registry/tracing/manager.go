@@ -558,6 +558,14 @@ func DefaultTracingConfig() *TracingConfig {
 	}
 }
 
+// TraceRetentionFromEnv returns the configured mesh:trace stream retention.
+// Exported so processes that build a TracingConfig by hand (meshui) get the
+// same value as the registry — trimming must not depend on one process being
+// alive (#1424).
+func TraceRetentionFromEnv() time.Duration {
+	return parseTraceRetentionFromEnv()
+}
+
 // parseTraceRetentionFromEnv parses MCP_MESH_TRACE_RETENTION following the
 // same conventions as MCP_MESH_RETENTION (registry sweep):
 //   - unset / empty: defaults to 24h

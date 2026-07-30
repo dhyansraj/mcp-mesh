@@ -21,6 +21,66 @@ use crate::config::{get_redis_url, is_tracing_enabled};
 /// Redis stream name for trace data.
 const TRACE_STREAM_NAME: &str = "mesh:trace";
 
+/// Producer-side hard ceiling on the `mesh:trace` stream (issue #1424).
+///
+/// Time-based trimming (`XTRIM MINID`, `MCP_MESH_TRACE_RETENTION`) is done by
+/// the consumers — the registry and meshui. If both are down while agents keep
+/// publishing, nothing bounds the stream and the only backstop is Redis
+/// `allkeys-lru`, which evicts the ENTIRE `mesh:trace` key rather than shedding
+/// old entries. Capping at the producer makes the bound independent of any
+/// consumer being alive: every runtime (Python, TypeScript, Java, Go) publishes
+/// through this single call site.
+///
+/// `MAXLEN ~` is approximate — Redis trims in whole macro-node steps, so the
+/// stream may sit somewhat above the cap. That is deliberate: the exact form is
+/// O(N) per XADD, the approximate form is amortised O(1). This is a safety
+/// ceiling, not a retention policy; retention stays time-based on the consumer.
+const DEFAULT_TRACE_STREAM_MAXLEN: usize = 100_000;
+
+/// Read the producer-side stream cap from `MCP_MESH_TRACE_STREAM_MAXLEN`.
+///
+/// - unset / empty: `DEFAULT_TRACE_STREAM_MAXLEN`
+/// - positive integer: use it
+/// - `0`: no producer-side cap (plain `XADD`) — warned, since it removes a bound
+/// - negative / unparseable: warn and fall back to the default
+///
+/// Called ONCE per [`init_trace_publisher`] and cached in
+/// [`TracePublisherState::stream_maxlen`] — never from the publish path, where
+/// the env read + parse (and, on a misconfigured value, the `warn!`) would run
+/// for every span.
+fn trace_stream_maxlen() -> usize {
+    match std::env::var("MCP_MESH_TRACE_STREAM_MAXLEN") {
+        Err(_) => DEFAULT_TRACE_STREAM_MAXLEN,
+        Ok(raw) if raw.trim().is_empty() => DEFAULT_TRACE_STREAM_MAXLEN,
+        Ok(raw) => match raw.trim().parse::<i64>() {
+            Ok(0) => {
+                warn!(
+                    "MCP_MESH_TRACE_STREAM_MAXLEN=0: producer-side cap on '{}' is DISABLED; \
+                     the stream is bounded only while a registry or meshui consumer is alive",
+                    TRACE_STREAM_NAME
+                );
+                0
+            }
+            Ok(n) if n > 0 => n as usize,
+            Ok(n) => {
+                warn!(
+                    "Invalid MCP_MESH_TRACE_STREAM_MAXLEN={}: negative values are not allowed \
+                     (use 0 to disable); using default {}",
+                    n, DEFAULT_TRACE_STREAM_MAXLEN
+                );
+                DEFAULT_TRACE_STREAM_MAXLEN
+            }
+            Err(e) => {
+                warn!(
+                    "Invalid MCP_MESH_TRACE_STREAM_MAXLEN={:?}, using default {}: {}",
+                    raw, DEFAULT_TRACE_STREAM_MAXLEN, e
+                );
+                DEFAULT_TRACE_STREAM_MAXLEN
+            }
+        },
+    }
+}
+
 /// Cooldown between re-probe attempts once Redis has been marked unavailable
 /// (issue #1364). Stored as an atomic so tests can shrink it for a
 /// deterministic recovery assertion; production always uses the 5s default.
@@ -74,6 +134,12 @@ struct TracePublisherState {
     available: bool,
     /// Redis URL.
     redis_url: String,
+    /// Producer-side `MAXLEN ~` cap, resolved once at init (issue #1424).
+    /// Cached here rather than read from the environment per span: the publish
+    /// path runs for every span, and an env read + parse — plus a `warn!` on a
+    /// misconfigured value, which would be a log flood — has no business there.
+    /// 0 means "no cap": publish with a plain `XADD`.
+    stream_maxlen: usize,
 }
 
 impl Default for TracePublisherState {
@@ -83,6 +149,7 @@ impl Default for TracePublisherState {
             enabled: false,
             available: false,
             redis_url: String::new(),
+            stream_maxlen: DEFAULT_TRACE_STREAM_MAXLEN,
         }
     }
 }
@@ -277,6 +344,10 @@ pub async fn init_trace_publisher() -> bool {
             debug!("Distributed tracing: disabled");
             return false;
         }
+        // Resolve the producer-side cap here, alongside `enabled` / `redis_url`,
+        // so the publish path is a plain field read. Any warning about a
+        // misconfigured value fires once per init instead of once per span.
+        state.stream_maxlen = trace_stream_maxlen();
     }
 
     info!("Distributed tracing: enabled");
@@ -329,7 +400,7 @@ pub async fn publish_span(span_data: HashMap<String, String>) -> bool {
     //   * Redis marked unavailable → short-circuit INSTANTLY (read-lock only).
     //     The background re-prober is the only thing that dials Redis while
     //     unavailable, so no request ever stalls on a reconnect.
-    let mut conn = {
+    let (mut conn, maxlen) = {
         let state = publisher.read().await;
         if !state.enabled {
             return false;
@@ -346,7 +417,7 @@ pub async fn publish_span(span_data: HashMap<String, String>) -> bool {
             return false;
         }
         match &state.conn {
-            Some(c) => c.clone(),
+            Some(c) => (c.clone(), state.stream_maxlen),
             None => return false,
         }
     };
@@ -367,10 +438,20 @@ pub async fn publish_span(span_data: HashMap<String, String>) -> bool {
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
-    // Publish to stream
-    let result: Result<String, redis::RedisError> = conn
-        .xadd(TRACE_STREAM_NAME, "*", &items)
-        .await;
+    // Publish to stream, capped at the producer so the stream stays bounded
+    // even with every consumer down (issue #1424). `maxlen` was resolved once
+    // at init; 0 still means "no cap" and takes the plain `XADD` path.
+    let result: Result<String, redis::RedisError> = if maxlen > 0 {
+        conn.xadd_maxlen(
+            TRACE_STREAM_NAME,
+            redis::streams::StreamMaxlen::Approx(maxlen),
+            "*",
+            &items,
+        )
+        .await
+    } else {
+        conn.xadd(TRACE_STREAM_NAME, "*", &items).await
+    };
     match result {
         Ok(_msg_id) => {
             debug!("Published trace span to Redis stream");
@@ -487,6 +568,57 @@ mod tests {
         assert_eq!(TRACE_STREAM_NAME, "mesh:trace");
     }
 
+    /// Issue #1424: the producer-side `MAXLEN ~` cap is the only bound on the
+    /// stream when every consumer is down, so its env parsing must default
+    /// safely and must never silently unbound on a bad value.
+    ///
+    /// NB: mutates process env; `--test-threads=1` in CI keeps this serial.
+    #[test]
+    fn test_trace_stream_maxlen_env() {
+        let restore = std::env::var("MCP_MESH_TRACE_STREAM_MAXLEN").ok();
+
+        std::env::remove_var("MCP_MESH_TRACE_STREAM_MAXLEN");
+        assert_eq!(
+            trace_stream_maxlen(),
+            DEFAULT_TRACE_STREAM_MAXLEN,
+            "unset must use the default cap"
+        );
+
+        std::env::set_var("MCP_MESH_TRACE_STREAM_MAXLEN", "");
+        assert_eq!(
+            trace_stream_maxlen(),
+            DEFAULT_TRACE_STREAM_MAXLEN,
+            "empty must use the default cap"
+        );
+
+        std::env::set_var("MCP_MESH_TRACE_STREAM_MAXLEN", "500");
+        assert_eq!(trace_stream_maxlen(), 500, "positive override must apply");
+
+        std::env::set_var("MCP_MESH_TRACE_STREAM_MAXLEN", "0");
+        assert_eq!(trace_stream_maxlen(), 0, "0 must disable the producer cap");
+
+        // A bad value must fall back to the default, NOT to 0 — falling back
+        // to 0 would silently remove the bound.
+        std::env::set_var("MCP_MESH_TRACE_STREAM_MAXLEN", "-5");
+        assert_eq!(
+            trace_stream_maxlen(),
+            DEFAULT_TRACE_STREAM_MAXLEN,
+            "negative must fall back to the default, not disable"
+        );
+
+        std::env::set_var("MCP_MESH_TRACE_STREAM_MAXLEN", "not-a-number");
+        assert_eq!(
+            trace_stream_maxlen(),
+            DEFAULT_TRACE_STREAM_MAXLEN,
+            "unparseable must fall back to the default, not disable"
+        );
+
+        match restore {
+            Some(v) => std::env::set_var("MCP_MESH_TRACE_STREAM_MAXLEN", v),
+            None => std::env::remove_var("MCP_MESH_TRACE_STREAM_MAXLEN"),
+        }
+    }
+
     /// Issue #1166 MED-3: the publisher must establish ONE connection at
     /// init and reuse it across publishes — not dial Redis per span.
     /// Uses a minimal fake RESP server that counts accepted TCP
@@ -577,6 +709,242 @@ mod tests {
 
         std::env::remove_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED");
         std::env::remove_var("REDIS_URL");
+    }
+
+    /// Issue #1424: the XADD issued on the publish path must carry
+    /// `MAXLEN ~ <n>`, so the `mesh:trace` stream stays bounded even with every
+    /// consumer down. Captures the raw RESP bytes off a fake server and
+    /// asserts the cap is on the wire — the previous uncapped `XADD` left the
+    /// stream bounded only by a live registry.
+    ///
+    /// NB: mutates process env and the global publisher singleton; the suite
+    /// runs with --test-threads=1, matching the other env-mutating tests here.
+    #[tokio::test]
+    async fn publish_span_caps_stream_with_maxlen() {
+        use std::sync::Mutex;
+
+        reset_reprober_state();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake redis");
+        let addr = listener.local_addr().unwrap();
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured_srv = captured.clone();
+
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    break;
+                };
+                let captured_conn = captured_srv.clone();
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 8192];
+                    loop {
+                        match sock.read(&mut buf).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => {
+                                let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                                let ncmds = req
+                                    .split("\r\n")
+                                    .filter(|line| line.starts_with('*'))
+                                    .count()
+                                    .max(1);
+                                captured_conn.lock().unwrap().push(req);
+                                let resp = "+PONG\r\n".repeat(ncmds);
+                                if sock.write_all(resp.as_bytes()).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+        });
+
+        std::env::set_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED", "true");
+        std::env::set_var("REDIS_URL", format!("redis://{}", addr));
+        std::env::set_var("MCP_MESH_TRACE_STREAM_MAXLEN", "777");
+
+        let budget = std::time::Duration::from_secs(10);
+        assert!(
+            tokio::time::timeout(budget, init_trace_publisher())
+                .await
+                .expect("init timed out"),
+            "init must succeed against the fake server"
+        );
+
+        let span: HashMap<String, String> = HashMap::from([("span".to_string(), "s0".to_string())]);
+        assert!(
+            tokio::time::timeout(budget, publish_span(span))
+                .await
+                .expect("publish timed out"),
+            "publish must succeed"
+        );
+
+        // Give the fake server a moment to record the write.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let reqs = captured.lock().unwrap().clone();
+        let xadd = reqs
+            .iter()
+            .find(|r| r.contains("XADD"))
+            .unwrap_or_else(|| panic!("no XADD captured; requests were: {:?}", reqs))
+            .clone();
+
+        assert!(
+            xadd.contains("MAXLEN"),
+            "XADD must carry a MAXLEN cap, got: {:?}",
+            xadd
+        );
+        assert!(
+            xadd.contains("777"),
+            "XADD must carry the configured cap 777, got: {:?}",
+            xadd
+        );
+        assert!(
+            xadd.contains("\r\n~\r\n"),
+            "cap must be approximate (~) so XADD stays amortised O(1), got: {:?}",
+            xadd
+        );
+
+        std::env::remove_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED");
+        std::env::remove_var("REDIS_URL");
+        std::env::remove_var("MCP_MESH_TRACE_STREAM_MAXLEN");
+    }
+
+    /// The cap is resolved ONCE at init, not per span: the publish path runs for
+    /// every span, so an env read + parse there is pure overhead — and on a
+    /// misconfigured value the `warn!` inside `trace_stream_maxlen` becomes a
+    /// per-span log flood.
+    ///
+    /// Proven on the wire rather than by counting log lines: init with a valid
+    /// cap, then corrupt the env var and publish. A cached value keeps emitting
+    /// the init-time cap; a per-span read would parse the bad value, warn, and
+    /// fall back to the default. Also pins that `MAXLEN=0` still takes the plain
+    /// uncapped `XADD` path after caching.
+    ///
+    /// NB: mutates process env and the global publisher singleton; the suite
+    /// runs with --test-threads=1, matching the other env-mutating tests here.
+    #[tokio::test]
+    async fn publish_span_resolves_maxlen_once_at_init() {
+        use std::sync::Mutex;
+
+        reset_reprober_state();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake redis");
+        let addr = listener.local_addr().unwrap();
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured_srv = captured.clone();
+
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    break;
+                };
+                let captured_conn = captured_srv.clone();
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 8192];
+                    loop {
+                        match sock.read(&mut buf).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => {
+                                let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                                let ncmds = req
+                                    .split("\r\n")
+                                    .filter(|line| line.starts_with('*'))
+                                    .count()
+                                    .max(1);
+                                captured_conn.lock().unwrap().push(req);
+                                let resp = "+PONG\r\n".repeat(ncmds);
+                                if sock.write_all(resp.as_bytes()).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+        });
+
+        let budget = std::time::Duration::from_secs(10);
+        let find_xadd = |reqs: Vec<String>| -> String {
+            reqs.iter()
+                .find(|r| r.contains("XADD"))
+                .unwrap_or_else(|| panic!("no XADD captured; requests were: {:?}", reqs))
+                .clone()
+        };
+
+        std::env::set_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED", "true");
+        std::env::set_var("REDIS_URL", format!("redis://{}", addr));
+        std::env::set_var("MCP_MESH_TRACE_STREAM_MAXLEN", "321");
+
+        assert!(
+            tokio::time::timeout(budget, init_trace_publisher())
+                .await
+                .expect("init timed out"),
+            "init must succeed against the fake server"
+        );
+
+        // Corrupt the env AFTER init. A per-span read would warn and fall back
+        // to DEFAULT_TRACE_STREAM_MAXLEN; the cached value must win.
+        std::env::set_var("MCP_MESH_TRACE_STREAM_MAXLEN", "not-a-number");
+
+        for i in 0..3 {
+            let span: HashMap<String, String> =
+                HashMap::from([("span".to_string(), format!("s{}", i))]);
+            assert!(
+                tokio::time::timeout(budget, publish_span(span))
+                    .await
+                    .expect("publish timed out"),
+                "publish {} must succeed",
+                i
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let xadd = find_xadd(captured.lock().unwrap().clone());
+        assert!(
+            xadd.contains("321"),
+            "XADD must carry the init-time cap 321, not a per-span re-read of the env: {:?}",
+            xadd
+        );
+        assert!(
+            !xadd.contains(&DEFAULT_TRACE_STREAM_MAXLEN.to_string()),
+            "XADD must not fall back to the default from a per-span env re-read: {:?}",
+            xadd
+        );
+
+        // maxlen == 0 must still mean a plain, uncapped XADD after caching.
+        captured.lock().unwrap().clear();
+        std::env::set_var("MCP_MESH_TRACE_STREAM_MAXLEN", "0");
+        assert!(
+            tokio::time::timeout(budget, init_trace_publisher())
+                .await
+                .expect("re-init timed out"),
+            "re-init must succeed"
+        );
+        let span: HashMap<String, String> = HashMap::from([("span".to_string(), "z".to_string())]);
+        assert!(
+            tokio::time::timeout(budget, publish_span(span))
+                .await
+                .expect("publish timed out"),
+            "publish must succeed with the cap disabled"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let xadd = find_xadd(captured.lock().unwrap().clone());
+        assert!(
+            !xadd.contains("MAXLEN"),
+            "MCP_MESH_TRACE_STREAM_MAXLEN=0 must issue a plain uncapped XADD, got: {:?}",
+            xadd
+        );
+
+        std::env::remove_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED");
+        std::env::remove_var("REDIS_URL");
+        std::env::remove_var("MCP_MESH_TRACE_STREAM_MAXLEN");
     }
 
     /// Issue #1363: a black-holed / non-accepting Redis must not stall init

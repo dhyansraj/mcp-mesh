@@ -167,7 +167,10 @@ func main() {
 			BatchSize:     100,
 			BlockTimeout:  2 * time.Second,
 			TraceTimeout:  5 * time.Minute,
-			TempoQueryURL: resolveTempoURL(tempoURL),
+			// meshui honours MCP_MESH_TRACE_RETENTION too, so stream trimming
+			// does not depend on the registry process being alive (#1424).
+			TraceRetention: tracing.TraceRetentionFromEnv(),
+			TempoQueryURL:  resolveTempoURL(tempoURL),
 		}
 
 		metricsProc = ui.NewMetricsProcessor()

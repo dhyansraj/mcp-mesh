@@ -273,14 +273,23 @@ export DEFAULT_EVICTION_THRESHOLD=60
 ```bash
 # How long unhealthy/unknown agents are kept in the registry before the
 # sweep job purges them. Go duration string (e.g. "30m", "2h", "48h").
-# Default: 1h. Set to "0" to disable the sweep entirely (forensic mode —
-# keeps all rows). Affects `meshctl list` (purged agents disappear from
-# output), the underlying RegistryEvent table (event rows are governed
-# by a separate hardcoded 100,000 rolling cap, not by this variable),
-# and orphan schema_entries (rows in the content-addressed schema store
-# that are no longer referenced by any capability — purged when both
-# orphan and older than this retention window; #842).
+# Default: 1h. Set to "0" to disable the agent/schema sweep (forensic
+# mode — keeps all agent and schema rows). Affects `meshctl list` (purged
+# agents disappear from output) and orphan schema_entries (rows in the
+# content-addressed schema store that are no longer referenced by any
+# capability — purged when both orphan and older than this retention
+# window; #842). It does NOT govern the registry_events table: that has
+# its own row cap, MCP_MESH_EVENT_MAX_ROWS, which stays enforced even
+# with the sweep disabled.
 export MCP_MESH_RETENTION=1h
+
+# registry_events row cap — a table-size safety limit, not a retention
+# policy. When the table exceeds this many rows the oldest are deleted
+# until it is back under the cap. Enforced independently of
+# MCP_MESH_RETENTION, so disabling the sweep does not unbound this table.
+# Default: 100000. Set to "0" to disable the cap deliberately (logged as
+# a removed bound at startup).
+export MCP_MESH_EVENT_MAX_ROWS=100000
 
 # How often the periodic job/agent sweep runs (reaping, lease recovery,
 # retention purges). Go duration string (e.g. "30s", "5m", "1m30s").
@@ -310,7 +319,9 @@ export MCP_MESH_JOB_STALE_TIMEOUT=2h
   `1m` with the default 5m sweep) will not speed up the purge cadence —
   it only affects when an agent becomes eligible for purge. Lower
   `MCP_MESH_SWEEP_INTERVAL` to tighten the cadence.
-- Internal constant: event hard cap = 100,000 rows.
+- `MCP_MESH_RETENTION=0` disables only the agent/schema/job phases. The
+  `registry_events` row cap keeps running on the same schedule; use
+  `MCP_MESH_EVENT_MAX_ROWS=0` to turn that off too.
 
 ### Logging and Debug
 
@@ -456,10 +467,25 @@ export TRACE_EXPORTER_TYPE=otlp
 export TRACE_BATCH_SIZE=100
 export TRACE_TIMEOUT=5m
 
-# Redis trace stream retention — registry trims mesh:trace entries older
-# than this on connect and periodically. Go duration string. Default: 24h.
+# Redis trace stream retention — the registry AND meshui both trim mesh:trace
+# entries older than this on connect and periodically, so trimming does not
+# depend on a single process being alive. Go duration string. Default: 24h.
 # Set to "0" to disable trimming entirely.
 export MCP_MESH_TRACE_RETENTION=24h
+
+# Producer-side ceiling on the mesh:trace stream. Every agent runtime publishes
+# with XADD MAXLEN ~ <n>, so the stream stays bounded even when no consumer is
+# running. This is a safety ceiling, not a retention policy — time-based
+# retention stays with MCP_MESH_TRACE_RETENTION. Default: 100000. "0" disables.
+export MCP_MESH_TRACE_STREAM_MAXLEN=100000
+
+# In-memory telemetry aggregates (dashboard per-agent, per-model and per-edge
+# stats). Keyed by name, so they grow with agent/model name cardinality rather
+# than trace volume. A key not written to within the retention window ages out;
+# the max-entries ceiling is a backstop for name churn, evicting the
+# least-recently-seen key first. "0" disables the respective bound.
+export MCP_MESH_TELEMETRY_AGGREGATE_RETENTION=24h
+export MCP_MESH_TELEMETRY_AGGREGATE_MAX_ENTRIES=10000
 
 # Trace output options
 export TRACE_PRETTY_OUTPUT=false

@@ -249,7 +249,7 @@ func TestSweepEventMaxRowsOverCap(t *testing.T) {
 // event is well under the 100k cap, not because enforceEventCap is gated
 // (it always runs regardless of Retention).
 //
-// Note: Start() bails out before launching the goroutine when retention=0;
+// Note: with retention=0 Start() runs only the event-cap tick (#1425);
 // runOnce here is invoked directly to confirm the agent path is gated.
 func TestSweepDisabledRetention(t *testing.T) {
 	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
@@ -277,22 +277,50 @@ func TestSweepDisabledRetention(t *testing.T) {
 	}
 }
 
-// TestSweepDisabledStartIsNoop verifies that Start() with retention=0 does
-// not launch the goroutine (the operator's forensic escape hatch).
+// TestSweepDisabledStartIsNoop verifies that Start() launches nothing only
+// when BOTH bounds are off.
+//
+// Retention=0 alone is the operator's forensic escape hatch for agent/schema
+// history, but it no longer takes the registry_events row cap down with it
+// (#1425): the goroutine still runs, executing only the cap-only tick. See
+// TestEventCapEnforcedWithRetentionZero and
+// TestEventCapOnlyTickLeavesStaleAgentsAlone for what does and does not run.
 func TestSweepDisabledStartIsNoop(t *testing.T) {
 	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
-	cfg := SweepConfig{Retention: 0}
+	cfg := SweepConfig{Retention: 0, EventMaxRows: EventCapDisabled}
 	_, _, job, cleanup := newSweepTestEnv(t, cfg, now)
 	defer cleanup()
 
 	job.Start(context.Background())
+	defer job.Stop()
 
 	job.mu.Lock()
 	running := job.running
 	job.mu.Unlock()
 
 	if running {
-		t.Errorf("expected sweep job to NOT be running when Retention=0, but running=true")
+		t.Errorf("expected sweep job to NOT be running with Retention=0 and the event cap disabled, but running=true")
+	}
+}
+
+// TestSweepRetentionZeroStillRunsForEventCap is the counterpart: with only
+// Retention=0 the goroutine DOES start, because the registry_events row cap is
+// an independent bound (#1425).
+func TestSweepRetentionZeroStillRunsForEventCap(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 0}
+	_, _, job, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	job.Start(context.Background())
+	defer job.Stop()
+
+	job.mu.Lock()
+	running := job.running
+	job.mu.Unlock()
+
+	if !running {
+		t.Errorf("expected the sweep goroutine to run for the event cap with Retention=0, but running=false")
 	}
 }
 

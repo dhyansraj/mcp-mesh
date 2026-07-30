@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,9 +23,7 @@ import (
 	"mcp-mesh/src/core/logger"
 )
 
-// Internal sweep tunables. Operators get a single env-var knob
-// (MCP_MESH_RETENTION); these are deliberately not configurable so the
-// surface area stays small.
+// Internal sweep tunables.
 //
 // Exception: sweepInterval is overridable via MCP_MESH_SWEEP_INTERVAL so
 // integration tests that exercise crash-recovery and total_deadline expiry
@@ -33,7 +32,12 @@ import (
 const (
 	defaultSweepInterval = 5 * time.Minute
 	defaultRetention     = 1 * time.Hour
-	eventMaxRows         = 100_000
+
+	// defaultEventMaxRows caps the registry_events table. This is a
+	// table-size safety limit, NOT a retention policy: it is enforced
+	// independently of MCP_MESH_RETENTION (#1425) and tunable via
+	// MCP_MESH_EVENT_MAX_ROWS.
+	defaultEventMaxRows = 100_000
 )
 
 // sweepInterval is read once at package init from MCP_MESH_SWEEP_INTERVAL.
@@ -77,10 +81,24 @@ func readSweepIntervalFromEnv() time.Duration {
 
 // SweepConfig holds the configuration for the registry sweep job.
 //
-// Set Retention to 0 to disable the sweep entirely (forensic escape hatch:
-// no goroutine is launched, no agents or events are purged).
+// Set Retention to 0 to disable the agent/schema sweep (forensic escape
+// hatch: no agents or schema entries are purged). The registry_events row
+// cap is NOT affected by that — it has its own knob, EventMaxRows.
 type SweepConfig struct {
 	Retention time.Duration
+
+	// EventMaxRows caps the registry_events table. It is a table-size safety
+	// limit, not a retention policy, so it is enforced whether or not the
+	// agent/schema sweep is running (#1425): an operator who sets
+	// MCP_MESH_RETENTION=0 to preserve agent history no longer silently
+	// unbounds an unrelated table.
+	//
+	// 0 means "unset" and resolves to defaultEventMaxRows. Use the
+	// EventCapDisabled sentinel to turn the cap off deliberately — the zero
+	// value of a struct field must not be able to silently remove a bound.
+	// LoadSweepConfigFromEnv maps MCP_MESH_EVENT_MAX_ROWS=0 to that sentinel
+	// and logs it.
+	EventMaxRows int
 
 	// JobStaleTimeout is a DEFAULT total-runtime ceiling applied to jobs that
 	// did NOT set their own total_deadline, measured from submitted_at. The
@@ -92,17 +110,30 @@ type SweepConfig struct {
 	JobStaleTimeout time.Duration
 }
 
+// EventCapDisabled is the SweepConfig.EventMaxRows sentinel meaning "the
+// registry_events row cap is deliberately off". A plain 0 means "unset" and
+// resolves to defaultEventMaxRows, so a zero-valued config can never silently
+// remove the bound.
+const EventCapDisabled = -1
+
 // LoadSweepConfigFromEnv reads sweep configuration from the environment.
 //
-// Only MCP_MESH_RETENTION is honored:
+// MCP_MESH_RETENTION (agent/schema purge window):
 //   - unset / empty: defaults to 1h
 //   - any positive time.ParseDuration value (e.g. "2h", "30m"): use that value
-//   - "0" / "0s": disables the sweep job entirely
+//   - "0" / "0s": disables the agent/schema sweep (the registry_events row cap
+//     keeps running — see MCP_MESH_EVENT_MAX_ROWS)
 //   - negative (e.g. "-1h"): warn and fall back to default (likely a typo;
 //     0 is the documented disable mechanism)
 //   - invalid: warn and fall back to default
+//
+// MCP_MESH_EVENT_MAX_ROWS (registry_events table-size cap):
+//   - unset / empty: defaults to 100000
+//   - positive integer: use that value
+//   - "0": disables the cap — logged as a removed bound
+//   - negative / invalid: warn and fall back to default
 func LoadSweepConfigFromEnv(log *logger.Logger) SweepConfig {
-	cfg := SweepConfig{Retention: defaultRetention}
+	cfg := SweepConfig{Retention: defaultRetention, EventMaxRows: defaultEventMaxRows}
 
 	if v := os.Getenv("MCP_MESH_RETENTION"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
@@ -115,6 +146,27 @@ func LoadSweepConfigFromEnv(log *logger.Logger) SweepConfig {
 			}
 		} else if log != nil {
 			log.Warning("Invalid MCP_MESH_RETENTION %q, using default %s: %v", v, cfg.Retention, err)
+		}
+	}
+
+	if v := os.Getenv("MCP_MESH_EVENT_MAX_ROWS"); v != "" {
+		n, err := strconv.Atoi(v)
+		switch {
+		case err != nil:
+			if log != nil {
+				log.Warning("Invalid MCP_MESH_EVENT_MAX_ROWS %q, using default %d: %v", v, defaultEventMaxRows, err)
+			}
+		case n < 0:
+			if log != nil {
+				log.Warning("Invalid MCP_MESH_EVENT_MAX_ROWS %q: negative values are not allowed (use 0 to disable); using default %d", v, defaultEventMaxRows)
+			}
+		case n == 0:
+			if log != nil {
+				log.Warning("MCP_MESH_EVENT_MAX_ROWS=0: the registry_events row cap is DISABLED; the table will grow without bound")
+			}
+			cfg.EventMaxRows = EventCapDisabled
+		default:
+			cfg.EventMaxRows = n
 		}
 	}
 
@@ -169,9 +221,10 @@ func parseJobStaleTimeoutEnv() (time.Duration, error) {
 //     than Retention. Before deleting, dependency_resolution rows where
 //     the purged agent is a provider are flipped to status=unavailable so
 //     consumer-side state stays consistent.
-//  2. If the event row count exceeds the internal hard cap (100,000),
-//     delete oldest rows until back under the cap. Events are governed
-//     solely by row count, not age.
+//  2. If the event row count exceeds the row cap (MCP_MESH_EVENT_MAX_ROWS,
+//     default 100,000), delete oldest rows until back under the cap. Events
+//     are governed solely by row count, not age. This phase runs even when
+//     MCP_MESH_RETENTION=0 disables everything else (#1425).
 //  3. Purge orphan schema_entries (no capability still references the
 //     hash) older than Retention. Runs after step 1 so newly-orphaned
 //     schemas (whose last referencing capability got cascade-deleted)
@@ -193,17 +246,36 @@ type SweepJob struct {
 
 // NewSweepJob constructs a SweepJob with the given configuration.
 //
-// The clock and eventMaxRows are injectable for tests; production callers
-// should leave them unset so they default to time.Now (UTC) and the
-// internal eventMaxRows constant respectively.
+// The clock is injectable for tests; production callers should leave it unset
+// so it defaults to time.Now (UTC). eventMaxRows comes from cfg.EventMaxRows;
+// a zero-valued SweepConfig (as used by several tests) falls back to the
+// package default rather than silently disabling the cap — only an explicit
+// MCP_MESH_EVENT_MAX_ROWS=0 does that, and LoadSweepConfigFromEnv logs it.
+//
+// Only the EventCapDisabled sentinel turns the cap off. Any OTHER negative
+// value is a typo or an arithmetic slip, not an intent to unbound the table,
+// so it warns and falls back to the package default — matching how
+// LoadSweepConfigFromEnv treats bad env input.
 func NewSweepJob(cfg SweepConfig, entDB *database.EntDatabase, service *EntService, log *logger.Logger) *SweepJob {
+	maxRows := cfg.EventMaxRows
+	switch {
+	case maxRows == EventCapDisabled:
+		maxRows = 0 // explicit disable
+	case maxRows == 0:
+		maxRows = defaultEventMaxRows
+	case maxRows < 0:
+		if log != nil {
+			log.Warning("Invalid SweepConfig.EventMaxRows %d: negative values other than the EventCapDisabled sentinel (%d) are not allowed; using default %d", cfg.EventMaxRows, EventCapDisabled, defaultEventMaxRows)
+		}
+		maxRows = defaultEventMaxRows
+	}
 	return &SweepJob{
 		cfg:          cfg,
 		entDB:        entDB,
 		service:      service,
 		logger:       log,
 		clock:        func() time.Time { return time.Now().UTC() },
-		eventMaxRows: eventMaxRows,
+		eventMaxRows: maxRows,
 	}
 }
 
@@ -212,15 +284,20 @@ func NewSweepJob(cfg SweepConfig, entDB *database.EntDatabase, service *EntServi
 // runs every sweepInterval until the goroutine's context is cancelled or
 // Stop is called.
 //
-// If cfg.Retention is zero or negative the job is treated as disabled
-// and Start is a no-op.
+// MCP_MESH_RETENTION=0 disables the agent/schema/job phases but NOT the
+// registry_events row cap (#1425): the cap is a table-size safety limit, not
+// a retention policy, so the goroutine still starts and runs the cap-only
+// tick. Start is a full no-op only when BOTH bounds are off.
 func (s *SweepJob) Start(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.cfg.Retention <= 0 {
+	sweepEnabled := s.cfg.Retention > 0
+	capEnabled := s.eventMaxRows > 0
+
+	if !sweepEnabled && !capEnabled {
 		if s.logger != nil {
-			s.logger.Info("🧹 Registry sweep job disabled (MCP_MESH_RETENTION=0)")
+			s.logger.Warning("🧹 Registry sweep job fully disabled (MCP_MESH_RETENTION=0 and MCP_MESH_EVENT_MAX_ROWS=0): agents/schemas are never purged AND registry_events is not capped")
 		}
 		return
 	}
@@ -236,14 +313,29 @@ func (s *SweepJob) Start(ctx context.Context) {
 	s.running = true
 	s.wg.Add(1)
 
+	// Pick the tick body. With the sweep disabled we still run the event-cap
+	// phase on the same schedule, so disabling one bound never removes the
+	// other.
+	tick := s.tick
+	if !sweepEnabled {
+		tick = s.tickEventCapOnly
+	}
+
 	go func() {
 		defer s.wg.Done()
 		if s.logger != nil {
-			s.logger.Info("🧹 Starting registry sweep job (retention=%s)", s.cfg.Retention)
+			switch {
+			case sweepEnabled && capEnabled:
+				s.logger.Info("🧹 Starting registry sweep job (retention=%s, registry_events cap=%d rows)", s.cfg.Retention, s.eventMaxRows)
+			case sweepEnabled:
+				s.logger.Info("🧹 Starting registry sweep job (retention=%s); registry_events row cap DISABLED (MCP_MESH_EVENT_MAX_ROWS=0)", s.cfg.Retention)
+			default:
+				s.logger.Info("🧹 Registry sweep job disabled (MCP_MESH_RETENTION=0): agents and schemas are never purged. The registry_events row cap (%d rows, MCP_MESH_EVENT_MAX_ROWS) is still enforced every %s", s.eventMaxRows, sweepInterval)
+			}
 		}
 
 		// Run once at startup to catch missed sweeps after downtime.
-		s.tick(jobCtx)
+		tick(jobCtx)
 
 		ticker := time.NewTicker(sweepInterval)
 		defer ticker.Stop()
@@ -251,7 +343,7 @@ func (s *SweepJob) Start(ctx context.Context) {
 		for {
 			select {
 			case <-ticker.C:
-				s.tick(jobCtx)
+				tick(jobCtx)
 			case <-jobCtx.Done():
 				if s.logger != nil {
 					s.logger.Info("🛑 Registry sweep job stopped")
@@ -322,6 +414,32 @@ func (s *SweepJob) tick(ctx context.Context) {
 				res.jobsDeadlined, res.jobsStaled, res.jobEventsPurged, took)
 		} else {
 			s.logger.Debug("sweep: nothing to purge (took %s)", took)
+		}
+	}
+}
+
+// tickEventCapOnly is the tick body used when MCP_MESH_RETENTION=0. It runs
+// ONLY the registry_events row cap — the agent, schema and job phases stay
+// disabled, exactly as the operator asked for. It exists so that turning off
+// the retention sweep cannot also turn off an unrelated table-size bound
+// (#1425).
+func (s *SweepJob) tickEventCapOnly(ctx context.Context) {
+	start := s.clock()
+	n, err := s.enforceEventCap(ctx)
+	took := time.Since(start)
+
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Error("sweep: event cap enforcement failed (took %s): %v", took, err)
+		}
+		return
+	}
+
+	if s.logger != nil {
+		if n > 0 {
+			s.logger.Info("sweep: purged %d events over the %d-row cap (took %s)", n, s.eventMaxRows, took)
+		} else {
+			s.logger.Debug("sweep: registry_events under the %d-row cap (took %s)", s.eventMaxRows, took)
 		}
 	}
 }
@@ -577,10 +695,17 @@ func (s *SweepJob) purgeOneAgent(ctx context.Context, a *ent.Agent, threshold ti
 	return deleted, nil
 }
 
-// enforceEventCap deletes the oldest events when the table exceeds the
-// internal hard cap (s.eventMaxRows, defaulting to the package constant).
-// Events are governed solely by row count, not age.
+// enforceEventCap deletes the oldest events when the table exceeds the row
+// cap (s.eventMaxRows, from MCP_MESH_EVENT_MAX_ROWS, defaulting to the package
+// constant). Events are governed solely by row count, not age.
+//
+// A non-positive cap means the operator deliberately disabled it; without this
+// guard a cap of 0 would delete every row rather than keeping none bounded.
 func (s *SweepJob) enforceEventCap(ctx context.Context) (int, error) {
+	if s.eventMaxRows <= 0 {
+		return 0, nil
+	}
+
 	count, err := s.entDB.Client.RegistryEvent.Query().Count(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("count events: %w", err)

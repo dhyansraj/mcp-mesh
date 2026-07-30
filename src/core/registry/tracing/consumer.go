@@ -123,6 +123,50 @@ type StreamConsumerConfig struct {
 	Retention time.Duration
 }
 
+// Consumer-group housekeeping thresholds (#1424).
+//
+// These are timing thresholds for a reclamation loop that runs
+// unconditionally, not retention/memory trade-offs, so they are internal
+// constants rather than env knobs — the bound itself (the PEL does not grow,
+// dead consumers do not accumulate) is never off.
+//
+//   - pelMinIdle: how long a delivered-but-unacked entry must sit in the
+//     Pending Entries List before another read may reclaim it. In-band
+//     processing is sub-millisecond and the slowest path (a blocking OTLP
+//     export) is seconds, so 5 minutes cannot reclaim genuinely in-flight
+//     work; a spurious reclaim would cost a duplicate export, never a lost
+//     span.
+//   - pelMaxDeliveries: after this many delivery attempts an entry is treated
+//     as a poison pill — ACKed and logged instead of being retried forever.
+//   - pelReclaimBatch: entries examined per pass. A large backlog drains at
+//     pelReclaimBatch per maintenanceTickInterval, which is deliberate: the
+//     stream trim retires the underlying entries anyway, so there is no reason
+//     to spend an unbounded pass reclaiming them.
+//   - consumerIdleTimeout: how long a consumer entry may sit with zero pending
+//     messages and no reads before XGROUP DELCONSUMER removes it. This is what
+//     retires the `registry-<hostname>-<pid>` entry left behind by every pod
+//     restart.
+//   - maintenanceTickInterval: how often the housekeeping pass runs.
+//   - pelAckTimeout: bounds a single per-message ACK. Each successfully
+//     reprocessed message gets its own ACK deadline instead of sharing the
+//     pass-wide one — a pass reclaims up to pelReclaimBatch messages with a
+//     processMessage between every ACK, so a slow batch would exhaust a shared
+//     deadline and strand already-processed messages unACKed in the PEL, to be
+//     reclaimed and reprocessed forever.
+const (
+	pelMinIdle              = 5 * time.Minute
+	pelMaxDeliveries        = 5
+	pelReclaimBatch         = 100
+	consumerIdleTimeout     = 1 * time.Hour
+	maintenanceTickInterval = 1 * time.Minute
+	pelAckTimeout           = 5 * time.Second
+)
+
+// pelBatchTimeout bounds one reclaim pass's Redis round-trips (XPENDING,
+// XCLAIM, the poison-pill ACK). var rather than const only so tests can shrink
+// it; production never reassigns it.
+var pelBatchTimeout = 10 * time.Second
+
 // NewStreamConsumer creates a new Redis Streams consumer for trace events
 // This never fails - it stores config and attempts connection in background
 func NewStreamConsumer(config *StreamConsumerConfig, processor TraceEventProcessor) (*StreamConsumer, error) {
@@ -198,8 +242,220 @@ func (sc *StreamConsumer) Start() error {
 	sc.wg.Add(1)
 	go sc.connectionManager()
 
+	// Consumer-group housekeeping (PEL reclaim + dead-consumer reap). Runs
+	// independently of retention/trimming so it is never disabled.
+	sc.wg.Add(1)
+	go sc.maintenanceLoop()
+
 	sc.logger.Println("Consumer started (connection manager running in background)")
 	return nil
+}
+
+// maintenanceLoop periodically reclaims stuck PEL entries and removes
+// consumer-group entries left behind by previous processes. Both operations
+// no-op when disconnected; the next tick retries.
+func (sc *StreamConsumer) maintenanceLoop() {
+	defer sc.wg.Done()
+
+	ticker := time.NewTicker(maintenanceTickInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-sc.ctx.Done():
+			return
+		case <-ticker.C:
+			sc.runMaintenance()
+		}
+	}
+}
+
+// runMaintenance performs one housekeeping pass. Ordered so PEL entries are
+// reclaimed off dead consumers BEFORE those consumers are deleted — deleting a
+// consumer that still owns pending entries discards them.
+func (sc *StreamConsumer) runMaintenance() {
+	if reclaimed, dropped, err := sc.ReclaimPending(); err != nil {
+		sc.logger.Printf("Warning: PEL reclaim failed: %v (will retry in %s)", err, maintenanceTickInterval)
+	} else if reclaimed > 0 || dropped > 0 {
+		sc.logger.Printf("PEL maintenance: reclaimed %d stuck entries, dropped %d past %d delivery attempts",
+			reclaimed, dropped, pelMaxDeliveries)
+	}
+
+	if reaped, err := sc.ReapIdleConsumers(); err != nil {
+		sc.logger.Printf("Warning: idle-consumer reap failed: %v (will retry in %s)", err, maintenanceTickInterval)
+	} else if reaped > 0 {
+		sc.logger.Printf("Removed %d consumer-group entries idle longer than %s", reaped, consumerIdleTimeout)
+	}
+}
+
+// ReclaimPending re-processes entries stuck in the group's Pending Entries
+// List for longer than pelMinIdle, and permanently ACKs (dropping) any that
+// have already been delivered pelMaxDeliveries times.
+//
+// Without this, an entry whose processing fails is logged, skipped, never
+// ACKed and never re-read — XREADGROUP with ">" only ever returns
+// never-delivered entries — so it sits in the PEL forever (#1424).
+//
+// Returns (reclaimed, dropped, err). No-ops when disconnected.
+func (sc *StreamConsumer) ReclaimPending() (int, int, error) {
+	return sc.reclaimPendingWithIdle(pelMinIdle)
+}
+
+// reclaimPendingWithIdle is ReclaimPending with an explicit idle threshold, so
+// tests can exercise the reclaim path without waiting pelMinIdle.
+func (sc *StreamConsumer) reclaimPendingWithIdle(minIdle time.Duration) (int, int, error) {
+	sc.mu.RLock()
+	client := sc.client
+	state := sc.connectionState
+	sc.mu.RUnlock()
+
+	if !sc.enabled || client == nil || state != StateConnected {
+		return 0, 0, nil
+	}
+
+	ctx, cancel := context.WithTimeout(sc.ctx, pelBatchTimeout)
+	defer cancel()
+
+	pending, err := client.XPendingExt(ctx, &redis.XPendingExtArgs{
+		Stream: sc.streamName,
+		Group:  sc.consumerGroup,
+		Idle:   minIdle,
+		Start:  "-",
+		End:    "+",
+		Count:  pelReclaimBatch,
+	}).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return 0, 0, nil
+		}
+		return 0, 0, fmt.Errorf("XPENDING on %s/%s: %w", sc.streamName, sc.consumerGroup, err)
+	}
+	if len(pending) == 0 {
+		return 0, 0, nil
+	}
+
+	var (
+		retryIDs []string
+		dropIDs  []string
+	)
+	for _, p := range pending {
+		if p.RetryCount >= pelMaxDeliveries {
+			dropIDs = append(dropIDs, p.ID)
+			continue
+		}
+		retryIDs = append(retryIDs, p.ID)
+	}
+
+	// Poison pills: acknowledge and log rather than leaving them pending
+	// forever. The entry itself stays in the stream until XTRIM retires it,
+	// so it is still visible to an operator inspecting the stream.
+	dropped := 0
+	if len(dropIDs) > 0 {
+		if err := client.XAck(ctx, sc.streamName, sc.consumerGroup, dropIDs...).Err(); err != nil {
+			return 0, 0, fmt.Errorf("XACK poison-pill entries: %w", err)
+		}
+		dropped = len(dropIDs)
+		sc.logger.Printf("Dropped %d trace entries after %d failed delivery attempts (IDs: %v)",
+			dropped, pelMaxDeliveries, dropIDs)
+	}
+
+	reclaimed := 0
+	if len(retryIDs) > 0 {
+		msgs, err := client.XClaim(ctx, &redis.XClaimArgs{
+			Stream:   sc.streamName,
+			Group:    sc.consumerGroup,
+			Consumer: sc.consumerName,
+			MinIdle:  minIdle,
+			Messages: retryIDs,
+		}).Result()
+		if err != nil && err != redis.Nil {
+			return 0, dropped, fmt.Errorf("XCLAIM stuck entries: %w", err)
+		}
+
+		for _, m := range msgs {
+			if perr := sc.processMessage(m); perr != nil {
+				// Leave it pending; the delivery counter was just bumped by
+				// XCLAIM, so it converges on the poison-pill path above.
+				sc.logger.Printf("ERROR: reclaimed message %s failed again: %v", m.ID, perr)
+				continue
+			}
+			// Deliberately NOT the pass-wide ctx: this ACK is downstream of
+			// processMessage, so on a slow batch the shared deadline would
+			// already be spent and the message would stay in the PEL despite
+			// having been processed — reclaimed and reprocessed on every
+			// subsequent pass, forever.
+			ackCtx, ackCancel := context.WithTimeout(sc.ctx, pelAckTimeout)
+			aerr := client.XAck(ackCtx, sc.streamName, sc.consumerGroup, m.ID).Err()
+			ackCancel()
+			if aerr != nil {
+				sc.logger.Printf("WARN: failed to acknowledge reclaimed message %s: %v", m.ID, aerr)
+				continue
+			}
+			reclaimed++
+		}
+	}
+
+	return reclaimed, dropped, nil
+}
+
+// ReapIdleConsumers removes consumer-group entries that hold no pending
+// messages and have been idle longer than consumerIdleTimeout. The consumer
+// name embeds hostname+PID, so without this every process restart leaves a
+// permanent entry in the group (#1424).
+//
+// Consumers with pending entries are left alone — deleting them would discard
+// those entries. ReclaimPending runs first and moves them to this consumer, so
+// a genuinely dead consumer drains to zero pending and is reaped on a later
+// pass. This consumer never reaps itself.
+//
+// Returns the number of consumers removed. No-ops when disconnected.
+func (sc *StreamConsumer) ReapIdleConsumers() (int, error) {
+	return sc.reapIdleConsumersWithTimeout(consumerIdleTimeout)
+}
+
+// reapIdleConsumersWithTimeout is ReapIdleConsumers with an explicit idle
+// threshold, so tests can exercise the reap path without waiting an hour.
+func (sc *StreamConsumer) reapIdleConsumersWithTimeout(idleTimeout time.Duration) (int, error) {
+	sc.mu.RLock()
+	client := sc.client
+	state := sc.connectionState
+	sc.mu.RUnlock()
+
+	if !sc.enabled || client == nil || state != StateConnected {
+		return 0, nil
+	}
+
+	ctx, cancel := context.WithTimeout(sc.ctx, 10*time.Second)
+	defer cancel()
+
+	consumers, err := client.XInfoConsumers(ctx, sc.streamName, sc.consumerGroup).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("XINFO CONSUMERS on %s/%s: %w", sc.streamName, sc.consumerGroup, err)
+	}
+
+	reaped := 0
+	for _, c := range consumers {
+		if c.Name == sc.consumerName {
+			continue
+		}
+		if c.Pending > 0 {
+			continue
+		}
+		if c.Idle < idleTimeout {
+			continue
+		}
+		if err := client.XGroupDelConsumer(ctx, sc.streamName, sc.consumerGroup, c.Name).Err(); err != nil {
+			sc.logger.Printf("WARN: failed to delete idle consumer %s: %v", c.Name, err)
+			continue
+		}
+		sc.logger.Printf("Deleted consumer-group entry %s (idle %s, 0 pending)", c.Name, c.Idle)
+		reaped++
+	}
+
+	return reaped, nil
 }
 
 // connectionManager handles Redis connection with retry logic
@@ -632,7 +888,9 @@ func (sc *StreamConsumer) processNextBatch() error {
 		return fmt.Errorf("not connected")
 	}
 
-	// Read from consumer group (pending messages first, then new ones)
+	// Read NEVER-DELIVERED messages only (">"). Entries already delivered to
+	// some consumer live in the group's PEL and are recovered by
+	// ReclaimPending on the maintenance loop, not here.
 	args := &redis.XReadGroupArgs{
 		Group:    sc.consumerGroup,
 		Consumer: sc.consumerName,
