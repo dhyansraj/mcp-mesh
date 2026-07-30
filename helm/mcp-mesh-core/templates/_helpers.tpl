@@ -21,9 +21,17 @@ nameOverride/fullnameOverride desyncing this default derivation.
 {{- end }}
 
 {{/*
-Name of the auto-generated Grafana admin Secret, for NOTES output. Source of
-truth: "<fullname>-secret" in helm/mcp-mesh-grafana/templates/secret.yaml
-(+ "mcp-mesh-grafana.fullname" in that chart's _helpers.tpl). Keep in sync.
+Name of the auto-generated Grafana admin Secret, for NOTES output. The source
+of truth is "mcp-mesh-grafana.secretName" (+ "mcp-mesh-grafana.fullname") in
+helm/mcp-mesh-grafana/templates/_helpers.tpl; the umbrella cannot call subchart
+helpers, so this reproduces only its RELEASE-NAME branch.
+
+The two therefore drift as soon as the grafana subchart gets a nameOverride /
+fullnameOverride: that renames the real Secret while this copy keeps the
+literal "mcp-mesh-grafana", and the retrieval command printed in NOTES returns
+NotFound. Nothing catches that — unlike postgres, this chart has neither a
+guard nor a generatedSecretName escape hatch (only NOTES text is affected, so
+no workload breaks). Keep the derivations in sync by hand when either changes.
 */}}
 {{- define "mcp-mesh-core.grafanaSecretName" -}}
 {{- if contains "mcp-mesh-grafana" .Release.Name -}}

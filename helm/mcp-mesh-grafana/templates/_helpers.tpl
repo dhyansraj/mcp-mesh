@@ -51,6 +51,41 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
+Name of the chart-managed Secret holding the admin password (explicit
+grafana.config.adminPassword or the auto-generated one, key: admin-password).
+Consumed by secret.yaml, the Deployment's secretKeyRef, and this chart's
+NOTES. The mcp-mesh-core umbrella cannot call subchart helpers and reproduces
+the release-name branch of this name in "mcp-mesh-core.grafanaSecretName" —
+see the caveat there; it does not follow nameOverride/fullnameOverride.
+*/}}
+{{- define "mcp-mesh-grafana.secretName" -}}
+{{- printf "%s-secret" (include "mcp-mesh-grafana.fullname" .) -}}
+{{- end }}
+
+{{/*
+Guard for grafana.config.generatedSecret=false. That flag is enforced HERE and
+nowhere else: secret.yaml never reads it, so with an explicit adminPassword the
+chart-managed Secret still renders (it must — the Deployment references it) and
+the value is stable per render either way. What the flag buys is refusing the
+one non-deterministic case: no credential at all, where secret.yaml would
+invent a random password (lookup returns nothing without a cluster, so every
+GitOps render rotates it). Turning that into a render-time error is the
+GitOps-safe posture. Failing here rather than emitting nothing also avoids a
+Deployment referencing a Secret that never exists (CreateContainerConfigError
+at pod start, no template error). Invoked unconditionally from the deployment.
+
+--set-string yields the STRING "false", which is truthy in a template `if` —
+compare stringified so both spellings disable generation.
+*/}}
+{{- define "mcp-mesh-grafana.validateCredentialSource" -}}
+{{- $cfg := .Values.grafana.config | default dict -}}
+{{- $disabled := has (lower (printf "%v" (dig "generatedSecret" true $cfg))) (list "false" "0" "off" "no") -}}
+{{- if and $disabled (not $cfg.adminPassword) (not $cfg.existingSecret) -}}
+{{- fail "grafana.config.generatedSecret=false requires grafana.config.adminPassword or grafana.config.existingSecret: with generation disabled nothing creates the admin-password Secret, and Grafana's Deployment would reference one that does not exist. Set a credential (existingSecret keeps the password out of your values), or re-enable generatedSecret" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Render the image reference as [registry/]repository:tag. The registry prefix
 resolves as grafana.image.registry > global.imageRegistry > "" (implicit Docker Hub).
 The repository path is preserved — mirror images to the same paths in a

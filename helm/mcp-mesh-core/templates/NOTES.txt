@@ -44,9 +44,31 @@ with the database files on the persistent volume.
 Grafana admin password was auto-generated. Retrieve it with:
   kubectl get secret {{ include "mcp-mesh-core.grafanaSecretName" . }} -n {{ .Release.Namespace }} \
     -o jsonpath='{.data.admin-password}' | base64 -d
+The secret is reused on upgrade and, once this chart version has been applied,
+never deleted by Helm (resource-policy: keep): Grafana applies a password only
+on first start, so this secret is the only record of the one it is actually
+running with. Helm reads that policy off the live object, so a release coming
+from a chart that predates the annotation is protected only from the NEXT
+upgrade onward — verify with:
+  kubectl get secret {{ include "mcp-mesh-core.grafanaSecretName" . }} -n {{ .Release.Namespace }} \
+    -o jsonpath='{.metadata.annotations}'
 Grafana applies the generated value on first start only: if this release was
 upgraded from chart <= 2.4.0 with persistence enabled, the previous admin
 password remains active — see the chart README's upgrade notes.
+
+GitOps note: generation uses `lookup`, which needs a live cluster. Rendering
+without one (`helm template | kubectl apply`, Argo CD, Flux) produces a NEW
+random password on every render, so this Secret never converges and syncing it
+rotates the password. In those pipelines point the chart at a pre-created
+secret instead:
+  mcp-mesh-grafana.grafana.config.existingSecret=<secret name>
+  mcp-mesh-grafana.grafana.config.generatedSecret=false
+Adopt that in TWO steps on an existing release, never in the same change as a
+chart bump: the annotation above has to be on the live secret first, or the
+upgrade that sets existingSecret deletes the generated one. Then seal the
+password retrieved above into the new secret — Grafana applies a password only
+on first start, so with persistence enabled any other value has no effect until
+the volume is reset.
 {{- end }}
 {{- /* Only fires on the real remaining hazard: namespaceCreate renders
        global.namespace, which is independent of -n. Uninstall safety itself

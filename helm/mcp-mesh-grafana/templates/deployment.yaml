@@ -1,4 +1,5 @@
 {{- if .Values.grafana.enabled }}
+{{- include "mcp-mesh-grafana.validateCredentialSource" . -}}
 {{- /* Migration guard: grafana.securityContext used to be the POD security
        context (it carried fsGroup). It is now the CONTAINER security context
        and pod-level settings live under grafana.podSecurityContext — an old
@@ -57,7 +58,7 @@ spec:
         - name: GF_SECURITY_ADMIN_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: {{ include "mcp-mesh-grafana.fullname" . }}-secret
+              name: {{ include "mcp-mesh-grafana.secretName" . }}
               key: admin-password
         {{- end }}
         - name: GF_USERS_ALLOW_SIGN_UP
