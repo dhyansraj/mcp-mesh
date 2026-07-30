@@ -137,6 +137,42 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 	}
 }
 
+// Golden corpus sizes.
+//
+// #1409: the two corpus tests below used to report what they had measured via
+// t.Logf, so the figures quoted in #1392 and in the v3.3.2 release notes (83
+// corrupted code spans, 432 unstyled list lines) had no in-tree anchor —
+// nothing failed when they changed. They had already drifted: the list-line
+// figure was exactly 432 at the commit that fixed #1392 and is 433 today,
+// because two docs PRs added content afterwards.
+//
+// Exact matches, not floors. A floor cannot tell you the corpus SHRANK, and a
+// topic quietly dropping out of ListGuides is the one failure that would gut
+// every corpus test in this file while leaving them green.
+//
+// A docs change that moves these is expected to move them — update the
+// constant in the same commit and check the delta is the size you intended.
+const (
+	wantInlineCodeSpans = 1605
+	wantListCodeSpans   = 488
+	wantMarkupListLines = 433
+)
+
+// assertCorpusSize replaces the t.Logf these tests used to end on.
+func assertCorpusSize(t *testing.T, what string, got, want int) {
+	t.Helper()
+	if got == want {
+		t.Logf("verified %d %s across the man corpus", got, what)
+		return
+	}
+	t.Errorf("man corpus holds %d %s, want %d (delta %+d).\n"+
+		"If a docs change moved this, update the golden in renderer_test.go in "+
+		"the same commit and confirm the delta is the size you intended. A "+
+		"large drop usually means a topic stopped being listed, which would "+
+		"silently shrink every corpus assertion here.",
+		got, what, want, got-want)
+}
+
 // TestStyleInlineCorpus renders every shipped man page and asserts that the
 // content of every source code span survives verbatim into the output. Any
 // bold/italic/link escape injected into a code span breaks this.
@@ -176,7 +212,7 @@ func TestStyleInlineCorpus(t *testing.T) {
 	if checked == 0 {
 		t.Fatal("no inline code spans found in man corpus; test is not exercising anything")
 	}
-	t.Logf("verified %d inline code spans across the man corpus", checked)
+	assertCorpusSize(t, "inline code spans", checked, wantInlineCodeSpans)
 }
 
 const (
@@ -338,7 +374,52 @@ func TestRenderStyledCorpusListItems(t *testing.T) {
 	if checked == 0 {
 		t.Fatal("no list-item code spans found in man corpus; test is not exercising anything")
 	}
-	t.Logf("verified %d list-item inline code spans across the man corpus", checked)
+	assertCorpusSize(t, "list-item inline code spans", checked, wantListCodeSpans)
+}
+
+// TestManCorpusMarkupListLineCount re-derives the figure #1392 and the v3.3.2
+// release notes published — "432 list lines in default-variant topics carry
+// `code` or **bold**" — which was the size of the second defect: those lines
+// were written raw, so their markup rendered literally.
+//
+// It is the one published figure that is still measurable after the fix (the
+// 83 corrupted code spans were a property of the old renderer and cannot be
+// re-derived from a corpus it no longer corrupts), so it is the one worth
+// anchoring. Measured 432 at the commit that fixed #1392 and 433 today.
+//
+// This also guards the coverage the count stands for from the other side: the
+// list branches in renderStyled are what carry these lines through
+// styleInline, and a regression that stopped routing them would leave the two
+// corpus tests above passing on whatever still worked.
+func TestManCorpusMarkupListLineCount(t *testing.T) {
+	lines := 0
+
+	for _, guide := range ListGuides() {
+		_, content, err := GetGuide(guide.Name)
+		if err != nil {
+			t.Fatalf("GetGuide(%q) failed: %v", guide.Name, err)
+		}
+
+		inCodeBlock := false
+		for _, line := range strings.Split(content, "\n") {
+			if strings.HasPrefix(line, "```") {
+				inCodeBlock = !inCodeBlock
+				continue
+			}
+			if inCodeBlock {
+				continue
+			}
+			if !strings.HasPrefix(line, "- ") && !strings.HasPrefix(line, "  - ") &&
+				!numberedListRe.MatchString(line) {
+				continue
+			}
+			if inlineCodeRe.MatchString(line) || strings.Contains(line, "**") {
+				lines++
+			}
+		}
+	}
+
+	assertCorpusSize(t, "list lines carrying inline markup", lines, wantMarkupListLines)
 }
 
 // renderedHeader reproduces the fixed title block Render emits, so tests can

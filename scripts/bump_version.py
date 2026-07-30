@@ -443,6 +443,39 @@ def run_handler(handler: Handler, old: str, new: str, dry_run: bool) -> list[str
 
 
 # ---------------------------------------------------------------------------
+# Shared regex fragments
+#
+# The image-tag handlers below and the coverage guard's `_guard_patterns` must
+# agree on two things: which images are ours, and where our version token ends.
+# They used to state both inline on each side, and drifted — the handlers'
+# boundary admitted letters while the guard's did not, so a 3.3.1 bump would
+# have rewritten `mcpmesh/cli:3.3.1rc1`, a tag the guard does not consider ours
+# (#1427/#1409). Naming them once means the next image name, or the next change
+# to what may follow a version, reaches both sides or neither.
+# ---------------------------------------------------------------------------
+
+# Every mesh image published to Docker Hub.
+_MESH_IMAGES = (
+    r"mcpmesh/(?:registry|python-runtime|typescript-runtime"
+    r"|java-runtime|ui|cli):"
+)
+
+# Scaffold Dockerfile templates only ever build FROM a language runtime — the
+# registry, ui and cli images are services, not bases, and none of the fifteen
+# templates names one. The narrower set is a deliberate scope, not drift, so it
+# is a separate constant rather than a reason to widen the shared one.
+_MESH_RUNTIME_IMAGES = (
+    r"mcpmesh/(?:python-runtime|typescript-runtime|java-runtime):"
+)
+
+# Terminal boundary for a version token: `3.3.1` is not a prefix of `3.3.10`,
+# `3.3.1-rc.2`, `3.3.1.post1`, `3.3.1+build` or `3.3.1rc1`. Letters are
+# excluded alongside `. - +` because a PEP 440 release segment can be followed
+# directly by one, and no handler can produce a correct rewrite of such a tag.
+_VERSION_END = r"(?![\w.\-+])"
+
+
+# ---------------------------------------------------------------------------
 # Handler list (migrated from the original 20 category functions plus new
 # handlers that catch previously-missed stale references).
 # ---------------------------------------------------------------------------
@@ -655,13 +688,20 @@ HANDLERS: list[Handler] = [
     # prose. Narrowing them to the same line would stop legitimate sites from
     # updating. The over-match guard covers these instead: it reads the
     # surrounding lines, so the mesh coordinate one line up still counts.
+    #
+    # Unanchored at the FRONT is a deliberate choice; unbounded at the END was
+    # not. `--version OLD` used to stop at OLD, so a 3.3.1 -> 3.3.2 bump would
+    # have rewritten `--version 3.3.10` into `--version 3.3.20` — the same
+    # prefix corruption the pip pins were fixed for. Every `--version` site in
+    # the tree carries the exact version today, so the boundary changes
+    # nothing now; it is here so the day one does not, nothing breaks quietly.
     Handler(
         name="Documentation (--version OLD)",
         globs=[
             "docs/**/*.md",
             "src/core/cli/man/content/**/*.md",
         ],
-        pattern=r"(--version\s+)OLD",
+        pattern=r"(--version\s+)OLD(?![\w.\-+])",
         replacement=r"\g<1>NEW",
     ),
     # Anchored to the io.mcp-mesh coordinate, exactly like the POM handler.
@@ -730,7 +770,10 @@ HANDLERS: list[Handler] = [
             ".github/workflows/release.yml",
             ".github/workflows/helm-release.yml",
         ],
-        pattern=r"(e\.g\.,\s*v)OLD",
+        # Terminal boundary for the same reason as `--version OLD` above: the
+        # description reads "e.g., v3.3.2)", so nothing follows the version
+        # today, but ending the pattern at OLD is prefix matching either way.
+        pattern=r"(e\.g\.,\s*v)OLD(?![\w.\-+])",
         replacement=r"\g<1>NEW",
     ),
     # --- Category 16: TypeScript Example Packages (@mcpmesh/*) -----------
@@ -748,12 +791,13 @@ HANDLERS: list[Handler] = [
     ),
     # --- Category 17: Docker Example Helm Values --------------------------
     # `--version X` again sits on a continuation line of a `helm upgrade`
-    # command whose chart ref is on the preceding line — left unanchored for
-    # the same reason as the documentation handler.
+    # command whose chart ref is on the preceding line — left unanchored at the
+    # front for the same reason as the documentation handler, and terminally
+    # bounded for the same reason too.
     Handler(
         name="Docker Example Helm Values",
         globs=["examples/docker-examples/agents/*/helm-values.yaml"],
-        pattern=r"(--version\s+)OLD",
+        pattern=r"(--version\s+)OLD(?![\w.\-+])",
         replacement=r"\g<1>NEW",
     ),
     # --- Category 18: Integration Test Artifacts --------------------------
@@ -782,15 +826,22 @@ HANDLERS: list[Handler] = [
     Handler(
         name="Docker Image Tags (Scaffold Dockerfile.tmpl)",
         globs=["cmd/meshctl/templates/*/*/Dockerfile.tmpl"],
-        pattern=(
-            r"(mcpmesh/(?:python-runtime|typescript-runtime"
-            r"|java-runtime):)OLD(?![\d.\-+])"
-        ),
+        pattern="(" + _MESH_RUNTIME_IMAGES + ")OLD" + _VERSION_END,
         replacement=r"\g<1>NEW",
     ),
     # --- NEW: Docker tags in markdown (man content + docs + helm READMEs)
-    # Pattern uses (?![\d.\-+]) negative lookahead so `:1.3.1` doesn't match
-    # the prefix of `:1.3.10`, `:1.3.1-rc.2`, `:1.3.1.0`, or `:1.3.1+build`.
+    # The image-tag handlers share the `(?![\w.\-+])` terminal boundary so
+    # `:1.3.1` doesn't match the prefix of `:1.3.10`, `:1.3.1-rc.2`, `:1.3.1.0`
+    # or `:1.3.1+build`.
+    #
+    # #1427/#1409: it used to read `(?![\d.\-+])`, which admits LETTERS — so a
+    # 3.3.1 bump would have rewritten a `mcpmesh/cli:3.3.1rc1` tag. The
+    # coverage guard has always used the wider form and therefore ignored that
+    # exact tag, so guard and handler disagreed about whether `3.3.1rc1` is our
+    # version. The guard is right: a letter-suffixed tag is a different
+    # version, and no handler can produce a correct rewrite of one. Verified
+    # against every `mcpmesh/<image>:` tag in the tree before widening — the
+    # match set is byte-identical, because no real tag carries a letter suffix.
     Handler(
         name="Docker Image Tags in Markdown",
         globs=[
@@ -799,10 +850,7 @@ HANDLERS: list[Handler] = [
             "helm/*/README.md",
         ],
         excludes=["docs/downloads/**"],
-        pattern=(
-            r"(mcpmesh/(?:registry|python-runtime|typescript-runtime"
-            r"|java-runtime|ui|cli):)OLD(?![\d.\-+])"
-        ),
+        pattern="(" + _MESH_IMAGES + ")OLD" + _VERSION_END,
         replacement=r"\g<1>NEW",
     ),
     # --- NEW: Docker tags in example + integration test Dockerfiles ------
@@ -817,10 +865,7 @@ HANDLERS: list[Handler] = [
             "tests/integration/suites/uc20_tutorial/**",
             "**/node_modules/**",
         ],
-        pattern=(
-            r"(FROM mcpmesh/(?:registry|python-runtime|typescript-runtime"
-            r"|java-runtime|ui|cli):)OLD(?![\d.\-+])"
-        ),
+        pattern="(FROM " + _MESH_IMAGES + ")OLD" + _VERSION_END,
         replacement=r"\g<1>NEW",
     ),
     # --- NEW: Docker tags in docker-compose.yml + variants ---------------
@@ -833,10 +878,7 @@ HANDLERS: list[Handler] = [
             "examples/**/docker-compose.*.yml",
         ],
         excludes=["**/node_modules/**"],
-        pattern=(
-            r"(mcpmesh/(?:registry|python-runtime|typescript-runtime"
-            r"|java-runtime|ui|cli):)OLD(?![\d.\-+])"
-        ),
+        pattern="(" + _MESH_IMAGES + ")OLD" + _VERSION_END,
         replacement=r"\g<1>NEW",
     ),
     # --- NEW: Hardcoded image tags inside Go handler source --------------
@@ -847,10 +889,7 @@ HANDLERS: list[Handler] = [
             "src/core/cli/handlers/typescript_handler.go",
             "src/core/cli/handlers/java_handler.go",
         ],
-        pattern=(
-            r"(mcpmesh/(?:registry|python-runtime|typescript-runtime"
-            r"|java-runtime|ui|cli):)OLD(?![\d.\-+])"
-        ),
+        pattern="(" + _MESH_IMAGES + ")OLD" + _VERSION_END,
         replacement=r"\g<1>NEW",
     ),
     # --- NEW: Scaffold help text + scaffold tests + handler tests --------
@@ -863,10 +902,7 @@ HANDLERS: list[Handler] = [
             "src/core/cli/scaffold/compose.go",
             "src/core/cli/scaffold/compose_test.go",
         ],
-        pattern=(
-            r"(mcpmesh/(?:registry|python-runtime|typescript-runtime"
-            r"|java-runtime|ui|cli):)OLD(?![\d.\-+])"
-        ),
+        pattern="(" + _MESH_IMAGES + ")OLD" + _VERSION_END,
         replacement=r"\g<1>NEW",
     ),
     # --- NEW: language_test.go pins the FULL release tag (e.g., :1.3.0) --
@@ -877,10 +913,7 @@ HANDLERS: list[Handler] = [
     Handler(
         name="Language Test Hardcoded Image Tags (full version)",
         globs=["src/core/cli/handlers/language_test.go"],
-        pattern=(
-            r"(mcpmesh/(?:registry|python-runtime|typescript-runtime"
-            r"|java-runtime|ui|cli):)OLD(?![\d.\-+])"
-        ),
+        pattern="(" + _MESH_IMAGES + ")OLD" + _VERSION_END,
         replacement=r"\g<1>NEW",
     ),
 ]
@@ -1070,16 +1103,11 @@ def _guard_patterns(old: str, new: str | None = None) -> list[re.Pattern]:
     o = re.escape(old)
     om = re.escape(to_minor(old))
     op = re.escape(to_pep440(old))
-    img = (
-        r"mcpmesh/(?:registry|python-runtime|typescript-runtime"
-        r"|java-runtime|ui|cli):"
-    )
-    # OLD must be the WHOLE version token, never a prefix of a longer one.
-    # Alphanumerics are excluded alongside `. - +` because a release segment
-    # can be followed directly by a letter: `2.8.0rc1` / `2.8.0b1` are
-    # different versions under PEP 440, and no handler would rewrite them, so
-    # flagging one as a stale `2.8.0` is a survivor the bump cannot clear.
-    boundary = r"(?![\w.\-+])"
+    # The image set and the terminal boundary are the module-level constants
+    # the handlers use, so guard and handlers cannot disagree about which
+    # tags are ours or where our version token ends (#1427/#1409).
+    img = _MESH_IMAGES
+    boundary = _VERSION_END
     patterns = [
         re.compile(img + o + boundary),
         # Optional `[extras]` between the name and the specifier: a pip
@@ -1498,9 +1526,30 @@ def main() -> int:
     cargo_lock = PROJECT_ROOT / "src" / "runtime" / "core" / "Cargo.lock"
     if cargo_lock.exists():
         print()
+        # #1407: this used to say 'cargo generate-lockfile', which re-resolves
+        # the ENTIRE dependency graph rather than refreshing our own version.
+        # Following it shipped six third-party crate moves in v3.2.3 and six
+        # more in v3.3.1 — including the napi chain and cc, which change the
+        # compiled native module — under release notes claiming no runtime
+        # change. Neither bump guard can see it: both only inspect lines
+        # carrying the mesh version, and the churn hides in a ~450-file diff.
         print(
-            "Reminder: run 'cargo generate-lockfile' in src/runtime/core "
-            "to refresh Cargo.lock with the new mcp-mesh-core version"
+            "Reminder: run 'cargo update --package mcp-mesh-core' in "
+            "src/runtime/core to refresh Cargo.lock with the new "
+            "mcp-mesh-core version"
+        )
+        print(
+            "  Do NOT run 'cargo generate-lockfile' — it re-resolves the whole "
+            "dependency graph and silently advances third-party crates (#1407). "
+            "The targeted command reports 'Locking 1 package' and produces a "
+            "one-line diff."
+        )
+
+    if cargo_lock.exists() or chart_lock.exists():
+        print()
+        print(
+            "Then verify both lockfiles moved only mesh versions:\n"
+            "  python3 scripts/check_release_lockfiles.py"
         )
 
     failed = False
