@@ -54,8 +54,11 @@ public class MeshInjectArgumentResolver implements HandlerMethodArgumentResolver
 
     @Override
     public boolean supportsParameter(MethodParameter parameter) {
-        // Support McpMeshTool parameters - with or without @MeshInject
-        return McpMeshTool.class.isAssignableFrom(parameter.getParameterType());
+        // Support McpMeshTool parameters - with or without @MeshInject.
+        // The predicate lives in MeshInjectableSlots (issue #1401) so the
+        // boot-time legacy-shape detector classifies parameters exactly the
+        // way this resolver does, rather than re-deriving the rule.
+        return MeshInjectableSlots.isRouteInjectable(parameter.getParameterType());
     }
 
     @Override

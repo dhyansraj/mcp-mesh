@@ -73,6 +73,11 @@ public class MeshRouteBeanPostProcessor implements BeanPostProcessor {
             // Enrich dependency specs with generic return type info from method parameters
             enrichDependencyReturnTypes(method, deps);
 
+            // Issue #1401: report handlers whose bindings would change when
+            // @MeshRoute moves from name-based to positional pairing. Warning
+            // only — this PR changes no binding behaviour.
+            MeshLegacyBindingDetector.inspectRoute(method, deps);
+
             // Register each HTTP method/path combination
             String handlerMethodId = targetClass.getName() + "." + method.getName();
             MeshRouteRegistry.RouteMetadata metadata = new MeshRouteRegistry.RouteMetadata(
