@@ -12,6 +12,8 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -135,6 +137,76 @@ class MeshToolWrapperRegistryOverloadTest {
     }
 
     // ─────────────────────────────────────────────────────────────────
+    // Replacement must not strand the capability index
+    // ─────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("A replacement that changes capability releases the old capability key")
+    void changedCapabilityReleasesTheOldKey() throws Exception {
+        MeshToolWrapperRegistry registry = registry();
+        // A null-Method wrapper is the ONLY shape that reaches this: the
+        // overload guard rejects a different Method on an existing funcId, and
+        // an equal Method carries the same @MeshTool annotation, so production
+        // cannot change a capability across a replacement.
+        MeshToolWrapper stale = nullMethodWrapper(
+            FUNC_ID, new OverloadedAnalyzer(), stringOverload(), "analyze_string");
+        MeshToolWrapper fresh = nullMethodWrapper(
+            FUNC_ID, new OverloadedAnalyzer(), stringOverload(), "analyze_int");
+        registry.registerWrapper(stale);
+        registry.registerWrapper(fresh);
+
+        assertNull(registry.getHandlerByCapability("analyze_string"),
+            "the replaced wrapper must not still answer under the capability it "
+                + "no longer declares");
+        assertFalse(registry.hasCapability("analyze_string"),
+            "and it must not still be REPORTED as an owned capability");
+        assertSame(fresh, registry.getHandlerByCapability("analyze_int"),
+            "the replacement's own capability must resolve to it");
+    }
+
+    @Test
+    @DisplayName("Releasing the old key must not clobber an unrelated owner of that capability")
+    void changedCapabilityDoesNotClobberAnUnrelatedOwner() throws Exception {
+        MeshToolWrapperRegistry registry = registry();
+        String otherFuncId = OverloadedAnalyzer.class.getName() + ".other";
+        MeshToolWrapper stale = nullMethodWrapper(
+            FUNC_ID, new OverloadedAnalyzer(), stringOverload(), "analyze_string");
+        // An UNRELATED wrapper (different funcId) takes ownership of the very
+        // capability 'stale' used to hold...
+        MeshToolWrapper unrelated = nullMethodWrapper(
+            otherFuncId, new OverloadedAnalyzer(), stringOverload(), "analyze_string");
+        MeshToolWrapper fresh = nullMethodWrapper(
+            FUNC_ID, new OverloadedAnalyzer(), stringOverload(), "analyze_int");
+        registry.registerWrapper(stale);
+        registry.registerWrapper(unrelated);
+
+        // ...and replacing 'stale' must not evict it. An unconditional
+        // remove(previousCapability) would — the release has to be conditional
+        // on the entry still pointing at the wrapper being replaced.
+        registry.registerWrapper(fresh);
+
+        assertSame(unrelated, registry.getHandlerByCapability("analyze_string"),
+            "the capability's current owner is a different wrapper — replacing an "
+                + "unrelated funcId must leave it alone");
+        assertSame(fresh, registry.getHandlerByCapability("analyze_int"));
+    }
+
+    @Test
+    @DisplayName("A replacement keeping the same capability still replaces under it")
+    void sameCapabilityReplacementStillReplaces() throws Exception {
+        MeshToolWrapperRegistry registry = registry();
+        MeshToolWrapper stale = wrapper(new OverloadedAnalyzer(), stringOverload(), "analyze_string");
+        MeshToolWrapper fresh = wrapper(new OverloadedAnalyzer(), stringOverload(), "analyze_string");
+        registry.registerWrapper(stale);
+        registry.registerWrapper(fresh);
+
+        assertTrue(registry.hasCapability("analyze_string"));
+        assertSame(fresh, registry.getHandlerByCapability("analyze_string"),
+            "the ordinary same-capability replacement must be untouched by the "
+                + "old-key release");
+    }
+
+    // ─────────────────────────────────────────────────────────────────
     // Harness
     // ─────────────────────────────────────────────────────────────────
 
@@ -149,7 +221,12 @@ class MeshToolWrapperRegistryOverloadTest {
 
     /** A handler that reports no {@link Method} — e.g. a non-{@code @MeshTool} handler. */
     private static MeshToolWrapper nullMethodWrapper(Object bean, Method method, String capability) {
-        return new MeshToolWrapper(FUNC_ID, capability, "test", bean, method,
+        return nullMethodWrapper(FUNC_ID, bean, method, capability);
+    }
+
+    private static MeshToolWrapper nullMethodWrapper(
+            String funcId, Object bean, Method method, String capability) {
+        return new MeshToolWrapper(funcId, capability, "test", bean, method,
                 List.of(), JsonMapper.builder().build()) {
             @Override
             public Method getMethod() {

@@ -115,7 +115,9 @@ public class MeshToolWrapperRegistry {
         // Two DIFFERENT declarations must never share a funcId (issue #1448).
         // Checked HERE, immediately before the put that would evict the first
         // one — this is the only point that sees both declarations.
-        assertNotAnOverload(funcId, wrapper);
+        MeshToolWrapper previous = wrappers.get(funcId);
+        assertNotAnOverload(funcId, previous, wrapper);
+        releaseReplacedCapability(previous, capability);
 
         // Store in wrapper maps (for dependency updates)
         wrappers.put(funcId, wrapper);
@@ -198,8 +200,7 @@ public class MeshToolWrapperRegistry {
      * <p>A {@code null} Method carries no identity to compare, so it falls back
      * to the replacing behaviour rather than guessing.
      */
-    private void assertNotAnOverload(String funcId, MeshToolWrapper incoming) {
-        MeshToolWrapper previous = wrappers.get(funcId);
+    private void assertNotAnOverload(String funcId, MeshToolWrapper previous, MeshToolWrapper incoming) {
         if (previous == null) {
             return;
         }
@@ -219,6 +220,45 @@ public class MeshToolWrapperRegistry {
                 + "injected into the other. @MeshTool has no name attribute to tell them "
                 + "apart: rename one of the methods, or move one to a separate class or agent.",
             funcId, previousMethod, incomingMethod));
+    }
+
+    /**
+     * Drop the capability key a replaced wrapper owned, when the replacement
+     * declares a DIFFERENT one.
+     *
+     * <p>{@link #handlersByCapability} is the one index {@link #registerWrapper}
+     * writes that is NOT keyed by funcId, so a bare {@code put} cannot displace
+     * the replaced wrapper's own entry: the old capability keeps pointing at the
+     * wrapper that was just superseded, and {@link #getHandlerByCapability},
+     * {@link #hasCapability} and {@link #getHandlersByCapability} go on serving
+     * and reporting it.
+     *
+     * <p><b>Not reachable in production today.</b> {@link #registerWrapper} has
+     * one production caller ({@code MeshToolBeanPostProcessor}), which always
+     * builds the wrapper from a scanned {@link Method};
+     * {@link #assertNotAnOverload} rejects a different Method on an existing
+     * funcId, and an EQUAL Method carries the same {@code @MeshTool} annotation,
+     * so the capability cannot change across a replacement. The path stays open
+     * only for a null-Method wrapper, which production never constructs. It is
+     * closed anyway because the asymmetry itself is the hazard — every other
+     * index honours replacement and this one did not, which is the shape that
+     * produced #1437, #1445 and #1448.
+     *
+     * <p>The removal is conditional on the entry still pointing at the wrapper
+     * being replaced (two-arg {@link java.util.concurrent.ConcurrentHashMap#remove(Object, Object)};
+     * {@code MeshToolWrapper} does not override {@code equals}, so the match is
+     * identity). An unconditional {@code remove(previousCapability)} would evict
+     * a legitimate, unrelated wrapper that owns that capability now.
+     */
+    private void releaseReplacedCapability(MeshToolWrapper previous, String capability) {
+        if (previous == null) {
+            return;
+        }
+        String previousCapability = previous.getCapability();
+        if (previousCapability == null || Objects.equals(previousCapability, capability)) {
+            return;
+        }
+        handlersByCapability.remove(previousCapability, previous);
     }
 
     /**
