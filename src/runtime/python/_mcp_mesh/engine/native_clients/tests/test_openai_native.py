@@ -2376,6 +2376,37 @@ class TestResponsesImageTranslation:
         )
         assert parts[0]["detail"] == detail
 
+    def test_every_detail_the_installed_sdk_accepts_is_forwarded(self):
+        """The allowlist must track the INSTALLED SDK, not a frozen trio.
+
+        ``openai`` is unpinned and this enum grows — 2.52.0 added ``original``
+        to low/high/auto. A hard-coded set silently downgrades a valid caller
+        value to ``auto``. Parametrising over the SDK's own Literal means this
+        test keeps its meaning on whatever version CI resolves.
+        """
+        import typing
+
+        from openai.types.responses import ResponseInputImageParam
+
+        hints = typing.get_type_hints(ResponseInputImageParam, include_extras=True)
+        sdk_details = openai_native._literal_strings(hints["detail"])
+        assert sdk_details, "could not read the SDK's detail Literal"
+        assert sdk_details <= openai_native._valid_image_details()
+
+        for detail in sorted(sdk_details):
+            parts = _translate_user_content(
+                [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://x/y.png", "detail": detail},
+                    }
+                ]
+            )
+            assert parts[0]["detail"] == detail, (
+                f"detail={detail!r} is valid for the installed openai SDK but "
+                "the adapter downgraded it"
+            )
+
     def test_detail_on_part_root_accepted(self):
         parts = _translate_user_content(
             [
@@ -2443,6 +2474,57 @@ class TestResponsesImageTranslation:
 # ---------------------------------------------------------------------------
 
 
+def _zero_filled(model_cls, known: dict | None = None) -> dict:
+    """``known`` plus a 0 for every OTHER required field on ``model_cls``.
+
+    Version-robustness for the token-counter models (see ``_sdk_usage``). Reads
+    the required-field set off the INSTALLED SDK rather than hard-coding it, so
+    a newly-added required counter is absorbed automatically.
+
+    Non-int required additions would fail ``model_validate`` — deliberately, and
+    in this one helper rather than across every streaming test.
+    """
+    out = dict(known or {})
+    for name, field in model_cls.model_fields.items():
+        if name not in out and field.is_required():
+            out[name] = 0
+    return out
+
+
+def _sdk_usage(input_tokens: int, output_tokens: int) -> dict:
+    """A ``ResponseUsage`` payload valid for whatever openai version is installed.
+
+    The adapter reads exactly two fields off usage — ``input_tokens`` and
+    ``output_tokens`` (see ``_responses_usage``). The nested ``*_tokens_details``
+    breakdowns are counters it never touches, so pinning their exact field set
+    into fixtures buys zero coverage while coupling the whole streaming suite to
+    one SDK version: ``openai`` is unpinned, and 2.52.0 added a required
+    ``InputTokensDetails.cache_write_tokens`` that broke 16 tests at once on CI
+    while passing locally on 2.14.0.
+
+    So: hard-code only what the adapter actually reads (still fully validated by
+    ``model_validate``, so the fields under test keep their real required-ness),
+    and derive the rest from the installed models. A future counter addition is
+    absorbed here, in ONE place.
+    """
+    from openai.types.responses.response_usage import (
+        InputTokensDetails,
+        OutputTokensDetails,
+        ResponseUsage,
+    )
+
+    return _zero_filled(
+        ResponseUsage,
+        {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+            "input_tokens_details": _zero_filled(InputTokensDetails),
+            "output_tokens_details": _zero_filled(OutputTokensDetails),
+        },
+    )
+
+
 def _sdk_response(
     *,
     status="completed",
@@ -2465,13 +2547,7 @@ def _sdk_response(
         "status": status,
     }
     if usage is not None:
-        payload["usage"] = {
-            "input_tokens": usage[0],
-            "input_tokens_details": {"cached_tokens": 0},
-            "output_tokens": usage[1],
-            "output_tokens_details": {"reasoning_tokens": 0},
-            "total_tokens": usage[0] + usage[1],
-        }
+        payload["usage"] = _sdk_usage(usage[0], usage[1])
     if incomplete_details is not None:
         payload["incomplete_details"] = incomplete_details
     return Response.model_validate(payload)

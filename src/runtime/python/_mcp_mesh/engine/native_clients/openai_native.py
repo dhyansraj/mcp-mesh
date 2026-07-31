@@ -639,10 +639,70 @@ def _translate_response_format_to_text(response_format: Any) -> dict[str, Any]:
     return {"format": response_format}
 
 
-# ``ResponseInputImageParam.detail`` is ``Literal["low","high","auto"]`` and is
-# marked Required in the OpenAI SDK's own TypedDict — always emit one.
-_RESPONSES_IMAGE_DETAILS = frozenset({"low", "high", "auto"})
+# ``ResponseInputImageParam.detail`` is marked Required in the OpenAI SDK's own
+# TypedDict — always emit one.
 _RESPONSES_DEFAULT_IMAGE_DETAIL = "auto"
+# Long-stable trio, used only when SDK introspection is unavailable.
+_RESPONSES_IMAGE_DETAILS_FALLBACK = frozenset({"low", "high", "auto"})
+_RESPONSES_IMAGE_DETAILS_CACHE: frozenset[str] | None = None
+
+
+def _literal_strings(annotation: Any) -> frozenset[str]:
+    """Pull the string members out of a (possibly wrapped) ``Literal``.
+
+    Handles ``Required[Literal[...]]`` / ``Optional[Literal[...]]`` by
+    recursing into type args. Returns an empty set when there is no string
+    Literal to find.
+    """
+    import typing
+
+    args = typing.get_args(annotation)
+    if args and all(isinstance(a, str) for a in args):
+        return frozenset(args)
+    for arg in args:
+        found = _literal_strings(arg)
+        if found:
+            return found
+    return frozenset()
+
+
+def _valid_image_details() -> frozenset[str]:
+    """Accepted ``input_image.detail`` values for the INSTALLED openai SDK.
+
+    Read off ``ResponseInputImageParam``'s own ``Literal`` rather than
+    hard-coded. ``openai`` is an unpinned dependency and this enum GROWS:
+    2.14.0 had ``low``/``high``/``auto``; 2.52.0 added ``original``. A frozen
+    allowlist would silently downgrade a caller's valid ``detail="original"``
+    to ``auto`` — a wrong image fidelity, soft-failed with a misleading WARN.
+
+    Soft-fails to the long-stable trio if the SDK is absent or its layout
+    changes; this is a validator, it must never raise. Cached — the installed
+    SDK cannot change within a process.
+    """
+    global _RESPONSES_IMAGE_DETAILS_CACHE
+    if _RESPONSES_IMAGE_DETAILS_CACHE is not None:
+        return _RESPONSES_IMAGE_DETAILS_CACHE
+
+    details = _RESPONSES_IMAGE_DETAILS_FALLBACK
+    try:
+        import typing
+
+        from openai.types.responses import ResponseInputImageParam
+
+        hints = typing.get_type_hints(ResponseInputImageParam, include_extras=True)
+        found = _literal_strings(hints.get("detail"))
+        if found:
+            details = found
+    except Exception as exc:  # noqa: BLE001 — validator must not raise
+        logger.debug(
+            "Could not introspect ResponseInputImageParam.detail (%s); "
+            "falling back to %s",
+            exc,
+            sorted(_RESPONSES_IMAGE_DETAILS_FALLBACK),
+        )
+
+    _RESPONSES_IMAGE_DETAILS_CACHE = details
+    return details
 
 
 def _translate_image_part(part: dict[str, Any]) -> dict[str, Any]:
@@ -682,11 +742,13 @@ def _translate_image_part(part: dict[str, Any]) -> dict[str, Any]:
             f"got image_url={field!r}"
         )
 
-    if detail is not None and detail not in _RESPONSES_IMAGE_DETAILS:
+    valid_details = _valid_image_details()
+    if detail is not None and detail not in valid_details:
         logger.warning(
             "OpenAI Responses path: unsupported image detail %r "
-            "(expected one of low/high/auto); using %s",
+            "(this openai SDK accepts %s); using %s",
             detail,
+            "/".join(sorted(valid_details)),
             _RESPONSES_DEFAULT_IMAGE_DETAIL,
         )
         detail = None
