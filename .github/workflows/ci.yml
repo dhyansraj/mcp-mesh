@@ -150,6 +150,10 @@ jobs:
         working-directory: src/runtime/typescript
         run: npm install
 
+      - name: Type check TypeScript SDK (Express 4 + 5)
+        working-directory: src/runtime/typescript
+        run: npm run typecheck:all
+
       - name: Run TypeScript tests
         working-directory: src/runtime/typescript
         run: npm test
