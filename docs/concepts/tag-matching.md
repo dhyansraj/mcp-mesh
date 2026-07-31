@@ -117,12 +117,15 @@ Scoring:
 
 ## Tie Breaking
 
-The resolver's tiebreaker is `HighestScoreThenVersion`: candidates are
-sorted by tag-match score (descending) first, then — among candidates with
-the same score — by highest semver version.
+The resolver's tiebreaker is `HighestScoreThenVersion`:
 
-1. **Score** - Highest tag-match score wins
-2. **Version** - Among equal scores, higher semver wins
+1. **Score** — highest tag-match score wins
+2. **Version** — among equal scores, higher semver wins
+3. **Agent ID** — among equal scores and versions, the lowest agent ID wins
+
+Exactly one candidate is selected, and the sort is stable, so an unchanged
+topology resolves the same way every time. See
+[Tiebreaker](audit.md#tiebreaker) for the canonical description.
 
 ## Combining with Versions
 

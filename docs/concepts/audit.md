@@ -17,7 +17,7 @@ When a consumer asks the registry to resolve a dependency, candidates flow throu
 3. **`tags`** — apply required / preferred / excluded tag filters and compute scores. See [Tag Matching](tag-matching.md).
 4. **`version`** — apply semver constraint (`>=2.0.0`, `^1.4`, etc.).
 5. **`schema`** — apply the opt-in schema check. When the consumer didn't ask for schema matching, this stage is a pass-through and `spec.schema_mode` reads `"none"`. See [Schema Matching](schema-matching.md).
-6. **`tiebreaker`** — pick the winner from the surviving set. Currently `HighestScoreFirst` (highest tag-match score, first encountered if tied).
+6. **`tiebreaker`** — pick the winner from the surviving set: highest tag-match score first, then **highest version**, then agent ID for determinism (the newest satisfying version wins).
 
 Each stage records `kept` (survivors) and `evicted` (with a typed reason). The chosen producer is recorded on the `tiebreaker` stage and at the top level of the trace.
 
@@ -91,7 +91,7 @@ Each event's `data` field is an `AuditTrace`:
     },
     { "stage": "schema",     "kept": ["hr-v2:lookup"] },
     { "stage": "tiebreaker", "kept": ["hr-v2:lookup"],
-      "chosen": "hr-v2:lookup", "reason": "HighestScoreFirst" }
+      "chosen": "hr-v2:lookup", "reason": "HighestScoreThenVersion" }
   ],
   "chosen": {
     "agent_id":      "hr-v2",
@@ -139,9 +139,37 @@ Reasons are typed (not freeform strings) so audit consumers can pattern-match. T
 
 ## Tiebreaker
 
-After all filter stages, the surviving candidates are ordered by tag-match score (descending) and the first one wins. The audit records this as `reason: "HighestScoreFirst"` on the tiebreaker stage.
+This section is the canonical description of how the registry picks a winner. Other pages link here rather than restating it.
+
+After all filter stages, the surviving candidates are ordered by:
+
+1. **Tag-match score**, descending — see [Tag Matching](tag-matching.md).
+2. **Version**, highest first — among providers with the same score, the newest satisfying version wins.
+3. **Agent ID**, ascending — a deterministic last resort so a full tie is never arbitrary.
+
+The first candidate wins. The audit records this as `reason: "HighestScoreThenVersion"` on the tiebreaker stage.
+
+The sort is **stable**, so an unchanged topology resolves to the same provider every time. Re-resolution only moves the winner when the topology itself changes — a provider joins or leaves, a health state flips, or a version is deployed.
 
 Configurable tiebreakers (round-robin, latency-aware, etc.) are out of scope for v1 — the audit trail is forward-compatible: future tiebreakers will record their own name in the same `reason` field.
+
+### The registry does not load balance
+
+The registry selects **exactly one winner per dependency**, deterministically. It does not round-robin, and it does not spread calls across providers. Every call through an injected proxy goes to the winner's registered endpoint until the topology changes and the dependency is re-resolved.
+
+Whether calls then reach more than one process is a **deployment** question, decided by what that endpoint resolves to:
+
+| Deployment | Registered endpoint | What happens |
+| --- | --- | --- |
+| `mcp-mesh-agent` Helm chart | Kubernetes Service DNS (`<release>-mcp-mesh-agent.<namespace>`) | kube-proxy spreads calls across the Service's replica pods. The distribution is **Kubernetes'**, not the mesh's. |
+| Raw manifests, Docker, bare metal — no `MCP_MESH_HTTP_HOST` | Auto-detected host address (in Kubernetes, the pod IP) | Every call lands on that one process. Extra replicas register separately and add no throughput to an already-resolved edge. |
+
+The chart sets the Service DNS default via `MCP_MESH_HTTP_HOST` in its ConfigMap. Override it with `agent.advertisedHost` when the default is wrong — a fully qualified `<service>.<namespace>.svc.cluster.local` for cross-namespace consumers, or an external ingress hostname for cross-cluster ones.
+
+Two consequences worth planning around:
+
+- **Adding replicas only adds capacity if the endpoint is a Service.** If the agent advertises a pod IP, a second replica is idle as far as an existing consumer is concerned.
+- **Behind a Service, consecutive calls can land on different pods.** Anything the agent keeps in memory between calls is therefore unsafe — see [In-Process State](in-process-state.md).
 
 ## See Also
 

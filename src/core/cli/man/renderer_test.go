@@ -169,10 +169,17 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // failure on 3.4). Four code spans in one replaced paragraph; still no list
 // line, and the `text` fence labels added in the same change are skipped by
 // these tests, which treat any ``` line as a block delimiter.
+// #1430: +7 / +4 / +7, all in `audit.md`. The tiebreaker prose became the
+// canonical description of resolver selection — a numbered score/version/agent-ID
+// list, plus a "registry does not load balance" section whose two deployment
+// shapes (Service DNS vs auto-detected pod IP) are bullets naming
+// `MCP_MESH_HTTP_HOST` and `agent.advertisedHost`. Bullets, not a table: the
+// renderer passes `|` lines through raw, so table-cell markup would print
+// literally.
 const (
-	wantInlineCodeSpans = 1637
-	wantListCodeSpans   = 488
-	wantMarkupListLines = 433
+	wantInlineCodeSpans = 1644
+	wantListCodeSpans   = 492
+	wantMarkupListLines = 440
 )
 
 // assertCorpusSize replaces the t.Logf these tests used to end on.

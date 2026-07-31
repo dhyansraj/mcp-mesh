@@ -121,7 +121,11 @@ spec:
             # HTTP server binding - bind to all interfaces
             - name: HOST
               value: "0.0.0.0"
-            # 🎯 Kubernetes service discovery - auto-detect from labels
+            # NOT service discovery. No runtime reads SERVICE_NAME or NAMESPACE —
+            # the host the agent advertises to the registry comes from
+            # MCP_MESH_HTTP_HOST in the ConfigMap (agent.advertisedHost, defaulting
+            # to Service DNS). These two are downward-API metadata kept for
+            # operator convenience only; nothing in mesh consumes them.
             - name: SERVICE_NAME
               valueFrom:
                 fieldRef:
@@ -130,7 +134,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            # Fallback pod IP for backward compatibility
+            # Pod IP — read by the runtime for trace/context attribution only
+            # (not for endpoint advertisement; see MCP_MESH_HTTP_HOST above).
             - name: POD_IP
               valueFrom:
                 fieldRef:

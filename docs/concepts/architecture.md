@@ -102,7 +102,7 @@ capability → tags → version → schema → tiebreaker
 - **version** — semver constraint (`>=2.0.0`, `^1.4`, etc.).
 - **schema** — opt-in canonical-shape check on the producer's `outputSchema`. See [Schema Matching](schema-matching.md).
 
-The tiebreaker (`HighestScoreFirst`) picks the winner from the surviving set. Every non-trivial decision is recorded in the registry event log so you can replay it with `meshctl audit` — see [Audit Trail](audit.md).
+The tiebreaker (`HighestScoreThenVersion`) picks **exactly one** winner from the surviving set — score, then highest version, then agent ID. It never round-robins; see [Tiebreaker](audit.md#tiebreaker) for the canonical description and for what that winner's endpoint means when the agent runs multiple replicas. Every non-trivial decision is recorded in the registry event log so you can replay it with `meshctl audit` — see [Audit Trail](audit.md).
 
 ## Service Discovery
 

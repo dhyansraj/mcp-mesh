@@ -136,9 +136,35 @@ Reasons are typed (not freeform strings) so audit consumers can pattern-match. T
 
 ## Tiebreaker
 
-After all filter stages, the surviving candidates are ordered by tag-match score (descending), then by version (highest first), then by agent ID for determinism — the first one wins. So among providers of the same capability and tags, the newest satisfying version is chosen. The audit records this as `reason: "HighestScoreThenVersion"` on the tiebreaker stage.
+This section is the canonical description of how the registry picks a winner. Other topics refer here rather than restating it.
+
+After all filter stages, the surviving candidates are ordered by:
+
+1. **Tag-match score**, descending — see `meshctl man tags`.
+2. **Version**, highest first — among providers with the same score, the newest satisfying version wins.
+3. **Agent ID**, ascending — a deterministic last resort so a full tie is never arbitrary.
+
+The first candidate wins. The audit records this as `reason: "HighestScoreThenVersion"` on the tiebreaker stage.
+
+The sort is **stable**, so an unchanged topology resolves to the same provider every time. Re-resolution only moves the winner when the topology itself changes — a provider joins or leaves, a health state flips, or a version is deployed.
 
 Configurable tiebreakers (round-robin, latency-aware, etc.) are out of scope for v1 — the audit trail is forward-compatible: future tiebreakers will record their own name in the same `reason` field.
+
+## The registry does not load balance
+
+The registry selects **exactly one winner per dependency**, deterministically. It does not round-robin, and it does not spread calls across providers. Every call through an injected proxy goes to the winner's registered endpoint until the topology changes and the dependency is re-resolved.
+
+Whether calls then reach more than one process is a **deployment** question, decided by what that endpoint resolves to:
+
+- **Deployed with the `mcp-mesh-agent` Helm chart** — the agent registers Kubernetes Service DNS (`<release>-mcp-mesh-agent.<namespace>`), so kube-proxy spreads calls across the Service's replica pods. The distribution is **Kubernetes'**, not the mesh's.
+- **Raw manifests, Docker, or bare metal with no `MCP_MESH_HTTP_HOST`** — the agent registers an auto-detected host address (in Kubernetes, its own pod IP), so every call lands on that one process. Extra replicas register separately and add no throughput to an already-resolved edge.
+
+The chart sets the Service DNS default via `MCP_MESH_HTTP_HOST` in its ConfigMap. Override it with `agent.advertisedHost` when the default is wrong — a fully qualified `<service>.<namespace>.svc.cluster.local` for cross-namespace consumers, or an external ingress hostname for cross-cluster ones.
+
+Two consequences worth planning around:
+
+- **Adding replicas only adds capacity if the endpoint is a Service.** If the agent advertises a pod IP, a second replica is idle as far as an existing consumer is concerned.
+- **Behind a Service, consecutive calls can land on different pods.** Anything the agent keeps in memory between calls is therefore unsafe: keep per-call state in the request, and externalize anything that must outlive it.
 
 ## See Also
 
