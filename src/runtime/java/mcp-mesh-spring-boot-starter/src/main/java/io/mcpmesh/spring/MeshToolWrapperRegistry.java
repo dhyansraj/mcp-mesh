@@ -112,6 +112,13 @@ public class MeshToolWrapperRegistry {
         String capability = wrapper.getCapability();
         String methodName = wrapper.getMethodName();
 
+        // Two DIFFERENT declarations must never share a funcId (issue #1448).
+        // Checked HERE, immediately before the put that would evict the first
+        // one — this is the only point that sees both declarations.
+        MeshToolWrapper previous = wrappers.get(funcId);
+        assertNotAnOverload(funcId, previous, wrapper);
+        releaseReplacedCapability(previous, capability);
+
         // Store in wrapper maps (for dependency updates)
         wrappers.put(funcId, wrapper);
         if (wrapper.getMethod() != null) {
@@ -157,6 +164,101 @@ public class MeshToolWrapperRegistry {
 
         log.info("Registered handler: {} (capability: {}, method: {})",
             funcId, capability, methodName);
+    }
+
+    /**
+     * Refuse to boot when two overloaded {@code @MeshTool} methods in ONE class
+     * would share a funcId (issue #1448).
+     *
+     * <p>A funcId is {@code FQCN.methodName} with no parameter types
+     * ({@code MeshToolBeanPostProcessor}), so {@code analyze(String)} and
+     * {@code analyze(int)} on one class compute the same one and the second
+     * registration silently EVICTS the first from every funcId-keyed map here.
+     * Nothing downstream notices: the duplicate-capability guard in
+     * {@link MeshToolRegistry#registerTool} is keyed by capability, so distinct
+     * capabilities walk through it, and the heartbeat still advertises BOTH
+     * tools — the evicted one with no MCP tool behind it. Worse, both advertise
+     * the same {@code function_name}, so the registry merges their dependency
+     * lists under that one key and an in-range {@code dep_index} can wire one
+     * overload's dependency into the other's slot.
+     *
+     * <p>Widening the funcId to include parameter types would not fix it: the
+     * bare method name is the wire name, and it keys three single-valued
+     * namespaces — the MCP SDK tool table, the registry's
+     * {@code dependencies_resolved} map, and {@link #wrappersByMethodName}.
+     * {@code @MeshTool} has no name attribute, so two overloads cannot be given
+     * distinct wire names and the declaration itself has to be rejected.
+     *
+     * <p>The discriminator is the handler {@link Method}, NOT wrapper identity,
+     * mirroring the tolerance {@link #indexBareMethodName} expresses on funcId:
+     * {@link Method#equals} is value-based and includes parameter types, so a
+     * prototype-scoped bean instantiated twice, a context refresh, or a repeated
+     * post-processing pass produces a fresh wrapper for an EQUAL Method and
+     * replaces cleanly, exactly as before (issue #1445). Only a genuinely
+     * different Method — a real overload — throws.
+     *
+     * <p>A {@code null} Method carries no identity to compare, so it falls back
+     * to the replacing behaviour rather than guessing.
+     */
+    private void assertNotAnOverload(String funcId, MeshToolWrapper previous, MeshToolWrapper incoming) {
+        if (previous == null) {
+            return;
+        }
+        Method previousMethod = previous.getMethod();
+        Method incomingMethod = incoming.getMethod();
+        if (previousMethod == null || incomingMethod == null
+                || previousMethod.equals(incomingMethod)) {
+            // Re-registration of the same declaration: replace, as before.
+            return;
+        }
+        throw new IllegalStateException(String.format(
+            "Overloaded @MeshTool methods share the function id '%s': %s and %s. "
+                + "A @MeshTool is advertised on the wire by its bare method name, which "
+                + "keys the MCP tool table, the registry's dependency resolutions and this "
+                + "registry's by-name index — two overloads collapse onto that one name, "
+                + "so one of them is unreachable and a dependency resolved for one can be "
+                + "injected into the other. @MeshTool has no name attribute to tell them "
+                + "apart: rename one of the methods, or move one to a separate class or agent.",
+            funcId, previousMethod, incomingMethod));
+    }
+
+    /**
+     * Drop the capability key a replaced wrapper owned, when the replacement
+     * declares a DIFFERENT one.
+     *
+     * <p>{@link #handlersByCapability} is the one index {@link #registerWrapper}
+     * writes that is NOT keyed by funcId, so a bare {@code put} cannot displace
+     * the replaced wrapper's own entry: the old capability keeps pointing at the
+     * wrapper that was just superseded, and {@link #getHandlerByCapability},
+     * {@link #hasCapability} and {@link #getHandlersByCapability} go on serving
+     * and reporting it.
+     *
+     * <p><b>Not reachable in production today.</b> {@link #registerWrapper} has
+     * one production caller ({@code MeshToolBeanPostProcessor}), which always
+     * builds the wrapper from a scanned {@link Method};
+     * {@link #assertNotAnOverload} rejects a different Method on an existing
+     * funcId, and an EQUAL Method carries the same {@code @MeshTool} annotation,
+     * so the capability cannot change across a replacement. The path stays open
+     * only for a null-Method wrapper, which production never constructs. It is
+     * closed anyway because the asymmetry itself is the hazard — every other
+     * index honours replacement and this one did not, which is the shape that
+     * produced #1437, #1445 and #1448.
+     *
+     * <p>The removal is conditional on the entry still pointing at the wrapper
+     * being replaced (two-arg {@link java.util.concurrent.ConcurrentHashMap#remove(Object, Object)};
+     * {@code MeshToolWrapper} does not override {@code equals}, so the match is
+     * identity). An unconditional {@code remove(previousCapability)} would evict
+     * a legitimate, unrelated wrapper that owns that capability now.
+     */
+    private void releaseReplacedCapability(MeshToolWrapper previous, String capability) {
+        if (previous == null) {
+            return;
+        }
+        String previousCapability = previous.getCapability();
+        if (previousCapability == null || Objects.equals(previousCapability, capability)) {
+            return;
+        }
+        handlersByCapability.remove(previousCapability, previous);
     }
 
     /**

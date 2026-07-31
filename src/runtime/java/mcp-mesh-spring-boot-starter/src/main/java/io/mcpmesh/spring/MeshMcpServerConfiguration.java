@@ -196,17 +196,18 @@ public class MeshMcpServerConfiguration {
      *       so a repeated registrar pass replaces rather than accumulates.</li>
      * </ul>
      *
-     * <p><b>Known limit — overloads in ONE class are not reached.</b> This scans
+     * <p><b>Overloads in ONE class never reach this guard — they are rejected
+     * earlier</b> (issue #1448). This scans
      * {@link MeshToolWrapperRegistry#getAllHandlers()}, which is keyed by funcId,
-     * and a funcId is {@code FQCN.methodName} with no parameter types. Two
-     * overloaded {@code @MeshTool} methods in the same class therefore share a
-     * funcId and the second EVICTS the first from that map before this guard
-     * ever sees it — the collision is real but invisible here. Widening the
-     * funcId is not an option: it is the wire identity the Rust core echoes back
-     * on {@code funcId:dep_N} dependency-resolution events. The narrower
-     * same-class overload case is covered on the registry side by
-     * {@link MeshToolRegistry#registerTool}'s duplicate-capability guard
-     * whenever the overloads also share a capability.
+     * and a funcId is {@code FQCN.methodName} with no parameter types, so two
+     * overloaded {@code @MeshTool} methods in the same class share one and the
+     * second would evict the first from that map before this guard ever sees it.
+     * {@link MeshToolWrapperRegistry#registerWrapper} now refuses that at the
+     * store site. Widening the funcId would not have helped: both overloads
+     * still collapse onto ONE wire name — the bare method name, which keys the
+     * MCP tool table, the registry's {@code dependencies_resolved} map and
+     * {@code wrappersByMethodName} — and {@code @MeshTool} has no name attribute
+     * to separate them.
      *
      * @param handlers every handler about to be registered with the MCP server
      * @throws IllegalStateException naming both colliding declarations
