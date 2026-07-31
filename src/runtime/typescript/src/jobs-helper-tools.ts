@@ -26,6 +26,14 @@ const TOOL_NAME_STATUS = "__mesh_job_status";
 const TOOL_NAME_RESULT = "__mesh_job_result";
 const TOOL_NAME_CANCEL = "__mesh_job_cancel";
 
+/** The framework-reserved helper tool names, for callers that need to
+ *  reconcile them against user-declared tools (issue #1442). */
+export const JOB_HELPER_TOOL_NAMES: readonly string[] = [
+  TOOL_NAME_STATUS,
+  TOOL_NAME_RESULT,
+  TOOL_NAME_CANCEL,
+];
+
 const DESCRIPTIONS: Record<string, string> = {
   [TOOL_NAME_STATUS]:
     "[Framework] Return the latest mesh-registry state for a job_id. " +
@@ -67,6 +75,13 @@ export interface HelperToolMeta {
 export function registerJobHelperTools(
   server: FastMCP,
   registryUrl: string,
+  /**
+   * Helper names a user-declared tool already owns (issue #1442). Registering
+   * over them would make the user's tool unreachable on the wire — fastmcp's
+   * `addTool` filters out the previous entry — while the heartbeat kept
+   * advertising it. Skipped entirely instead: not on the server, not in `meta`.
+   */
+  skipNames: ReadonlySet<string> = new Set(),
 ): Map<string, HelperToolMeta> {
   const meta = new Map<string, HelperToolMeta>();
   if (!registryUrl) {
@@ -100,79 +115,85 @@ export function registerJobHelperTools(
   });
 
   // Status: GET /jobs/{id} via JobProxy.status()
-  try {
-    server.addTool({
-      name: TOOL_NAME_STATUS,
-      description: DESCRIPTIONS[TOOL_NAME_STATUS],
-      parameters: inputParams,
-      execute: async (args: { jobId: string }) => {
-        const proxy = new JobProxy(args.jobId, registryUrl);
-        const snapshot = await proxy.status();
-        return JSON.stringify(snapshot);
-      },
-    });
-    meta.set(TOOL_NAME_STATUS, {
-      capability: TOOL_NAME_STATUS,
-      version: "1.0.0",
-      tags: ["mesh-jobs", "framework"],
-      description: DESCRIPTIONS[TOOL_NAME_STATUS],
-      inputSchema: inputSchemaJson,
-      task: false,
-    });
-  } catch (err) {
-    console.warn(`[mesh-jobs] could not register ${TOOL_NAME_STATUS}:`, err);
+  if (!skipNames.has(TOOL_NAME_STATUS)) {
+    try {
+      server.addTool({
+        name: TOOL_NAME_STATUS,
+        description: DESCRIPTIONS[TOOL_NAME_STATUS],
+        parameters: inputParams,
+        execute: async (args: { jobId: string }) => {
+          const proxy = new JobProxy(args.jobId, registryUrl);
+          const snapshot = await proxy.status();
+          return JSON.stringify(snapshot);
+        },
+      });
+      meta.set(TOOL_NAME_STATUS, {
+        capability: TOOL_NAME_STATUS,
+        version: "1.0.0",
+        tags: ["mesh-jobs", "framework"],
+        description: DESCRIPTIONS[TOOL_NAME_STATUS],
+        inputSchema: inputSchemaJson,
+        task: false,
+      });
+    } catch (err) {
+      console.warn(`[mesh-jobs] could not register ${TOOL_NAME_STATUS}:`, err);
+    }
   }
 
   // Result: same wire as status; helper unwraps just the terminal bits.
-  try {
-    server.addTool({
-      name: TOOL_NAME_RESULT,
-      description: DESCRIPTIONS[TOOL_NAME_RESULT],
-      parameters: inputParams,
-      execute: async (args: { jobId: string }) => {
-        const proxy = new JobProxy(args.jobId, registryUrl);
-        const snapshot = (await proxy.status()) as Record<string, unknown>;
-        return JSON.stringify({
-          status: snapshot.status,
-          result: snapshot.result,
-          error: snapshot.error,
-        });
-      },
-    });
-    meta.set(TOOL_NAME_RESULT, {
-      capability: TOOL_NAME_RESULT,
-      version: "1.0.0",
-      tags: ["mesh-jobs", "framework"],
-      description: DESCRIPTIONS[TOOL_NAME_RESULT],
-      inputSchema: inputSchemaJson,
-      task: false,
-    });
-  } catch (err) {
-    console.warn(`[mesh-jobs] could not register ${TOOL_NAME_RESULT}:`, err);
+  if (!skipNames.has(TOOL_NAME_RESULT)) {
+    try {
+      server.addTool({
+        name: TOOL_NAME_RESULT,
+        description: DESCRIPTIONS[TOOL_NAME_RESULT],
+        parameters: inputParams,
+        execute: async (args: { jobId: string }) => {
+          const proxy = new JobProxy(args.jobId, registryUrl);
+          const snapshot = (await proxy.status()) as Record<string, unknown>;
+          return JSON.stringify({
+            status: snapshot.status,
+            result: snapshot.result,
+            error: snapshot.error,
+          });
+        },
+      });
+      meta.set(TOOL_NAME_RESULT, {
+        capability: TOOL_NAME_RESULT,
+        version: "1.0.0",
+        tags: ["mesh-jobs", "framework"],
+        description: DESCRIPTIONS[TOOL_NAME_RESULT],
+        inputSchema: inputSchemaJson,
+        task: false,
+      });
+    } catch (err) {
+      console.warn(`[mesh-jobs] could not register ${TOOL_NAME_RESULT}:`, err);
+    }
   }
 
   // Cancel: POST /jobs/{id}/cancel via JobProxy.cancel()
-  try {
-    server.addTool({
-      name: TOOL_NAME_CANCEL,
-      description: DESCRIPTIONS[TOOL_NAME_CANCEL],
-      parameters: cancelParams,
-      execute: async (args: { jobId: string; reason?: string }) => {
-        const proxy = new JobProxy(args.jobId, registryUrl);
-        await proxy.cancel(args.reason ?? null);
-        return JSON.stringify({ ok: true, jobId: args.jobId });
-      },
-    });
-    meta.set(TOOL_NAME_CANCEL, {
-      capability: TOOL_NAME_CANCEL,
-      version: "1.0.0",
-      tags: ["mesh-jobs", "framework"],
-      description: DESCRIPTIONS[TOOL_NAME_CANCEL],
-      inputSchema: cancelSchemaJson,
-      task: false,
-    });
-  } catch (err) {
-    console.warn(`[mesh-jobs] could not register ${TOOL_NAME_CANCEL}:`, err);
+  if (!skipNames.has(TOOL_NAME_CANCEL)) {
+    try {
+      server.addTool({
+        name: TOOL_NAME_CANCEL,
+        description: DESCRIPTIONS[TOOL_NAME_CANCEL],
+        parameters: cancelParams,
+        execute: async (args: { jobId: string; reason?: string }) => {
+          const proxy = new JobProxy(args.jobId, registryUrl);
+          await proxy.cancel(args.reason ?? null);
+          return JSON.stringify({ ok: true, jobId: args.jobId });
+        },
+      });
+      meta.set(TOOL_NAME_CANCEL, {
+        capability: TOOL_NAME_CANCEL,
+        version: "1.0.0",
+        tags: ["mesh-jobs", "framework"],
+        description: DESCRIPTIONS[TOOL_NAME_CANCEL],
+        inputSchema: cancelSchemaJson,
+        task: false,
+      });
+    } catch (err) {
+      console.warn(`[mesh-jobs] could not register ${TOOL_NAME_CANCEL}:`, err);
+    }
   }
 
   return meta;

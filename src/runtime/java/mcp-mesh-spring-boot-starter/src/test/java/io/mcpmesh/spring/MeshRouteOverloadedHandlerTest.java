@@ -140,6 +140,14 @@ class MeshRouteOverloadedHandlerTest {
         MeshRouteRegistry.RouteMetadata wide = registry.getByHandlerMethod(
             overload(String.class, McpMeshTool.class, McpMeshTool.class));
 
+        // Issue #1443: three distinctly-mapped handlers are three routes. This
+        // controller is the issue's PROBE-C measurement, which reported four —
+        // the fourth being a phantom GET / whose winner was whichever handler
+        // getDeclaredMethods() happened to hand over last.
+        assertEquals(3, registry.getRouteCount());
+        assertNull(registry.getByRoute("GET", "/"),
+            "no handler is mapped at the controller base path");
+
         assertNotNull(narrow);
         assertNotNull(wide);
         assertEquals(List.of("alpha", "beta"), capabilities(narrow));
@@ -237,6 +245,10 @@ class MeshRouteOverloadedHandlerTest {
         new MeshRouteBeanPostProcessor(registry)
             .postProcessAfterInitialization(new MultiMappedController(), "multiMapped");
 
+        // Exactly two — issue #1443: the scan also registered a phantom
+        // GET <base path> for every handler, so this controller yielded three.
+        assertEquals(2, registry.getRouteCount(),
+            "one handler on two mappings is two routes, not three");
         assertNotNull(registry.getByRoute("GET", "/multi"));
         assertSame(registry.getByRoute("GET", "/multi"), registry.getByRoute("POST", "/multi"),
             "both mappings share ONE metadata instance — that is not a duplicate handler");
