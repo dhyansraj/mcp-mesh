@@ -89,8 +89,26 @@ the annotation is covered from the NEXT upgrade onward.
 
 The bundled PostgreSQL volume behaves the same way for a different reason: it
 is created by the StatefulSet's claim template, which the release does not own.
-Tempo's volume is NOT kept — it is a rolling trace buffer under active
-retention, so uninstall reclaims it.
+Tempo is the deliberate opposite: its trace buffer is an emptyDir by default,
+so there is nothing to keep or reclaim, and a claim it is given explicitly is
+still reclaimed on uninstall — it is under active retention, not durable
+storage.
+{{- end }}
+{{- $tempoSub := index .Values "mcp-mesh-tempo" | default dict }}
+{{- $tempoPersist := dig "tempo" "persistence" (dict) $tempoSub }}
+{{- if and .Values.tempo.enabled ($tempoPersist.enabled | default false) }}
+{{- $retention := dig "tempo" "config" "retention" "1h" $tempoSub }}
+
+Tempo persistence is enabled, so this release owns a ReadWriteOnce claim:
+
+  PersistentVolumeClaim/{{ include "mcp-mesh-core.tempoFullname" . }}-pvc
+
+It is NOT annotated resource-policy: keep — `helm uninstall`, and any upgrade
+that sets mcp-mesh-tempo.tempo.persistence.enabled back to false, deletes it.
+That is deliberate: retention ({{ $retention }}) prunes the volume continuously,
+so what it holds is minutes old and already expiring. The claim also constrains
+rollouts — the outgoing pod must terminate before its replacement is scheduled,
+or the replacement hangs on a Multi-Attach error.
 {{- end }}
 {{- /* Only fires on the real remaining hazard: namespaceCreate renders
        global.namespace, which is independent of -n. Uninstall safety itself

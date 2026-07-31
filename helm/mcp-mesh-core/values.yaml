@@ -297,17 +297,34 @@ mcp-mesh-tempo:
         enabled: true
         prometheusUrl: "http://prometheus:9090/api/v1/write"
 
+      # Tempo's volume is a rolling window sized by these two, not an archive:
+      # blocks are cut every blockDuration and dropped past retention. A live
+      # install held 3.1MB of /var/tempo after 25 hours at these defaults.
       retention: "1h"
       blockDuration: "5m"
 
+    # Off by default: with retention at 1h the volume buffers minutes of traces,
+    # so a claim buys ~3MB of history across a restart in exchange for a
+    # ReadWriteOnce attach on every rollout. Disabled, Tempo uses an emptyDir
+    # and a pod restart costs at most `retention` of buffered traces.
+    #
+    # Turning it on for an existing release is safe. Turning it OFF is what
+    # deletes the claim: the PVC leaves the rendered manifest and Helm reclaims
+    # it on the next `helm upgrade`. Upgrading from a chart that defaulted this
+    # to true does exactly that, once — intended, and bounded by `retention`.
+    # See "Trace storage (Tempo)" in this chart's README.
+    #
+    # size is only read when enabled — see mcp-mesh-tempo/values.yaml for how to
+    # size it against retention, since 5Gi is far larger than 1h of traces needs.
     persistence:
-      enabled: true
+      enabled: false
       size: 5Gi
 
-    # This claim is ReadWriteOnce and Tempo runs a single replica, so the
-    # subchart already defaults to a strategy that terminates the outgoing pod
-    # before scheduling its replacement (RollingUpdate, maxSurge: 0). Nothing
-    # to set here — see mcp-mesh-tempo/values.yaml before overriding.
+    # Tempo runs a single replica, so the subchart defaults to a strategy that
+    # terminates the outgoing pod before scheduling its replacement
+    # (RollingUpdate, maxSurge: 0) — required once persistence above is enabled,
+    # because that claim is ReadWriteOnce. Nothing to set here — see
+    # mcp-mesh-tempo/values.yaml before overriding.
     # Full path: mcp-mesh-tempo.tempo.strategy
 
     resources:

@@ -46,6 +46,16 @@ no workload breaks). Keep the derivations in sync by hand when either changes.
 {{- printf "%s-secret" (include "mcp-mesh-core.grafanaFullname" .) -}}
 {{- end }}
 
+{{/* Same reproduction of the subchart's fullname, same drift caveat, for the
+     tempo claim named in NOTES when persistence is opted back in. */}}
+{{- define "mcp-mesh-core.tempoFullname" -}}
+{{- if contains "mcp-mesh-tempo" .Release.Name -}}
+{{- .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- printf "%s-mcp-mesh-tempo" .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end }}
+
 {{/*
 Removed-key guards. These umbrella-level keys were dead config — no template
 ever consumed them — so a values file still carrying one would silently

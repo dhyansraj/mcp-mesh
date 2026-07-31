@@ -24,8 +24,34 @@ tempo:
       memory: "1Gi"
       cpu: "500m"
 
+  # Off by default: this volume is a rolling buffer, not durable storage. The
+  # `retention` setting below (default 1h) prunes blocks continuously, so the
+  # volume never accumulates — a live install measured 3.1MB of /var/tempo after
+  # 25 hours of uptime, 0.06% of the 5Gi claim below, with the oldest block 31
+  # minutes old. Disabled, Tempo writes its WAL and blocks to an emptyDir and a
+  # pod restart costs at most `retention` of buffered traces.
+  #
+  # The access mode is what made that trade a bad one. A ReadWriteOnce claim on
+  # a single-replica Deployment is the reason the rollout below has to terminate
+  # the outgoing pod before scheduling its replacement: with any maxSurge the
+  # incoming pod can land on another node and hang forever on a Multi-Attach
+  # error. That constraint does not exist for an emptyDir.
+  #
+  # Set enabled: true to keep traces across a pod restart, and read `retention`
+  # and `blockDuration` below before sizing it — the right claim size is a
+  # function of both. `size: 5Gi` is kept as the opt-in default only so that
+  # turning persistence back on does not silently reprovision at a different
+  # size for anyone who already had it; at `retention: "1h"` it is roughly
+  # 1600x the measured working set, and a few hundred Mi is ample. Scale it
+  # from there if you raise retention, not from this number.
+  #
+  # Upgrading a release that had this enabled drops the PersistentVolumeClaim
+  # from the rendered manifest, and Helm deletes it on the next `helm upgrade`.
+  # That is intended — what is lost is at most `retention` of buffered traces —
+  # but it is not reversible: see "Trace storage (Tempo)" in the
+  # mcp-mesh-core chart README before upgrading.
   persistence:
-    enabled: true
+    enabled: false
     size: 5Gi
     storageClass: ""
     accessModes:
@@ -33,25 +59,27 @@ tempo:
 
   # Deployment update strategy. Empty gets the chart's default: RollingUpdate
   # with maxSurge: 0 and maxUnavailable: 1, which terminates the outgoing pod
-  # before scheduling its replacement. That ordering is required, not tuning —
-  # this chart runs a single replica against the ReadWriteOnce volume above, and
-  # with any maxSurge the incoming pod can be scheduled to another node, where
-  # it hangs indefinitely on a Multi-Attach error waiting for a claim the
-  # outgoing pod still holds. On a single-node cluster it mounts instead, which
-  # is worse rather than better: two single-binary Tempo processes briefly write
-  # the same WAL and blocks directory. At one replica there is no availability to
-  # preserve, so the only cost of ordering the swap is a gap in trace ingestion
-  # while the old pod terminates. `type: Recreate` is redundant here — maxSurge:
-  # 0 already orders the swap, and leaving type as RollingUpdate keeps
-  # .spec.strategy freely transitionable on later upgrades.
+  # before scheduling its replacement. That ordering is required, not tuning,
+  # whenever persistence above is enabled — this chart runs a single replica
+  # against a ReadWriteOnce claim, and with any maxSurge the incoming pod can be
+  # scheduled to another node, where it hangs indefinitely on a Multi-Attach
+  # error waiting for a claim the outgoing pod still holds. On a single-node
+  # cluster it mounts instead, which is worse rather than better: two
+  # single-binary Tempo processes briefly write the same WAL and blocks
+  # directory. At one replica there is no availability to preserve, so the only
+  # cost of ordering the swap is a gap in trace ingestion while the old pod
+  # terminates — which is why the default is kept even with persistence off,
+  # where an emptyDir imposes no such constraint. `type: Recreate` is redundant
+  # here — maxSurge: 0 already orders the swap, and leaving type as
+  # RollingUpdate keeps .spec.strategy freely transitionable on later upgrades.
   #
-  # Expect one transient FailedAttachVolume/Multi-Attach event per pod-template
-  # change: Kubernetes issues the scale-down and the scale-up in the same
-  # second, so the replacement is created while the CSI driver is still
-  # detaching the volume from the old node. It clears once the detach completes
-  # — under a minute in practice, bounded by terminationGracePeriodSeconds plus
-  # detach time — and the rollout converges with no intervention. The event is
-  # logged, not silent.
+  # With persistence enabled, expect one transient
+  # FailedAttachVolume/Multi-Attach event per pod-template change: Kubernetes
+  # issues the scale-down and the scale-up in the same second, so the
+  # replacement is created while the CSI driver is still detaching the volume
+  # from the old node. It clears once the detach completes — under a minute in
+  # practice, bounded by terminationGracePeriodSeconds plus detach time — and
+  # the rollout converges with no intervention. The event is logged, not silent.
   #
   # Overrides are deep-merged into the above, so set only the keys you mean to
   # change. Note that maxUnavailable must stay non-zero while maxSurge is 0:
@@ -81,7 +109,13 @@ tempo:
       enabled: true
       prometheusUrl: "http://prometheus:9090/api/v1/write"
 
-    # Retention settings
+    # Retention settings. These two decide how much data /var/tempo ever holds,
+    # and therefore what `persistence.size` above would need to be if you turn
+    # persistence on: blocks are cut every blockDuration and dropped once they
+    # age past retention, so the volume is a rolling window, not an archive.
+    # At these defaults a live install held 3.1MB after 25 hours of uptime.
+    # Raising retention is what makes the volume grow; blockDuration only
+    # changes how coarsely it is pruned.
     retention: "1h"
     blockDuration: "5m"
 
