@@ -78,10 +78,15 @@ public class MeshRouteBeanPostProcessor implements BeanPostProcessor {
             // handler still shaped for the pre-3.4 name-based binding.
             MeshLegacyBindingDetector.inspectRoute(method, deps);
 
-            // Register each HTTP method/path combination
-            String handlerMethodId = targetClass.getName() + "." + method.getName();
+            // Register each HTTP method/path combination.
+            //
+            // Issue #1437: the METHOD is the handler's identity. The registry
+            // derives the "ClassName.methodName" id from it for logs, but keys
+            // on the Method itself — that id omits parameter types, so two
+            // overloaded @MeshRoute handlers share it and the interceptor served
+            // one of them the other's (positional) dependency list.
             MeshRouteRegistry.RouteMetadata metadata = new MeshRouteRegistry.RouteMetadata(
-                handlerMethodId,
+                method,
                 deps,
                 meshRoute.description(),
                 meshRoute.failOnMissingDependency()

@@ -43,8 +43,20 @@ public class MeshLlmRegistry {
     // Registry: functionId -> LlmConfig
     private final Map<String, LlmConfig> configsByFunctionId = new ConcurrentHashMap<>();
 
-    // Registry: method signature -> LlmConfig
-    private final Map<String, LlmConfig> configsByMethod = new ConcurrentHashMap<>();
+    /**
+     * Registry: handler {@link Method} -&gt; LlmConfig.
+     *
+     * <p>Keyed by {@code Method}, not by {@code "Class#methodName"} (issue
+     * #1437): that string omits parameter types, so two overloaded
+     * {@code @MeshLlm} methods in one class collided and the second registration
+     * silently replaced the first — handing one overload the other's provider
+     * selector, prompt and model. Every reader of this map already holds the
+     * {@code Method}, and {@link Method#equals} is value-based over
+     * {@code (declaringClass, name, returnType, parameterTypes)}, so the lookup
+     * key needs no derivation: it is strictly more precise than the string it
+     * replaces, with the same declaring-class component.
+     */
+    private final Map<Method, LlmConfig> configsByMethod = new ConcurrentHashMap<>();
 
     /**
      * Register an @MeshLlm annotated method.
@@ -55,7 +67,6 @@ public class MeshLlmRegistry {
      */
     public void register(Class<?> targetClass, Method method, MeshLlm annotation) {
         String functionId = targetClass.getName() + "." + method.getName();
-        String methodKey = getMethodKey(method);
 
         // v2: direct LLM mode is gone — every @MeshLlm consumer must point
         // providerSelector at a registered @MeshLlmProvider. An empty selector
@@ -89,7 +100,7 @@ public class MeshLlmRegistry {
         );
 
         configsByFunctionId.put(functionId, config);
-        configsByMethod.put(methodKey, config);
+        configsByMethod.put(method, config);
 
         log.info("Registered @MeshLlm: {} (mesh-delegated)", functionId);
     }
@@ -105,14 +116,14 @@ public class MeshLlmRegistry {
      * Get LLM config by method.
      */
     public LlmConfig getByMethod(Method method) {
-        return configsByMethod.get(getMethodKey(method));
+        return method == null ? null : configsByMethod.get(method);
     }
 
     /**
      * Check if a method has @MeshLlm configuration.
      */
     public boolean hasConfig(Method method) {
-        return configsByMethod.containsKey(getMethodKey(method));
+        return method != null && configsByMethod.containsKey(method);
     }
 
     /**
@@ -120,10 +131,6 @@ public class MeshLlmRegistry {
      */
     public Map<String, LlmConfig> getAllConfigs() {
         return Map.copyOf(configsByFunctionId);
-    }
-
-    private String getMethodKey(Method method) {
-        return method.getDeclaringClass().getName() + "#" + method.getName();
     }
 
     /**

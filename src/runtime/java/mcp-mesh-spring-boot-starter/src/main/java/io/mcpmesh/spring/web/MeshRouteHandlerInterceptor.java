@@ -102,16 +102,35 @@ public class MeshRouteHandlerInterceptor implements HandlerInterceptor {
     }
 
     @Override
+    @SuppressWarnings("deprecation")  // getByHandlerMethodId: compatibility fallback only
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response,
                              Object handler) throws Exception {
         if (!(handler instanceof HandlerMethod handlerMethod)) {
             return true;
         }
 
-        // Look up route metadata by handler method
+        // Look up route metadata by the handler METHOD (issue #1437).
+        //
+        // The method is the handler's identity; "ClassName.methodName" is not —
+        // it omits parameter types, so two overloaded @MeshRoute handlers share
+        // one id and this lookup served both of them whichever registered last.
+        // The injected dependency list is built from what comes back and is
+        // POSITIONAL (#1401), so the swap was invisible in the result's shape.
+        //
+        // The id is kept for log lines below, where the ambiguity is harmless
+        // and it reads better than Method.toString().
+        MeshRouteRegistry.RouteMetadata metadata =
+            registry.getByHandlerMethod(handlerMethod.getMethod());
         String handlerMethodId = handlerMethod.getBeanType().getName() + "." +
             handlerMethod.getMethod().getName();
-        MeshRouteRegistry.RouteMetadata metadata = registry.getByHandlerMethodId(handlerMethodId);
+        if (metadata == null) {
+            // Compatibility fallback for metadata registered without a Method
+            // identity, and for the exotic proxying arrangements where the
+            // method Spring MVC resolves is not the one the bean post-processor
+            // scanned. Refused by the registry when the id is ambiguous, so it
+            // can never resolve one overload to another's dependencies.
+            metadata = registry.getByHandlerMethodId(handlerMethodId);
+        }
 
         if (metadata == null || metadata.getDependencies().isEmpty()) {
             return true;
