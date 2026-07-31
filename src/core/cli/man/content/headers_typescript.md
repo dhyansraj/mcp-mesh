@@ -86,19 +86,23 @@ agent.addTool({
   capability: "relay_headers",
   dependencies: ["echo_headers"],
   parameters: z.object({}),
-  execute: async ({}, { echo_headers }: { echo_headers: McpMeshTool | null }) => {
+  execute: async ({}, echoHeaders: McpMeshTool | null = null) => {
+    if (!echoHeaders) {
+      return "Header echo unavailable";
+    }
+
     // Check what's already propagated
     const propagated = getCurrentPropagatedHeaders();
 
     if (!propagated["x-audit-id"]) {
       // Inject a new header on this specific call
-      const result = await echo_headers!({}, {
+      const result = await echoHeaders({}, {
         headers: { "x-audit-id": "audit-12345" },
       });
       return JSON.stringify(result);
     }
 
-    const result = await echo_headers!({});
+    const result = await echoHeaders({});
     return JSON.stringify(result);
   },
 });

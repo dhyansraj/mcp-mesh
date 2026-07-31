@@ -108,13 +108,19 @@ export MCP_MESH_TOOL_WORKERS=1
 export MCP_MESH_TOOL_ISOLATION=true
 ```
 
-### Strict DI Diagnostics (Python)
+### Strict DI Diagnostics (Python, Java)
 
 ```bash
 # Default: false. When truthy, ambiguous or skipped dependency-injection
-# configurations raise StrictDIError at decoration/startup instead of
-# warning. Injection semantics are unchanged — only the diagnostic
-# severity is promoted.
+# configurations fail at decoration/startup instead of warning. Injection
+# semantics are unchanged — only the diagnostic severity is promoted.
+#
+# - Python: raises StrictDIError at decoration/startup.
+# - Java: promotes the boot-time dependency/parameter arity mismatch and
+#   the @MeshRoute / @MeshA2A legacy-order warning to a startup failure.
+#   A contradicting @MeshInject value is fatal either way — it asserts the
+#   dependency position already assigns, so a false assertion is never
+#   survivable. Accepts 1 / true / yes.
 export MCP_MESH_STRICT_DI=true
 ```
 

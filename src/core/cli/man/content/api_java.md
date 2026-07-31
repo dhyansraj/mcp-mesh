@@ -56,7 +56,7 @@ public ResponseEntity<Map<String, Object>> greet(
 }
 ```
 
-The `McpMeshTool` is injected by parameter name matching the capability. Call `.call()` with your arguments -- mesh handles routing to the actual agent.
+The `McpMeshTool` is injected **by position**: the Nth entry of `dependencies` binds to the Nth `McpMeshTool` parameter, in signature order. Parameter names are never consulted -- name them however reads best. Call `.call()` with your arguments; mesh handles routing to the actual agent.
 
 ## Consumer-Only Mode
 
@@ -86,20 +86,30 @@ That is all. The framework detects `@MeshRoute` usage and starts in consumer-onl
 
 ## Dependency Declaration
 
-### Simple (by capability name)
+### Positional pairing
+
+The Nth `@MeshDependency` binds to the Nth `McpMeshTool` parameter, in signature order. Business parameters (`@RequestParam`, `@RequestBody`, ...) take no part in the pairing:
 
 ```java
 @GetMapping("/data")
-@MeshRoute(dependencies = @MeshDependency(capability = "user_service"))
-public ResponseEntity<?> getData(McpMeshTool<Map<String, Object>> user_service) {
-    Map<String, Object> result = user_service.call(Map.of("id", 42));
+@MeshRoute(dependencies = {
+    @MeshDependency(capability = "user_service"),
+    @MeshDependency(capability = "notification_service")
+})
+public ResponseEntity<?> getData(
+        @RequestParam int id,
+        McpMeshTool<Map<String, Object>> users,     // dependencies[0] -- user_service
+        McpMeshTool<Map<String, Object>> notify) {  // dependencies[1] -- notification_service
+
+    Map<String, Object> result = users.call(Map.of("id", id));
+    notify.call(Map.of("event", "read"));
     return ResponseEntity.ok(result);
 }
 ```
 
-### With @MeshInject (explicit binding)
+### With @MeshInject (assertion)
 
-When the parameter name does not match the capability, use `@MeshInject`:
+`@MeshInject` does not select a dependency -- it asserts the one position already assigns, and the application fails to start if the two disagree. It is optional; add it when you want the pairing pinned against a future reorder:
 
 ```java
 @GetMapping("/employee")
@@ -112,6 +122,8 @@ public ResponseEntity<?> getEmployee(
     return ResponseEntity.ok(employee);
 }
 ```
+
+> **Changed in 3.4.0.** `@MeshRoute` used to bind by name -- by the `@MeshInject` value, or by the parameter name. See `meshctl man upgrading` before upgrading a controller that declares more than one dependency.
 
 ## Typed Deserialization
 

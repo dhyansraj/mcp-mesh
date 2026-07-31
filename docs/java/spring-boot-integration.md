@@ -8,11 +8,11 @@
   <span>Looking for TypeScript? See <a href="../typescript/express-integration/">TypeScript Express Integration</a></span>
 </div>
 
-> Use mesh dependency injection in Spring Boot REST controllers with `@MeshRoute` and `@MeshInject`
+> Use mesh dependency injection in Spring Boot REST controllers with `@MeshRoute`
 
 ## Overview
 
-MCP Mesh provides `@MeshRoute` and `@MeshInject` annotations for Spring Boot REST controllers that need to consume mesh capabilities. This enables traditional REST APIs to leverage the mesh service layer without being full MCP agents themselves.
+MCP Mesh provides the `@MeshRoute` annotation for Spring Boot REST controllers that need to consume mesh capabilities. This enables traditional REST APIs to leverage the mesh service layer without being full MCP agents themselves.
 
 **Important**: This is for integrating MCP Mesh into your EXISTING Spring Boot app. To create a new MCP agent, use `meshctl scaffold --lang java` instead.
 
@@ -49,9 +49,9 @@ MCP Mesh provides `@MeshRoute` and `@MeshInject` annotations for Spring Boot RES
 
 Apply `@MeshRoute` to a `@RestController` method to declare mesh dependencies. Dependencies are injected as typed `McpMeshTool<T>` parameters.
 
-### Parameter Name Matching (Recommended)
+### Positional Pairing
 
-When the method parameter name matches the capability name, no extra annotation is needed:
+The Nth `@MeshDependency` binds to the Nth `McpMeshTool` parameter, in signature order. Parameter names are never consulted, and business parameters (`@RequestParam`, `@RequestBody`, ...) take no part in the pairing:
 
 ```java
 @GetMapping("/greet")
@@ -61,7 +61,7 @@ When the method parameter name matches the capability name, no extra annotation 
 )
 public ResponseEntity<Map<String, Object>> greet(
         @RequestParam(defaultValue = "World") String name,
-        McpMeshTool<Map<String, Object>> greeting) {  // "greeting" matches capability
+        McpMeshTool<Map<String, Object>> greeting) {  // dependencies[0]
 
     Map<String, Object> result = greeting.call(Map.of("name", name));
 
@@ -73,9 +73,7 @@ public ResponseEntity<Map<String, Object>> greet(
 }
 ```
 
-### @MeshInject for Name Mismatch
-
-Use `@MeshInject` when your parameter name differs from the capability name:
+With several dependencies, declaration order is the binding — name the parameters however reads best:
 
 ```java
 @PostMapping("/process")
@@ -88,10 +86,10 @@ Use `@MeshInject` when your parameter name differs from the capability name:
 )
 public ResponseEntity<Map<String, Object>> process(
         @RequestBody Map<String, Object> input,
-        McpMeshTool<Map<String, Object>> greeting,                      // Name matches
-        @MeshInject("agent_info") McpMeshTool<Map<String, Object>> infoTool) {  // Name differs
+        McpMeshTool<Map<String, Object>> greeter,    // dependencies[0] - greeting
+        McpMeshTool<Map<String, Object>> infoTool) { // dependencies[1] - agent_info
 
-    Map<String, Object> greetingResult = greeting.call(Map.of("name", input.get("name")));
+    Map<String, Object> greetingResult = greeter.call(Map.of("name", input.get("name")));
     Map<String, Object> info = infoTool.call();
 
     return ResponseEntity.ok(Map.of(
@@ -100,6 +98,21 @@ public ResponseEntity<Map<String, Object>> process(
     ));
 }
 ```
+
+### @MeshInject asserts the position
+
+`@MeshInject` does not select a dependency — it asserts the one position already assigns, and the application fails to start if the two disagree. It is optional; add it when you want the pairing pinned against a future reorder of either end:
+
+```java
+public ResponseEntity<Map<String, Object>> process(
+        @RequestBody Map<String, Object> input,
+        @MeshInject("greeting") McpMeshTool<Map<String, Object>> greeter,
+        @MeshInject("agent_info") McpMeshTool<Map<String, Object>> infoTool) { ... }
+```
+
+!!! warning "Changed in 3.4.0"
+
+    `@MeshRoute` used to bind **by name** — by the `@MeshInject` value, falling back to the Java parameter name. It now binds by position, like `@MeshTool` and like every Python and TypeScript site. See [Migrating to positional DI](../migration/3.4-positional-di.md) before upgrading a controller that declares more than one dependency.
 
 ## Optional Dependencies
 
@@ -163,7 +176,6 @@ package com.example.api;
 
 import io.mcpmesh.MeshAgent;
 import io.mcpmesh.spring.web.MeshDependency;
-import io.mcpmesh.spring.web.MeshInject;
 import io.mcpmesh.spring.web.MeshRoute;
 import io.mcpmesh.types.McpMeshTool;
 import org.springframework.boot.SpringApplication;

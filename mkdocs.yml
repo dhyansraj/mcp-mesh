@@ -288,6 +288,9 @@ nav:
           - Call & Debug Tools: typescript/local-development/05-calling-tools.md
           - Troubleshooting: typescript/local-development/troubleshooting.md
 
+  - Migration:
+      - "3.4 — Positional Dependency Injection": migration/3.4-positional-di.md
+
   - Deployment:
       - deployment.md
       - Upgrading a Live Mesh: upgrading.md

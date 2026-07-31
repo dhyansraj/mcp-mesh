@@ -133,6 +133,16 @@ A single Python process may NOT host both `@mesh.tool` capabilities and a `mesh.
 
 The same producer surface ships in Java (`@MeshA2A`) and TypeScript (`mesh.a2a.mount(...)`), each with the identical sync / long-running / SSE behavior — see the respective SDK docs for the runtime-specific syntax.
 
+**Dependency injection is positional in every runtime.** The Nth declared dependency binds to the Nth injectable slot — the Nth `McpMeshTool` handler parameter in Python and Java, and the Nth element of the TypeScript `deps` array, which is **zero-based**: `deps[0]` is the first declared dependency. Names are never consulted:
+
+| Runtime    | Declaration              | Handler slot                                    |
+| ---------- | ------------------------ | ----------------------------------------------- |
+| Python     | `dependencies=[...]`     | `McpMeshTool` parameters, in signature order     |
+| Java       | `@MeshDependency` list   | `McpMeshTool<T>` parameters, in signature order  |
+| TypeScript | `dependencies: [...]`    | `deps[i]` on the handler's first argument        |
+
+> **Changed in 3.4.0.** Java `@MeshA2A` bound by parameter name (or `@MeshInject` value), and TypeScript `mesh.a2a.mount` handed the handler an object keyed by capability. Both now bind by position. Python is unchanged. See `meshctl man upgrading`.
+
 ## Consumer (Python / Java / TypeScript)
 
 The consumer marker per runtime:

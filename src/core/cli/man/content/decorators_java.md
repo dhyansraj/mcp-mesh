@@ -78,7 +78,7 @@ public GreetingResponse greet(
 
 **Note**: Dependencies are injected as `McpMeshTool<T>` parameters on the method. They may be `null` if unavailable.
 
-**Note**: `dependencies` entries pair with the method's `McpMeshTool<T>` (and `MeshJob`) parameters in declaration order, and parameter names are yours to choose. See `meshctl man dependency-injection --java` for the full pairing rule, including where a `MeshJob` parameter fits and how `@MeshRoute` differs.
+**Note**: `dependencies` entries pair with the method's `McpMeshTool<T>` (and `MeshJob`) parameters **by position**, in declaration order; parameter names are never consulted. `@MeshRoute` and `@MeshA2A` use the identical rule (changed in 3.4.0 — they used to bind by name). See `meshctl man dependency-injection --java` for the full pairing rule, including where a `MeshJob` parameter fits and what `@MeshInject` asserts.
 
 ### Schema-aware capabilities (issue #547)
 

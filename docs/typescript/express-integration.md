@@ -42,14 +42,15 @@ app.use(express.json());
 
 app.post("/chat", mesh.route(
   [{ capability: "avatar_chat" }],
-  async (req, res, { avatar_chat }) => {
-    if (!avatar_chat) {
-      return res.status(503).json({ error: "Service unavailable" });
+  async (req, res, [avatarChat]) => {
+    if (!avatarChat) {
+      res.status(503).json({ error: "Service unavailable" });
+      return;
     }
-    const result = await avatar_chat({
+    const result = (await avatarChat({
       message: req.body.message,
       user_email: "user@example.com",
-    });
+    })) as { message?: string };
     res.json({ response: result.message });
   }
 ));
@@ -59,16 +60,23 @@ app.listen(3000);
 
 ## Dependency Declaration
 
-### Simple (by capability name)
+### Positional pairing
+
+The handler's third argument is an array: `deps[i]` is the proxy for the i-th declared dependency, or `null` when it is not currently resolved. Destructure it positionally — the binding names are yours to choose.
 
 ```typescript
 app.post("/users", mesh.route(
   ["user_service", "notification_service"],
-  async (req, res, { user_service, notification_service }) => {
-    // Dependencies are keyed by capability name
+  async (req, res, [userService, notificationService]) => {
+    // userService         === deps[0] — "user_service"
+    // notificationService === deps[1] — "notification_service"
   }
 ));
 ```
+
+!!! warning "Changed in 3.4.0"
+
+    `mesh.route` used to hand the handler an object keyed by capability (`{ user_service }`). It is now an array, matching Python, Java, and `addTool`. Reading a **declared** capability by name throws a `TypeError` naming the index and printing the rewrite. See [Migrating to positional DI](../migration/3.4-positional-di.md).
 
 ### With Tag Filtering
 
@@ -78,7 +86,7 @@ app.post("/analyze", mesh.route(
     { capability: "llm", tags: ["+claude"] },
     { capability: "storage", tags: ["-deprecated"] },
   ],
-  async (req, res, { llm, storage }) => {
+  async (req, res, [llm, storage]) => {
     // Use filtered dependencies
   }
 ));
@@ -107,19 +115,20 @@ interface ChatResponse {
 // Chat endpoint that delegates to mesh avatar agent
 app.post("/api/chat", mesh.route(
   [{ capability: "avatar_chat" }],
-  async (req: Request<{}, ChatResponse, ChatRequest>, res: Response<ChatResponse>, { avatar_chat }) => {
-    if (!avatar_chat) {
-      return res.status(503).json({
+  async (req: Request<{}, ChatResponse, ChatRequest>, res: Response<ChatResponse>, [avatarChat]) => {
+    if (!avatarChat) {
+      res.status(503).json({
         response: "Avatar service unavailable",
         avatarId: ""
       });
+      return;
     }
 
-    const result = await avatar_chat({
+    const result = (await avatarChat({
       message: req.body.message,
       avatar_id: req.body.avatarId || "default",
       user_email: "user@example.com",
-    });
+    })) as { message?: string };
 
     res.json({
       response: result.message || "",
@@ -131,11 +140,15 @@ app.post("/api/chat", mesh.route(
 // History endpoint using mesh agent
 app.get("/api/history", mesh.route(
   [{ capability: "conversation_history_get" }],
-  async (req, res, { conversation_history_get }) => {
-    const result = await conversation_history_get({
+  async (req, res, [historyGet]) => {
+    if (!historyGet) {
+      res.status(503).json({ error: "history service unavailable" });
+      return;
+    }
+    const result = (await historyGet({
       avatar_id: req.query.avatarId || "default",
       limit: parseInt(req.query.limit as string) || 50,
-    });
+    })) as { messages?: unknown[] };
     res.json({ messages: result.messages || [] });
   }
 ));
@@ -161,7 +174,7 @@ The backend will:
 1. Auto-initialize mesh connection on first `mesh.route()` call
 2. Connect to the mesh registry
 3. Resolve dependencies declared in `mesh.route()`
-4. Inject proxies into route handlers as the `deps` object
+4. Inject proxies into route handlers as the positional `deps` array
 5. Re-resolve on topology changes (auto-rewiring)
 
 ## Advanced: Explicit Control
@@ -184,7 +197,11 @@ const meshApp = meshExpress(app, {
 // Define routes with mesh.route()
 app.post("/compute", mesh.route(
   [{ capability: "calculator" }],
-  async (req, res, { calculator }) => {
+  async (req, res, [calculator]) => {
+    if (!calculator) {
+      res.status(503).json({ error: "calculator unavailable" });
+      return;
+    }
     res.json({ result: await calculator(req.body) });
   }
 ));

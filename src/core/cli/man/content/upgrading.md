@@ -1,6 +1,108 @@
 # Upgrading a Live Mesh
 
-> Order of operations, version-skew guarantees, schema migrations, and in-flight job safety for upgrading a running mesh
+> Order of operations, version-skew guarantees, schema migrations, in-flight job safety, and source migrations for upgrading a running mesh
+
+## 3.4.0 — Dependency injection is positional everywhere
+
+**Breaking, Java and TypeScript. Python is unchanged.** As of 3.4.0 the Nth declared dependency binds to the Nth injectable parameter, at every injection site in every runtime. Parameter names, capability keys and `@MeshInject` values are never used to *select* a dependency.
+
+Two sites changed:
+
+| Runtime    | Site                              | Before                          | After                     |
+| ---------- | --------------------------------- | ------------------------------- | ------------------------- |
+| Java       | `@MeshRoute`, `@MeshA2A`          | by `@MeshInject` value / by parameter name | by position    |
+| TypeScript | `mesh.route`, `mesh.a2a.mount`    | object keyed by capability      | positional array          |
+
+Java `@MeshTool`, TypeScript `addTool`, and every Python site were already positional, so their *binding* is untouched. One caveat at `@MeshTool`: `@MeshInject` is now honoured on its parameters, where it was previously ignored, so a value that disagrees with its parameter's position now fails at boot.
+
+### Find your exposure before you upgrade
+
+A handler declaring **two or more** dependencies can rebind when its declaration order disagrees with its old names. Do not use the dependency count as a filter, though — one dependency is exempt only in narrow cases, and they differ by runtime. In TypeScript there is no exemption at all: the *callback shape* changed, so a sole-dependency handler still written `async (req, res, { cap }) => ...` throws through the new guard exactly as a five-dependency one does. In Java a single dependency is exempt only when its `@MeshInject` already names the declared capability, or carries none — a sole `@MeshInject` naming something else selected nothing on 3.3 and was injected `null`, and on 3.4 it is a false assertion that fails the boot.
+
+The 3.3.x Java SDK already ships the detector that finds them, and it warns without changing behaviour. Upgrade to the latest 3.3.x first, start each Spring Boot app, and grep the startup log:
+
+```bash
+grep -n "declaration order\|parameter names disagree\|BY POSITION (issue #1401)" app.log
+```
+
+```text
+@MeshRoute com.example.api.ApiController.report(McpMeshTool, McpMeshTool): parameter
+names disagree with declaration order, so these parameters do NOT bind the way their
+names suggest.
+  2 declared dependencies: [0] 'get_employee', [1] 'employee_count'
+    slot 0 = parameter 0 (McpMeshTool employee_count)
+        parameter name 'employee_count' used to bind:   dependency[1] 'employee_count'
+        binds (by position):                            dependency[0] 'get_employee'
+  If this handler was written for mcp-mesh 3.3 or earlier (when @MeshRoute and @MeshA2A
+  bound by name), fix it — pick one:
+    • reorder dependencies = {...} to: [0] 'employee_count', [1] 'get_employee'
+```
+
+The two **reorder** fixes it prescribes are behaviour-preserving on 3.3 *and* correct on 3.4 — moving whole `@MeshDependency` entries, or moving the parameters, is name-neutral under the old rule — so you can land those before upgrading. Its third suggestion, *adding* an `@MeshInject` where the parameter carried none, preserves 3.3 behaviour only where the parameter name already selected that same dependency; where the name matched no declared capability, 3.3 injected `null` and the annotation starts injecting a real proxy. `MCP_MESH_STRICT_DI=true` turns the warnings into a startup failure if you want the sweep enforced in CI.
+
+TypeScript has no equivalent pre-upgrade signal, but it cannot misbind either: string keys and array indices are disjoint, so a stale `deps.capability` throws rather than silently returning another dependency's proxy.
+
+### Java — `@MeshInject` becomes an assertion
+
+`@MeshInject` no longer selects a dependency; it asserts the one position already assigns, and a contradiction fails the boot **unconditionally** (not gated on `MCP_MESH_STRICT_DI`). Reorder the declaration list to match the parameters, or drop the annotations — on 3.4 binding is identical either way. Drop them only *after* upgrading, though: on 3.3 `@MeshInject` still selects the dependency, so removing it there falls back to parameter-name matching and can rebind a running application.
+
+```java
+// Before (3.3) — bound by @MeshInject value; declaration order was irrelevant.
+@MeshRoute(dependencies = {
+    @MeshDependency(capability = "get_employee"),
+    @MeshDependency(capability = "employee_count")
+})
+public ResponseEntity<Report> report(
+        @MeshInject("employee_count") McpMeshTool<Integer> stats,
+        @MeshInject("get_employee") McpMeshTool<Employee> lookup) { ... }
+
+// After (3.4) — declaration order IS the binding. Reorder one end.
+@MeshRoute(dependencies = {
+    @MeshDependency(capability = "employee_count"),
+    @MeshDependency(capability = "get_employee")
+})
+public ResponseEntity<Report> report(
+        @MeshInject("employee_count") McpMeshTool<Integer> stats,
+        @MeshInject("get_employee") McpMeshTool<Employee> lookup) { ... }
+```
+
+An unannotated handler is the same fix with the annotations absent — the parameter names carry no meaning, so either reorder `dependencies = {...}` or reorder the parameters.
+
+### TypeScript — destructure the array
+
+```typescript
+// Before (3.3)
+mesh.route(["add", "greet_lucky"], async (req, res, { add, greet_lucky }) => { ... });
+
+// After (3.4)
+mesh.route(["add", "greet_lucky"], async (req, res, [add, greetLucky]) => { ... });
+```
+
+```typescript
+// Before (3.3)
+mesh.a2a.mount(app, config, async (deps, payload) => {
+  const dateService = deps["date_service"] as McpMeshTool | null;
+});
+
+// After (3.4)
+mesh.a2a.mount(app, config, async ([dateService], payload) => { ... });
+```
+
+Reading a **declared** capability by name on the new array throws with the index and the rewrite:
+
+```text
+mesh.route dependencies are positional as of 3.4.0.
+You accessed `deps.add`; "add" is declared dependency [0].
+Rewrite the handler as:  async (req, res, [add, greet_lucky]) => { ... }
+```
+
+`RouteDependencies` and `A2ADependencies` now alias `PositionalDependencies` (`Array<McpMeshTool | null>`), so an object type argument such as `mount<{ date_service: McpMeshTool }>(...)` stops compiling. Use a per-slot tuple: `mount<[McpMeshTool | null]>(...)`.
+
+### What does not change
+
+Correctly-ordered code is unaffected — the whole in-tree corpus was measured on both sides of the conversion: **Java 21 handlers, 0 binding differences; TypeScript 35 handlers, 0 binding differences.** Slot preservation is unchanged too: an unresolved dependency holds its own index as `null` and never shifts a later one up.
+
+Full guide with every before/after: <https://mcp-mesh.ai/migration/3.4-positional-di/>
 
 ## Recommended Order
 

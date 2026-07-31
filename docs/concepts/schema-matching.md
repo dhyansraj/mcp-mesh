@@ -114,7 +114,7 @@ agent.addTool({
     },
   ],
   parameters: z.object({}),
-  execute: async ({}, { lookup_employee }) => { /* ... */ },
+  execute: async ({}, lookupEmployee: McpMeshTool | null = null) => { /* ... */ },
 });
 ```
 

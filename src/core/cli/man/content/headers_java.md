@@ -170,8 +170,8 @@ identity-provider subject to a local user row on first login, recording
 an audit event on every authenticated request, or hydrating a
 request-scoped principal from a remote profile service.
 
-`@MeshInject` only fires on `@MeshRoute` controller methods. To reach
-mesh capabilities from any other Spring-managed bean, declare the
+`@MeshRoute` parameter injection only fires on controller methods. To
+reach mesh capabilities from any other Spring-managed bean, declare the
 capability on the bean class with `@MeshDependsOn` and inject it via
 `@Qualifier`:
 
@@ -230,7 +230,7 @@ on call.
 
 Often that is the right answer — push provisioning, audit, and RBAC
 hydration into a controller body (or a downstream mesh tool) where
-`@MeshInject` works as designed. Use `@MeshDependsOn` when the
+`@MeshRoute` injection works as designed. Use `@MeshDependsOn` when the
 side-effect *genuinely* belongs in a non-controller surface: filters
 that run before MVC dispatch, security beans Spring constructs outside
 the request lifecycle, scheduled jobs without a request context.

@@ -26,7 +26,7 @@ route handler  ──── injects proxy for capability "session_state.record_q
 resolved provider agent ──► result ──► HTTP response
 ```
 
-The per-runtime surface differs — Java pairs `@MeshRoute(dependencies = {…})` with a `@MeshInject` parameter typed `McpMeshTool<…>`; Python and TypeScript declare the dependency on the route and receive the proxy — but the shape is the same everywhere: one route, the specific capabilities it names, one resolved proxy per capability, called inline in the handler. The exact declaration syntax lives in the dependency-injection guides linked below.
+The per-runtime surface differs in syntax — Java declares `@MeshRoute(dependencies = {…})` and takes `McpMeshTool<…>` parameters, Python declares on the decorator and takes typed parameters, TypeScript declares on `mesh.route(...)` and destructures a `deps` array — but the shape is the same everywhere: one route, the specific capabilities it names, one resolved proxy per capability, called inline in the handler. **Binding is positional in all three**: the Nth declared capability lands in the Nth injectable slot, and names are never consulted. The exact declaration syntax lives in the dependency-injection guides linked below.
 
 Because the proxy is an ordinary resolved dependency, everything DDDI gives a consumer applies here too: the capability hot-swaps to a better or healthier provider between requests, calls thread call context and appear in the audit trail, and an unavailable optional capability injects a null/unavailable proxy that the handler can fall back around.
 
@@ -68,8 +68,9 @@ A route is a DDDI consumer with an HTTP trigger. Each capability it injects is o
 This page stays at the concept level; the exact route declaration, dependency wiring, and injection syntax live in the runtime guides:
 
 - [Dependency Injection (Python)](../python/dependency-injection.md#required-dependencies) — `@mesh.route`, required deps, the 503 perimeter
-- [Dependency Injection (Java)](../java/dependency-injection.md#views-and-meshroute) — `@MeshRoute` + `@MeshInject`, per-capability injection
+- [Dependency Injection (Java)](../java/dependency-injection.md#views-and-meshroute) — `@MeshRoute`, positional pairing, per-capability injection
 - [Dependency Injection (TypeScript)](../typescript/dependency-injection.md#required-dependencies) — `mesh.route()`, required deps, the 503 perimeter
+- [Migrating to positional DI (3.4)](../migration/3.4-positional-di.md) — the Java and TypeScript route binding change
 
 ## See Also
 
