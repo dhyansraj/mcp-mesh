@@ -639,18 +639,146 @@ def _translate_response_format_to_text(response_format: Any) -> dict[str, Any]:
     return {"format": response_format}
 
 
+# ``ResponseInputImageParam.detail`` is marked Required in the OpenAI SDK's own
+# TypedDict — always emit one.
+_RESPONSES_DEFAULT_IMAGE_DETAIL = "auto"
+# Long-stable trio, used only when SDK introspection is unavailable.
+_RESPONSES_IMAGE_DETAILS_FALLBACK = frozenset({"low", "high", "auto"})
+_RESPONSES_IMAGE_DETAILS_CACHE: frozenset[str] | None = None
+
+
+def _literal_strings(annotation: Any) -> frozenset[str]:
+    """Pull the string members out of a (possibly wrapped) ``Literal``.
+
+    Handles ``Required[Literal[...]]`` / ``Optional[Literal[...]]`` by
+    recursing into type args. Returns an empty set when there is no string
+    Literal to find.
+    """
+    import typing
+
+    args = typing.get_args(annotation)
+    if args and all(isinstance(a, str) for a in args):
+        return frozenset(args)
+    for arg in args:
+        found = _literal_strings(arg)
+        if found:
+            return found
+    return frozenset()
+
+
+def _valid_image_details() -> frozenset[str]:
+    """Accepted ``input_image.detail`` values for the INSTALLED openai SDK.
+
+    Read off ``ResponseInputImageParam``'s own ``Literal`` rather than
+    hard-coded. ``openai`` is an unpinned dependency and this enum GROWS:
+    2.14.0 had ``low``/``high``/``auto``; 2.52.0 added ``original``. A frozen
+    allowlist would silently downgrade a caller's valid ``detail="original"``
+    to ``auto`` — a wrong image fidelity, soft-failed with a misleading WARN.
+
+    Soft-fails to the long-stable trio if the SDK is absent or its layout
+    changes; this is a validator, it must never raise. Cached — the installed
+    SDK cannot change within a process.
+    """
+    global _RESPONSES_IMAGE_DETAILS_CACHE
+    if _RESPONSES_IMAGE_DETAILS_CACHE is not None:
+        return _RESPONSES_IMAGE_DETAILS_CACHE
+
+    details = _RESPONSES_IMAGE_DETAILS_FALLBACK
+    try:
+        import typing
+
+        from openai.types.responses import ResponseInputImageParam
+
+        hints = typing.get_type_hints(ResponseInputImageParam, include_extras=True)
+        found = _literal_strings(hints.get("detail"))
+        if found:
+            details = found
+    except Exception as exc:  # noqa: BLE001 — validator must not raise
+        logger.debug(
+            "Could not introspect ResponseInputImageParam.detail (%s); "
+            "falling back to %s",
+            exc,
+            sorted(_RESPONSES_IMAGE_DETAILS_FALLBACK),
+        )
+
+    _RESPONSES_IMAGE_DETAILS_CACHE = details
+    return details
+
+
+def _translate_image_part(part: dict[str, Any]) -> dict[str, Any]:
+    """chat ``{"type":"image_url", ...}`` → Responses ``{"type":"input_image"}``.
+
+    Shape taken from the installed OpenAI SDK's
+    ``openai.types.responses.ResponseInputImageParam``: a FLAT part carrying
+    ``image_url`` as a plain string ("a fully qualified URL or base64 encoded
+    image in a data URL" — so http(s) URLs and ``data:`` URIs both go in the
+    same field, no vendor-specific split like Anthropic's base64/url sources)
+    plus a required ``detail`` of ``low``/``high``/``auto``.
+
+    Accepts every image form the chat path accepts:
+      * ``{"image_url": {"url": ..., "detail": ...}}`` — mesh's own emitter
+        (``_mcp_mesh.media.resolver._format_for_openai`` produces a data URI
+        with ``detail="high"``).
+      * ``{"image_url": "<url>"}`` — bare-string form some clients send, which
+        the Anthropic/Gemini adapters also accept.
+      * A ``detail`` on the part itself rather than nested under ``image_url``.
+    """
+    field = part.get("image_url")
+    detail: Any = None
+    if isinstance(field, str):
+        url: Any = field
+    elif isinstance(field, dict):
+        url = field.get("url")
+        detail = field.get("detail")
+    else:
+        url = None
+    if detail is None:
+        detail = part.get("detail")
+
+    if not url or not isinstance(url, str):
+        raise ValueError(
+            "OpenAI Responses path: image content part has no usable url "
+            "(expected image_url={'url': ...} or image_url='<url>'); "
+            f"got image_url={field!r}"
+        )
+
+    valid_details = _valid_image_details()
+    if detail is not None and detail not in valid_details:
+        logger.warning(
+            "OpenAI Responses path: unsupported image detail %r "
+            "(this openai SDK accepts %s); using %s",
+            detail,
+            "/".join(sorted(valid_details)),
+            _RESPONSES_DEFAULT_IMAGE_DETAIL,
+        )
+        detail = None
+
+    return {
+        "type": "input_image",
+        "image_url": url,
+        "detail": detail or _RESPONSES_DEFAULT_IMAGE_DETAIL,
+    }
+
+
 def _translate_message_content(content: Any, role: str) -> Any:
     """Translate chat-style message ``content`` into the Responses input shape.
 
     Plain-string content passes through unchanged (the common case). A
-    content-part ARRAY is translated part-by-part: text parts
-    ``{"type":"text","text":...}`` become ``input_text`` (user/system) or
-    ``output_text`` (assistant), matching the part types Responses expects.
+    content-part ARRAY is translated part-by-part:
 
-    Any image or other non-text part raises a clear ``ValueError`` rather than
+      * text parts ``{"type":"text","text":...}`` → ``input_text`` (user/system)
+        or ``output_text`` (assistant), matching the part types Responses
+        expects.
+      * image parts ``{"type":"image_url", ...}`` → ``input_image``
+        (issue #1336) so reasoning + tools + vision works on this path. See
+        :func:`_translate_image_part` for the accepted input forms.
+      * parts already in Responses shape (``input_text`` / ``output_text`` /
+        ``input_image`` / ``input_file``) pass through untouched so the
+        translation is idempotent.
+
+    Any other part type still raises a clear ``ValueError`` rather than
     forwarding an untranslated chat-shape part that would yield a cryptic
-    OpenAI 400. Image translation is deliberately NOT attempted here (the
-    Responses image-part shape differs and is unverified for this path).
+    OpenAI 400.
     """
     if not isinstance(content, list):
         return content
@@ -660,10 +788,15 @@ def _translate_message_content(content: Any, role: str) -> Any:
         ptype = part.get("type") if isinstance(part, dict) else None
         if ptype == "text":
             translated.append({"type": text_type, "text": part.get("text")})
+        elif ptype == "image_url":
+            translated.append(_translate_image_part(part))
+        elif ptype in ("input_text", "output_text", "input_image", "input_file"):
+            # Already Responses-shaped — passthrough (idempotent).
+            translated.append(part)
         else:
             raise ValueError(
-                "OpenAI Responses path (reasoning model + tools) does not yet "
-                "support multimodal image content; use string/text content, "
+                "OpenAI Responses path (reasoning model + tools) does not "
+                "support this content part type; use text or image_url parts, "
                 "drop tools, or use a non-reasoning model "
                 f"(unsupported content part type={ptype!r})"
             )
@@ -846,12 +979,77 @@ def _build_responses_kwargs(
     return responses_kwargs
 
 
+# Semantic events that carry the finished ``Response`` — the only place the
+# Responses stream reports usage (there is no incremental usage, unlike
+# Anthropic's cumulative ``message_delta``).
+_RESPONSES_TERMINAL_EVENTS = frozenset({
+    "response.completed",
+    "response.incomplete",
+    "response.failed",
+})
+
+
 def _rget(obj: Any, key: str, default: Any = None) -> Any:
     """Attribute-or-key getter so adapters accept both SDK Pydantic objects
     and plain dicts (keeps the Responses adapter test-friendly)."""
     if isinstance(obj, dict):
         return obj.get(key, default)
     return getattr(obj, key, default)
+
+
+def _responses_usage(raw: Any) -> _Usage | None:
+    """``Response.usage`` (``input_tokens``/``output_tokens``) → :class:`_Usage`.
+
+    Shared by the buffered and streaming Responses paths so the two cannot
+    drift on the token mapping.
+    """
+    usage_obj = _rget(raw, "usage", None)
+    if usage_obj is None:
+        return None
+    return _Usage(
+        prompt_tokens=_rget(usage_obj, "input_tokens", 0) or 0,
+        completion_tokens=_rget(usage_obj, "output_tokens", 0) or 0,
+    )
+
+
+def _responses_finish_reason(raw: Any, *, has_tool_calls: bool) -> str:
+    """Derive a truthful chat-shape ``finish_reason`` from a Responses object.
+
+    Responses carries the signal on ``status`` / ``incomplete_details`` rather
+    than a ``finish_reason`` field: map truncation / content-filter / incomplete
+    outcomes instead of collapsing everything into stop/tool_calls. Shared by
+    the buffered and streaming Responses paths.
+    """
+    finish_reason = "tool_calls" if has_tool_calls else "stop"
+    status = _rget(raw, "status", None)
+    incomplete = _rget(raw, "incomplete_details", None)
+    if status == "incomplete":
+        reason = _rget(incomplete, "reason", None) if incomplete is not None else None
+        if reason == "max_output_tokens":
+            return "length"
+        if reason == "content_filter":
+            return "content_filter"
+        # An incomplete response with an unmapped (or empty) reason must not
+        # look like a clean stop — surface it for debugging.
+        logger.debug(
+            "Native OpenAI adapter (Responses): incomplete response with "
+            "unmapped reason (status=%r, incomplete_details=%r); keeping "
+            "finish_reason=%r",
+            status,
+            incomplete,
+            finish_reason,
+        )
+    elif status not in (None, "completed"):
+        # "failed" / any other terminal status — keep stop/tool_calls but log so
+        # an empty-output failure isn't a silent clean stop.
+        logger.debug(
+            "Native OpenAI adapter (Responses): non-completed status "
+            "(status=%r, incomplete_details=%r); keeping finish_reason=%r",
+            status,
+            incomplete,
+            finish_reason,
+        )
+    return finish_reason
 
 
 def _adapt_responses_response(raw: Any) -> _Response:
@@ -924,85 +1122,12 @@ def _adapt_responses_response(raw: Any) -> _Response:
         tool_calls=tool_calls or None,
     )
 
-    usage_obj = _rget(raw, "usage", None)
-    if usage_obj is not None:
-        usage = _Usage(
-            prompt_tokens=_rget(usage_obj, "input_tokens", 0) or 0,
-            completion_tokens=_rget(usage_obj, "output_tokens", 0) or 0,
-        )
-    else:
-        usage = None
-
-    # Preserve a truthful finish_reason (the chat path forwards the real one).
-    # Responses carries the signal on ``status`` / ``incomplete_details`` rather
-    # than a ``finish_reason`` field: map truncation / content-filter /
-    # incomplete outcomes instead of collapsing everything into stop/tool_calls.
-    finish_reason = "tool_calls" if tool_calls else "stop"
-    status = _rget(raw, "status", None)
-    incomplete = _rget(raw, "incomplete_details", None)
-    if status == "incomplete":
-        reason = _rget(incomplete, "reason", None) if incomplete is not None else None
-        if reason == "max_output_tokens":
-            finish_reason = "length"
-        elif reason == "content_filter":
-            finish_reason = "content_filter"
-        else:
-            # An incomplete response with an unmapped (or empty) reason must not
-            # look like a clean stop — surface it for debugging.
-            logger.debug(
-                "Native OpenAI adapter (Responses): incomplete response with "
-                "unmapped reason (status=%r, incomplete_details=%r); keeping "
-                "finish_reason=%r",
-                status,
-                incomplete,
-                finish_reason,
-            )
-    elif status not in (None, "completed"):
-        # "failed" / any other terminal status — keep stop/tool_calls but log so
-        # an empty-output failure isn't a silent clean stop.
-        logger.debug(
-            "Native OpenAI adapter (Responses): non-completed status "
-            "(status=%r, incomplete_details=%r); keeping finish_reason=%r",
-            status,
-            incomplete,
-            finish_reason,
-        )
-
     return _Response(
         message=message,
-        usage=usage,
+        usage=_responses_usage(raw),
         model=_rget(raw, "model", None),
-        finish_reason=finish_reason,
-    )
-
-
-def _responses_result_to_stream_chunk(resp: _Response) -> _StreamChunk:
-    """Collapse a buffered Responses ``_Response`` into a single terminal
-    ``_StreamChunk`` carrying content + tool-call deltas + usage + finish_reason.
-
-    Used by the buffered-fallback streaming path (see ``complete_stream``). The
-    provider-side consumer buffers all chunks and merges content / tool_calls /
-    usage across them, so one all-in-one chunk reassembles correctly.
-    """
-    choice = resp.choices[0]
-    msg = choice.message
-    tool_call_deltas: list[_StreamToolCallDelta] | None = None
-    if msg.tool_calls:
-        tool_call_deltas = [
-            _StreamToolCallDelta(
-                index=i,
-                id=tc.id,
-                type="function",
-                name=tc.function.name,
-                arguments=tc.function.arguments,
-            )
-            for i, tc in enumerate(msg.tool_calls)
-        ]
-    return _StreamChunk(
-        delta=_Delta(content=msg.content, tool_calls=tool_call_deltas),
-        usage=resp.usage,
-        model=resp.model,
-        finish_reason=choice.finish_reason,
+        # Preserve a truthful finish_reason (the chat path forwards the real one).
+        finish_reason=_responses_finish_reason(raw, has_tool_calls=bool(tool_calls)),
     )
 
 
@@ -1231,7 +1356,25 @@ async def complete_stream(
 ) -> AsyncIterator[Any]:
     """Stream an OpenAI completion as litellm-shape chunks.
 
-    OpenAI's SDK exposes streaming via ``await client.chat.completions.create(
+    Two backends, one chunk shape (consumers cannot tell them apart):
+
+    **Responses** (reasoning model + tools — issue #1334/#1336). ``await
+    client.responses.create(stream=True)`` returns an ``AsyncStream`` of
+    SEMANTIC events which are mapped as:
+
+      * ``response.created`` / ``response.in_progress`` → model id only.
+      * ``response.output_text.delta`` → chunk with ``delta.content``.
+      * ``response.output_item.added`` (``function_call``) → chunk with
+        ``delta.tool_calls`` carrying call_id + name (the argument-delta events
+        carry neither).
+      * ``response.function_call_arguments.delta`` → chunk with
+        ``delta.tool_calls`` carrying the argument fragment at the same index.
+      * ``response.output_item.done`` → backfill only (see inline note).
+      * ``response.completed`` / ``.incomplete`` / ``.failed`` → chunk with
+        usage + finish_reason.
+
+    **chat.completions** (everything else). OpenAI's SDK exposes streaming via
+    ``await client.chat.completions.create(
     stream=True)`` which returns an ``AsyncStream[ChatCompletionChunk]``.
     The adapter forces ``stream_options.include_usage=True`` so the final
     chunk carries the authoritative usage tally (matches LiteLLM's
@@ -1245,21 +1388,210 @@ async def complete_stream(
     """
     client = _build_client(model, api_key, base_url)
 
-    # Reasoning models WITH tools must use the Responses API (issue #1334).
-    # TODO(#1334): native Responses streaming. mesh does not yet stream the
-    # Responses API natively; run the call buffered and emit the terminal
-    # result as a single chunk. The provider-side consumer buffers all chunks
-    # and merges content / tool_calls / usage across them, so a single
-    # all-in-one chunk reassembles correctly (no interrupted-stream fallback
-    # is needed here — a buffered call has no partial-usage hole).
+    # Reasoning models WITH tools must use the Responses API (issue #1334) and
+    # stream it natively via semantic events (issue #1336).
     if _openai_wants_responses_api(model, request_params):
-        logger.info(
-            "Native OpenAI Responses path: buffering reasoning+tools stream "
-            "(native Responses streaming not yet implemented — #1334)"
-        )
         responses_kwargs = _build_responses_kwargs(request_params, model=model)
-        raw = await client.responses.create(**responses_kwargs)
-        yield _responses_result_to_stream_chunk(_adapt_responses_response(raw))
+        responses_kwargs["stream"] = True
+        # NOTE: no ``stream_options`` here. Responses' StreamOptions has no
+        # ``include_usage`` (usage always rides on ``response.completed``), so
+        # forwarding the chat path's option would be rejected.
+
+        # item_id → {index, id_emitted, args_emitted}. Responses identifies a
+        # streamed function call by its OUTPUT-ITEM id, and the argument-delta
+        # events carry only that ``item_id`` — never the call_id or the name
+        # (those arrive once on ``response.output_item.added``). Map each item
+        # to a contiguous 0-based tool-call ordinal so the merged shape is
+        # indistinguishable from the chat path's (``output_index`` would leak
+        # reasoning items into the numbering).
+        tool_slots: dict[str, dict[str, Any]] = {}
+        next_tc_index = 0
+        saw_tool_call = False
+
+        # Same interrupted-stream contract as the chat path below: track the
+        # last usage counters seen on the wire and flip ``final_usage_emitted``
+        # only AFTER the authoritative yield returns, so a consumer that
+        # aborts mid-yield still gets the best-effort fallback from ``finally``.
+        last_input_tokens = 0
+        last_output_tokens = 0
+        last_model: str | None = _strip_prefix(model)
+        final_usage_emitted = False
+
+        try:
+            stream = await client.responses.create(**responses_kwargs)
+            async for event in stream:
+                etype = _rget(event, "type", None)
+
+                # Every lifecycle event (created / in_progress / queued /
+                # completed / incomplete / failed) embeds the ``Response``.
+                # Harvest the model id and any usage it carries BEFORE the
+                # per-type dispatch: OpenAI itself only fills usage on the
+                # terminal event, but an OpenAI-compatible server may report it
+                # earlier — and recording whatever we saw is what makes the
+                # interrupted-stream fallback below able to publish non-zero
+                # tokens (same reason anthropic_native records message_start /
+                # message_delta counters).
+                resp_obj = _rget(event, "response", None)
+                if resp_obj is not None:
+                    model_id = _rget(resp_obj, "model", None)
+                    if model_id:
+                        last_model = model_id
+                    event_usage = _responses_usage(resp_obj)
+                    if event_usage is not None:
+                        last_input_tokens = event_usage.prompt_tokens
+                        last_output_tokens = event_usage.completion_tokens
+
+                if etype == "response.output_text.delta":
+                    text = _rget(event, "delta", "") or ""
+                    if text:
+                        yield _StreamChunk(
+                            delta=_Delta(content=text), model=last_model
+                        )
+                    continue
+
+                if etype == "response.output_item.added":
+                    item = _rget(event, "item", None)
+                    if _rget(item, "type", None) != "function_call":
+                        # reasoning / message items carry no delta of their own.
+                        continue
+                    item_id = _rget(item, "id", None) or ""
+                    slot = tool_slots.get(item_id)
+                    if slot is None:
+                        slot = {
+                            "index": next_tc_index,
+                            "id_emitted": False,
+                            "args_emitted": False,
+                        }
+                        next_tc_index += 1
+                        tool_slots[item_id] = slot
+                    saw_tool_call = True
+                    slot["id_emitted"] = True
+                    yield _StreamChunk(
+                        delta=_Delta(
+                            tool_calls=[
+                                _StreamToolCallDelta(
+                                    index=slot["index"],
+                                    # chat ``tool_call.id`` ≡ Responses ``call_id``.
+                                    id=_rget(item, "call_id", None) or item_id,
+                                    type="function",
+                                    name=_rget(item, "name", None),
+                                )
+                            ]
+                        ),
+                        model=last_model,
+                    )
+                    continue
+
+                if etype == "response.function_call_arguments.delta":
+                    item_id = _rget(event, "item_id", None) or ""
+                    slot = tool_slots.get(item_id)
+                    if slot is None:
+                        # No ``output_item.added`` seen for this item (defensive
+                        # — an OpenAI-compatible proxy that skips it). Allocate
+                        # the ordinal anyway; ``output_item.done`` backfills the
+                        # id/name so the merger doesn't drop the call.
+                        slot = {
+                            "index": next_tc_index,
+                            "id_emitted": False,
+                            "args_emitted": False,
+                        }
+                        next_tc_index += 1
+                        tool_slots[item_id] = slot
+                    fragment = _rget(event, "delta", "") or ""
+                    if not fragment:
+                        continue
+                    slot["args_emitted"] = True
+                    yield _StreamChunk(
+                        delta=_Delta(
+                            tool_calls=[
+                                _StreamToolCallDelta(
+                                    index=slot["index"], arguments=fragment
+                                )
+                            ]
+                        ),
+                        model=last_model,
+                    )
+                    continue
+
+                if etype == "response.output_item.done":
+                    # Backfill-only safety net: emit ONLY the pieces the delta
+                    # events never delivered for this call. Re-emitting already
+                    # streamed arguments would double them (the merger
+                    # concatenates), so each piece is gated on its flag.
+                    item = _rget(event, "item", None)
+                    if _rget(item, "type", None) != "function_call":
+                        continue
+                    item_id = _rget(item, "id", None) or ""
+                    slot = tool_slots.get(item_id)
+                    if slot is None:
+                        slot = {
+                            "index": next_tc_index,
+                            "id_emitted": False,
+                            "args_emitted": False,
+                        }
+                        next_tc_index += 1
+                        tool_slots[item_id] = slot
+                    args = _rget(item, "arguments", None)
+                    need_id = not slot["id_emitted"]
+                    need_args = not slot["args_emitted"] and bool(args)
+                    if not (need_id or need_args):
+                        continue
+                    saw_tool_call = True
+                    slot["id_emitted"] = slot["id_emitted"] or need_id
+                    slot["args_emitted"] = slot["args_emitted"] or need_args
+                    yield _StreamChunk(
+                        delta=_Delta(
+                            tool_calls=[
+                                _StreamToolCallDelta(
+                                    index=slot["index"],
+                                    id=(
+                                        (_rget(item, "call_id", None) or item_id)
+                                        if need_id
+                                        else None
+                                    ),
+                                    type="function" if need_id else None,
+                                    name=_rget(item, "name", None) if need_id else None,
+                                    arguments=args if need_args else None,
+                                )
+                            ]
+                        ),
+                        model=last_model,
+                    )
+                    continue
+
+                if etype in _RESPONSES_TERMINAL_EVENTS:
+                    # ``response.completed`` / ``.incomplete`` / ``.failed`` all
+                    # carry the finished Response — where OpenAI reports the
+                    # authoritative usage (already harvested above).
+                    if resp_obj is None:
+                        continue
+                    usage = _responses_usage(resp_obj)
+                    yield _StreamChunk(
+                        delta=_Delta(),
+                        usage=usage,
+                        model=last_model,
+                        finish_reason=_responses_finish_reason(
+                            resp_obj, has_tool_calls=saw_tool_call
+                        ),
+                    )
+                    if usage is not None:
+                        final_usage_emitted = True
+                    continue
+        finally:
+            # Identical contract to the chat path's finally below — see there
+            # for the full rationale.
+            if not final_usage_emitted and (last_input_tokens or last_output_tokens):
+                try:
+                    yield _StreamChunk(
+                        delta=_Delta(),
+                        usage=_Usage(
+                            prompt_tokens=last_input_tokens,
+                            completion_tokens=last_output_tokens,
+                        ),
+                        model=last_model,
+                    )
+                except (GeneratorExit, StopAsyncIteration):
+                    pass
         return
 
     create_kwargs = _build_create_kwargs(request_params, model=model)

@@ -1912,31 +1912,34 @@ class TestBuildResponsesKwargs:
             "content": [{"type": "output_text", "text": "Sure thing."}],
         } in kwargs["input"]
 
-    def test_image_part_array_raises_value_error(self):
-        """An image (or any non-text) content part raises a clear ValueError
-        rather than forwarding an untranslated shape that yields a cryptic
-        OpenAI 400."""
-        with pytest.raises(ValueError) as exc_info:
-            openai_native._build_responses_kwargs(
-                {
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": "What is this?"},
-                                {
-                                    "type": "image_url",
-                                    "image_url": {"url": "https://x/y.png"},
-                                },
-                            ],
-                        }
-                    ]
-                },
-                model="openai/gpt-5.6-terra",
-            )
-        msg = str(exc_info.value)
-        assert "multimodal image content" in msg
-        assert "non-reasoning model" in msg
+    def test_unsupported_part_type_raises_value_error(self):
+        """A genuinely untranslatable content part still raises a clear
+        ValueError rather than forwarding a chat-shape part that yields a
+        cryptic OpenAI 400. (Images are translated — see
+        ``TestResponsesImageTranslation`` — but e.g. Anthropic-shape ``image``
+        blocks or audio parts are not.)"""
+        for part in (
+            {"type": "image", "source": {"type": "base64", "data": "AAA"}},
+            {"type": "input_audio", "input_audio": {"data": "AAA"}},
+        ):
+            with pytest.raises(ValueError) as exc_info:
+                openai_native._build_responses_kwargs(
+                    {
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": "What is this?"},
+                                    part,
+                                ],
+                            }
+                        ]
+                    },
+                    model="openai/gpt-5.6-terra",
+                )
+            msg = str(exc_info.value)
+            assert "content part type" in msg
+            assert "non-reasoning model" in msg
 
     def test_tool_call_arguments_none_coerced_to_empty_string(self):
         """A stored ``arguments`` of explicit ``None`` must become ``""`` —
@@ -2260,21 +2263,15 @@ class TestResponsesDispatch:
         instance.responses.create.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_stream_reasoning_with_tools_buffers_via_responses(self):
-        """Streaming reasoning+tools falls back to a buffered Responses call and
-        emits a single terminal chunk carrying content + usage."""
-        cls_mock, instance = _patched_dual_openai(
-            chat_response=_make_openai_completion(text="chat"),
-            responses_response=_make_responses_response(
-                output=[
-                    {
-                        "type": "message",
-                        "content": [{"type": "output_text", "text": "buffered"}],
-                    }
-                ],
-                input_tokens=9,
-                output_tokens=3,
-            ),
+    async def test_stream_reasoning_with_tools_uses_responses_stream(self):
+        """Streaming reasoning+tools hits ``responses.create(stream=True)`` —
+        NOT chat.completions, and NOT a buffered non-streaming call (#1336)."""
+        cls_mock, instance = _patched_responses_stream(
+            [
+                _ev_created(),
+                _ev_text_delta("hi"),
+                _ev_completed(),
+            ]
         )
         with patch("openai.AsyncOpenAI", cls_mock):
             stream = openai_native.complete_stream(
@@ -2285,45 +2282,808 @@ class TestResponsesDispatch:
                 model="openai/gpt-5.6-terra",
                 api_key="sk-test",
             )
-            chunks = [c async for c in stream]
+            async for _ in stream:
+                pass
 
-        instance.responses.create.assert_called_once()
         instance.chat.completions.create.assert_not_called()
-        # Single terminal chunk with content + usage.
-        assert len(chunks) == 1
-        assert chunks[0].choices[0].delta.content == "buffered"
-        assert chunks[0].usage.prompt_tokens == 9
-        assert chunks[0].usage.completion_tokens == 3
+        instance.responses.create.assert_called_once()
+        kwargs = instance.responses.create.call_args.kwargs
+        assert kwargs["stream"] is True
+        # Responses' StreamOptions has no ``include_usage`` — forwarding the
+        # chat path's option would be rejected by the API.
+        assert "stream_options" not in kwargs
 
-    @pytest.mark.asyncio
-    async def test_stream_reasoning_with_tools_emits_tool_call_delta(self):
-        cls_mock, instance = _patched_dual_openai(
-            chat_response=_make_openai_completion(text="chat"),
-            responses_response=_make_responses_response(
-                output=[
+
+# ---------------------------------------------------------------------------
+# Multimodal input translation — chat image parts → Responses input_image
+# (issue #1336). Shape source: openai.types.responses.ResponseInputImageParam
+# in the installed SDK — a FLAT part with ``image_url`` as a plain string
+# ("a fully qualified URL or base64 encoded image in a data URL") and a
+# REQUIRED ``detail`` of low/high/auto.
+# ---------------------------------------------------------------------------
+
+
+def _translate_user_content(content):
+    """Run one user message's content through the Responses builder and return
+    the translated content of the resulting input item."""
+    kwargs = openai_native._build_responses_kwargs(
+        {"messages": [{"role": "user", "content": content}]},
+        model="openai/gpt-5.6-terra",
+    )
+    return kwargs["input"][0]["content"]
+
+
+class TestResponsesImageTranslation:
+    def test_image_part_no_longer_raises(self):
+        """Regression for the #1334 deferral: an image part used to raise a
+        deliberate ValueError on this path. It must now translate."""
+        parts = _translate_user_content(
+            [
+                {"type": "text", "text": "What is this?"},
+                {"type": "image_url", "image_url": {"url": "https://x/y.png"}},
+            ]
+        )
+        assert [p["type"] for p in parts] == ["input_text", "input_image"]
+
+    def test_mesh_resolver_shape_translated(self):
+        """The exact shape mesh's own emitter produces
+        (``_mcp_mesh.media.resolver._format_for_openai``): a base64 data URI
+        with ``detail="high"`` nested under ``image_url``."""
+        data_uri = "data:image/png;base64,iVBORw0KGgo="
+        parts = _translate_user_content(
+            [{"type": "image_url", "image_url": {"url": data_uri, "detail": "high"}}]
+        )
+        assert parts == [
+            {"type": "input_image", "image_url": data_uri, "detail": "high"}
+        ]
+
+    def test_https_url_form_translated(self):
+        parts = _translate_user_content(
+            [{"type": "image_url", "image_url": {"url": "https://x/y.png"}}]
+        )
+        # URL and data-URI both ride in the same ``image_url`` string field.
+        assert parts[0]["image_url"] == "https://x/y.png"
+        assert parts[0]["type"] == "input_image"
+
+    def test_bare_string_image_url_form_translated(self):
+        """Some clients send ``image_url`` as a bare string; the Anthropic and
+        Gemini adapters accept it, so this path must too."""
+        parts = _translate_user_content(
+            [{"type": "image_url", "image_url": "https://x/y.png"}]
+        )
+        assert parts[0] == {
+            "type": "input_image",
+            "image_url": "https://x/y.png",
+            "detail": "auto",
+        }
+
+    def test_detail_defaults_to_auto_when_absent(self):
+        """``detail`` is Required in ResponseInputImageParam — always emit one."""
+        parts = _translate_user_content(
+            [{"type": "image_url", "image_url": {"url": "https://x/y.png"}}]
+        )
+        assert parts[0]["detail"] == "auto"
+
+    @pytest.mark.parametrize("detail", ["low", "high", "auto"])
+    def test_valid_detail_forwarded(self, detail):
+        parts = _translate_user_content(
+            [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://x/y.png", "detail": detail},
+                }
+            ]
+        )
+        assert parts[0]["detail"] == detail
+
+    def test_every_detail_the_installed_sdk_accepts_is_forwarded(self):
+        """The allowlist must track the INSTALLED SDK, not a frozen trio.
+
+        ``openai`` is unpinned and this enum grows — 2.52.0 added ``original``
+        to low/high/auto. A hard-coded set silently downgrades a valid caller
+        value to ``auto``. Parametrising over the SDK's own Literal means this
+        test keeps its meaning on whatever version CI resolves.
+        """
+        import typing
+
+        from openai.types.responses import ResponseInputImageParam
+
+        hints = typing.get_type_hints(ResponseInputImageParam, include_extras=True)
+        sdk_details = openai_native._literal_strings(hints["detail"])
+        assert sdk_details, "could not read the SDK's detail Literal"
+        assert sdk_details <= openai_native._valid_image_details()
+
+        for detail in sorted(sdk_details):
+            parts = _translate_user_content(
+                [
                     {
-                        "type": "function_call",
-                        "call_id": "call_s1",
-                        "name": "get_weather",
-                        "arguments": '{"city": "Paris"}',
+                        "type": "image_url",
+                        "image_url": {"url": "https://x/y.png", "detail": detail},
                     }
                 ]
-            ),
+            )
+            assert parts[0]["detail"] == detail, (
+                f"detail={detail!r} is valid for the installed openai SDK but "
+                "the adapter downgraded it"
+            )
+
+    def test_detail_on_part_root_accepted(self):
+        parts = _translate_user_content(
+            [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://x/y.png"},
+                    "detail": "low",
+                }
+            ]
         )
+        assert parts[0]["detail"] == "low"
+
+    def test_invalid_detail_warns_and_falls_back_to_auto(self, caplog):
+        """OpenAI only accepts low/high/auto — anything else would 400. Soft-fail
+        to the default with a WARN rather than forwarding the bad value."""
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger=openai_native.logger.name):
+            parts = _translate_user_content(
+                [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://x/y.png", "detail": "ultra"},
+                    }
+                ]
+            )
+        assert parts[0]["detail"] == "auto"
+        assert any("ultra" in r.getMessage() for r in caplog.records)
+
+    def test_image_part_without_url_raises(self):
+        with pytest.raises(ValueError) as exc_info:
+            _translate_user_content([{"type": "image_url", "image_url": {}}])
+        assert "no usable url" in str(exc_info.value)
+
+    def test_already_responses_shaped_parts_pass_through(self):
+        """Translation is idempotent — re-running it over already-Responses
+        shapes must not raise or rewrite them."""
+        native = [
+            {"type": "input_text", "text": "hi"},
+            {"type": "input_image", "image_url": "https://x/y.png", "detail": "low"},
+        ]
+        assert _translate_user_content(native) == native
+
+    def test_mixed_text_and_image_ordering_preserved(self):
+        parts = _translate_user_content(
+            [
+                {"type": "text", "text": "before"},
+                {"type": "image_url", "image_url": {"url": "https://x/y.png"}},
+                {"type": "text", "text": "after"},
+            ]
+        )
+        assert [p["type"] for p in parts] == [
+            "input_text",
+            "input_image",
+            "input_text",
+        ]
+
+
+# ---------------------------------------------------------------------------
+# Native Responses streaming (issue #1336)
+#
+# Events are built from the OpenAI SDK's OWN Pydantic models
+# (openai.types.responses.*) rather than hand-rolled namespaces, so the field
+# names/required-ness the adapter reads are exactly what the SDK emits.
+# ---------------------------------------------------------------------------
+
+
+def _zero_filled(model_cls, known: dict | None = None) -> dict:
+    """``known`` plus a 0 for every OTHER required field on ``model_cls``.
+
+    Version-robustness for the token-counter models (see ``_sdk_usage``). Reads
+    the required-field set off the INSTALLED SDK rather than hard-coding it, so
+    a newly-added required counter is absorbed automatically.
+
+    Non-int required additions would fail ``model_validate`` — deliberately, and
+    in this one helper rather than across every streaming test.
+    """
+    out = dict(known or {})
+    for name, field in model_cls.model_fields.items():
+        if name not in out and field.is_required():
+            out[name] = 0
+    return out
+
+
+def _sdk_usage(input_tokens: int, output_tokens: int) -> dict:
+    """A ``ResponseUsage`` payload valid for whatever openai version is installed.
+
+    The adapter reads exactly two fields off usage — ``input_tokens`` and
+    ``output_tokens`` (see ``_responses_usage``). The nested ``*_tokens_details``
+    breakdowns are counters it never touches, so pinning their exact field set
+    into fixtures buys zero coverage while coupling the whole streaming suite to
+    one SDK version: ``openai`` is unpinned, and 2.52.0 added a required
+    ``InputTokensDetails.cache_write_tokens`` that broke 16 tests at once on CI
+    while passing locally on 2.14.0.
+
+    So: hard-code only what the adapter actually reads (still fully validated by
+    ``model_validate``, so the fields under test keep their real required-ness),
+    and derive the rest from the installed models. A future counter addition is
+    absorbed here, in ONE place.
+    """
+    from openai.types.responses.response_usage import (
+        InputTokensDetails,
+        OutputTokensDetails,
+        ResponseUsage,
+    )
+
+    return _zero_filled(
+        ResponseUsage,
+        {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+            "input_tokens_details": _zero_filled(InputTokensDetails),
+            "output_tokens_details": _zero_filled(OutputTokensDetails),
+        },
+    )
+
+
+def _sdk_response(
+    *,
+    status="completed",
+    usage=(11, 5),
+    model="gpt-5.6-terra",
+    incomplete_details=None,
+):
+    """Build a real ``openai.types.responses.Response``."""
+    from openai.types.responses import Response
+
+    payload = {
+        "id": "resp_1",
+        "created_at": 0,
+        "model": model,
+        "object": "response",
+        "output": [],
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+        "status": status,
+    }
+    if usage is not None:
+        payload["usage"] = _sdk_usage(usage[0], usage[1])
+    if incomplete_details is not None:
+        payload["incomplete_details"] = incomplete_details
+    return Response.model_validate(payload)
+
+
+def _ev_created(**kw):
+    from openai.types.responses import ResponseCreatedEvent
+
+    kw.setdefault("usage", None)
+    return ResponseCreatedEvent(
+        response=_sdk_response(status="in_progress", **kw),
+        sequence_number=0,
+        type="response.created",
+    )
+
+
+def _ev_text_delta(text, *, item_id="msg_1", output_index=1, seq=1):
+    from openai.types.responses import ResponseTextDeltaEvent
+
+    return ResponseTextDeltaEvent(
+        content_index=0,
+        delta=text,
+        item_id=item_id,
+        logprobs=[],
+        output_index=output_index,
+        sequence_number=seq,
+        type="response.output_text.delta",
+    )
+
+
+def _fc_item(*, item_id="fc_1", call_id="call_abc", name="get_weather", arguments=""):
+    from openai.types.responses import ResponseFunctionToolCall
+
+    return ResponseFunctionToolCall(
+        arguments=arguments,
+        call_id=call_id,
+        name=name,
+        type="function_call",
+        id=item_id,
+        status="in_progress",
+    )
+
+
+def _ev_item_added(item, *, output_index=1, seq=2):
+    from openai.types.responses import ResponseOutputItemAddedEvent
+
+    return ResponseOutputItemAddedEvent(
+        item=item,
+        output_index=output_index,
+        sequence_number=seq,
+        type="response.output_item.added",
+    )
+
+
+def _ev_item_done(item, *, output_index=1, seq=8):
+    from openai.types.responses import ResponseOutputItemDoneEvent
+
+    return ResponseOutputItemDoneEvent(
+        item=item,
+        output_index=output_index,
+        sequence_number=seq,
+        type="response.output_item.done",
+    )
+
+
+def _ev_args_delta(fragment, *, item_id="fc_1", output_index=1, seq=3):
+    from openai.types.responses import ResponseFunctionCallArgumentsDeltaEvent
+
+    return ResponseFunctionCallArgumentsDeltaEvent(
+        delta=fragment,
+        item_id=item_id,
+        output_index=output_index,
+        sequence_number=seq,
+        type="response.function_call_arguments.delta",
+    )
+
+
+def _ev_completed(*, usage=(11, 5), seq=9):
+    from openai.types.responses import ResponseCompletedEvent
+
+    return ResponseCompletedEvent(
+        response=_sdk_response(status="completed", usage=usage),
+        sequence_number=seq,
+        type="response.completed",
+    )
+
+
+def _ev_incomplete(*, reason="max_output_tokens", usage=(11, 5), seq=9):
+    from openai.types.responses import ResponseIncompleteEvent
+
+    return ResponseIncompleteEvent(
+        response=_sdk_response(
+            status="incomplete",
+            usage=usage,
+            incomplete_details={"reason": reason},
+        ),
+        sequence_number=seq,
+        type="response.incomplete",
+    )
+
+
+def _patched_responses_stream(events, *, stream_obj=None):
+    """(cls_mock, instance) whose ``responses.create`` returns an async stream
+    of the given semantic events."""
+    instance = MagicMock()
+    instance.chat = MagicMock()
+    instance.chat.completions = MagicMock()
+    instance.chat.completions.create = AsyncMock()
+    instance.responses = MagicMock()
+    instance.responses.create = AsyncMock(
+        return_value=stream_obj if stream_obj is not None else _FakeAsyncStream(events)
+    )
+    cls_mock = MagicMock(return_value=instance)
+    return cls_mock, instance
+
+
+_STREAM_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Look up weather.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+]
+
+
+async def _run_responses_stream(events, *, stream_obj=None, tools=True):
+    """Drive ``complete_stream`` over the given events; return the chunks."""
+    cls_mock, instance = _patched_responses_stream(events, stream_obj=stream_obj)
+    params = {"messages": [{"role": "user", "content": "Hi."}]}
+    if tools:
+        params["tools"] = _STREAM_TOOLS
+    with patch("openai.AsyncOpenAI", cls_mock):
+        stream = openai_native.complete_stream(
+            params, model="openai/gpt-5.6-terra", api_key="sk-test"
+        )
+        return [c async for c in stream]
+
+
+def _contents(chunks):
+    out = []
+    for c in chunks:
+        if c.choices:
+            text = getattr(c.choices[0].delta, "content", None)
+            if text:
+                out.append(text)
+    return out
+
+
+class TestResponsesNativeStreaming:
+    @pytest.mark.asyncio
+    async def test_text_deltas_stream_incrementally_not_one_blob(self):
+        """The whole point of #1336: N text deltas produce N content chunks,
+        not one terminal blob."""
+        chunks = await _run_responses_stream(
+            [
+                _ev_created(),
+                _ev_text_delta("Hello "),
+                _ev_text_delta("from "),
+                _ev_text_delta("Responses"),
+                _ev_completed(),
+            ]
+        )
+        pieces = _contents(chunks)
+        assert len(pieces) == 3
+        assert "".join(pieces) == "Hello from Responses"
+
+    @pytest.mark.asyncio
+    async def test_empty_text_delta_yields_no_chunk(self):
+        chunks = await _run_responses_stream(
+            [_ev_created(), _ev_text_delta(""), _ev_completed()]
+        )
+        assert _contents(chunks) == []
+
+    @pytest.mark.asyncio
+    async def test_completed_event_carries_usage_and_model(self):
+        chunks = await _run_responses_stream(
+            [_ev_created(), _ev_text_delta("hi"), _ev_completed(usage=(31, 7))]
+        )
+        usage_chunks = [c for c in chunks if c.usage is not None]
+        assert len(usage_chunks) == 1
+        assert usage_chunks[0].usage.prompt_tokens == 31
+        assert usage_chunks[0].usage.completion_tokens == 7
+        assert usage_chunks[0].usage.total_tokens == 38
+        assert "gpt-5.6-terra" in [c.model for c in chunks if c.model]
+
+    @pytest.mark.asyncio
+    async def test_completed_terminal_chunk_is_last_and_carries_finish_reason(self):
+        chunks = await _run_responses_stream(
+            [_ev_created(), _ev_text_delta("hi"), _ev_completed()]
+        )
+        assert chunks[-1].usage is not None
+        assert chunks[-1].choices[0].finish_reason == "stop"
+
+    @pytest.mark.asyncio
+    async def test_incomplete_event_maps_finish_reason_length(self):
+        chunks = await _run_responses_stream(
+            [
+                _ev_created(),
+                _ev_text_delta("trunc"),
+                _ev_incomplete(reason="max_output_tokens"),
+            ]
+        )
+        assert chunks[-1].choices[0].finish_reason == "length"
+        assert chunks[-1].usage is not None
+
+    @pytest.mark.asyncio
+    async def test_tool_call_deltas_merge_via_agent_merger(self):
+        """The streamed tool-call shape must reassemble through the SAME merger
+        the chat path's chunks go through — consumers can't tell the paths
+        apart."""
+        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+
+        item = _fc_item()
+        chunks = await _run_responses_stream(
+            [
+                _ev_created(),
+                _ev_item_added(item),
+                _ev_args_delta('{"city"'),
+                _ev_args_delta(': "Paris"}'),
+                _ev_item_done(
+                    item.model_copy(
+                        update={"arguments": '{"city": "Paris"}', "status": "completed"}
+                    )
+                ),
+                _ev_completed(),
+            ]
+        )
+        merged = MeshLlmAgent._merge_streamed_tool_calls(chunks)
+        assert len(merged) == 1
+        tc = merged[0]
+        assert tc["id"] == "call_abc"
+        assert tc["type"] == "function"
+        assert tc["function"]["name"] == "get_weather"
+        assert tc["function"]["arguments"] == '{"city": "Paris"}'
+        assert any(MeshLlmAgent._chunk_has_tool_call(c) for c in chunks)
+
+    @pytest.mark.asyncio
+    async def test_argument_deltas_arrive_as_separate_chunks(self):
+        """Argument fragments stream incrementally rather than as one blob."""
+        item = _fc_item()
+        chunks = await _run_responses_stream(
+            [
+                _ev_created(),
+                _ev_item_added(item),
+                _ev_args_delta('{"city"'),
+                _ev_args_delta(': "Paris"}'),
+                _ev_completed(),
+            ]
+        )
+        arg_chunks = [
+            c
+            for c in chunks
+            if c.choices
+            and c.choices[0].delta.tool_calls
+            and c.choices[0].delta.tool_calls[0].function.arguments
+        ]
+        assert len(arg_chunks) == 2
+
+    @pytest.mark.asyncio
+    async def test_output_item_done_does_not_double_arguments(self):
+        """``output_item.done`` repeats the FULL arguments string. Re-emitting
+        it would double the JSON through the concatenating merger."""
+        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+
+        item = _fc_item()
+        chunks = await _run_responses_stream(
+            [
+                _ev_created(),
+                _ev_item_added(item),
+                _ev_args_delta('{"city": "Paris"}'),
+                _ev_item_done(
+                    item.model_copy(update={"arguments": '{"city": "Paris"}'})
+                ),
+                _ev_completed(),
+            ]
+        )
+        merged = MeshLlmAgent._merge_streamed_tool_calls(chunks)
+        assert merged[0]["function"]["arguments"] == '{"city": "Paris"}'
+
+    @pytest.mark.asyncio
+    async def test_output_item_done_backfills_when_added_missing(self):
+        """Defensive: an OpenAI-compatible server that skips
+        ``output_item.added`` would otherwise lose the call_id/name and the
+        merger would DROP the whole tool call (it discards id-less slots)."""
+        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+
+        item = _fc_item()
+        chunks = await _run_responses_stream(
+            [
+                _ev_created(),
+                _ev_args_delta('{"city": "Paris"}'),
+                _ev_item_done(
+                    item.model_copy(update={"arguments": '{"city": "Paris"}'})
+                ),
+                _ev_completed(),
+            ]
+        )
+        merged = MeshLlmAgent._merge_streamed_tool_calls(chunks)
+        assert len(merged) == 1
+        assert merged[0]["id"] == "call_abc"
+        assert merged[0]["function"]["name"] == "get_weather"
+        assert merged[0]["function"]["arguments"] == '{"city": "Paris"}'
+
+    @pytest.mark.asyncio
+    async def test_parallel_tool_calls_get_contiguous_zero_based_indices(self):
+        """Responses numbers items by ``output_index`` (reasoning items occupy
+        slots too); the adapter must re-key to the chat path's contiguous
+        0-based tool-call ordinals."""
+        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+
+        a = _fc_item(item_id="fc_a", call_id="call_a", name="get_weather")
+        b = _fc_item(item_id="fc_b", call_id="call_b", name="get_time")
+        chunks = await _run_responses_stream(
+            [
+                _ev_created(),
+                # output_index 1 and 2 — index 0 was a reasoning item.
+                _ev_item_added(a, output_index=1),
+                _ev_item_added(b, output_index=2),
+                _ev_args_delta('{"city": "Paris"}', item_id="fc_a"),
+                _ev_args_delta('{"tz": "CET"}', item_id="fc_b"),
+                _ev_completed(),
+            ]
+        )
+        indices = sorted(
+            {
+                tc.index
+                for c in chunks
+                if c.choices and c.choices[0].delta.tool_calls
+                for tc in c.choices[0].delta.tool_calls
+            }
+        )
+        assert indices == [0, 1]
+        merged = MeshLlmAgent._merge_streamed_tool_calls(chunks)
+        assert [m["id"] for m in merged] == ["call_a", "call_b"]
+        assert merged[0]["function"]["arguments"] == '{"city": "Paris"}'
+        assert merged[1]["function"]["arguments"] == '{"tz": "CET"}'
+
+    @pytest.mark.asyncio
+    async def test_finish_reason_is_tool_calls_when_tools_streamed(self):
+        chunks = await _run_responses_stream(
+            [
+                _ev_created(),
+                _ev_item_added(_fc_item()),
+                _ev_args_delta("{}"),
+                _ev_completed(),
+            ]
+        )
+        assert chunks[-1].choices[0].finish_reason == "tool_calls"
+
+    @pytest.mark.asyncio
+    async def test_unknown_event_types_ignored(self):
+        """Responses emits many events mesh doesn't map (reasoning summaries,
+        content_part.added, web_search, ...). They must be skipped, not crash."""
+        from openai.types.responses import ResponseReasoningSummaryTextDeltaEvent
+
+        noise = ResponseReasoningSummaryTextDeltaEvent(
+            delta="thinking...",
+            item_id="rs_1",
+            output_index=0,
+            sequence_number=1,
+            summary_index=0,
+            type="response.reasoning_summary_text.delta",
+        )
+        chunks = await _run_responses_stream(
+            [_ev_created(), noise, _ev_text_delta("hi"), _ev_completed()]
+        )
+        assert _contents(chunks) == ["hi"]
+
+
+# ---------------------------------------------------------------------------
+# Responses streaming — interrupted-stream usage fallback (#1336)
+# Mirrors TestStreamInterruptionUsage on the chat path.
+# ---------------------------------------------------------------------------
+
+
+class _RaisingResponsesStream:
+    """Async stream that raises partway through — models a server cutoff."""
+
+    def __init__(self, events, exc=None):
+        self._events = events
+        self._exc = exc or RuntimeError("server cutoff")
+
+    def __aiter__(self):
+        async def _gen():
+            for e in self._events:
+                if e == "RAISE":
+                    raise self._exc
+                yield e
+
+        return _gen()
+
+
+class TestResponsesStreamInterruptionUsage:
+    @pytest.mark.asyncio
+    async def test_no_double_usage_when_terminal_chunk_delivered(self):
+        """The authoritative usage chunk reached the consumer, so the ``finally``
+        fallback must NOT also fire (matches the chat path's invariant)."""
+        chunks = await _run_responses_stream(
+            [_ev_created(), _ev_text_delta("hi"), _ev_completed(usage=(8, 2))]
+        )
+        usage_chunks = [c for c in chunks if c.usage is not None]
+        assert len(usage_chunks) == 1
+        assert usage_chunks[0].usage.prompt_tokens == 8
+        assert usage_chunks[0].usage.completion_tokens == 2
+
+    @pytest.mark.asyncio
+    async def test_no_usage_chunk_when_no_usage_ever_observed(self):
+        """Stream cut before any usage was seen: counters are 0 and the fallback
+        must NOT emit a misleading 0-token usage chunk."""
+        stream_obj = _RaisingResponsesStream(
+            [_ev_created(), _ev_text_delta("partial"), "RAISE"]
+        )
+        cls_mock, _ = _patched_responses_stream([], stream_obj=stream_obj)
+        raised = None
+        chunks = []
         with patch("openai.AsyncOpenAI", cls_mock):
             stream = openai_native.complete_stream(
                 {
                     "messages": [{"role": "user", "content": "Hi."}],
-                    "tools": self._TOOLS,
+                    "tools": _STREAM_TOOLS,
                 },
                 model="openai/gpt-5.6-terra",
                 api_key="sk-test",
             )
-            chunks = [c async for c in stream]
+            try:
+                async for c in stream:
+                    chunks.append(c)
+            except RuntimeError as exc:
+                raised = exc
 
-        instance.responses.create.assert_called_once()
-        tcs = chunks[0].choices[0].delta.tool_calls
-        assert tcs is not None and len(tcs) == 1
-        assert tcs[0].id == "call_s1"
-        assert tcs[0].function.name == "get_weather"
-        assert tcs[0].function.arguments == '{"city": "Paris"}'
+        assert raised is not None and "server cutoff" in str(raised)
+        assert [c for c in chunks if c.usage is not None] == []
+
+    @pytest.mark.asyncio
+    async def test_emits_best_effort_usage_when_stream_cut_after_usage_seen(self):
+        """Usage was observed on the wire but the authoritative terminal chunk
+        never reached the consumer — the ``finally`` block must publish a
+        best-effort usage chunk so telemetry doesn't record 0 tokens for a
+        partial generation."""
+        # A server that reports usage on an early lifecycle event and then
+        # drops the connection before ``response.completed``.
+        early = _ev_created(usage=(17, 4))
+        stream_obj = _RaisingResponsesStream(
+            [early, _ev_text_delta("partial"), "RAISE"]
+        )
+        cls_mock, _ = _patched_responses_stream([], stream_obj=stream_obj)
+        raised = None
+        chunks = []
+        with patch("openai.AsyncOpenAI", cls_mock):
+            stream = openai_native.complete_stream(
+                {
+                    "messages": [{"role": "user", "content": "Hi."}],
+                    "tools": _STREAM_TOOLS,
+                },
+                model="openai/gpt-5.6-terra",
+                api_key="sk-test",
+            )
+            try:
+                async for c in stream:
+                    chunks.append(c)
+            except RuntimeError as exc:
+                raised = exc
+
+        assert raised is not None
+        usage_chunks = [c for c in chunks if c.usage is not None]
+        assert len(usage_chunks) == 1, "expected the best-effort fallback chunk"
+        assert usage_chunks[0].usage.prompt_tokens == 17
+        assert usage_chunks[0].usage.completion_tokens == 4
+        assert usage_chunks[0].model == "gpt-5.6-terra"
+
+    @pytest.mark.asyncio
+    async def test_consumer_abort_teardown_matches_chat_path(self):
+        """Consumer abandons the stream and ``aclose()``s it while the
+        ``finally`` fallback still wants to yield.
+
+        Python raises ``RuntimeError: async generator ignored GeneratorExit``
+        here — the ``except (GeneratorExit, StopAsyncIteration)`` guard does NOT
+        intercept it, because the yield *succeeds* and it is the aclose
+        machinery that objects. This is PRE-EXISTING shared behaviour of the
+        chat path (and anthropic_native), not a Responses-path quirk, and
+        helpers.py's consumer wraps its aclose() in ``except Exception`` — so
+        the Responses path must behave identically rather than invent new
+        semantics. Asserted as an explicit parity check so a future fix moves
+        both paths together.
+        """
+
+        async def _abort_after_first(stream):
+            async for _ in stream:
+                break
+            try:
+                await stream.aclose()
+                return None
+            except Exception as exc:  # noqa: BLE001 — that's the comparison
+                return type(exc).__name__
+
+        # --- Responses path -------------------------------------------------
+        cls_mock, _ = _patched_responses_stream(
+            [
+                _ev_created(usage=(5, 3)),
+                _ev_text_delta("one"),
+                _ev_text_delta("two"),
+                _ev_completed(),
+            ]
+        )
+        with patch("openai.AsyncOpenAI", cls_mock):
+            responses_outcome = await _abort_after_first(
+                openai_native.complete_stream(
+                    {
+                        "messages": [{"role": "user", "content": "Hi."}],
+                        "tools": _STREAM_TOOLS,
+                    },
+                    model="openai/gpt-5.6-terra",
+                    api_key="sk-test",
+                )
+            )
+
+        # --- chat.completions path (same scenario: usage seen, then abort) ---
+        chat_chunks = [
+            _make_stream_chunk(
+                usage={"prompt_tokens": 5, "completion_tokens": 3},
+                model="gpt-4o-mini",
+            ),
+            _make_stream_chunk(content="one"),
+            _make_stream_chunk(content="two"),
+        ]
+        cls_mock2, _ = _patched_streaming_openai(chat_chunks)
+        with patch("openai.AsyncOpenAI", cls_mock2):
+            chat_outcome = await _abort_after_first(
+                openai_native.complete_stream(
+                    {"messages": [{"role": "user", "content": "Hi."}]},
+                    model="openai/gpt-4o-mini",
+                    api_key="sk-test",
+                )
+            )
+
+        assert responses_outcome == chat_outcome

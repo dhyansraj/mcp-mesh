@@ -21,6 +21,7 @@ Real network calls are mocked except in the live test class.
 
 from __future__ import annotations
 
+import json
 import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -459,3 +460,436 @@ class TestLiveRefusalIntegration:
                 (content or "")[:200]
             )
         )
+
+
+# ---------------------------------------------------------------------------
+# Live integration tests — Responses API native streaming + vision (#1336)
+#
+# These ARE the acceptance criteria of issue #1336, which are live smoke tests
+# by nature: the mocked unit tests in ``test_openai_native.py`` pin the event
+# mapping against the SDK's own types, but only a real call proves OpenAI
+# accepts what we send and streams what we expect. Same double gate as
+# ``TestLiveRefusalIntegration`` above.
+#
+# Skip-vs-fail policy, deliberately split:
+#   * MODEL BEHAVIOUR variance (declining to call the tool, describing the
+#     image oddly) → ``pytest.skip`` — out of our control.
+#   * MESH SHAPE violations (one terminal blob instead of deltas, missing
+#     usage, unmergeable tool call, image part rejected) → ``assert`` — that
+#     is precisely what #1336 changed and what a regression would break.
+# ---------------------------------------------------------------------------
+
+
+# Reasoning-model id used for the live Responses probes. Overridable because
+# gpt-5-family ids churn faster than this file does; any gpt-5 non-chat or
+# o-series id routes to the Responses API (see is_openai_reasoning_model).
+_LIVE_REASONING_MODEL_ENV = "MCP_MESH_LIVE_OPENAI_REASONING_MODEL"
+_LIVE_REASONING_MODEL = os.environ.get(
+    _LIVE_REASONING_MODEL_ENV, "openai/gpt-5.6-terra"
+)
+
+_LIVE_WEATHER_TOOL = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get the current weather for a city.",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+                "additionalProperties": False,
+            },
+        },
+    }
+]
+
+
+def _solid_red_png_data_uri(size: int = 512) -> str:
+    """A solid-red (#FF0000) PNG as a base64 data URI, generated in-process.
+
+    Deliberately NOT a committed binary fixture. The shape is exactly what
+    mesh's own emitter produces — ``_mcp_mesh.media.resolver._format_for_openai``
+    builds ``data:<mime>;base64,<data>`` — so the live probe exercises the real
+    upstream payload rather than a hand-written URL. Pure stdlib (zlib+struct);
+    no Pillow dependency.
+
+512px rather than a handful of pixels, for two measured reasons. (1) OpenAI's
+    vision pipeline rescales and re-encodes the input; on an 8x8 source the hue
+    shifted enough that gpt-5.6-terra described pure #FF0000 as "orange".
+    (2) gpt-5-family models bill images as 32x32 patches, so a small image
+    contributes only a handful of input tokens — too weak a signal for the
+    token-delta assertion below. 512px ≈ 256 patches, an unmistakable delta.
+    A solid colour compresses to ~1KB regardless of dimensions.
+    """
+    import base64
+    import struct
+    import zlib
+
+    width = height = size
+    # Raw scanlines: filter byte 0 + RGB triplets, all pure red.
+    raw = b"".join(b"\x00" + b"\xff\x00\x00" * width for _ in range(height))
+
+    def _chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        )
+
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + _chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + _chunk(b"IDAT", zlib.compress(raw))
+        + _chunk(b"IEND", b"")
+    )
+    return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+
+
+def _chunk_text(chunk) -> str | None:
+    """Content delta off a mesh ``_StreamChunk`` (None when it carries none)."""
+    if not chunk.choices:
+        return None
+    return getattr(chunk.choices[0].delta, "content", None)
+
+
+def _chunk_tool_deltas(chunk) -> list:
+    if not chunk.choices:
+        return []
+    return getattr(chunk.choices[0].delta, "tool_calls", None) or []
+
+
+def _merge_tool_calls(chunks) -> list[dict]:
+    """Reassemble streamed tool calls with the REAL merger the agentic loop
+    uses — the point is that Responses-path chunks are indistinguishable from
+    chat-path chunks to it. Imported lazily to keep this module's import cheap
+    (mesh_llm_agent pulls in the wider engine)."""
+    from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+
+    return MeshLlmAgent._merge_streamed_tool_calls(chunks)
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not _LIVE_GATE_ENABLED,
+    reason=(
+        f"live integration not enabled; set {_LIVE_GATE_ENV}=1 to opt in "
+        "(mocked unit tests above are primary coverage)"
+    ),
+)
+@pytest.mark.skipif(
+    not _OPENAI_API_KEY_PRESENT,
+    reason="OPENAI_API_KEY not set; live OpenAI probe cannot run",
+)
+class TestLiveResponsesStreamingIntegration:
+    """#1336 acceptance 1 — native Responses streaming for reasoning + tools.
+
+    Two turns against the real API:
+      * turn 1 streams a function call (id/name arrive on
+        ``response.output_item.added``, JSON accrues via
+        ``response.function_call_arguments.delta``);
+      * turn 2 feeds the tool result back and streams the model's prose, which
+        is where incremental text deltas are observable.
+
+    The buffered fallback this issue removed emitted ONE chunk carrying content
+    + tool_calls + usage + finish_reason together. Both discriminators below
+    fail against that shape.
+    """
+
+    async def _collect(self, request_params):
+        chunks = []
+        stream = openai_native.complete_stream(
+            request_params, model=_LIVE_REASONING_MODEL
+        )
+        async for chunk in stream:
+            chunks.append(chunk)
+        return chunks
+
+    @pytest.mark.asyncio
+    async def test_reasoning_with_tools_streams_incrementally(self):
+        # Pin the routing decision so this can never silently degrade into a
+        # chat.completions test if the model id or predicate changes.
+        turn1_params = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "What is the weather in Paris? Use the get_weather "
+                        "tool, then describe the result in two sentences."
+                    ),
+                }
+            ],
+            "tools": _LIVE_WEATHER_TOOL,
+        }
+        assert openai_native._openai_wants_responses_api(
+            _LIVE_REASONING_MODEL, turn1_params
+        ), (
+            f"{_LIVE_REASONING_MODEL} does not route to the Responses API; "
+            f"set {_LIVE_REASONING_MODEL_ENV} to a gpt-5 non-chat / o-series id"
+        )
+
+        # --- turn 1: streamed tool call ------------------------------------
+        turn1 = await self._collect(turn1_params)
+        assert turn1, "Responses stream yielded no chunks at all"
+
+        merged = _merge_tool_calls(turn1)
+        if not merged:
+            # The model chose to answer without calling the tool — behaviour
+            # variance, not a mesh defect.
+            pytest.skip(
+                "model did not call the tool on this turn; streamed tool-call "
+                "reassembly not exercised (mocked tests cover the shape)"
+            )
+
+        tool_call = merged[0]
+        assert tool_call["id"], "merged tool call has no id (call_id lost)"
+        assert tool_call["type"] == "function"
+        assert tool_call["function"]["name"] == "get_weather"
+        # Arguments must reassemble into valid JSON — a doubled or truncated
+        # fragment stream fails here.
+        args = json.loads(tool_call["function"]["arguments"])
+        assert isinstance(args, dict)
+
+        # Terminal marker + usage on turn 1.
+        assert turn1[-1].usage is not None, "no terminal usage chunk on turn 1"
+        assert turn1[-1].usage.prompt_tokens > 0
+        assert turn1[-1].choices[0].finish_reason == "tool_calls"
+
+        # --- turn 2: streamed prose ----------------------------------------
+        turn2_params = {
+            "messages": turn1_params["messages"]
+            + [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": tool_call["id"],
+                            "type": "function",
+                            "function": tool_call["function"],
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call["id"],
+                    "content": (
+                        '{"city": "Paris", "temp_c": 21, "condition": "sunny"}'
+                    ),
+                },
+            ],
+            "tools": _LIVE_WEATHER_TOOL,
+        }
+        turn2 = await self._collect(turn2_params)
+
+        text_chunks = [c for c in turn2 if _chunk_text(c)]
+        answer = "".join(_chunk_text(c) for c in text_chunks)
+        if not answer.strip():
+            pytest.skip(
+                "model emitted no prose on the follow-up turn (called the tool "
+                "again?); incremental-text assertion not exercised"
+            )
+
+        # DISCRIMINATOR 1 — real streaming produces many small deltas. The
+        # removed buffered fallback produced exactly one chunk holding the
+        # entire answer, so this fails against it.
+        assert len(text_chunks) >= 2, (
+            "expected multiple incremental content deltas, got "
+            f"{len(text_chunks)} — this is the buffered-blob shape #1336 "
+            f"removed (answer={answer[:120]!r})"
+        )
+
+        # DISCRIMINATOR 2 — shape-only, independent of token counts: native
+        # streaming NEVER carries content and usage on the same chunk, whereas
+        # the buffered fallback packed content + usage + finish_reason into one.
+        assert not any(
+            _chunk_text(c) and c.usage is not None for c in turn2
+        ), "a chunk carried both content and usage — buffered-blob shape"
+
+        # Terminal markers: usage last, non-zero, clean finish.
+        assert turn2[-1].usage is not None, "no terminal usage chunk on turn 2"
+        assert turn2[-1].usage.prompt_tokens > 0
+        assert turn2[-1].usage.completion_tokens > 0
+        assert _chunk_text(turn2[-1]) is None, "terminal chunk carried text"
+        assert turn2[-1].choices[0].finish_reason == "stop"
+        # Exactly one usage chunk — no double-emission from the finally block.
+        assert len([c for c in turn2 if c.usage is not None]) == 1
+
+    @pytest.mark.asyncio
+    async def test_streamed_tool_call_argument_deltas_are_fragmented(self):
+        """The call id/name and the JSON arguments must arrive as SEPARATE
+        deltas — that split only exists on the native event stream.
+
+        Structural only: asserts the id-bearing delta precedes any
+        argument-bearing delta, which is what the item_id → ordinal mapping in
+        the adapter guarantees.
+        """
+        params = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Use the get_weather tool for Tokyo.",
+                }
+            ],
+            "tools": _LIVE_WEATHER_TOOL,
+        }
+        chunks = await self._collect(params)
+        if not _merge_tool_calls(chunks):
+            pytest.skip("model did not call the tool on this turn")
+
+        id_positions, arg_positions = [], []
+        for i, chunk in enumerate(chunks):
+            for delta in _chunk_tool_deltas(chunk):
+                if delta.id:
+                    id_positions.append(i)
+                if delta.function.arguments:
+                    arg_positions.append(i)
+
+        assert id_positions, "no delta carried the tool-call id"
+        assert arg_positions, "no delta carried tool-call arguments"
+        assert min(id_positions) < min(arg_positions), (
+            "the id/name delta must precede argument fragments "
+            f"(id at {min(id_positions)}, args from {min(arg_positions)})"
+        )
+        # The id/name never rides on the same delta as an argument fragment on
+        # the native path (the buffered fallback packed them together).
+        assert not set(id_positions) & set(arg_positions), (
+            "id and arguments arrived on the same delta — buffered-blob shape"
+        )
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not _LIVE_GATE_ENABLED,
+    reason=(
+        f"live integration not enabled; set {_LIVE_GATE_ENV}=1 to opt in "
+        "(mocked unit tests above are primary coverage)"
+    ),
+)
+@pytest.mark.skipif(
+    not _OPENAI_API_KEY_PRESENT,
+    reason="OPENAI_API_KEY not set; live OpenAI probe cannot run",
+)
+class TestLiveResponsesVisionIntegration:
+    """#1336 acceptance 2 — vision + tools on the Responses (reasoning) path.
+
+    Before #1336 an image part raised a deliberate ``ValueError`` here. The
+    mocked tests prove the emitted part matches
+    ``openai.types.responses.ResponseInputImageParam``; only a live call proves
+    the SERVER accepts it (the SDK does not runtime-validate TypedDicts, so a
+    wrong shape passes client-side and surfaces as an HTTP 400).
+    """
+
+    _PROMPT = "What single colour fills this image? Answer with just the colour name."
+
+    def _params(self, *, with_image: bool):
+        content = [{"type": "text", "text": self._PROMPT}]
+        if with_image:
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": _solid_red_png_data_uri(),
+                        "detail": "high",
+                    },
+                }
+            )
+        return {
+            "messages": [{"role": "user", "content": content}],
+            # Tools present so the request routes to Responses — vision WITHOUT
+            # tools would stay on chat.completions and prove nothing here.
+            "tools": _LIVE_WEATHER_TOOL,
+        }
+
+    @pytest.mark.asyncio
+    async def test_vision_with_tools_reasoning_request(self):
+        request_params = self._params(with_image=True)
+        assert openai_native._openai_wants_responses_api(
+            _LIVE_REASONING_MODEL, request_params
+        ), (
+            f"{_LIVE_REASONING_MODEL} does not route to the Responses API; "
+            f"set {_LIVE_REASONING_MODEL_ENV} to a gpt-5 non-chat / o-series id"
+        )
+
+        # A ValueError here means the image translation regressed; a
+        # BadRequestError means the input_image shape is wrong. Both must fail
+        # the test rather than skip.
+        response = await openai_native.complete(
+            request_params, model=_LIVE_REASONING_MODEL
+        )
+        assert response.usage is not None
+        assert response.usage.prompt_tokens > 0
+
+        # THE structural proof that the image was ingested, not merely accepted:
+        # the identical prompt without the image costs materially fewer input
+        # tokens (OpenAI bills image tiles as input tokens). This does NOT
+        # depend on the model's prose, so it cannot rot with model behaviour —
+        # unlike asserting a colour word, which is exactly the kind of
+        # exact-text assertion this repo's live tests avoid. Verified live:
+        # gpt-5.6-terra reads pure #FF0000 as "Orange", so the colour word is
+        # informational only (below), never load-bearing.
+        baseline = await openai_native.complete(
+            self._params(with_image=False), model=_LIVE_REASONING_MODEL
+        )
+        assert baseline.usage is not None
+        delta = response.usage.prompt_tokens - baseline.usage.prompt_tokens
+        assert delta > 50, (
+            "image contributed no meaningful input tokens "
+            f"(with-image={response.usage.prompt_tokens}, "
+            f"text-only={baseline.usage.prompt_tokens}, delta={delta}) — "
+            "the input_image part was accepted but not ingested"
+        )
+
+        content = response.choices[0].message.content
+        if not content:
+            pytest.skip(
+                "model returned no text for the vision turn (called a tool "
+                "instead?); colour naming not exercised"
+            )
+        if "red" not in content.lower():
+            # Model behaviour, not a mesh defect — the token delta above already
+            # proved the image reached it. Observed live on gpt-5.6-terra.
+            pytest.skip(
+                "model did not name the image red (colour perception on "
+                f"re-encoded input varies); content={content[:200]!r}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_vision_image_part_no_longer_raises_value_error(self):
+        """Direct regression guard for the #1334 deferral this issue removed.
+
+        Kept separate from the semantic check above so a server-side outage or
+        an unhelpful answer can never mask the fact that the translation itself
+        still runs.
+        """
+        request_params = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe this image briefly."},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": _solid_red_png_data_uri()},
+                        },
+                    ],
+                }
+            ],
+            "tools": _LIVE_WEATHER_TOOL,
+        }
+        # The builder is where the old ValueError fired — exercise it directly,
+        # no network needed for this half.
+        kwargs = openai_native._build_responses_kwargs(
+            request_params, model=_LIVE_REASONING_MODEL
+        )
+        parts = kwargs["input"][0]["content"]
+        assert [p["type"] for p in parts] == ["input_text", "input_image"]
+        assert parts[1]["image_url"].startswith("data:image/png;base64,")
+        assert parts[1]["detail"] in ("low", "high", "auto")
+
+        # And the server accepts it.
+        response = await openai_native.complete(
+            request_params, model=_LIVE_REASONING_MODEL
+        )
+        assert response.usage is not None
