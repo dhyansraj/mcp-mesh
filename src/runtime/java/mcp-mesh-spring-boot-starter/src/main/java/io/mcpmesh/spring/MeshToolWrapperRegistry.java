@@ -112,6 +112,11 @@ public class MeshToolWrapperRegistry {
         String capability = wrapper.getCapability();
         String methodName = wrapper.getMethodName();
 
+        // Two DIFFERENT declarations must never share a funcId (issue #1448).
+        // Checked HERE, immediately before the put that would evict the first
+        // one — this is the only point that sees both declarations.
+        assertNotAnOverload(funcId, wrapper);
+
         // Store in wrapper maps (for dependency updates)
         wrappers.put(funcId, wrapper);
         if (wrapper.getMethod() != null) {
@@ -157,6 +162,63 @@ public class MeshToolWrapperRegistry {
 
         log.info("Registered handler: {} (capability: {}, method: {})",
             funcId, capability, methodName);
+    }
+
+    /**
+     * Refuse to boot when two overloaded {@code @MeshTool} methods in ONE class
+     * would share a funcId (issue #1448).
+     *
+     * <p>A funcId is {@code FQCN.methodName} with no parameter types
+     * ({@code MeshToolBeanPostProcessor}), so {@code analyze(String)} and
+     * {@code analyze(int)} on one class compute the same one and the second
+     * registration silently EVICTS the first from every funcId-keyed map here.
+     * Nothing downstream notices: the duplicate-capability guard in
+     * {@link MeshToolRegistry#registerTool} is keyed by capability, so distinct
+     * capabilities walk through it, and the heartbeat still advertises BOTH
+     * tools — the evicted one with no MCP tool behind it. Worse, both advertise
+     * the same {@code function_name}, so the registry merges their dependency
+     * lists under that one key and an in-range {@code dep_index} can wire one
+     * overload's dependency into the other's slot.
+     *
+     * <p>Widening the funcId to include parameter types would not fix it: the
+     * bare method name is the wire name, and it keys three single-valued
+     * namespaces — the MCP SDK tool table, the registry's
+     * {@code dependencies_resolved} map, and {@link #wrappersByMethodName}.
+     * {@code @MeshTool} has no name attribute, so two overloads cannot be given
+     * distinct wire names and the declaration itself has to be rejected.
+     *
+     * <p>The discriminator is the handler {@link Method}, NOT wrapper identity,
+     * mirroring the tolerance {@link #indexBareMethodName} expresses on funcId:
+     * {@link Method#equals} is value-based and includes parameter types, so a
+     * prototype-scoped bean instantiated twice, a context refresh, or a repeated
+     * post-processing pass produces a fresh wrapper for an EQUAL Method and
+     * replaces cleanly, exactly as before (issue #1445). Only a genuinely
+     * different Method — a real overload — throws.
+     *
+     * <p>A {@code null} Method carries no identity to compare, so it falls back
+     * to the replacing behaviour rather than guessing.
+     */
+    private void assertNotAnOverload(String funcId, MeshToolWrapper incoming) {
+        MeshToolWrapper previous = wrappers.get(funcId);
+        if (previous == null) {
+            return;
+        }
+        Method previousMethod = previous.getMethod();
+        Method incomingMethod = incoming.getMethod();
+        if (previousMethod == null || incomingMethod == null
+                || previousMethod.equals(incomingMethod)) {
+            // Re-registration of the same declaration: replace, as before.
+            return;
+        }
+        throw new IllegalStateException(String.format(
+            "Overloaded @MeshTool methods share the function id '%s': %s and %s. "
+                + "A @MeshTool is advertised on the wire by its bare method name, which "
+                + "keys the MCP tool table, the registry's dependency resolutions and this "
+                + "registry's by-name index — two overloads collapse onto that one name, "
+                + "so one of them is unreachable and a dependency resolved for one can be "
+                + "injected into the other. @MeshTool has no name attribute to tell them "
+                + "apart: rename one of the methods, or move one to a separate class or agent.",
+            funcId, previousMethod, incomingMethod));
     }
 
     /**
