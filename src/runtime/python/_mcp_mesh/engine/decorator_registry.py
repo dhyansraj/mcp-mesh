@@ -8,6 +8,7 @@ The DecoratorRegistry stores metadata from decorators like @mesh_agent without
 making any network calls or requiring any runtime infrastructure.
 """
 
+import inspect
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -15,6 +16,108 @@ from datetime import datetime
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+#: Attribute a factory-built tool function carries to point at the USER
+#: declaration it stands in for. ``mesh.llm_provider`` sets it: every provider
+#: it builds is the SAME nested ``process_chat`` closure renamed to the user's
+#: function name (the issue #227 fix), so the closure's own source coordinates
+#: are identical for every provider in the process and cannot discriminate
+#: them. Any future decorator that synthesizes a tool from a shared template
+#: must stamp this too, or its tools become mutually indistinguishable to the
+#: issue #1442 guard.
+DECLARATION_ORIGIN_ATTR = "_mesh_declaration_origin"
+
+
+def _declaration_target(func: Callable) -> Callable:
+    """Resolve ``func`` to the function whose source IS the declaration."""
+    target = inspect.unwrap(func)
+    # A factory-built tool stands in for the user function it was built from.
+    # Checked AFTER unwrap because the marker is copied onto every
+    # ``functools.wraps`` layer above it.
+    origin = getattr(target, DECLARATION_ORIGIN_ATTR, None)
+    if origin is not None and callable(origin):
+        return inspect.unwrap(origin)
+    return target
+
+
+def _declaration_identity(func: Callable) -> tuple:
+    """A stable identity for the DECLARATION behind ``func`` (issue #1442).
+
+    Used to tell a genuine duplicate-tool-name collision (two different
+    functions claiming one advertised MCP tool name) apart from the SAME
+    declaration being registered again.
+
+    Prefers the compiled code object's source coordinates over anything
+    derived from the function object, because the re-registration cases are
+    exactly the ones that produce a *new* function object for an unchanged
+    declaration:
+
+    - ``importlib.reload`` and closure factories re-run the same ``def``;
+    - object identity of the decorated wrapper is never stable (that is the
+      trap PR #1445 had to undo elsewhere);
+    - the ``__main__.X`` / ``<module>.X`` dual-module footgun (issue #1031)
+      re-executes ONE source file as two modules. Same file, same line — so
+      this identity already treats it as one declaration. When the two loads
+      disagree on the path spelling as well, :func:`_is_dual_module_pair`
+      catches it.
+
+    Falls back to ``(__module__, __qualname__)`` for callables with no code
+    object (builtins, C extensions, callable instances).
+    """
+    target = _declaration_target(func)
+    code = getattr(target, "__code__", None)
+    if code is not None:
+        return (
+            "code",
+            code.co_filename,
+            code.co_firstlineno,
+            getattr(code, "co_qualname", None) or code.co_name,
+        )
+    return (
+        "name",
+        getattr(target, "__module__", None),
+        getattr(target, "__qualname__", getattr(target, "__name__", None)),
+    )
+
+
+def _is_dual_module_pair(previous: Callable, incoming: Callable) -> bool:
+    """Whether two declarations are the ``__main__.X`` / ``<module>.X`` pair.
+
+    ``python main.py`` plus a sibling's ``from main import X`` evaluates one
+    source file as two modules. Usually both loads report the same
+    ``co_filename`` so :func:`_declaration_identity` already calls them equal —
+    but the two loads can spell the path differently (relative for the entry
+    script, resolved for the import), and then the identities diverge for what
+    is really one declaration.
+
+    Mirrors the conservative rule in
+    :func:`_mcp_mesh.engine.dual_module_detection.detect_dual_module_registration`:
+    exactly one side must be ``__main__``, and both must name the same
+    function. Deliberately NOT a general "same qualname" tolerance — two
+    ordinary modules that both define ``analyze`` is the collision this guard
+    exists to catch. Tolerating the pair here hands the diagnosis to
+    ``pipeline.mcp_startup.dual_module_check``, whose message explains the
+    restructure-as-a-package fix.
+    """
+    prev = _declaration_target(previous)
+    inc = _declaration_target(incoming)
+    prev_module = getattr(prev, "__module__", None)
+    inc_module = getattr(inc, "__module__", None)
+    if (prev_module == "__main__") == (inc_module == "__main__"):
+        return False
+    return getattr(prev, "__qualname__", None) == getattr(inc, "__qualname__", None)
+
+
+def _describe_declaration(func: Callable) -> str:
+    """Human-readable ``module.qualname (file:line)`` for an error message."""
+    target = _declaration_target(func)
+    module = getattr(target, "__module__", "?")
+    qualname = getattr(target, "__qualname__", getattr(target, "__name__", "?"))
+    code = getattr(target, "__code__", None)
+    if code is None:
+        return f"{module}.{qualname}"
+    return f"{module}.{qualname} ({code.co_filename}:{code.co_firstlineno})"
 
 
 @dataclass
@@ -140,7 +243,21 @@ class DecoratorRegistry:
 
     @classmethod
     def register_mesh_tool(cls, func: Callable, metadata: dict[str, Any]) -> None:
-        """Register a @mesh_tool decorated function (future use)."""
+        """Register a @mesh_tool decorated function.
+
+        Raises:
+            ValueError: when a DIFFERENT declaration already claimed this
+                advertised MCP tool name (issue #1442). ``func.__name__`` is the
+                wire name — the heartbeat ships it as the tool's
+                ``function_name`` and a client's ``tools/call`` sends it back as
+                ``params.name`` — so a second claimant does not shadow the first
+                harmlessly: one of the two tools becomes permanently
+                unreachable. Re-registering the SAME declaration is an
+                idempotent refresh and does not raise.
+        """
+        tool_name = func.__name__
+        cls._assert_tool_name_unclaimed(tool_name, func)
+
         decorated_func = DecoratedFunction(
             decorator_type="mesh_tool",
             function=func,
@@ -148,7 +265,45 @@ class DecoratorRegistry:
             registered_at=datetime.now(),
         )
 
-        cls._mesh_tools[func.__name__] = decorated_func
+        cls._mesh_tools[tool_name] = decorated_func
+
+    @classmethod
+    def _assert_tool_name_unclaimed(cls, tool_name: str, func: Callable) -> None:
+        """Refuse a second, DIFFERENT declaration of one MCP tool name (#1442).
+
+        The claimed-name index is ``_mesh_tools`` itself — deliberately, rather
+        than a parallel dict. ``_mesh_tools`` is manipulated directly by several
+        test harnesses (snapshot / clear / restore) and by
+        :meth:`unregister_mesh_tool`; a side table would silently de-sync from
+        it and the guard would fire on names nothing holds any more, or miss
+        ones it should catch.
+
+        ``_mesh_tools`` holds the injection WRAPPER once
+        :meth:`update_mesh_tool_function` has run, so the stored function is
+        unwrapped back to its declaration before comparison — both wrapper
+        layers (``dependency_injector.create_injection_wrapper`` and
+        ``decorators._wrap_with_isolation``) use ``functools.wraps``.
+        """
+        previous = cls._mesh_tools.get(tool_name)
+        if previous is None:
+            return
+        if _declaration_identity(previous.function) == _declaration_identity(func):
+            return
+        if _is_dual_module_pair(previous.function, func):
+            logger.debug(
+                "Tool '%s' re-registered under a second module name — deferring to "
+                "the dual-module check (issue #1031)",
+                tool_name,
+            )
+            return
+        raise ValueError(
+            f"Duplicate MCP tool name '{tool_name}': already declared by "
+            f"{_describe_declaration(previous.function)}, declared again by "
+            f"{_describe_declaration(func)}. The tool name is the wire name a "
+            f"client calls (tools/call params.name), so registering it twice "
+            f"would leave one of these tools permanently unreachable. Rename one "
+            f"of the functions, or move one of the tools to a separate agent."
+        )
 
     @classmethod
     def update_mesh_tool_function(cls, func_name: str, new_func: Callable) -> None:

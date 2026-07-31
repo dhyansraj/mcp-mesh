@@ -206,6 +206,26 @@ class JobsHelperToolsStep(PipelineStep):
             return result
 
         helpers = _make_helper_tools(registry_url)
+
+        # Issue #1442: a user tool may already have claimed a helper's name.
+        # This check has to run BEFORE _register_on_fastmcp — that call is what
+        # actually clobbers the user's tool on the wire, and it used to happen
+        # first, leaving the user's tool unreachable via MCP but still advertised
+        # in the heartbeat (the DecoratorRegistry guard raised afterwards, into
+        # an `except Exception` that downgraded it to a warning). Drop the
+        # colliding helper instead: the user's tool is the one a client is
+        # actually calling, and the helpers are framework conveniences.
+        claimed = self._names_claimed_by_user_tools(helpers)
+        for name in claimed:
+            self.logger.error(
+                "MeshJob helper tool '%s' is NOT registered: a tool of that name is "
+                "already declared by this agent. '__mesh_job_*' names are reserved by "
+                "the framework — rename your tool to restore job status/result/cancel "
+                "support on this agent.",
+                name,
+            )
+            helpers.pop(name, None)
+
         total_registered = 0
         for server_key, server_instance in servers.items():
             n = _register_on_fastmcp(server_instance, helpers)
@@ -230,6 +250,27 @@ class JobsHelperToolsStep(PipelineStep):
         )
         self.logger.info("📨 %s", result.message)
         return result
+
+    def _names_claimed_by_user_tools(self, helpers: dict[str, Any]) -> list[str]:
+        """Helper names a user-declared ``@mesh.tool`` already owns (#1442).
+
+        A helper re-registered from a previous pass in the same process is NOT
+        a claim — it is this step's own entry, recognised by the
+        ``framework_internal`` marker :meth:`_register_helpers_in_decorator_registry`
+        stamps on it.
+        """
+        try:
+            from ...engine.decorator_registry import DecoratorRegistry
+
+            registered = DecoratorRegistry.get_mesh_tools()
+        except Exception:  # pragma: no cover - registry import guarded below too
+            return []
+        return [
+            name
+            for name in helpers
+            if name in registered
+            and not registered[name].metadata.get("framework_internal")
+        ]
 
     def _register_helpers_in_decorator_registry(
         self, helpers: dict[str, Any]
@@ -288,6 +329,13 @@ class JobsHelperToolsStep(PipelineStep):
                     "jobs_helper_tools: registered %s in DecoratorRegistry",
                     tool_name,
                 )
+            except ValueError:
+                # Issue #1442: a duplicate-tool-name collision is a contract
+                # violation, not a best-effort registration hiccup. Downgrading
+                # it to a warning here is what let a clobbered user tool go
+                # unnoticed. `execute` drops claimed names before we get here,
+                # so reaching this is a real surprise and must surface.
+                raise
             except Exception as e:
                 self.logger.warning(
                     "jobs_helper_tools: failed to register %s in "

@@ -18,6 +18,18 @@ from unittest import mock
 
 import mesh
 import pytest
+from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+
+
+@pytest.fixture(autouse=True)
+def _clean_registry():
+    # Several cases here declare a tool function named ``handler``. Those are
+    # DIFFERENT declarations sharing one advertised MCP tool name, which is a
+    # boot error since issue #1442 — reset the process-wide registry between
+    # cases so each declares into a clean namespace.
+    DecoratorRegistry.clear_all()
+    yield
+    DecoratorRegistry.clear_all()
 
 
 # ===========================================================================

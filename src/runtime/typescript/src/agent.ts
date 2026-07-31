@@ -67,7 +67,11 @@ import {
   stopDispatchers,
   type ClaimHandler,
 } from "./claim-dispatcher.js";
-import { registerJobHelperTools, type HelperToolMeta } from "./jobs-helper-tools.js";
+import {
+  registerJobHelperTools,
+  JOB_HELPER_TOOL_NAMES,
+  type HelperToolMeta,
+} from "./jobs-helper-tools.js";
 import { registerCancelRoute } from "./jobs-cancel-route.js";
 import {
   clusterStrictEnabled,
@@ -227,6 +231,35 @@ export function depSignature(
 }
 
 /**
+ * #1442: a stable identity for the DECLARATION behind a tool, used to tell a
+ * genuine duplicate-advertised-name collision (two different tools claiming one
+ * wire name) from the SAME declaration being registered again.
+ *
+ * Deliberately NOT the definition object's reference, nor `execute`'s
+ * reference: re-registration is exactly the case that hands over a fresh object
+ * for an unchanged declaration (a module re-evaluated under a test runner's
+ * module reset, a dual CJS/ESM load, a helper that re-runs the registration
+ * block). Discriminating on instance identity is the trap PR #1445 had to undo.
+ *
+ * It covers every field that reaches the wire — capability, version, tags,
+ * task, dependencies and the converted input schema — plus the handler's
+ * source text. Handler source alone is too weak in both directions: two
+ * declarations can share a body while publishing different schemas or
+ * dependencies, and `Function.prototype.toString` degrades to
+ * `"function () { [native code] }"` for bound and native functions, which would
+ * make all of those look alike. Two declarations agreeing on the whole wire
+ * shape AND the body are indistinguishable to every consumer of the tool name.
+ */
+function declarationIdentity(parts: unknown[]): string {
+  return stableStringify(parts);
+}
+
+/** Source text of a handler, or a stable marker when it has none. */
+function handlerSource(execute: unknown): string {
+  return typeof execute === "function" ? execute.toString() : String(execute);
+}
+
+/**
  * MeshAgent wraps a FastMCP server with MCP Mesh capabilities.
  *
  * It provides:
@@ -248,6 +281,13 @@ export class MeshAgent {
   private config: ResolvedAgentConfig;
   private agentId: string;
   private tools: Map<string, ToolMeta> = new Map();
+  /**
+   * Advertised MCP tool name -> identity of the declaration that claimed it
+   * (issue #1442). Kept alongside `tools` rather than derived from it because
+   * `tools` holds published METADATA, not enough to tell one declaration from
+   * another. See `toolDeclarationIdentity`.
+   */
+  private toolDeclarations: Map<string, string> = new Map();
   /**
    * Maps LLM provider tool names to their vendor (e.g., "process_chat" -> "anthropic").
    * TODO: Use for provider metrics, health checks, or exposing via getLlmProviderVendor() getter.
@@ -446,6 +486,26 @@ export class MeshAgent {
           `(cross-ref src/core/registry/validation.go).`,
       );
     }
+
+    // Issue #1442: `def.name` is the advertised MCP tool name — the wire name a
+    // client calls (`tools/call` sends `params.name = <registry function_name>`).
+    // Two different declarations claiming it did not shadow each other
+    // harmlessly: `this.tools` is a plain `Map.set` and fastmcp's own `addTool`
+    // filters out the previous entry, so the loser silently vanished from
+    // `tools/list` while the registry kept advertising it. Check here, before
+    // anything is registered; the name is CLAIMED only once registration has
+    // actually happened (the validations below still throw).
+    const identity = declarationIdentity([
+      "tool",
+      producedCapability,
+      def.version ?? "1.0.0",
+      def.tags ?? [],
+      def.task === true,
+      def.dependencies ?? [],
+      this.safeInputSchema(def.parameters),
+      handlerSource(execute),
+    ]);
+    this.assertToolNameAvailable(toolName, identity, producedCapability, "addTool");
 
     // Phase 1 MeshJob substrate: validate `task: true` requires an
     // async function. Long-running tools need a Promise-based control
@@ -661,6 +721,7 @@ export class MeshAgent {
     // The worker entry will look up tools by name when handling dispatched
     // calls from the main thread.
     if (this._workerMode) {
+      this.toolDeclarations.set(toolName, identity);
       _workerToolMap.set(
         toolName,
         execute as unknown as (...args: unknown[]) => unknown
@@ -1175,6 +1236,10 @@ export class MeshAgent {
     const parametersWithPassthrough = typeof schema.passthrough === "function"
       ? schema.passthrough()
       : def.parameters;
+    // #1442: claim the name at the first irreversible registration — every
+    // validation above can still throw, and a name claimed with nothing behind
+    // it would refuse the corrected declaration on a retry.
+    this.toolDeclarations.set(toolName, identity);
     this.server.addTool({
       name: toolName,
       description: def.description,
@@ -1378,6 +1443,31 @@ export class MeshAgent {
     // Create the LLM provider tool definition
     const toolDef = llmProvider(config);
 
+    // Issue #1442: this path registers with FastMCP directly, never through
+    // `addTool`, so it used to bypass the duplicate-name guard entirely — and
+    // `llmProvider` defaults the tool name to `process_chat`, so two
+    // `addLlmProvider` calls without an explicit `name` both claimed it and one
+    // provider silently vanished from `tools/list`.
+    //
+    // The identity comes from the CONFIG, not from `toolDef.execute`: every
+    // provider is built by the same `llmProvider` factory, so all their handler
+    // closures share one source text and would compare equal (the same trap the
+    // Python `mesh.llm_provider` origin stamp exists for).
+    const identity = declarationIdentity([
+      "llmProvider",
+      config.model,
+      config.capability ?? "llm",
+      config.version ?? "1.0.0",
+      config.tags ?? [],
+    ]);
+    this.assertToolNameAvailable(
+      toolDef.name,
+      identity,
+      config.capability ?? "llm",
+      "addLlmProvider",
+    );
+    this.toolDeclarations.set(toolDef.name, identity);
+
     // Add to FastMCP server
     this.server.addTool({
       name: toolDef.name,
@@ -1406,6 +1496,54 @@ export class MeshAgent {
     }
 
     return this;
+  }
+
+  /**
+   * Issue #1442: refuse a second, DIFFERENT declaration of one advertised MCP
+   * tool name. Shared by every registration surface — `addTool` and
+   * `addLlmProvider` — because the name is claimed on the wire regardless of
+   * which one put it there.
+   *
+   * Re-registering the SAME declaration is tolerated (see
+   * {@link declarationIdentity}); that is the PR #1445 lesson.
+   *
+   * @param api the API the caller actually used, so the message points at the
+   *            method they invoked rather than always at `addTool`.
+   */
+  private assertToolNameAvailable(
+    toolName: string,
+    identity: string,
+    producedCapability: string,
+    api: "addTool" | "addLlmProvider",
+  ): void {
+    const previousIdentity = this.toolDeclarations.get(toolName);
+    if (previousIdentity === undefined || previousIdentity === identity) {
+      return;
+    }
+    throw new Error(
+      `${api}: duplicate MCP tool name '${toolName}' — it is already ` +
+        `registered by a different tool declaration ` +
+        `(capability '${this.tools.get(toolName)?.capability ?? "?"}', now ` +
+        `'${producedCapability}'). The tool name is the wire name a client ` +
+        `calls (tools/call params.name), so registering it twice would leave ` +
+        `one of these tools permanently unreachable. Rename one of them ` +
+        `(addTool/addLlmProvider accept an explicit 'name'), or move one to a ` +
+        `separate agent.`,
+    );
+  }
+
+  /**
+   * Convert a Zod schema for the #1442 declaration identity, tolerating a
+   * conversion failure — an unconvertible schema must not turn the guard into
+   * a new way for `addTool` to throw.
+   */
+  private safeInputSchema(parameters: unknown): unknown {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return this.convertZodToJsonSchema(parameters as any);
+    } catch {
+      return "<unconvertible>";
+    }
   }
 
   /**
@@ -1833,14 +1971,47 @@ export class MeshAgent {
     if (!this.config.registryUrl) {
       return;
     }
+    // Issue #1442: a user tool may already own one of the reserved helper
+    // names. Skipping it only in the catalog loop below was not enough —
+    // `registerJobHelperTools` registers on the FastMCP server too, and
+    // fastmcp's `addTool` filters out the previous entry, so the user's tool
+    // went unreachable on the wire while the heartbeat kept advertising it.
+    const claimed = new Set(
+      JOB_HELPER_TOOL_NAMES.filter((name) => this.toolDeclarations.has(name)),
+    );
+    for (const name of claimed) {
+      console.error(
+        `[mesh-jobs] helper tool '${name}' is NOT registered: a tool of that ` +
+          `name is already declared on this agent. '__mesh_job_*' names are ` +
+          `reserved by the framework — rename your tool to restore job ` +
+          `status/result/cancel support on this agent.`,
+      );
+    }
+
     let helpers: Map<string, HelperToolMeta>;
     try {
-      helpers = registerJobHelperTools(this.server, this.config.registryUrl);
+      helpers = registerJobHelperTools(
+        this.server,
+        this.config.registryUrl,
+        claimed,
+      );
     } catch (err) {
       console.warn("[mesh-jobs] failed to register job helper tools:", err);
       return;
     }
     for (const [name, meta] of helpers.entries()) {
+      // Issue #1442, the reverse order: this runs from `_autoStart`, which is
+      // `process.nextTick`-scheduled and awaits the port probe, so an `addTool`
+      // made after any `await` in user startup code lands AFTER the helpers.
+      // Recording each registered helper keeps `toolDeclarations` a complete
+      // picture of the wire namespace, so that later `addTool` is refused
+      // instead of silently clobbering the helper on the FastMCP server. (The
+      // `tools.has` guard below protects only the mesh catalog, not the wire.)
+      this.toolDeclarations.set(
+        name,
+        declarationIdentity(["jobsHelper", name, meta.version]),
+      );
+
       // Don't overwrite a user-defined tool with the same name.
       if (this.tools.has(name)) continue;
       this.tools.set(name, {

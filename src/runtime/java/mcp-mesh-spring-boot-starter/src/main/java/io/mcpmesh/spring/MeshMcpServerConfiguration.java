@@ -23,9 +23,11 @@ import org.springframework.boot.web.servlet.ServletRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * MCP Server configuration for MCP Mesh agents.
@@ -65,6 +67,9 @@ public class MeshMcpServerConfiguration {
      */
     private static final Map<String, Object> WRAP_RESULT_META =
         Map.of("fastmcp", Map.of("wrap_result", true));
+
+    /** funcId prefix {@code LlmProviderToolWrapper} builds ({@code llm_provider:<capability>}). */
+    private static final String LLM_PROVIDER_FUNC_ID_PREFIX = "llm_provider:";
 
     // MCP SDK 2.0.0 uses Jackson 3 (tools.jackson)
     private final tools.jackson.databind.json.JsonMapper mcpJsonMapper;
@@ -123,6 +128,11 @@ public class MeshMcpServerConfiguration {
             .validateToolInputs(false)
             .build();
 
+        // Issue #1442: refuse to boot when two declarations would advertise the
+        // same MCP tool name. Runs BEFORE any addTool so the agent never comes up
+        // half-registered.
+        assertUniqueAdvertisedToolNames(wrapperRegistry.getAllHandlers());
+
         // Register all tools from wrapper registry (includes both @MeshTool and @MeshLlmProvider)
         for (McpToolHandler handler : wrapperRegistry.getAllHandlers()) {
             registerTool(server, handler);
@@ -148,6 +158,116 @@ public class MeshMcpServerConfiguration {
 
         log.info("Registered stateless MCP servlet at {}", MCP_ENDPOINT);
         return registration;
+    }
+
+    /**
+     * Refuse to boot when two DIFFERENT tool declarations would be advertised
+     * under the same MCP tool name (issue #1442).
+     *
+     * <p>The advertised name is the wire name: a client's {@code tools/call}
+     * carries {@code params.name = <the registry's function_name>}, which is
+     * exactly {@link McpToolHandler#getMethodName()}. It is a bare method name
+     * with no class qualifier, so two {@code @MeshTool} methods named
+     * {@code analyze} in different classes claim the same slot — and the MCP SDK
+     * (2.0.0) resolves that by silently keeping one, leaving the other tool
+     * permanently unreachable even though the registry advertises it.
+     *
+     * <p>This is the MCP-layer analogue of the duplicate-capability guard in
+     * {@link MeshToolRegistry#registerTool}, and it borrows that guard's
+     * tolerance: the discriminator is the <b>funcId</b>
+     * ({@code FQCN.methodName}), not handler identity. Re-registering the SAME
+     * declaration — a prototype-scoped bean instantiated twice, a Spring context
+     * refresh, a repeated bean post-processing pass — produces a fresh handler
+     * instance for an unchanged funcId, which every other index in
+     * {@link MeshToolWrapperRegistry} already replaces without complaint. Only a
+     * second, genuinely different declaration throws.
+     *
+     * <p>The framework's own fixed names are each claimed exactly once per
+     * agent, so a normal agent never trips this:
+     * <ul>
+     *   <li>{@code llm_generate} — one {@code @MeshLlmProvider} class produces
+     *       one handler with funcId {@code llm_provider:<capability>}. TWO
+     *       provider classes on one agent DO throw, correctly: they would both
+     *       advertise {@code llm_generate} and one would be dead on the wire.</li>
+     *   <li>{@code __mesh_job_status} / {@code __mesh_job_result} /
+     *       {@code __mesh_job_cancel} — {@link JobsHelperToolsRegistrar}
+     *       registers one handler per op under the synthetic funcId
+     *       {@code __mesh_jobs_helper.<op>}, and the registry is keyed by funcId,
+     *       so a repeated registrar pass replaces rather than accumulates.</li>
+     * </ul>
+     *
+     * <p><b>Known limit — overloads in ONE class are not reached.</b> This scans
+     * {@link MeshToolWrapperRegistry#getAllHandlers()}, which is keyed by funcId,
+     * and a funcId is {@code FQCN.methodName} with no parameter types. Two
+     * overloaded {@code @MeshTool} methods in the same class therefore share a
+     * funcId and the second EVICTS the first from that map before this guard
+     * ever sees it — the collision is real but invisible here. Widening the
+     * funcId is not an option: it is the wire identity the Rust core echoes back
+     * on {@code funcId:dep_N} dependency-resolution events. The narrower
+     * same-class overload case is covered on the registry side by
+     * {@link MeshToolRegistry#registerTool}'s duplicate-capability guard
+     * whenever the overloads also share a capability.
+     *
+     * @param handlers every handler about to be registered with the MCP server
+     * @throws IllegalStateException naming both colliding declarations
+     */
+    static void assertUniqueAdvertisedToolNames(Collection<McpToolHandler> handlers) {
+        Map<String, String> claimedBy = new LinkedHashMap<>();
+        for (McpToolHandler handler : handlers) {
+            String toolName = handler.getMethodName();
+            if (toolName == null) {
+                continue;
+            }
+            String funcId = handler.getFuncId();
+            // containsKey, NOT putIfAbsent: the map permits null values, and
+            // putIfAbsent REPLACES a null-valued mapping and returns null — so a
+            // name first claimed by a handler with a null funcId would read as
+            // unclaimed for every later claimant, and the collision this guard
+            // exists to catch would walk straight through. Nothing enforces a
+            // non-null funcId: McpToolHandler is a public interface and
+            // getFuncId() has no default.
+            if (!claimedBy.containsKey(toolName)) {
+                claimedBy.put(toolName, funcId);
+                continue;
+            }
+            String previousFuncId = claimedBy.get(toolName);
+            if (Objects.equals(previousFuncId, funcId)) {
+                // The same declaration re-registered — fine.
+                continue;
+            }
+            throw new IllegalStateException(String.format(
+                "Duplicate MCP tool name '%s': advertised by both %s and %s. "
+                    + "The MCP tool name is the wire name a client calls "
+                    + "(tools/call params.name), so registering it twice leaves one of "
+                    + "these tools permanently unreachable. %s",
+                toolName, previousFuncId, funcId, remedyFor(previousFuncId, funcId)));
+        }
+    }
+
+    /**
+     * The actionable half of the duplicate-tool-name error. "Rename one of the
+     * methods" is wrong advice for an {@code @MeshLlmProvider} collision: there
+     * is no method to rename — {@code llm_generate} is a framework constant that
+     * every provider wrapper returns from {@code getMethodName()}, so the only
+     * fix is to stop hosting two providers on one agent.
+     */
+    private static String remedyFor(String previousFuncId, String funcId) {
+        boolean previousIsProvider = previousFuncId != null
+            && previousFuncId.startsWith(LLM_PROVIDER_FUNC_ID_PREFIX);
+        boolean incomingIsProvider = funcId != null
+            && funcId.startsWith(LLM_PROVIDER_FUNC_ID_PREFIX);
+        if (previousIsProvider && incomingIsProvider) {
+            return "Both are @MeshLlmProvider classes, and every provider advertises the "
+                + "framework's fixed 'llm_generate' tool name — there is no method name to "
+                + "change. One agent hosts at most one @MeshLlmProvider: keep one and move "
+                + "the other to its own agent.";
+        }
+        if (previousIsProvider || incomingIsProvider) {
+            return "One of them is a @MeshLlmProvider class, which always advertises the "
+                + "framework's fixed 'llm_generate' tool name. Rename the @MeshTool method, "
+                + "or move the provider to its own agent.";
+        }
+        return "Rename one of the methods, or move one of the tools to a separate agent.";
     }
 
     /**

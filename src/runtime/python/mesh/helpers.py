@@ -3488,6 +3488,26 @@ def llm_provider(
         process_chat_stream.__name__ = f"{func.__name__}_stream"
         process_chat_stream.__qualname__ = f"{func.__qualname__}_stream"
 
+        # Issue #1442: the renames above make the TOOL NAME unique per provider,
+        # but every provider in the process is this same nested `process_chat`
+        # closure — same file, same line, same code object. The duplicate-tool-name
+        # guard identifies a declaration by its source coordinates, so without a
+        # pointer back to the user's function two providers that DO collide on the
+        # tool name (same function name in two modules) would compare equal and the
+        # second would silently replace the first — the very collision the #227 fix
+        # above is about. Stamp the origin so the guard can tell them apart.
+        # Set BEFORE the decorators below so `functools.wraps` copies it onto every
+        # wrapper layer.
+        #
+        # The attribute NAME comes from the guard that reads it, not a literal:
+        # a rename on that side would otherwise silently stop this stamp from
+        # landing and take the whole @mesh.llm_provider surface back to being
+        # invisible to the guard, with nothing failing to say so.
+        from _mcp_mesh.engine.decorator_registry import DECLARATION_ORIGIN_ATTR
+
+        setattr(process_chat, DECLARATION_ORIGIN_ATTR, func)
+        setattr(process_chat_stream, DECLARATION_ORIGIN_ATTR, func)
+
         # CRITICAL: Apply @mesh.tool() FIRST (before FastMCP caches the function)
         # This ensures mesh DI wrapper is in place when FastMCP caches the function
         # Decorators are applied bottom-up, so mesh wrapper must be innermost
