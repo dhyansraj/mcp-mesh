@@ -44,11 +44,18 @@ Caller-supplied slots never wait: the documented mock contract lets callers
 pass a fake/proxy for any injectable parameter explicitly — the pending
 collection consults the call kwargs and skips those slots entirely.
 
-Scope (deliberate): the grace covers the dependency-injection wrappers only
-— ``@mesh.tool`` / ``@mesh.route`` call paths. Lifespan/startup-hook
-dependency usage, module-scope captured deps, and ``@mesh.llm``
-provider/filter assembly (registration-time, with its own update mechanism)
-are NOT covered.
+Scope (deliberate): the grace covers the injection wrappers only — the
+``@mesh.tool`` / ``@mesh.route`` dependency-injection call paths AND the
+``@mesh.llm`` provider-injection call path (issue #1456). The latter was
+originally excluded on the grounds that provider assembly has "its own
+update mechanism"; it does, but that mechanism had no wait, and providers
+resolve on the SAME heartbeat schedule as tool dependencies (the
+registration heartbeat always reports zero providers, because providers and
+consumers register in the same instant). So a call landing before the second
+heartbeat injected ``None`` and blew up in the user's function. The
+``@mesh.llm`` grace is keyed per CONSUMER FUNCTION — see
+``mesh.decorators._llm_settle_key``. Lifespan/startup-hook dependency usage
+and module-scope captured deps remain NOT covered.
 
 This is environmental, not a declaration mistake: ``MCP_MESH_STRICT_DI``
 never interacts with the settle window in any way.
