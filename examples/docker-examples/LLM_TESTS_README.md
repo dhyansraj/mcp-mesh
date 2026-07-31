@@ -27,13 +27,13 @@ cp .env.example .env
 cd examples/docker-examples
 ```
 
-### 3. Build Development Images (One-Time)
+### 3. Pull Images (One-Time)
 
 ```bash
-docker compose -f docker-compose.llm-tests.yml build
+docker compose -f docker-compose.llm-tests.yml pull
 ```
 
-This builds the development image with hot-reload support for the MCP Mesh runtime.
+Every service runs a published `mcpmesh/*` image — there is nothing to build.
 
 ### 4. Start Infrastructure
 
@@ -176,19 +176,17 @@ docker compose -f docker-compose.llm-tests.yml --profile test-004 down
 
 ## Development Workflow
 
-### Editing Runtime Code (Hot Reload)
+### Changing the MCP Mesh Runtime
 
-The development setup mounts the runtime source code, so you can edit and test without rebuilding:
+These containers run the released `mcp-mesh` package from the published
+`mcpmesh/python-runtime` image, so edits under `src/runtime/python` have no
+effect here. To exercise runtime changes from the working tree, use the repo's
+own build and test path:
 
 ```bash
-# 1. Edit runtime code
-vim ../../src/runtime/python/_mcp_mesh/engine/mesh_llm_agent.py
-
-# 2. Restart the container (NO rebuild needed!)
-docker compose -f docker-compose.llm-tests.yml restart test-001-basic-llm
-
-# 3. Test immediately - changes are live!
-curl -X POST http://localhost:9001/mcp ...
+make build
+tsuite run --suite-path tests/src-tests
+tsuite run --suite-path tests/integration --parallel 8
 ```
 
 ### Editing Agent Code
@@ -312,8 +310,8 @@ docker compose -f docker-compose.llm-tests.yml logs <service-name> | grep -i "ll
 # Stop all services
 docker compose -f docker-compose.llm-tests.yml down -v
 
-# Rebuild from scratch
-docker compose -f docker-compose.llm-tests.yml build --no-cache
+# Re-pull images
+docker compose -f docker-compose.llm-tests.yml pull
 
 # Start fresh
 docker compose -f docker-compose.llm-tests.yml up -d postgres redis registry system-agent

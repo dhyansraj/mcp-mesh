@@ -94,7 +94,7 @@ async def health_check() -> dict:
     return {"status": "healthy", "agent": "analyzer"}
 
 
-def analyzer_health():
+async def analyzer_health():
     """Health check function for mesh registration."""
     return True
 

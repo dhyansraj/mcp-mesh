@@ -117,7 +117,7 @@ async def health_check() -> dict:
     return {"status": "healthy", "agent": "orchestrator"}
 
 
-def orchestrator_health():
+async def orchestrator_health():
     """Health check function for mesh registration."""
     return True
 

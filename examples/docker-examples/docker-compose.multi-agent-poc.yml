@@ -39,9 +39,7 @@ services:
       - mcp-mesh-ma-poc
 
   registry:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/registry/Dockerfile
+    image: mcpmesh/registry:3.3.2
     container_name: mcp-mesh-registry-ma-poc
     ports:
       - "8003:8000"
@@ -66,9 +64,7 @@ services:
 
   # Executor Agent - Provides basic tools (bash, write_file, read_file, grep_files)
   executor-agent:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    image: mcpmesh/python-runtime:3.3.2
     container_name: mcp-mesh-executor-agent
     environment:
       MCP_MESH_REGISTRY_URL: http://registry:8000
@@ -80,11 +76,10 @@ services:
       MCP_MESH_DEBUG_MODE: true
       PYTHONUNBUFFERED: 1
     volumes:
-      - ../../src/runtime/python:/mcp-mesh-runtime:ro
       - ../multi-agent-poc/executor_agent.py:/app/agent.py:ro
       - ../multi-agent-poc/workspace:/workspace:rw # Mounted workspace
-    entrypoint: >
-      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    working_dir: /app
+    command: ["agent.py"]
     ports:
       - "9100:9100"
     depends_on:
@@ -106,9 +101,7 @@ services:
 
   # Claude Provider - LLM provider for specialist agents (Preferred)
   claude-provider:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    image: mcpmesh/python-runtime:3.3.2
     container_name: mcp-mesh-claude-provider
     environment:
       MCP_MESH_REGISTRY_URL: http://registry:8000
@@ -120,10 +113,9 @@ services:
       MCP_MESH_DEBUG_MODE: true
       PYTHONUNBUFFERED: 1
     volumes:
-      - ../../src/runtime/python:/mcp-mesh-runtime:ro
       - ../multi-agent-poc/claude_provider.py:/app/agent.py:ro
-    entrypoint: >
-      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    working_dir: /app
+    command: ["agent.py"]
     ports:
       - "9101:9101"
     depends_on:
@@ -145,9 +137,7 @@ services:
 
   # OpenAI Provider - LLM provider for specialist agents (Fallback)
   openai-provider:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    image: mcpmesh/python-runtime:3.3.2
     container_name: mcp-mesh-openai-provider
     environment:
       MCP_MESH_REGISTRY_URL: http://registry:8000
@@ -159,10 +149,9 @@ services:
       MCP_MESH_DEBUG_MODE: true
       PYTHONUNBUFFERED: 1
     volumes:
-      - ../../src/runtime/python:/mcp-mesh-runtime:ro
       - ../multi-agent-poc/openai_provider.py:/app/agent.py:ro
-    entrypoint: >
-      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    working_dir: /app
+    command: ["agent.py"]
     ports:
       - "9104:9104"
     depends_on:
@@ -184,9 +173,7 @@ services:
 
   # Developer Agent - Software development specialist using mesh delegation
   developer-agent:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    image: mcpmesh/python-runtime:3.3.2
     container_name: mcp-mesh-developer-agent
     environment:
       MCP_MESH_REGISTRY_URL: http://registry:8000
@@ -197,11 +184,10 @@ services:
       MCP_MESH_DEBUG_MODE: true
       PYTHONUNBUFFERED: 1
     volumes:
-      - ../../src/runtime/python:/mcp-mesh-runtime:ro
       - ../multi-agent-poc/developer_agent.py:/app/agent.py:ro
       - ../multi-agent-poc/prompts:/app/prompts:ro # Mount prompts directory
-    entrypoint: >
-      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    working_dir: /app
+    command: ["agent.py"]
     ports:
       - "9102:9102"
     depends_on:
@@ -227,9 +213,7 @@ services:
 
   # QA Agent - Quality Assurance specialist
   qa-agent:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    image: mcpmesh/python-runtime:3.3.2
     container_name: mcp-mesh-qa-agent
     environment:
       MCP_MESH_REGISTRY_URL: http://registry:8000
@@ -240,11 +224,10 @@ services:
       MCP_MESH_DEBUG_MODE: true
       PYTHONUNBUFFERED: 1
     volumes:
-      - ../../src/runtime/python:/mcp-mesh-runtime:ro
       - ../multi-agent-poc/qa_agent.py:/app/agent.py:ro
       - ../multi-agent-poc/prompts:/app/prompts:ro # Mount prompts directory
-    entrypoint: >
-      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    working_dir: /app
+    command: ["agent.py"]
     ports:
       - "9103:9103"
     depends_on:
@@ -270,9 +253,7 @@ services:
 
   # Intent Agent - Conversational orchestrator
   intent-agent:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    image: mcpmesh/python-runtime:3.3.2
     container_name: mcp-mesh-intent-agent
     environment:
       MCP_MESH_REGISTRY_URL: http://registry:8000
@@ -283,11 +264,10 @@ services:
       MCP_MESH_DEBUG_MODE: true
       PYTHONUNBUFFERED: 1
     volumes:
-      - ../../src/runtime/python:/mcp-mesh-runtime:ro
       - ../multi-agent-poc/intent_agent.py:/app/agent.py:ro
       - ../multi-agent-poc/prompts:/app/prompts:ro # Mount prompts directory
-    entrypoint: >
-      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    working_dir: /app
+    command: ["agent.py"]
     ports:
       - "9200:9200"
     depends_on:
