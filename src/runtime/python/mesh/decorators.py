@@ -2790,13 +2790,114 @@ def set_shutdown_context(context: dict[str, Any]):
     set_global_shutdown_context(context)
 
 
+def _llm_settle_key(function_id: str) -> str:
+    """Settle key for a ``@mesh.llm`` consumer's provider slot (issue #1456).
+
+    Keyed on the CONSUMER's ``function_id`` — never on the provider
+    capability — for the same reason ``@mesh.tool`` uses per-slot composite
+    ``"<func_id>:dep_<N>"`` keys rather than capability names:
+
+    * Resolution is delivered per consumer function. The registry returns
+      ``llm_providers`` keyed by function name; the injector maps that to a
+      ``function_id`` and calls THAT wrapper's ``_mesh_update_llm_agent``
+      (see ``mesh_llm_agent_injector._process_function_provider``). The unit
+      of resolution is the consumer, so the settle key must be too.
+    * The state a woken waiter re-reads is ``wrapper._mesh_llm_agent``,
+      which is per-wrapper. A settle key must be 1:1 with the state its
+      waiter observes, otherwise the wake is a lie.
+    * Two ``@mesh.llm`` consumers in one process routinely resolve at
+      different times even against the "same" capability: their provider
+      filters differ (tags/version, plus the auto-applied
+      ``±ai.mcpmesh.stream`` discrimination tag), one may resolve while the
+      other has no matching provider at all, and a consumer with a tool
+      ``filter`` has its wrapper update DEFERRED until the tools arrive in a
+      later phase. Capability-level keying would let consumer A's resolution
+      wake consumer B, which would re-read its own still-``None`` agent and
+      inject ``None`` anyway — the exact spurious wake the composite tool
+      keys exist to prevent.
+    * ``function_id`` carries a per-decoration uuid suffix, so dual-import
+      twins of the same module get distinct keys and cannot cross-wake.
+    """
+    return f"llm:{function_id}"
+
+
+def _pending_llm_settle(wrapper: Any, func_name: str) -> list:
+    """Settle-pending entry for this wrapper's LLM provider, or ``[]``.
+
+    Reuses the shared ``collect_pending_settle_deps`` gate so the settled
+    steady state costs exactly one latch check and never touches the wait
+    primitives — the single-slot shape is ``@mesh.llm``'s analogue of a
+    one-dependency tool wrapper. Returns ``[]`` for wrappers with no settle
+    key (hand-built test doubles, legacy wrappers), which keeps every
+    existing direct caller wait-free.
+    """
+    settle_key = getattr(wrapper, "_mesh_llm_settle_key", None)
+    if settle_key is None:
+        return []
+    from _mcp_mesh.engine.settle import collect_pending_settle_deps
+
+    config = getattr(wrapper, "_mesh_llm_config", None) or {}
+    provider = config.get("provider") or {}
+    capability = provider.get("capability") or "llm"
+    return collect_pending_settle_deps(
+        [settle_key],
+        [{"capability": f"{capability} (LLM provider for {func_name})"}],
+        [getattr(wrapper, "_mesh_llm_agent", None)],
+        lambda _key: None,
+    )
+
+
 def _get_llm_agent_for_injection(
+    wrapper: Any, param_name: str, kwargs: dict, func_name: str
+) -> Any:
+    """Sync injection entry point — settling-window grace then resolve.
+
+    Issue #1456: while the agent is still settling and this consumer's
+    provider has not resolved, block (bounded by the REMAINING settle
+    budget) instead of injecting ``None``. ``wait_for_settle_sync`` probes
+    for a running event loop and skips the blocking wait if one is found,
+    so this is safe on FastMCP's ``anyio.to_thread`` dispatch and degrades
+    to today's behavior anywhere else. On budget expiry the wait simply
+    returns and ``None`` is injected exactly as before — the window is a
+    ceiling, never a hang.
+    """
+    pending = _pending_llm_settle(wrapper, func_name)
+    if pending:
+        from _mcp_mesh.engine.settle import wait_for_settle_sync
+
+        wait_for_settle_sync(pending, logger)
+    return _resolve_llm_agent_for_injection(wrapper, param_name, kwargs, func_name)
+
+
+async def _await_llm_agent_for_injection(
+    wrapper: Any, param_name: str, kwargs: dict, func_name: str
+) -> Any:
+    """Async injection entry point — loop-native settling-window grace.
+
+    Async twin of :func:`_get_llm_agent_for_injection` (issue #1456). Awaits
+    a loop-native ``asyncio.Event`` mirror rather than blocking, so the
+    grace never consumes threadpool capacity and stays cancellable at
+    shutdown. Same budget ceiling, same ``None``-on-expiry contract.
+    """
+    pending = _pending_llm_settle(wrapper, func_name)
+    if pending:
+        from _mcp_mesh.engine.settle import wait_for_settle_async
+
+        await wait_for_settle_async(pending, logger)
+    return _resolve_llm_agent_for_injection(wrapper, param_name, kwargs, func_name)
+
+
+def _resolve_llm_agent_for_injection(
     wrapper: Any, param_name: str, kwargs: dict, func_name: str
 ) -> Any:
     """
     Get the appropriate LLM agent for injection based on template mode.
 
     Handles both template-based (per-call context) and non-template (cached) modes.
+
+    Read AFTER any settle wait so both the cached agent and the per-call
+    context factory (installed by the same heartbeat update) are re-read
+    post-resolution.
 
     Args:
         wrapper: The wrapper function with _mesh_llm_* attributes
@@ -3152,6 +3253,16 @@ def llm(
         # Step 4: Generate unique function ID
         function_id = f"{func.__name__}_{uuid.uuid4().hex[:8]}"
 
+        # Settling-window grace (#1456): declare this consumer's provider
+        # slot so a call landing before the provider resolves waits on the
+        # remaining budget instead of injecting None. Declared here (wiring
+        # time) exactly like the @mesh.tool dependency keys — the FIRST
+        # declaration in the process anchors the settle window.
+        from _mcp_mesh.engine.settle import get_settle_state
+
+        llm_settle_key = _llm_settle_key(function_id)
+        get_settle_state().register_declared(llm_settle_key)
+
         # Step 5: Register with DecoratorRegistry
         DecoratorRegistry.register_mesh_llm(
             func=func,
@@ -3211,17 +3322,46 @@ def llm(
             # Store the original call behavior to preserve DI injection
             original_call = existing_wrapper
 
-            # Create enhanced wrapper that does BOTH DI injection and LLM injection
-            @wraps(func)
-            def combined_injection_wrapper(*args, **kwargs):
-                """Wrapper that injects both MeshLlmAgent and DI parameters."""
-                # Inject LLM parameter if not provided or if it's None
-                if param_name not in kwargs or kwargs.get(param_name) is None:
-                    kwargs[param_name] = _get_llm_agent_for_injection(
-                        combined_injection_wrapper, param_name, kwargs, func.__name__
-                    )
-                # Then call the original wrapper (which handles DI injection)
-                return original_call(*args, **kwargs)
+            # Create enhanced wrapper that does BOTH DI injection and LLM
+            # injection.
+            #
+            # Two variants, mirroring the @mesh.a2a_consumer bridge: when the
+            # DI wrapper underneath is a coroutine function the combined
+            # wrapper is async too, so the settling-window grace (#1456) can
+            # use the loop-native await instead of blocking a threadpool
+            # thread for up to the whole window. Sync tools (FastMCP
+            # dispatches them via anyio.to_thread) keep the blocking wait,
+            # which is safe off the loop and self-skips on it.
+            if asyncio.iscoroutinefunction(original_call):
+
+                @wraps(func)
+                async def combined_injection_wrapper(*args, **kwargs):
+                    """Wrapper that injects both MeshLlmAgent and DI parameters."""
+                    if param_name not in kwargs or kwargs.get(param_name) is None:
+                        kwargs[param_name] = await _await_llm_agent_for_injection(
+                            combined_injection_wrapper,
+                            param_name,
+                            kwargs,
+                            func.__name__,
+                        )
+                    # Then call the original wrapper (which handles DI injection)
+                    return await original_call(*args, **kwargs)
+
+            else:
+
+                @wraps(func)
+                def combined_injection_wrapper(*args, **kwargs):
+                    """Wrapper that injects both MeshLlmAgent and DI parameters."""
+                    # Inject LLM parameter if not provided or if it's None
+                    if param_name not in kwargs or kwargs.get(param_name) is None:
+                        kwargs[param_name] = _get_llm_agent_for_injection(
+                            combined_injection_wrapper,
+                            param_name,
+                            kwargs,
+                            func.__name__,
+                        )
+                    # Then call the original wrapper (which handles DI injection)
+                    return original_call(*args, **kwargs)
 
             # Add LLM metadata attributes to combined wrapper
             combined_injection_wrapper._mesh_llm_agent = (
@@ -3231,6 +3371,9 @@ def llm(
             combined_injection_wrapper._mesh_llm_function_id = function_id
             combined_injection_wrapper._mesh_llm_config = resolved_config
             combined_injection_wrapper._mesh_llm_output_type = output_type
+            # Settling-window grace (#1456): the key this wrapper's waiters
+            # park on and update_llm_agent resolves.
+            combined_injection_wrapper._mesh_llm_settle_key = llm_settle_key
             combined_injection_wrapper.__wrapped__ = func
 
             # Override signature to hide LLM parameter from FastMCP schema.
@@ -3256,6 +3399,11 @@ def llm(
             # Create update method for heartbeat that updates the COMBINED wrapper
             def update_llm_agent(agent):
                 combined_injection_wrapper._mesh_llm_agent = agent
+                if agent is not None:
+                    # Settling-window grace (#1456): wake any settling call
+                    # parked on this consumer's provider slot AFTER the agent
+                    # is installed, so the woken call re-reads a real agent.
+                    get_settle_state().mark_resolved(llm_settle_key)
                 logger.info(
                     f"🔄 Updated MeshLlmAgent on combined wrapper for {func.__name__} (function_id={function_id})"
                 )
@@ -3297,19 +3445,42 @@ def llm(
                 f"📝 No existing wrapper found for '{func.__name__}' - creating new LLM wrapper"
             )
 
-            @wraps(func)
-            def llm_injection_wrapper(*args, **kwargs):
-                """Wrapper that injects MeshLlmAgent parameter."""
-                # Inject llm parameter if not provided or if it's None
-                if param_name not in kwargs or kwargs.get(param_name) is None:
-                    kwargs[param_name] = _get_llm_agent_for_injection(
-                        llm_injection_wrapper, param_name, kwargs, func.__name__
-                    )
-                return func(*args, **kwargs)
+            # Same sync/async split as the combined branch above (#1456):
+            # an async user function gets an async wrapper so the settle
+            # grace can await loop-natively. Async GENERATORS deliberately
+            # keep the sync wrapper — re-yielding through an async-generator
+            # shim would break the deterministic ``aclose()`` propagation the
+            # stream path relies on — and fall back to the blocking wait,
+            # which self-skips when invoked on a running loop.
+            if asyncio.iscoroutinefunction(func):
+
+                @wraps(func)
+                async def llm_injection_wrapper(*args, **kwargs):
+                    """Wrapper that injects MeshLlmAgent parameter."""
+                    if param_name not in kwargs or kwargs.get(param_name) is None:
+                        kwargs[param_name] = await _await_llm_agent_for_injection(
+                            llm_injection_wrapper, param_name, kwargs, func.__name__
+                        )
+                    return await func(*args, **kwargs)
+
+            else:
+
+                @wraps(func)
+                def llm_injection_wrapper(*args, **kwargs):
+                    """Wrapper that injects MeshLlmAgent parameter."""
+                    # Inject llm parameter if not provided or if it's None
+                    if param_name not in kwargs or kwargs.get(param_name) is None:
+                        kwargs[param_name] = _get_llm_agent_for_injection(
+                            llm_injection_wrapper, param_name, kwargs, func.__name__
+                        )
+                    return func(*args, **kwargs)
 
             # Create update method for heartbeat - updates the wrapper, not func
             def update_llm_agent(agent):
                 llm_injection_wrapper._mesh_llm_agent = agent
+                if agent is not None:
+                    # Settling-window grace (#1456) — see the combined branch.
+                    get_settle_state().mark_resolved(llm_settle_key)
                 logger.info(
                     f"🔄 Updated MeshLlmAgent for {func.__name__} (function_id={function_id})"
                 )
@@ -3320,6 +3491,7 @@ def llm(
             llm_injection_wrapper._mesh_llm_function_id = function_id
             llm_injection_wrapper._mesh_llm_config = resolved_config
             llm_injection_wrapper._mesh_llm_output_type = output_type
+            llm_injection_wrapper._mesh_llm_settle_key = llm_settle_key
             llm_injection_wrapper._mesh_update_llm_agent = update_llm_agent
 
             # Override signature to hide LLM parameter from FastMCP schema
