@@ -180,9 +180,23 @@ helm get values <release>
   existing claim, data intact; reclaim the storage deliberately with
   `kubectl delete pvc <release>-mcp-mesh-grafana-pvc -n <ns>`. This lands on a
   plain `helm upgrade` with no pod restart — the claim never leaves the rendered
-  manifest, so it is a metadata-only patch. Tempo's PVC is unchanged and still
-  deleted on uninstall: it is a rolling trace buffer under active retention, not
-  durable storage.
+  manifest, so it is a metadata-only patch.
+- **Tempo's PVC is deleted by this upgrade, and that is intended.**
+  `mcp-mesh-tempo.tempo.persistence.enabled` now defaults to `false`, so the
+  claim leaves the rendered manifest and Helm reclaims it on the next
+  `helm upgrade` — Tempo comes back on an `emptyDir`. What is lost is the
+  volume and up to `retention` (default `1h`) of buffered traces: Tempo's
+  volume is a rolling buffer under active retention, not durable storage, and
+  a live install measured 3.1MB in it after 25 hours of uptime. Nothing else on
+  the release is affected and ingestion resumes normally. The default changed
+  because the `ReadWriteOnce` claim it required is a real rollout constraint on
+  a single-replica Deployment — that is what deadlocked the chart on multi-node
+  clusters — paid for minutes of traces. To keep the volume, pin the old value
+  in the same upgrade:
+  `--set mcp-mesh-tempo.tempo.persistence.enabled=true`; setting it afterward
+  provisions a new, empty claim rather than recovering the reclaimed one. This
+  is the deliberate opposite of Grafana's treatment above — Grafana's volume
+  holds state you authored and nothing can replay.
 - **The core release owns its `Namespace`** (`namespaceCreate`, default
   `true`). Older charts let `helm uninstall` delete that namespace and cascade
   to every co-located agent, Secret, and PVC. Upgrading fixes this with no

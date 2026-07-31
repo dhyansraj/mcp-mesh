@@ -13,7 +13,9 @@ This umbrella chart deploys the core MCP Mesh infrastructure components:
 ### Prerequisites
 
 - Kubernetes 1.19+
-- Helm 3.0+
+- Helm 3.2.0+ (the install recipe below needs `--create-namespace`; installing
+  from an OCI registry needs 3.8+, and the `--take-ownership` adoption path in
+  [Namespace handling](#namespace-handling) needs 3.17+)
 
 ### Installation
 
@@ -587,6 +589,57 @@ mcp-mesh-registry:
     enabled: true
 ```
 
+### Trace storage (Tempo)
+
+Tempo writes its WAL and blocks to an **`emptyDir`** by default
+(`mcp-mesh-tempo.tempo.persistence.enabled: false`), so no PersistentVolumeClaim
+is rendered and a pod restart costs at most `retention` of buffered traces.
+
+That is all the volume ever held. `retention` (`1h`) and `blockDuration`
+(`5m`) make `/var/tempo` a rolling window, not an archive: blocks are cut every
+`blockDuration` and dropped once they age past `retention`. Measured on a live
+install with 25 hours of uptime, `/var/tempo` held **3.1MB**, with the oldest
+block 31 minutes old. A claim therefore bought ~3MB of history across a restart
+— while imposing a `ReadWriteOnce` attach on a single-replica Deployment, which
+is what forces the rollout to terminate the outgoing pod before scheduling its
+replacement and what deadlocked the chart on multi-node clusters before that
+ordering was fixed. `emptyDir` has no such constraint.
+
+Turn it back on if you want traces to survive a restart, and size it against
+`retention` rather than against the shipped default — `5Gi` is roughly 1600x the
+measured working set at `retention: "1h"`, and is kept only so that re-enabling
+persistence does not silently reprovision at a different size:
+
+```yaml
+# values.yaml
+mcp-mesh-tempo:
+  tempo:
+    persistence:
+      enabled: true
+      size: 1Gi
+```
+
+Note that this claim is **not** annotated `helm.sh/resource-policy: keep`,
+unlike Grafana's — `helm uninstall` reclaims it. The two volumes are treated
+oppositely on purpose: Grafana's holds state you authored and nothing can
+replay, Tempo's holds minutes of traces that its own retention is already
+deleting.
+
+#### Upgrade note: this default change deletes an existing Tempo PVC
+
+Earlier chart versions defaulted `mcp-mesh-tempo.tempo.persistence.enabled` to
+`true`. Upgrading to this version drops the `PersistentVolumeClaim` from the
+rendered manifest, so **Helm deletes it on the next `helm upgrade`** — losing
+the volume and up to `retention` (default `1h`) of buffered traces with it. That
+is the intended consequence of the default change, not an accident: nothing else
+on the release is affected, and Tempo comes back on an `emptyDir` ingesting
+normally.
+
+To keep the claim, pin the old value in the same `helm upgrade` that bumps the
+chart — `--set mcp-mesh-tempo.tempo.persistence.enabled=true`. A claim that has
+already been reclaimed cannot be recovered by setting the value afterward; the
+next upgrade provisions a new, empty one.
+
 ## Security
 
 ### Credential summary
@@ -681,7 +734,7 @@ deliberate:
 | `<release>-mcp-mesh-grafana-secret` | yes (`resource-policy: keep`) | Only record of the admin password Grafana is actually running with — it is applied on first start and then lives in the volume above |
 | `postgres-data-<release>-mcp-mesh-postgres-0` | yes (not release-owned) | Created by the StatefulSet's claim template, so Helm never had it to delete |
 | `<release>-mcp-mesh-postgres-credentials` | yes (`resource-policy: keep`) | Must keep matching the provisioned data directory |
-| `<release>-mcp-mesh-tempo-pvc` | **no** | A rolling trace buffer, not durable storage: `retention` (default `1h`) prunes it continuously, so what it holds is minutes old and already expiring |
+| `<release>-mcp-mesh-tempo-pvc` | **no** — and not rendered at all by default | A rolling trace buffer, not durable storage: `retention` (default `1h`) prunes it continuously, so what it holds is minutes old and already expiring. `mcp-mesh-tempo.tempo.persistence.enabled` defaults to `false`; opted back in, the claim is reclaimed on uninstall. See [Trace storage (Tempo)](#trace-storage-tempo) |
 | Namespace | yes (`resource-policy: keep`) | See [Namespace handling](#namespace-handling) |
 
 Reinstalling under the same release name adopts all of the kept objects, with
@@ -731,6 +784,7 @@ existing release — on its own that upgrade *deletes* the namespace. See
 | `registry.enabled` | bool   | `true`       | Enable Registry deployment           |
 | `grafana.enabled`  | bool   | `true`       | Enable Grafana deployment            |
 | `tempo.enabled`    | bool   | `true`       | Enable Tempo deployment              |
+| `mcp-mesh-tempo.tempo.persistence.enabled` | bool | `false` | Give Tempo a `ReadWriteOnce` claim instead of an `emptyDir`. Off by default: the volume is a rolling buffer that `retention` prunes continuously. See [Trace storage (Tempo)](#trace-storage-tempo) |
 | `namespaceCreate`  | bool   | `true`       | Render `global.namespace` as a release-owned `Namespace`, annotated `"helm.sh/resource-policy": keep` so uninstall never deletes it. **Set `false` on new installs** — left `true`, the install fails on Helm 3 and on any pre-created namespace. Never flip it to `false` on an existing release in isolation. See [Namespace handling](#namespace-handling) |
 
 ## Service Discovery

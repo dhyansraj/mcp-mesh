@@ -176,10 +176,17 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // `MCP_MESH_HTTP_HOST` and `agent.advertisedHost`. Bullets, not a table: the
 // renderer passes `|` lines through raw, so table-cell markup would print
 // literally.
+// #1423: +12 / +12 / +2, all in `upgrading.md`. Two bullets appended to "Helm
+// Mechanics", both list lines carrying markup, so every span they add lands in
+// all three counts. The Tempo one (8 spans) documents the
+// `mcp-mesh-tempo.tempo.persistence.enabled` default flipping to `false` and
+// the PVC deletion that flip causes on upgrade; the Grafana one (4 spans)
+// backfills the `resource-policy: keep` note that #1426 landed in `docs/` but
+// not here, since the Tempo bullet contrasts against it.
 const (
-	wantInlineCodeSpans = 1644
-	wantListCodeSpans   = 492
-	wantMarkupListLines = 440
+	wantInlineCodeSpans = 1656
+	wantListCodeSpans   = 504
+	wantMarkupListLines = 442
 )
 
 // assertCorpusSize replaces the t.Logf these tests used to end on.
