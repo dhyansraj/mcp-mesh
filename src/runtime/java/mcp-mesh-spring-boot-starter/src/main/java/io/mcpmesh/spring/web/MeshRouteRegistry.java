@@ -17,6 +17,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -78,17 +79,23 @@ public class MeshRouteRegistry {
      * @param httpMethod HTTP method (GET, POST, etc.)
      * @param path       URL path pattern
      * @param metadata   Route metadata
-     * @throws IllegalStateException when a DIFFERENT handler is already
+     * @throws IllegalStateException when a CONFLICTING route is already
      *                               registered for the same {@link Method} —
-     *                               a genuine duplicate registration, which
-     *                               fails the boot rather than silently winning
-     *                               (issue #1437, matching
-     *                               {@link MeshA2ARegistry#register})
+     *                               i.e. different metadata declaring a
+     *                               different dependency list, which fails the
+     *                               boot rather than silently winning (issue
+     *                               #1437, matching
+     *                               {@link MeshA2ARegistry#register}).
+     *                               Re-registering the same handler with an
+     *                               equal dependency list is idempotent and does
+     *                               NOT throw. Indexing happens BEFORE the path
+     *                               map is written, so a rejected registration
+     *                               leaves the registry untouched.
      */
     public void register(String httpMethod, String path, RouteMetadata metadata) {
         String routeId = buildRouteId(httpMethod, path);
-        routesByPath.put(routeId, metadata);
         indexHandler(metadata);
+        routesByPath.put(routeId, metadata);
 
         // Settling-window grace (#1193): declare this route's dependency
         // capabilities with the process-wide settle state so the
@@ -127,18 +134,31 @@ public class MeshRouteRegistry {
      * registered once PER MAPPING with the SAME metadata instance. That is not a
      * duplicate: the guard fires only when a <b>different</b> metadata instance
      * claims a {@link Method} that is already registered.
+     *
+     * <p>Nor is a re-scan a duplicate: two bean definitions of the same
+     * controller class yield two distinct-but-equal {@link RouteMetadata} for the
+     * same {@link Method}. Instance identity would fail the boot on that, while
+     * {@link #register} itself replaces in {@link #routesByPath} without
+     * complaint. So the guard is narrowed to the thing that actually matters —
+     * the injected dependency list, which is what a lookup here feeds
+     * (positionally, since #1401): equal dependencies means the re-registration
+     * is a no-op and the incoming metadata simply replaces the old mapping;
+     * only a genuinely different dependency list throws.
      */
     private void indexHandler(RouteMetadata metadata) {
         Method handlerMethod = metadata.getHandlerMethod();
         if (handlerMethod != null) {
             RouteMetadata previous = routesByHandlerMethod.putIfAbsent(handlerMethod, metadata);
             if (previous != null && previous != metadata) {
-                throw new IllegalStateException(
-                    "@MeshRoute handler collision: " + handlerMethod
-                        + " is already registered with a different route metadata"
-                        + " (dependencies " + previous.getDependencies() + " vs "
-                        + metadata.getDependencies() + "). Each handler method must be"
-                        + " registered exactly once.");
+                if (!previous.getDependencies().equals(metadata.getDependencies())) {
+                    throw new IllegalStateException(
+                        "@MeshRoute handler collision: " + handlerMethod
+                            + " is already registered with a different route metadata"
+                            + " (dependencies " + previous.getDependencies() + " vs "
+                            + metadata.getDependencies() + "). Each handler method must be"
+                            + " registered exactly once.");
+                }
+                routesByHandlerMethod.put(handlerMethod, metadata);
             }
         }
 
@@ -472,7 +492,16 @@ public class MeshRouteRegistry {
             this.failOnMissingDependency = failOnMissingDependency;
         }
 
-        private static String buildHandlerMethodId(Method method) {
+        /**
+         * The single source of the {@code "ClassName.methodName"} id.
+         *
+         * <p>Package-visible so lookup sites — {@link MeshRouteHandlerInterceptor}'s
+         * compatibility fallback — build the id exactly the way registration did
+         * (issue #1437). Deriving it independently from the bean type instead of
+         * the DECLARING class diverges for a handler inherited from a base class,
+         * and the fallback then silently misses.
+         */
+        static String buildHandlerMethodId(Method method) {
             return method == null ? null
                 : method.getDeclaringClass().getName() + "." + method.getName();
         }
@@ -694,6 +723,39 @@ public class MeshRouteRegistry {
 
         public boolean hasVersion() {
             return version != null && !version.isEmpty();
+        }
+
+        /**
+         * Value equality over every declared field.
+         *
+         * <p>Load-bearing, not decoration: {@link MeshRouteRegistry#indexHandler}
+         * distinguishes an idempotent re-registration of a handler from a genuine
+         * conflicting one by comparing the two {@code List<DependencySpec>}. On the
+         * inherited identity {@code equals} that comparison could never be true for
+         * two separately-built specs, and the narrowed guard would be inert.
+         */
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof DependencySpec other)) {
+                return false;
+            }
+            return required == other.required
+                && Objects.equals(capability, other.capability)
+                && Arrays.equals(tags, other.tags)
+                && Objects.equals(version, other.version)
+                && Objects.equals(parameterName, other.parameterName)
+                && Objects.equals(expectedType, other.expectedType)
+                && schemaMode == other.schemaMode
+                && Objects.equals(returnType, other.returnType);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(capability, Arrays.hashCode(tags), version, parameterName,
+                expectedType, schemaMode, required, returnType);
         }
 
         @Override

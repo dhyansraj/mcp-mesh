@@ -10,6 +10,7 @@ import java.lang.reflect.Type;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -168,19 +169,33 @@ public class MeshToolWrapperRegistry {
      * dependency resolution into the wrong tool's slot. Both remain fully
      * addressable by {@code funcId} and by {@link Method}, which is how they are
      * addressed in practice.
+     *
+     * <p>The collision discriminator is the <b>funcId</b>, not the wrapper
+     * instance: {@link #registerWrapper} stores every other index ({@link #wrappers},
+     * {@link #wrappersByMethod}, {@link #handlers}, {@link #handlersByCapability})
+     * with a bare {@code put}, so re-registering the same funcId with a fresh
+     * wrapper instance cleanly replaces the old one everywhere. Treating that as a
+     * collision here — on instance identity — would permanently poison bare-name
+     * resolution for a tool that never actually collided with anything.
      */
     private void indexBareMethodName(String methodName, MeshToolWrapper wrapper) {
         if (methodName == null) {
             return;
         }
         MeshToolWrapper previous = wrappersByMethodName.putIfAbsent(methodName, wrapper);
-        if (previous != null && previous != wrapper) {
-            ambiguousMethodNames.add(methodName);
-            log.warn("Method name '{}' is registered by more than one @MeshTool ({} and {}) — "
-                    + "it no longer resolves a wrapper by name alone. Both remain addressable "
-                    + "by their function ids.",
-                methodName, previous.getFuncId(), wrapper.getFuncId());
+        if (previous == null) {
+            return;
         }
+        if (Objects.equals(previous.getFuncId(), wrapper.getFuncId())) {
+            // Re-registration of the same tool: replace, exactly like every other index.
+            wrappersByMethodName.put(methodName, wrapper);
+            return;
+        }
+        ambiguousMethodNames.add(methodName);
+        log.warn("Method name '{}' is registered by more than one @MeshTool ({} and {}) — "
+                + "it no longer resolves a wrapper by name alone. Both remain addressable "
+                + "by their function ids.",
+            methodName, previous.getFuncId(), wrapper.getFuncId());
     }
 
     /**

@@ -107,6 +107,36 @@ class MeshToolWrapperRegistryMethodNameCollisionTest {
             "the bare-name fallback must still deliver when the name names one tool");
     }
 
+    @Test
+    @DisplayName("Re-registering the same tool replaces it — it does not collide with itself")
+    void reRegisteringSameFuncIdReplacesRatherThanCollides() throws Exception {
+        MeshToolWrapperRegistry registry = registry();
+        FirstAnalyzer staleBean = new FirstAnalyzer();
+        FirstAnalyzer freshBean = new FirstAnalyzer();
+        // Two FRESH wrapper instances for the SAME funcId (same class, same method).
+        MeshToolWrapper stale = wrapper(FirstAnalyzer.class, staleBean, "first_analyze");
+        MeshToolWrapper fresh = wrapper(FirstAnalyzer.class, freshBean, "first_analyze");
+        registry.registerWrapper(stale);
+        registry.registerWrapper(fresh);
+
+        // Every other index in registerWrapper replaces on a bare put; the
+        // bare-name index must not be the one map that treats a re-registration
+        // as a collision and poisons the name forever.
+        assertSame(fresh, registry.getWrapperByMethodName("analyze"),
+            "a re-registration of the same funcId must replace the mapping, not "
+                + "make the name ambiguous");
+
+        registry.updateDependency("analyze:dep_0", "http://provider", "lookup");
+        fresh.invoke(Map.of("q", "x"));
+        assertEquals("lookup", capabilityOf(freshBean.received.get(0)),
+            "the resolution must land on the replacement bean");
+
+        stale.invoke(Map.of("q", "x"));
+        assertNull(staleBean.received.get(0),
+            "the replaced wrapper's slot must stay unwired — the apply went to the "
+                + "replacement, not to the instance it superseded");
+    }
+
     // ─────────────────────────────────────────────────────────────────
     // Harness
     // ─────────────────────────────────────────────────────────────────

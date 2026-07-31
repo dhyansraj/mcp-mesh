@@ -119,10 +119,15 @@ public class MeshRouteHandlerInterceptor implements HandlerInterceptor {
         //
         // The id is kept for log lines below, where the ambiguity is harmless
         // and it reads better than Method.toString().
+        //
+        // It is built by RouteMetadata's own helper so it matches what
+        // registration indexed. Deriving it from the BEAN TYPE instead diverged
+        // for a handler inherited from a base class (declaring class = base,
+        // bean type = concrete controller) and the fallback silently missed.
         MeshRouteRegistry.RouteMetadata metadata =
             registry.getByHandlerMethod(handlerMethod.getMethod());
-        String handlerMethodId = handlerMethod.getBeanType().getName() + "." +
-            handlerMethod.getMethod().getName();
+        String handlerMethodId = MeshRouteRegistry.RouteMetadata.buildHandlerMethodId(
+            handlerMethod.getMethod());
         if (metadata == null) {
             // Compatibility fallback for metadata registered without a Method
             // identity, and for the exotic proxying arrangements where the
