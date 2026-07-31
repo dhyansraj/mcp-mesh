@@ -46,6 +46,7 @@ Registers a function as a mesh capability with dependency injection.
 
 ```typescript
 import { z } from "zod";
+import type { McpMeshTool } from "@mcpmesh/sdk";
 
 agent.addTool({
   name: "greet",
@@ -58,11 +59,11 @@ agent.addTool({
     name: z.string(),
   }),
   execute: async (
-    { name },                          // Input parameters
-    { date_service }                   // Injected dependencies (nullable)
+    { name },                                    // Input parameters
+    dateService: McpMeshTool | null = null       // dependencies[0] (nullable)
   ) => {
-    if (date_service) {
-      const today = await date_service({});
+    if (dateService) {
+      const today = await dateService({});
       return `Hello ${name}! Today is ${today}`;
     }
     return `Hello ${name}!`;  // Graceful degradation
@@ -70,7 +71,7 @@ agent.addTool({
 });
 ```
 
-**Note**: Dependencies are injected as the second parameter object, keyed by capability name. They may be `null` if unavailable.
+**Note**: Dependencies are injected **by position** as parameters after `args`, in declaration order — `dependencies[0]` is the second parameter, `dependencies[1]` the third, and so on. Parameter names are never consulted. A dependency arrives as `null` if unavailable.
 
 ### Dependency Injection Types
 
@@ -117,7 +118,7 @@ agent.addTool({
     },
   ],
   parameters: z.object({}),
-  execute: async ({}, { lookup_employee }) => { /* ... */ },
+  execute: async ({}, lookupEmployee: McpMeshTool | null = null) => { /* ... */ },
 });
 ```
 
@@ -239,21 +240,24 @@ const app = express();
 app.use(express.json());
 
 app.post("/chat", mesh.route(
-  [{ capability: "avatar_chat" }],  // Dependencies
-  async (req, res, { avatar_chat }) => {
-    if (!avatar_chat) {
-      return res.status(503).json({ error: "Service unavailable" });
+  [{ capability: "avatar_chat" }],  // Dependencies, in binding order
+  async (req, res, [avatarChat]) => {
+    if (!avatarChat) {
+      res.status(503).json({ error: "Service unavailable" });
+      return;
     }
-    const result = await avatar_chat({
+    const result = (await avatarChat({
       message: req.body.message,
       user_email: "user@example.com",
-    });
+    })) as { message?: string };
     res.json({ response: result.message });
   }
 ));
 
 app.listen(3000);
 ```
+
+**Note**: the handler's third argument is a positional array — `deps[i]` is the i-th declared dependency, `null` when unresolved. (Changed in 3.4.0; it used to be an object keyed by capability.)
 
 **Note**: `mesh.route()` is for Express backends that _consume_ mesh capabilities. Use `agent.addTool()` for MCP agents that _provide_ capabilities.
 
@@ -310,6 +314,7 @@ export MCP_MESH_REGISTRY_URL=http://registry:8000
 
 ```typescript
 import { FastMCP, mesh } from "@mcpmesh/sdk";
+import type { McpMeshTool } from "@mcpmesh/sdk";
 import { z } from "zod";
 
 const server = new FastMCP({
@@ -346,10 +351,10 @@ agent.addTool({
     a: z.number(),
     b: z.number(),
   }),
-  execute: async ({ operation, a, b }, { audit_log }) => {
+  execute: async ({ operation, a, b }, auditLog: McpMeshTool | null = null) => {
     const result = operation === "add" ? a + b : a - b;
-    if (audit_log) {
-      await audit_log({ operation, a, b, result });
+    if (auditLog) {
+      await auditLog({ operation, a, b, result });
     }
     return String(result);
   },

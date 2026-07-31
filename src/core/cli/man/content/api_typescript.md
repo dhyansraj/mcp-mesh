@@ -36,18 +36,24 @@ app.post(
   "/chat",
   mesh.route(
     [{ capability: "avatar_chat" }],
-    async (req, res, { avatar_chat }) => {
-      const result = await avatar_chat({
+    async (req, res, [avatarChat]) => {
+      if (!avatarChat) {
+        res.status(503).json({ error: "avatar_chat unavailable" });
+        return;
+      }
+      const result = (await avatarChat({
         message: req.body.message,
         user_email: "user@example.com",
-      });
+      })) as { message?: string };
       res.json({ response: result.message });
     },
   ),
 );
 ```
 
-The third argument to your handler is a dependencies object -- mesh resolves and injects the proxies by **position**. The first dependency maps to the first key in the destructured object, and so on.
+The third argument to your handler is a dependencies **array**: `deps[i]` is the proxy for the i-th declared dependency, or `null` when it is not currently resolved. Destructure it positionally -- the binding names are yours to choose.
+
+> **Changed in 3.4.0.** `mesh.route` used to hand the handler a capability-keyed object (`{ avatar_chat }`). It is now an array, matching Python, Java, and `addTool`. Reading a declared capability by name throws with the index and the rewrite -- see `meshctl man upgrading`.
 
 ## Starting Fresh
 
@@ -62,8 +68,12 @@ app.use(express.json());
 
 app.post(
   "/greet",
-  mesh.route(["greeting"], async (req, res, { greeting }) => {
-    const result = await greeting({ name: req.body.name });
+  mesh.route(["greeting"], async (req, res, [greeting]) => {
+    if (!greeting) {
+      res.status(503).json({ error: "greeting unavailable" });
+      return;
+    }
+    const result = (await greeting({ name: req.body.name })) as { text?: string };
     res.json({ message: result.text || "" });
   }),
 );
@@ -73,15 +83,16 @@ app.listen(3000);
 
 ## Dependency Declaration
 
-### Simple (by capability name)
+### Positional pairing
 
 ```typescript
 app.post(
   "/users",
   mesh.route(
     ["user_service", "notification_service"],
-    async (req, res, { user_service, notification_service }) => {
-      // Dependencies are keyed by capability name
+    async (req, res, [userService, notificationService]) => {
+      // userService         === deps[0] -- "user_service"
+      // notificationService === deps[1] -- "notification_service"
     },
   ),
 );
@@ -97,7 +108,7 @@ app.post(
       { capability: "llm", tags: ["+claude"] },
       { capability: "storage", tags: ["-deprecated"] },
     ],
-    async (req, res, { llm, storage }) => {
+    async (req, res, [llm, storage]) => {
       // Use filtered dependencies
     },
   ),
@@ -122,7 +133,7 @@ npx tsx src/server.ts
 1. Auto-initializes mesh connection on first `mesh.route()` call
 2. Connects to the mesh registry
 3. Resolves dependencies declared in `mesh.route()`
-4. Injects proxies into your route handler as the `deps` object
+4. Injects proxies into your route handler as the positional `deps` array
 5. Re-resolves on topology changes (auto-rewiring)
 
 ## Advanced: Explicit Control
@@ -146,7 +157,11 @@ app.post(
   "/compute",
   mesh.route(
     [{ capability: "calculator" }],
-    async (req, res, { calculator }) => {
+    async (req, res, [calculator]) => {
+      if (!calculator) {
+        res.status(503).json({ error: "calculator unavailable" });
+        return;
+      }
       res.json({ result: await calculator(req.body) });
     },
   ),
@@ -163,11 +178,12 @@ If a dependency might not be available, check for null:
 ```typescript
 app.post(
   "/greet",
-  mesh.route([{ capability: "greeting" }], async (req, res, { greeting }) => {
+  mesh.route([{ capability: "greeting" }], async (req, res, [greeting]) => {
     if (!greeting) {
-      return res.status(503).json({ error: "Service unavailable" });
+      res.status(503).json({ error: "Service unavailable" });
+      return;
     }
-    const result = await greeting({ name: req.body.name });
+    const result = (await greeting({ name: req.body.name })) as { text?: string };
     res.json({ message: result.text });
   }),
 );
@@ -182,9 +198,9 @@ app.post(
   "/greet",
   mesh.route(
     [{ capability: "greeting", required: true }],
-    async (req, res, { greeting }) => {
+    async (req, res, [greeting]) => {
       // framework guarantees greeting is live
-      const result = await greeting({ name: req.body.name });
+      const result = (await greeting!({ name: req.body.name })) as { text?: string };
       res.json({ message: result.text });
     },
   ),

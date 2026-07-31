@@ -77,7 +77,7 @@ agent.addTool({
 });
 ```
 
-**Note**: Dependencies are injected positionally as `McpMeshTool | null` parameters after the first `args` parameter, in declaration order, and parameter names are yours to choose. See the [Dependency Injection](dependency-injection.md) guide for the full pairing rule.
+**Note**: Dependencies are injected **by position** as `McpMeshTool | null` parameters after the first `args` parameter, in declaration order; parameter names are never consulted, so they are yours to choose. See the [Dependency Injection](dependency-injection.md) guide for the full pairing rule.
 
 ### Dependency Injection Types
 
@@ -190,21 +190,24 @@ const app = express();
 app.use(express.json());
 
 app.post("/chat", mesh.route(
-  [{ capability: "avatar_chat" }],  // Dependencies
-  async (req, res, { avatar_chat }) => {
-    if (!avatar_chat) {
-      return res.status(503).json({ error: "Service unavailable" });
+  [{ capability: "avatar_chat" }],  // Dependencies, in binding order
+  async (req, res, [avatarChat]) => {
+    if (!avatarChat) {
+      res.status(503).json({ error: "Service unavailable" });
+      return;
     }
-    const result = await avatar_chat({
+    const result = (await avatarChat({
       message: req.body.message,
       user_email: "user@example.com",
-    });
+    })) as { message?: string };
     res.json({ response: result.message });
   }
 ));
 
 app.listen(3000);
 ```
+
+**Note**: the handler's third argument is a positional array — `deps[i]` is the i-th declared dependency, `null` when unresolved. (Changed in 3.4.0; it used to be an object keyed by capability. See [Migrating to positional DI](../migration/3.4-positional-di.md).)
 
 **Note**: `mesh.route()` is for Express backends that _consume_ mesh capabilities. Use `agent.addTool()` for MCP agents that _provide_ capabilities.
 

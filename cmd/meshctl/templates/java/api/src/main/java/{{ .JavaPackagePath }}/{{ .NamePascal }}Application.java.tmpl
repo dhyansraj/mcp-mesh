@@ -55,8 +55,10 @@ class ApiController {
      * Call the "hello" mesh capability.
      *
      * <p>The @MeshRoute annotation declares a dependency on the "hello" capability.
-     * At request time, the framework resolves the dependency and injects it as a
-     * McpMeshTool parameter (matched by @MeshInject name).
+     * At request time, the framework resolves the dependency and injects it
+     * BY POSITION: the Nth declared dependency fills the Nth McpMeshTool
+     * parameter. @MeshInject does not select a dependency -- it asserts the
+     * one position assigns, and boot fails if the two disagree.
      */
     @GetMapping("/api/hello")
     @MeshRoute(dependencies = @MeshDependency(capability = "hello"))

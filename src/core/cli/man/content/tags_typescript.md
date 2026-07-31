@@ -46,9 +46,9 @@ agent.addTool({
   capability: "my_capability",
   dependencies: [{ capability: "weather_data", tags: ["api"] }],
   parameters: z.object({}),
-  execute: async ({}, { weather_data }) => {
-    if (weather_data) {
-      return await weather_data({ city: "NYC" });
+  execute: async ({}, weatherData: McpMeshTool | null = null) => {
+    if (weatherData) {
+      return await weatherData({ city: "NYC" });
     }
     return "Weather service unavailable";
   },
@@ -73,9 +73,9 @@ agent.addTool({
     },
   ],
   parameters: z.object({}),
-  execute: async ({}, { weather_data }) => {
-    if (weather_data) {
-      return await weather_data({ city: "NYC" });
+  execute: async ({}, weatherData: McpMeshTool | null = null) => {
+    if (weatherData) {
+      return await weatherData({ city: "NYC" });
     }
     return "No suitable weather service found";
   },
@@ -204,15 +204,15 @@ agent.addTool({
     city: z.string(),
     days: z.number().default(5),
   }),
-  execute: async ({ city, days }, { weather_data }) => {
-    if (!weather_data) {
+  execute: async ({ city, days }, weatherData: McpMeshTool | null = null) => {
+    if (!weatherData) {
       return JSON.stringify({
         error: "No weather service available",
         suggestion: "Check mesh status with 'meshctl list'",
       });
     }
 
-    const forecast = await weather_data({ city, forecast_days: days });
+    const forecast = await weatherData({ city, forecast_days: days });
     return forecast;
   },
 });
@@ -245,7 +245,7 @@ agent.addTool({
     { capability: "math", tags: ["addition", ["python", "typescript"]] },
   ],
   parameters: z.object({ a: z.number(), b: z.number() }),
-  execute: async ({ a, b }, { math }) => {
+  execute: async ({ a, b }, math: McpMeshTool | null = null) => {
     if (!math) return "Service unavailable";
     return await math({ a, b });
   },

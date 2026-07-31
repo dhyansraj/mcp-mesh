@@ -152,8 +152,25 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 //
 // A docs change that moves these is expected to move them — update the
 // constant in the same commit and check the delta is the size you intended.
+// #1401 (docs): +28 inline code spans. These tests sample the DEFAULT variant
+// of each listed topic, so the many `_java` / `_typescript` edits in that
+// change are invisible here; the delta is entirely `a2a.md` (+7, the
+// cross-runtime positional-binding note plus the zero-based `deps[0]`
+// clarification) and `upgrading.md` (+21, the new "3.4.0 — Dependency
+// injection is positional everywhere" section, including the `@MeshTool`
+// `@MeshInject` caveat and the on-3.3 qualifications). Neither added a
+// markdown list line, so the two list goldens are unmoved.
+//
+// #1401 review follow-up: +4 more, all in `upgrading.md`. The "one dependency
+// cannot change meaning" exemption was wrong in both runtimes and was rewritten
+// to name the two real cases — a TypeScript handler still taking a
+// capability-keyed callback (`async (req, res, { cap }) => ...`) and a Java
+// sole `@MeshInject` that names a different capability (`null` on 3.3, a boot
+// failure on 3.4). Four code spans in one replaced paragraph; still no list
+// line, and the `text` fence labels added in the same change are skipped by
+// these tests, which treat any ``` line as a block delimiter.
 const (
-	wantInlineCodeSpans = 1605
+	wantInlineCodeSpans = 1637
 	wantListCodeSpans   = 488
 	wantMarkupListLines = 433
 )

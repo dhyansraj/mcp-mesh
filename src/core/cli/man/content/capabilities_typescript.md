@@ -153,9 +153,9 @@ agent.addTool({
   capability: "forecast",
   dependencies: [{ capability: "weather_data", tags: ["+premium"] }],
   parameters: z.object({}),
-  execute: async ({}, { weather_data }) => {
-    if (weather_data) {
-      return await weather_data({ city: "NYC" });
+  execute: async ({}, weatherData: McpMeshTool | null = null) => {
+    if (weatherData) {
+      return await weatherData({ city: "NYC" });
     }
     return "Weather service unavailable";
   },
@@ -172,8 +172,12 @@ agent.addTool({
   capability: "my_capability",
   dependencies: ["date_service", "weather_data"],
   parameters: z.object({ query: z.string() }),
-  execute: async ({ query }, { date_service, weather_data }) => {
-    // date_service and weather_data are McpMeshTool | null
+  execute: async (
+    { query },
+    dateService: McpMeshTool | null = null,   // dependencies[0]
+    weatherData: McpMeshTool | null = null,   // dependencies[1]
+  ) => {
+    // Both are McpMeshTool | null — bound by position, not by name
   },
 });
 ```
@@ -189,8 +193,12 @@ agent.addTool({
     { capability: "weather_data", tags: ["+accurate", "-deprecated"] },
   ],
   parameters: z.object({ query: z.string() }),
-  execute: async ({ query }, { date_service, weather_data }) => {
-    // Dependencies injected by capability name
+  execute: async (
+    { query },
+    dateService: McpMeshTool | null = null,   // dependencies[0]
+    weatherData: McpMeshTool | null = null,   // dependencies[1]
+  ) => {
+    // Dependencies are injected by position, in declaration order
   },
 });
 ```

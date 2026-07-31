@@ -108,11 +108,11 @@ agent.addTool({
   capability: "my_capability",
   dependencies: ["date_service"],
   parameters: z.object({}),
-  execute: async ({}, { date_service }) => {
-    // If date_service agent restarts or is replaced,
-    // the proxy automatically points to new instance
-    if (date_service) {
-      return await date_service({});
+  execute: async ({}, dateService: McpMeshTool | null = null) => {
+    // If the date_service agent restarts or is replaced,
+    // the proxy automatically points to the new instance
+    if (dateService) {
+      return await dateService({});
     }
     return "Service unavailable";
   },
@@ -154,19 +154,23 @@ agent.addTool({
   capability: "resilient",
   dependencies: ["primary_service", "backup_service"],
   parameters: z.object({ data: z.string() }),
-  execute: async ({ data }, { primary_service, backup_service }) => {
+  execute: async (
+    { data },
+    primaryService: McpMeshTool | null = null,  // dependencies[0]
+    backupService: McpMeshTool | null = null,   // dependencies[1]
+  ) => {
     // Try primary first
-    if (primary_service) {
+    if (primaryService) {
       try {
-        return await primary_service({ data });
+        return await primaryService({ data });
       } catch (error) {
         console.log("Primary failed, trying backup");
       }
     }
 
     // Fall back to backup
-    if (backup_service) {
-      return await backup_service({ data });
+    if (backupService) {
+      return await backupService({ data });
     }
 
     // Both unavailable
@@ -220,24 +224,28 @@ agent.addTool({
     request: z.string(),
     priority: z.enum(["high", "normal", "low"]).default("normal"),
   }),
-  execute: async ({ request, priority }, { fast_processor, reliable_processor }) => {
+  execute: async (
+    { request, priority },
+    fastProcessor: McpMeshTool | null = null,      // dependencies[0]
+    reliableProcessor: McpMeshTool | null = null,  // dependencies[1]
+  ) => {
     // High priority: prefer fast if available
-    if (priority === "high" && fast_processor) {
+    if (priority === "high" && fastProcessor) {
       try {
-        return await fast_processor({ request });
+        return await fastProcessor({ request });
       } catch {
         console.log("Fast processor failed, falling back");
       }
     }
 
     // Normal/Low priority or fast failed: use reliable
-    if (reliable_processor) {
-      return await reliable_processor({ request });
+    if (reliableProcessor) {
+      return await reliableProcessor({ request });
     }
 
     // Last resort: try fast
-    if (fast_processor) {
-      return await fast_processor({ request });
+    if (fastProcessor) {
+      return await fastProcessor({ request });
     }
 
     return JSON.stringify({

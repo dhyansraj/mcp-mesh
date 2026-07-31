@@ -21,13 +21,13 @@ Issue #972: the same code path also flips `a2a_producer=true` on the agent paylo
 
     `@MeshA2A(path = "/agents/<skill>", ...)` on a Spring Boot bean method (sibling to `@MeshRoute`). The framework auto-mounts both routes on the application's `DispatcherServlet` — the user owns the Spring Boot lifecycle (`SpringApplication.run(...)`).
 
-    Mesh dependencies are declared via `@MeshDependency` entries on the annotation and injected at `@MeshInject` parameter slots, identical to the `@MeshRoute` DDDI path.
+    Mesh dependencies are declared via `@MeshDependency` entries on the annotation and injected **by position** into the handler's `McpMeshTool` parameters, identical to the `@MeshRoute` DDDI path. (Changed in 3.4.0 — `@MeshA2A` used to bind by name; see [Migrating to positional DI](../migration/3.4-positional-di.md).)
 
 === "TypeScript"
 
     `mesh.a2a.mount(app, config, handler)` on a user-owned Express app (sibling to `mesh.route(...)`). The user owns the Express app AND the `app.listen()` lifecycle — same shape as `mesh.route(...)` HTTP handlers. The mesh api-runtime pipeline picks up the mounted A2A surface from the `A2AProducerRegistry` and registers the agent with the registry as `agent_type=a2a` on each heartbeat.
 
-    Mesh dependencies are declared via the `dependencies` array on the mount config and supplied to the handler under the `deps` argument keyed by capability name, identical to how `mesh.route(...)` injects resolved `McpMeshTool` proxies.
+    Mesh dependencies are declared via the `dependencies` array on the mount config and supplied to the handler as a **positional** `deps` array — `deps[i]` is the i-th declared dependency, `null` until it resolves — identical to how `mesh.route(...)` injects resolved `McpMeshTool` proxies. (Changed in 3.4.0 — the argument used to be an object keyed by capability; see [Migrating to positional DI](../migration/3.4-positional-di.md).)
 
 ## Sync handler
 

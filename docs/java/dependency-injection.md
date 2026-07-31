@@ -46,6 +46,69 @@ public GreetingResponse smartGreet(
 
 **Important**: Dependencies are injected as `McpMeshTool<T>` parameters on the method. They may be `null` if unavailable.
 
+**How pairing works**: dependencies bind **by position**, at every injection site. The `dependencies` entries pair with the method's dependency-typed parameters — `McpMeshTool<T>` and, where present, `MeshJob` — in declaration order: the first entry fills the first such parameter, the second fills the second, and so on. `@Param`-annotated business parameters take no part in the pairing. Parameter names are never consulted, so they are yours to choose:
+
+```java
+@MeshTool(capability = "report",
+          dependencies = {@Selector(capability = "data_service"),
+                          @Selector(capability = "formatter")})
+public Report generateReport(
+        @Param(value = "query", description = "Report query") String query,
+        McpMeshTool<Data> data,        // ← data_service
+        McpMeshTool<String> format) {  // ← formatter
+    ...
+}
+```
+
+A `MeshJob` parameter (at most one per method) occupies a position in this same ordering and binds its paired dependency as the job's submitter. The same order-based rule applies in Python (`dependencies=[...]`) and TypeScript (`addTool({ dependencies: [...] })`).
+
+### One rule, every site
+
+`@MeshRoute` and `@MeshA2A` follow the identical rule: the Nth `@MeshDependency` binds to the Nth injectable parameter, in signature order. Parameter names are never consulted, and `@MeshDependency(name = ...)` no longer steers where a dependency lands — it survives only as an alias `@MeshInject` may assert against, and as a lookup key for `MeshRouteUtils`.
+
+```java
+@MeshRoute(dependencies = {
+    @MeshDependency(capability = "lookup_employee"),
+    @MeshDependency(capability = "employee_count")
+})
+@PostMapping("/report")
+public ResponseEntity<Report> report(
+        @RequestBody ReportRequest body,
+        McpMeshTool<Employee> employeeLookup,   // dependencies[0] — lookup_employee
+        McpMeshTool<Integer> headcount) { ... } // dependencies[1] — employee_count
+```
+
+!!! warning "Changed in 3.4.0"
+
+    `@MeshRoute` and `@MeshA2A` previously bound **by name** — by the `@MeshInject` value, or by the Java parameter name. They now bind by position, like `@MeshTool` and like every Python and TypeScript site. A handler whose declaration order disagrees with its old names is diagnosed at boot rather than silently rebound. See [Migrating to positional DI](../migration/3.4-positional-di.md).
+
+### `@MeshInject` is an assertion
+
+`@MeshInject` no longer *selects* a dependency — it *asserts* the one position already assigns. Its value must equal the capability (or the `@MeshDependency(name = ...)` alias) at that parameter's slot, or the application fails to start:
+
+```java
+@MeshRoute(dependencies = {
+    @MeshDependency(capability = "lookup_employee"),
+    @MeshDependency(capability = "employee_count")
+})
+@PostMapping("/report")
+public ResponseEntity<Report> report(
+        @RequestBody ReportRequest body,
+        @MeshInject("lookup_employee") McpMeshTool<Employee> employeeLookup,
+        @MeshInject("employee_count") McpMeshTool<Integer> headcount) { ... }
+```
+
+Keeping it is optional and changes **nothing about what binds** — but it is not inert at boot. A correct annotation pins the pairing: it silences the legacy-order warning described below, and turns a later reorder of one end without the other into a startup failure rather than a quiet rebind. A contradicting annotation is fatal **unconditionally**, not gated on `MCP_MESH_STRICT_DI`, because a false assertion is never a survivable shape. `@MeshInject` is honoured on `@MeshTool` parameters too, under the same assertion semantics.
+
+### Order validation
+
+Two boot-time checks back the positional contract:
+
+- **Arity.** A method that declares more dependencies than it has injectable parameters (the surplus is resolved and advertised but injected nowhere), or fewer (the surplus parameters are injected `null`), is reported. WARN by default; `MCP_MESH_STRICT_DI=true` promotes it to a startup failure.
+- **Order.** A handler whose parameter *names* match the declared capabilities in a different order — the fingerprint of code written against the pre-3.4 by-name rule — is reported with both orderings and the prescribed reorder. WARN by default, fatal under `MCP_MESH_STRICT_DI`. Adding a correct `@MeshInject` to each parameter silences it.
+
+`@MeshDependsOn` beans are the one deliberate exception: they bind by Spring bean name via `@Qualifier`, because that is a Spring wiring surface rather than a mesh parameter-pairing one.
+
 ### Dependencies with Filters
 
 Use the `@Selector` annotation with tags or version to filter providers:
@@ -68,7 +131,7 @@ public String generateReport(
 
 ## Component-level dependency declaration with `@MeshDependsOn`
 
-`@MeshInject` and `@MeshRoute(dependencies=...)` work at the controller-method scope. For everything else — `@Service` beans, `@Component`s, servlet `Filter`s, `@Scheduled` jobs — declare the capabilities your bean needs with the class-level `@MeshDependsOn` annotation. The auto-configuration then registers a singleton `McpMeshTool` bean named by each capability, so you can wire it the standard Spring way.
+`@MeshRoute(dependencies=...)` works at the controller-method scope. For everything else — `@Service` beans, `@Component`s, servlet `Filter`s, `@Scheduled` jobs — declare the capabilities your bean needs with the class-level `@MeshDependsOn` annotation. The auto-configuration then registers a singleton `McpMeshTool` bean named by each capability, so you can wire it the standard Spring way.
 
 ### Constructor injection (recommended)
 
@@ -113,11 +176,11 @@ public class HolidayChecker {
 | Scenario | Annotation |
 | -------- | ---------- |
 | `@MeshTool` method needing remote helpers | `@MeshTool(dependencies = @Selector(...))` + parameter injection |
-| `@RestController` handler method | `@MeshRoute(dependencies = {...})` + `@MeshInject` parameter |
+| `@RestController` handler method | `@MeshRoute(dependencies = {...})` + positional `McpMeshTool<T>` parameters |
 | `@Service` / `@Component` / `Filter` / `@Scheduled` / any other Spring bean | **`@MeshDependsOn` + `@Qualifier`** |
 | Several capabilities behind one typed facade | **`@MeshService` interface + `@Autowired`** |
 
-`@MeshDependsOn` and `@MeshInject`/`@MeshRoute` are complementary — same heartbeat-driven proxy lifecycle, same auto-rewiring on topology change, same `isAvailable()` semantics. Pick the surface that matches where you need the dependency. If the same capability shows up via multiple sources the framework deduplicates: a single proxy and a single registry entry per capability name.
+`@MeshDependsOn` and `@MeshRoute` are complementary — same heartbeat-driven proxy lifecycle, same auto-rewiring on topology change, same `isAvailable()` semantics. Pick the surface that matches where you need the dependency. If the same capability shows up via multiple sources the framework deduplicates: a single proxy and a single registry entry per capability name.
 
 ### Tags, version, and bean-name conflicts
 
@@ -252,7 +315,7 @@ The same interface can be used both ways at once — autowired as a bean **and**
 
 ### Views and `@MeshRoute`
 
-A `@MeshService` view interface is a **tool-parameter / bean-only** surface: used as a `@MeshRoute` handler parameter it is **rejected** at boot (a view facade cannot become a route perimeter). A route consumes a specific capability via `@MeshInject` instead — including a single dotted capability that a view would otherwise group. Declare the capability in the route's `dependencies = {}` and inject its proxy by name:
+A `@MeshService` view interface is a **tool-parameter / bean-only** surface: used as a `@MeshRoute` handler parameter it is **rejected** at boot (a view facade cannot become a route perimeter). A route consumes a specific capability as an ordinary positional dependency instead — including a single dotted capability that a view would otherwise group. Declare the capability in the route's `dependencies = {}` and take its proxy at the matching parameter position:
 
 ```java
 @MeshRoute(dependencies = {

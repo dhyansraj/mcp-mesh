@@ -48,7 +48,51 @@ agent.addTool({
 });
 ```
 
-**How pairing works**: Dependencies are injected positionally as parameters after the first `args` parameter, in declaration order (`dependencies[0]`, `dependencies[1]`, ...), and arrive as `null` if unavailable. Parameter names are yours to choose; pick whatever reads best.
+**How pairing works**: Dependencies are injected **by position** as parameters after the first `args` parameter, in declaration order (`dependencies[0]`, `dependencies[1]`, ...), and arrive as `null` if unavailable. Parameter names are never consulted, so they are yours to choose; pick whatever reads best.
+
+### `mesh.route` and `mesh.a2a.mount`
+
+The same rule, in array form. `mesh.route` hands the handler a positional `deps` array as its third argument; `mesh.a2a.mount` hands it as the first. `deps[i]` is the proxy for the i-th declared dependency, or `null` when it is not currently resolved:
+
+```typescript
+app.post(
+  "/report",
+  mesh.route(
+    ["data_service", "formatter"],
+    async (req, res, [dataService, formatter]) => {
+      if (!dataService || !formatter) {
+        res.status(503).json({ error: "dependencies unavailable" });
+        return;
+      }
+      const data = await dataService({ query: req.body.query });
+      res.json({ report: await formatter({ data }) });
+    },
+  ),
+);
+
+mesh.a2a.mount(
+  app,
+  { path: "/agents/date", skillId: "get-date", dependencies: ["date_service"] },
+  async ([dateService], _payload) => {
+    if (!dateService) return { error: "date_service unresolved" };
+    return { date: await dateService({}) };
+  },
+);
+```
+
+Slots are never compacted: an unresolved dependency holds its own index as `null` and never shifts a later one up.
+
+!!! warning "Changed in 3.4.0"
+
+    Both surfaces used to hand the handler an object keyed by capability (`{ data_service, formatter }`). Reading a **declared** capability by name on the array now throws with the index and the corrected signature:
+
+    ```text
+    mesh.route dependencies are positional as of 3.4.0.
+    You accessed `deps.data_service`; "data_service" is declared dependency [0].
+    Rewrite the handler as:  async (req, res, [data_service, formatter]) => { ... }
+    ```
+
+    `RouteDependencies` and `A2ADependencies` now alias `PositionalDependencies` (`Array<McpMeshTool | null>`), so an object type argument — `mesh.a2a.mount<{ date_service: McpMeshTool }>(...)` — no longer compiles. Use per-slot tuples instead: `mount<[McpMeshTool | null]>(...)`. See [Migrating to positional DI](../migration/3.4-positional-di.md).
 
 ### Dependencies with Filters
 

@@ -10,6 +10,22 @@ job safety for upgrading a mesh that is already serving traffic. For local
 development you can restart freely; this page is about upgrading a running
 deployment without dropping in-flight work.
 
+!!! warning "Source migration required for 3.4.0 (Java and TypeScript)"
+
+    3.4.0 aligns every dependency-injection site on positional binding. Java
+    `@MeshRoute` / `@MeshA2A` and TypeScript `mesh.route` / `mesh.a2a.mount`
+    changed how declared dependencies reach handler parameters. Python is
+    unchanged, and Java `@MeshTool` and TypeScript `addTool` were already
+    positional — but `@MeshInject` is now honoured on `@MeshTool` parameters,
+    where it was previously ignored, so a value that disagrees with its
+    parameter's position fails at boot. Nothing on the wire
+    changed, so no coordinated rollout is needed — but handlers need a source
+    edit. Do not filter by dependency count: every TypeScript handler still
+    taking a capability-keyed object converts whatever it declares, and a Java
+    handler with one dependency is exempt only when its `@MeshInject` already
+    names that capability, or carries none. See
+    [Migrating to positional DI](migration/3.4-positional-di.md).
+
 ## Recommended order
 
 Upgrade the **registry first, then the agents**.

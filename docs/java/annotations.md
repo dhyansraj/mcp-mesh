@@ -85,6 +85,8 @@ public GreetingResponse greet(
 
 **Note**: Dependencies are injected as `McpMeshTool<T>` parameters on the method. They may be `null` if unavailable.
 
+**Note**: `dependencies` entries pair with the method's `McpMeshTool<T>` (and `MeshJob`) parameters **by position**, in declaration order; parameter names are never consulted. `@MeshRoute` and `@MeshA2A` use the identical rule (changed in 3.4.0 — they used to bind by name). See [Dependency Injection](dependency-injection.md) for the full pairing rule, including where a `MeshJob` parameter fits and what `@MeshInject` asserts.
+
 ## @Param
 
 Documents tool parameters. Applied to method parameters.
@@ -266,7 +268,7 @@ public class ClaudeProviderApplication {
 
 ## @MeshRoute
 
-Enables mesh dependency injection in REST endpoint handlers.
+Enables mesh dependency injection in REST endpoint handlers. The Nth `@MeshDependency` binds to the Nth `McpMeshTool` parameter, in signature order; `@MeshInject` asserts that pairing rather than selecting it.
 
 ```java
 @MeshRoute(dependencies = @MeshDependency(capability = "avatar_chat"))

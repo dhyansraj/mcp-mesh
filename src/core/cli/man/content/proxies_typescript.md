@@ -43,7 +43,7 @@ agent.addTool({
   capability: "my_capability",
   dependencies: ["helper"],
   parameters: z.object({}),
-  execute: async ({}, { helper }) => {
+  execute: async ({}, helper: McpMeshTool | null = null) => {
     if (helper) {
       const result = await helper({}); // Call default tool
       return result;
@@ -56,7 +56,7 @@ agent.addTool({
 ### Named Tool Call
 
 ```typescript
-execute: async ({}, { helper }) => {
+execute: async ({}, helper: McpMeshTool | null = null) => {
   if (helper) {
     const result = await helper.callTool("specific_tool", { arg: "value" });
     return result;
@@ -67,7 +67,7 @@ execute: async ({}, { helper }) => {
 ### With Arguments
 
 ```typescript
-execute: async ({}, { weather }) => {
+execute: async ({}, weather: McpMeshTool | null = null) => {
   if (weather) {
     const result = await weather({ city: "London", units: "metric" });
     return result;
@@ -100,9 +100,9 @@ agent.addTool({
     },
   },
   parameters: z.object({ data: z.string() }),
-  execute: async ({ data }, { slow_service }) => {
-    if (slow_service) {
-      return await slow_service({ data });
+  execute: async ({ data }, slowService: McpMeshTool | null = null) => {
+    if (slowService) {
+      return await slowService({ data });
     }
     return "Service unavailable";
   },
@@ -135,10 +135,10 @@ agent.addTool({
     stream_service: { streaming: true },
   },
   parameters: z.object({ query: z.string() }),
-  execute: async ({ query }, { stream_service }) => {
-    if (stream_service) {
+  execute: async ({ query }, streamService: McpMeshTool | null = null) => {
+    if (streamService) {
       const chunks: string[] = [];
-      for await (const chunk of stream_service.stream({ query })) {
+      for await (const chunk of streamService.stream({ query })) {
         chunks.push(chunk);
       }
       return chunks.join("");
@@ -164,12 +164,12 @@ agent.addTool({
     },
   },
   parameters: z.object({ action: z.string() }),
-  execute: async ({ action }, { stateful_service }) => {
-    if (stateful_service) {
+  execute: async ({ action }, statefulService: McpMeshTool | null = null) => {
+    if (statefulService) {
       // All calls routed to same instance
-      await stateful_service.callTool("initialize", {});
-      const result = await stateful_service.callTool("process", { action });
-      await stateful_service.callTool("cleanup", {});
+      await statefulService.callTool("initialize", {});
+      const result = await statefulService.callTool("process", { action });
+      await statefulService.callTool("cleanup", {});
       return result;
     }
     return "Service unavailable";
@@ -187,7 +187,7 @@ agent.addTool({
   capability: "resilient",
   dependencies: ["helper"],
   parameters: z.object({}),
-  execute: async ({}, { helper }) => {
+  execute: async ({}, helper: McpMeshTool | null = null) => {
     if (helper === null) {
       return "Service unavailable";
     }
@@ -249,12 +249,17 @@ agent.addTool({
   parameters: z.object({
     dataId: z.string(),
   }),
-  execute: async ({ dataId }, { data_source, validator, storage }) => {
+  execute: async (
+    { dataId },
+    dataSource: McpMeshTool | null = null,  // dependencies[0]
+    validator: McpMeshTool | null = null,   // dependencies[1]
+    storage: McpMeshTool | null = null,     // dependencies[2]
+  ) => {
     // Fetch data
-    if (!data_source) {
+    if (!dataSource) {
       return JSON.stringify({ error: "Data source unavailable" });
     }
-    const data = await data_source({ id: dataId });
+    const data = await dataSource({ id: dataId });
 
     // Validate (optional)
     if (validator) {

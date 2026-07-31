@@ -64,7 +64,10 @@ DDDI uses **capability-based discovery** with tag matching, not hardcoded servic
       name: "greet",
       capability: "greeting",
       dependencies: ["calculator"],
-      execute: async (args, { calculator }) => {
+      execute: async (args, calculator: McpMeshTool | null = null) => {
+        if (!calculator) {
+          return "Calculator unavailable";
+        }
         const result = await calculator({ expression: "2+2" });
         return `The answer is ${result}`;
       },

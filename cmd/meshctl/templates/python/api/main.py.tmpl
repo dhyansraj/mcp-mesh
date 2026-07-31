@@ -33,8 +33,9 @@ async def hello_endpoint(request: Request, hello: McpMeshTool = None):
     Example API endpoint that calls the "hello" mesh capability.
 
     The @mesh.route decorator declares dependencies on mesh capabilities.
-    At request time, the framework resolves each dependency and injects
-    it as a McpMeshTool parameter (matched by parameter name).
+    At request time, the framework resolves each dependency and injects it
+    BY POSITION: the Nth declared dependency fills the Nth McpMeshTool
+    parameter. Parameter names are never consulted.
     """
     if not hello:
         raise HTTPException(status_code=503, detail="hello capability unavailable")

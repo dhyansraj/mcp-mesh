@@ -91,8 +91,11 @@ Once a producer streams, two consumer code paths are available — and both work
 
     app.post("/api/chat", mesh.route(
       [{ capability: "chat" }],
-      async (req, res, { chat }) => {
-        if (!chat) return res.status(503).json({ error: "chat unavailable" });
+      async (req, res, [chat]) => {
+        if (!chat) {
+          res.status(503).json({ error: "chat unavailable" });
+          return;
+        }
         await mesh.sseStream(res, chat.stream({ prompt: req.body.prompt }));
       }
     ));

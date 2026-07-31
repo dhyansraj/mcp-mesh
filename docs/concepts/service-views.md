@@ -185,7 +185,7 @@ A service view is a grouping convenience, not a default. The [Zero wire and regi
 
 ### When per-capability injection is the better fit
 
-- **A handler uses only 1–2 capabilities of the group** — declare exactly those with per-capability injection: a Python dependency on the specific `@mesh.tool` handler, a Java `@Selector` + `@MeshInject` → `McpMeshTool`, or a TypeScript dependency → `McpMeshTool`. Don't inject a 13-method view to reach two methods.
+- **A handler uses only 1–2 capabilities of the group** — declare exactly those with per-capability injection: a Python dependency on the specific `@mesh.tool` handler, a Java `@Selector` / `@MeshDependency` → `McpMeshTool`, or a TypeScript dependency → `McpMeshTool`. Don't inject a 13-method view to reach two methods.
 - **The consumer is a route handler** (`@mesh.route` / `mesh.route(...)` / `@MeshRoute`) — views are a tool-parameter surface and are **rejected** on routes anyway; a route declares the specific dotted capability it needs and injects that proxy.
 - **Precise `required`-gating matters** — a view's `required` methods gate the handler as a set; if those methods span multiple providers, the handler is gated on capabilities it never calls. Per-capability injection gates on exactly what the handler invokes.
 - **Dep-count legibility / registry footprint matters** — when you want `meshctl list` to show what a handler actually depends on, not the whole group behind one type.
