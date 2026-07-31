@@ -79,10 +79,34 @@ dependencies = [
     # add a full transitive lockfile.
     "mcp==1.28.1",
     "fastmcp==3.4.3",
-    "litellm>=1.80.5,!=1.82.7,!=1.82.8",
-    "anthropic>=0.77",
-    "openai>=1.60",
-    "google-genai>=1.22",
+    # Bounded, never pinned exactly (#1454). The vendor SDKs ship breaking
+    # changes on a cadence of their own: openai crossed 1.x -> 2.x while our
+    # floor still read >=1.60, and a *minor* (2.14 -> 2.52) added a required
+    # response field that broke CI while local envs stayed green. An upper
+    # bound at the next major is the strongest constraint expressible here —
+    # an exact pin would export our testing constraint onto every user who
+    # depends on these SDKs directly, which is why mcp/fastmcp above can be
+    # pinned and these cannot. The bound catches the major jump only; the
+    # minor-level drift is what the transitive lockfile in #1454 is for.
+    #
+    # openai floor raised 1.60 -> 2.14: the native adapter imports
+    # ``openai.types.responses`` (verified absent in 1.60, added in 1.66) and
+    # 2.14 is the oldest release the suite has actually been run against.
+    #
+    # anthropic is 0.x, where a minor — not a major — is the breaking unit, so
+    # <1 is weaker than it looks. It is still the right bound: anthropic has
+    # shipped ~120 minors over three years at a near-weekly cadence, so a
+    # <0.<next-minor> cap would make mcp-mesh uninstallable alongside a
+    # current anthropic within days of every release. 1.0 is the boundary
+    # worth failing on; the lockfile covers everything below it.
+    #
+    # google-genai is capped <3, not <2: 2.0 shipped 2026-05 and a fresh
+    # install has resolved 2.x ever since, so <2 would roll us back onto a 1.x
+    # line nothing has tested in months.
+    "litellm>=1.80.5,!=1.82.7,!=1.82.8,<2",
+    "anthropic>=0.77,<1",
+    "openai>=2.14,<3",
+    "google-genai>=1.22,<3",
     "prometheus-client>=0.19.0",
     "pyyaml>=6.0",
     "jinja2>=3.1.0",
@@ -128,28 +152,28 @@ anthropic = [
     # #834 — native dispatch is default ON). This extra is preserved as a
     # no-op so ``pip install mcp-mesh[anthropic]`` still resolves cleanly
     # for users who pinned it from earlier docs.
-    "anthropic>=0.77"
+    "anthropic>=0.77,<1"
 ]
 anthropic-bedrock = [
     # AWS Bedrock backend for the native Anthropic adapter. Required when
     # using bedrock/anthropic.claude-* models with MCP_MESH_NATIVE_LLM=1.
     # Install via:
     #   pip install mcp-mesh[anthropic-bedrock]
-    "anthropic[bedrock]>=0.77"
+    "anthropic[bedrock]>=0.77,<1"
 ]
 openai = [
     # Backward-compat alias: ``openai`` is now a base dependency (issue
     # #834 PR 2 — native dispatch is default ON). This extra is preserved
     # as a no-op so ``pip install mcp-mesh[openai]`` still resolves cleanly
     # for users who pinned it from earlier docs.
-    "openai>=1.60"
+    "openai>=2.14,<3"
 ]
 gemini = [
     # Backward-compat alias: ``google-genai`` is now a base dependency
     # (issue #834 PR 3 — native dispatch is default ON). This extra is
     # preserved as a no-op so ``pip install mcp-mesh[gemini]`` still
     # resolves cleanly for users who pinned it from earlier docs.
-    "google-genai>=1.22"
+    "google-genai>=1.22,<3"
 ]
 litellm = [
     # LiteLLM long-tail provider path (issue #1383).
@@ -170,7 +194,7 @@ litellm = [
     # The pin MUST stay identical to the ``litellm`` entry in [project]
     # dependencies above. Enforced by
     # tests/unit/test_litellm_extra_pin_sync.py.
-    "litellm>=1.80.5,!=1.82.7,!=1.82.8"
+    "litellm>=1.80.5,!=1.82.7,!=1.82.8,<2"
 ]
 
 [project.urls]
