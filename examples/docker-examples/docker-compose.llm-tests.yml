@@ -64,9 +64,7 @@ services:
 
   # MCP Mesh Registry
   registry:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/registry/Dockerfile
+    image: mcpmesh/registry:3.3.2
     container_name: mcp-mesh-registry-llm-test
     ports:
       - "8000:8000"
@@ -107,22 +105,16 @@ services:
 
   # System Agent - provides date_service, info, uptime_info capabilities
   system-agent:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev # ← Development build
+    image: mcpmesh/python-runtime:3.3.2
     container_name: mcp-mesh-system-agent-llm-test
     hostname: system-agent
     ports:
       - "8082:8080"
     volumes:
-      # Mount runtime source for hot reload (development mode)
-      - ../../src/runtime/python:/mcp-mesh-runtime:ro
       # Mount agent code
       - ../simple/system_agent.py:/app/agent.py:ro
     working_dir: /app
-    # Install mcp_mesh in editable mode, then run agent
-    entrypoint: >
-      sh -c "pip install -e /mcp-mesh-runtime && python /app/agent.py"
+    command: ["agent.py"]
     environment:
       - MCP_MESH_REGISTRY_URL=http://registry:8000
       - MCP_MESH_REGISTRY_HOST=registry
@@ -168,22 +160,16 @@ services:
 
   # Test 1: Basic LLM Agent (no tools)
   test-001-basic-llm:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev # ← Development build
+    image: mcpmesh/python-runtime:3.3.2
     container_name: mcp-mesh-test-001-basic-llm
     hostname: test-001-basic-llm
     ports:
       - "9001:8080"
     volumes:
-      # Mount runtime source for hot reload (development mode)
-      - ../../src/runtime/python:/mcp-mesh-runtime:ro
       # Mount agent code
       - ../llm-examples/test_001_basic_llm_agent.py:/app/agent.py:ro
     working_dir: /app
-    # Install mcp_mesh in editable mode, then run agent
-    entrypoint: >
-      sh -c "pip install -e /mcp-mesh-runtime && python /app/agent.py"
+    command: ["agent.py"]
     environment:
       # API Key from host environment (REQUIRED)
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
@@ -230,22 +216,16 @@ services:
 
   # Test 2: LLM Agent with Time Tools
   test-002-chat-with-time:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev # ← Development build
+    image: mcpmesh/python-runtime:3.3.2
     container_name: mcp-mesh-test-002-chat-with-time
     hostname: test-002-chat-with-time
     ports:
       - "9002:8080"
     volumes:
-      # Mount runtime source for hot reload (development mode)
-      - ../../src/runtime/python:/mcp-mesh-runtime:ro
       # Mount agent code
       - ../llm-examples/test_002_chat_with_time.py:/app/agent.py:ro
     working_dir: /app
-    # Install mcp_mesh in editable mode, then run agent
-    entrypoint: >
-      sh -c "pip install -e /mcp-mesh-runtime && python /app/agent.py"
+    command: ["agent.py"]
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - MCP_MESH_REGISTRY_URL=http://registry:8000
@@ -292,22 +272,16 @@ services:
 
   # Test 3: Multi-Tool Chat Agent
   test-003-multi-tool:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev # ← Development build
+    image: mcpmesh/python-runtime:3.3.2
     container_name: mcp-mesh-test-003-multi-tool
     hostname: test-003-multi-tool
     ports:
       - "9003:8080"
     volumes:
-      # Mount runtime source for hot reload (development mode)
-      - ../../src/runtime/python:/mcp-mesh-runtime:ro
       # Mount agent code
       - ../llm-examples/test_003_multi_tool_chat.py:/app/agent.py:ro
     working_dir: /app
-    # Install mcp_mesh in editable mode, then run agent
-    entrypoint: >
-      sh -c "pip install -e /mcp-mesh-runtime && python /app/agent.py"
+    command: ["agent.py"]
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - MCP_MESH_REGISTRY_URL=http://registry:8000
@@ -354,22 +328,16 @@ services:
 
   # Test 4a: System Analyst LLM Agent (specialist)
   test-004-analyst:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev # ← Development build
+    image: mcpmesh/python-runtime:3.3.2
     container_name: mcp-mesh-test-004-analyst
     hostname: test-004-analyst
     ports:
       - "9004:8080"
     volumes:
-      # Mount runtime source for hot reload (development mode)
-      - ../../src/runtime/python:/mcp-mesh-runtime:ro
       # Mount agent code
       - ../llm-examples/test_004_system_analyst_llm.py:/app/agent.py:ro
     working_dir: /app
-    # Install mcp_mesh in editable mode, then run agent
-    entrypoint: >
-      sh -c "pip install -e /mcp-mesh-runtime && python /app/agent.py"
+    command: ["agent.py"]
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - MCP_MESH_REGISTRY_URL=http://registry:8000
@@ -416,22 +384,16 @@ services:
 
   # Test 4b: Orchestrator LLM Agent (coordinator)
   test-004-orchestrator:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev # ← Development build
+    image: mcpmesh/python-runtime:3.3.2
     container_name: mcp-mesh-test-004-orchestrator
     hostname: test-004-orchestrator
     ports:
       - "9005:8080"
     volumes:
-      # Mount runtime source for hot reload (development mode)
-      - ../../src/runtime/python:/mcp-mesh-runtime:ro
       # Mount agent code
       - ../llm-examples/test_004_orchestrator_llm.py:/app/agent.py:ro
     working_dir: /app
-    # Install mcp_mesh in editable mode, then run agent
-    entrypoint: >
-      sh -c "pip install -e /mcp-mesh-runtime && python /app/agent.py"
+    command: ["agent.py"]
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - MCP_MESH_REGISTRY_URL=http://registry:8000

@@ -33,10 +33,13 @@ that demonstrates both chain and fan-out call patterns.
 
 ## Quick Start
 
+All services run published `mcpmesh/*` images pulled from Docker Hub — nothing
+is built locally.
+
 ```bash
 # Start all services
 cd examples/observability-test
-docker compose up --build
+docker compose up -d
 
 # Wait for all agents to register (check registry)
 meshctl list
@@ -142,16 +145,15 @@ for stream, messages in traces:
             print(f"  {key}: {value}")
 ```
 
-## Development Testing
+## Iterating on the agents
 
-The mcp-mesh source code is mounted into the containers, allowing you to:
-
-1. Make changes to `/src/runtime/python/_mcp_mesh/tracing/`
-2. Restart only the affected container(s)
-3. Re-run the test without rebuilding
+The services run the published `mcpmesh/python-runtime` and `mcpmesh/registry`
+images — the same artifacts a user installs. Only the agent files under
+`agents/` are mounted into the containers, so editing one and restarting that
+container is enough:
 
 ```bash
-# After making changes to tracing code
+# After editing agents/processor.py
 docker compose restart orchestrator processor analyzer storage
 
 # Clear previous traces
@@ -160,6 +162,13 @@ redis-cli DEL mesh:trace
 # Re-run test
 meshctl call orchestrator/orchestrate_workflow --workflow_id test456
 ```
+
+Editing `src/runtime/python` does **not** affect these containers — they run the
+released `mcp-mesh` package, not the working tree. To exercise mesh changes from
+source, use the repo's own build and test path (`make build`, then
+`tsuite run --suite-path tests/src-tests` followed by
+`tsuite run --suite-path tests/integration`), which builds and tests the runtime
+from the working tree.
 
 ## Troubleshooting
 
@@ -195,8 +204,7 @@ meshctl list --capability process_data
 ```
 observability-test/
 ├── README.md                 # This file
-├── docker-compose.yml        # Service definitions
-├── Dockerfile.dev            # Dev image with source mounting
+├── docker-compose.yml        # Service definitions (published mcpmesh/* images)
 └── agents/
     ├── orchestrator.py       # Entry point agent
     ├── processor.py          # Middle tier agent

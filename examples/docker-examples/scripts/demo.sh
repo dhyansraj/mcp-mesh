@@ -98,7 +98,7 @@ start_mesh() {
     print_header "🚀 Starting MCP Mesh"
 
     print_step "Starting Docker Compose services..."
-    docker-compose up -d --build
+    docker-compose up -d
 
     sleep 5
 

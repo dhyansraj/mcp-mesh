@@ -53,9 +53,7 @@ services:
       - mcp-mesh-llm-delegation-test
 
   registry:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/registry/Dockerfile
+    image: mcpmesh/registry:3.3.2
     container_name: mcp-mesh-registry-llm-delegation-test
     ports:
       - "8002:8000"
@@ -80,9 +78,7 @@ services:
 
   # Test PT-008: LLM Provider Registration
   test-pt-008-provider:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    image: mcpmesh/python-runtime:3.3.2
     container_name: mcp-mesh-test-pt-008-provider
     profiles:
       - test-pt-008
@@ -95,11 +91,10 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       PYTHONUNBUFFERED: 1
     volumes:
-      - ../../src/runtime/python:/mcp-mesh-runtime:ro
       - ../llm-mesh-delegation/test_008_provider_registration.py:/app/agent.py:ro
       - ../llm-mesh-delegation/prompts:/app/prompts:ro
-    entrypoint: >
-      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    working_dir: /app
+    command: ["agent.py"]
     ports:
       - "9019:9019"
     depends_on:
@@ -121,9 +116,7 @@ services:
 
   # Test PT-009: Basic Mesh Delegation - Provider
   test-pt-009-provider:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    image: mcpmesh/python-runtime:3.3.2
     container_name: mcp-mesh-test-pt-009-provider
     profiles:
       - test-pt-009
@@ -136,11 +129,10 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       PYTHONUNBUFFERED: 1
     volumes:
-      - ../../src/runtime/python:/mcp-mesh-runtime:ro
       - ../llm-mesh-delegation/test_009_provider.py:/app/agent.py:ro
       - ../llm-mesh-delegation/prompts:/app/prompts:ro
-    entrypoint: >
-      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    working_dir: /app
+    command: ["agent.py"]
     ports:
       - "9020:9020"
     depends_on:
@@ -162,9 +154,7 @@ services:
 
   # Test PT-009: Basic Mesh Delegation - Consumer
   test-pt-009-consumer:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    image: mcpmesh/python-runtime:3.3.2
     container_name: mcp-mesh-test-pt-009-consumer
     profiles:
       - test-pt-009
@@ -178,11 +168,10 @@ services:
       MCP_MESH_LOG_LEVEL: DEBUG
       MCP_MESH_DEBUG_MODE: "true"
     volumes:
-      - ../../src/runtime/python:/mcp-mesh-runtime:ro
       - ../llm-mesh-delegation/test_009_consumer.py:/app/agent.py:ro
       - ../llm-mesh-delegation/prompts:/app/prompts:ro
-    entrypoint: >
-      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    working_dir: /app
+    command: ["agent.py"]
     ports:
       - "9021:9021"
     depends_on:

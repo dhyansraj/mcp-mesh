@@ -119,7 +119,7 @@ async def health_check() -> dict:
     return {"status": "healthy", "agent": "storage", "records": len(_storage)}
 
 
-def storage_health():
+async def storage_health():
     """Health check function for mesh registration."""
     return True
 

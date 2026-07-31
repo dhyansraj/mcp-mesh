@@ -9,11 +9,16 @@ This directory contains Docker Compose examples for MCP Mesh, demonstrating how 
 - [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/) installed
 - At least 4GB RAM available for containers
 
-### 1. Build and Start Services
+### 1. Start Services
+
+Every service runs a published image from Docker Hub (`mcpmesh/registry`,
+`mcpmesh/python-runtime`) — there is nothing to build. The agent code is
+bind-mounted in from `examples/`, so the containers run the released `mcp-mesh`
+package against the example agents.
 
 ```bash
-# Build and start all services
-docker compose up --build -d
+# Pull and start all services
+docker compose up -d
 
 # Check service status
 docker compose ps

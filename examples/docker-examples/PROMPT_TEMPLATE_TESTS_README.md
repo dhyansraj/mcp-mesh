@@ -10,7 +10,7 @@ The LLM prompt template system enables dynamic, context-aware system prompts wit
 - **Type-Safe Contexts**: `MeshContextModel` for validated context objects
 - **Auto-Detection**: Automatic context parameter detection via type hints
 - **Enhanced Schemas**: Field descriptions for better LLM chains
-- **Hot Reload**: Edit templates and code without rebuilding
+- **Hot Reload**: Edit templates and agent code without rebuilding
 
 ## Prerequisites
 
@@ -37,13 +37,13 @@ cd examples/docker-examples
 cd examples/docker-examples
 ```
 
-### 3. Build Development Images (One-Time)
+### 3. Pull Images (One-Time)
 
 ```bash
-docker compose -f docker-compose.prompt-templates.yml build
+docker compose -f docker-compose.prompt-templates.yml pull
 ```
 
-This builds the development image with hot-reload support for the MCP Mesh runtime.
+Every service runs a published `mcpmesh/*` image — there is nothing to build.
 
 ### 4. Start Infrastructure
 
@@ -298,19 +298,17 @@ docker compose -f docker-compose.prompt-templates.yml --profile test-pt-006 down
 
 ## Development Workflow
 
-### Editing Runtime Code (Hot Reload)
+### Changing the MCP Mesh Runtime
 
-The development setup mounts the runtime source code, so you can edit and test without rebuilding:
+These containers run the released `mcp-mesh` package from the published
+`mcpmesh/python-runtime` image, so edits under `src/runtime/python` have no
+effect here. To exercise runtime changes from the working tree, use the repo's
+own build and test path:
 
 ```bash
-# 1. Edit runtime code
-vim ../../src/runtime/python/_mcp_mesh/engine/mesh_llm_agent.py
-
-# 2. Restart the container (NO rebuild needed!)
-docker compose -f docker-compose.prompt-templates.yml restart test-pt-001-basic-template
-
-# 3. Test immediately - changes are live!
-curl -X POST http://localhost:9011/mcp ...
+make build
+tsuite run --suite-path tests/src-tests
+tsuite run --suite-path tests/integration --parallel 8
 ```
 
 ### Editing Template Files
@@ -440,8 +438,8 @@ docker compose -f docker-compose.prompt-templates.yml logs registry | grep -i "a
 # Stop all services
 docker compose -f docker-compose.prompt-templates.yml down -v
 
-# Rebuild from scratch
-docker compose -f docker-compose.prompt-templates.yml build --no-cache
+# Re-pull images
+docker compose -f docker-compose.prompt-templates.yml pull
 
 # Start fresh
 docker compose -f docker-compose.prompt-templates.yml up -d postgres redis registry system-agent

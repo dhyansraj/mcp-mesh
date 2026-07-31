@@ -69,9 +69,7 @@ services:
 
   # Go-based registry service (built locally)
   registry:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/registry/Dockerfile
+    image: mcpmesh/registry:3.3.2
     container_name: mcp-mesh-registry
     ports:
       - "8000:8000"
@@ -117,9 +115,7 @@ services:
 
   # Hello World Python agent - built locally
   hello-world-agent:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/agents/base/Dockerfile.base
+    image: mcpmesh/python-runtime:3.3.2
     container_name: mcp-mesh-hello-world
     hostname: hello-world-agent
     ports:
@@ -128,7 +124,7 @@ services:
       # Mount agent code from outside
       - ../simple/hello_world.py:/app/agent.py:ro
     working_dir: /app
-    command: ["python", "agent.py"]
+    command: ["agent.py"]
     environment:
       # MCP Mesh configuration - agent works standalone if registry unavailable
       - MCP_MESH_REGISTRY_URL=http://registry:8000
@@ -172,9 +168,7 @@ services:
 
   # System Agent Python service - built locally
   system-agent:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/agents/base/Dockerfile.base
+    image: mcpmesh/python-runtime:3.3.2
     container_name: mcp-mesh-system-agent
     hostname: system-agent
     ports:
@@ -183,7 +177,7 @@ services:
       # Mount agent code from outside
       - ../simple/system_agent.py:/app/agent.py:ro
     working_dir: /app
-    command: ["python", "agent.py"]
+    command: ["agent.py"]
     environment:
       # MCP Mesh configuration - agent works standalone if registry unavailable
       - MCP_MESH_REGISTRY_URL=http://registry:8000
@@ -227,9 +221,7 @@ services:
 
   # FastMCP Agent with mesh integration - built locally
   fastmcp-agent:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/agents/base/Dockerfile.base
+    image: mcpmesh/python-runtime:3.3.2
     container_name: mcp-mesh-fastmcp-agent
     hostname: fastmcp-agent
     ports:
@@ -238,7 +230,7 @@ services:
       # Mount FastMCP agent code
       - ../simple/fastmcp_agent.py:/app/agent.py:ro
     working_dir: /app
-    command: ["python", "agent.py"]
+    command: ["agent.py"]
     environment:
       # MCP Mesh configuration
       - MCP_MESH_REGISTRY_URL=http://registry:8000
@@ -282,9 +274,7 @@ services:
 
   # Dependent Agent that uses FastMCP agent's time service - built locally
   dependent-agent:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/agents/base/Dockerfile.base
+    image: mcpmesh/python-runtime:3.3.2
     container_name: mcp-mesh-dependent-agent
     hostname: dependent-agent
     ports:
@@ -293,7 +283,7 @@ services:
       # Mount dependent agent code
       - ../simple/dependent_agent.py:/app/agent.py:ro
     working_dir: /app
-    command: ["python", "agent.py"]
+    command: ["agent.py"]
     environment:
       # MCP Mesh configuration
       - MCP_MESH_REGISTRY_URL=http://registry:8000
@@ -337,9 +327,7 @@ services:
 
   # FastAPI App with mesh integration - built locally
   fastapi-app:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/agents/base/Dockerfile.base
+    image: mcpmesh/python-runtime:3.3.2
     container_name: mcp-mesh-fastapi-app
     hostname: fastapi-app
     ports:
@@ -348,7 +336,7 @@ services:
       # Mount FastAPI app code
       - ../simple/fastapi_app.py:/app/agent.py:ro
     working_dir: /app
-    command: ["python", "agent.py"]
+    command: ["agent.py"]
     environment:
       # MCP Mesh configuration
       - MCP_MESH_REGISTRY_URL=http://registry:8000
@@ -392,9 +380,7 @@ services:
 
   # Simple FastAPI Router App (Maya-style APIRouter pattern) - built locally
   simple-router-app:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/agents/base/Dockerfile.base
+    image: mcpmesh/python-runtime:3.3.2
     container_name: mcp-mesh-simple-router-app
     hostname: simple-router-app
     ports:
@@ -403,7 +389,7 @@ services:
       # Mount Simple Router app code
       - ../simple/simple_fastapi_router.py:/app/agent.py:ro
     working_dir: /app
-    command: ["python", "agent.py"]
+    command: ["agent.py"]
     environment:
       # MCP Mesh configuration
       - MCP_MESH_REGISTRY_URL=http://registry:8000
@@ -447,9 +433,7 @@ services:
 
   # LLM With Deps Agent - demonstrates both static dependencies AND LLM provider
   llm-with-deps-agent:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/agents/base/Dockerfile.base
+    image: mcpmesh/python-runtime:3.3.2
     container_name: mcp-mesh-llm-with-deps
     hostname: llm-with-deps-agent
     ports:
@@ -458,7 +442,7 @@ services:
       # Mount LLM with deps agent code
       - ../simple/llm_with_deps_agent.py:/app/agent.py:ro
     working_dir: /app
-    command: ["python", "agent.py"]
+    command: ["agent.py"]
     environment:
       # MCP Mesh configuration
       - MCP_MESH_REGISTRY_URL=http://registry:8000
@@ -501,9 +485,7 @@ services:
 
   # OpenAI LLM Provider - Provides OpenAI GPT API access to mesh
   openai-provider:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/agents/base/Dockerfile.base
+    image: mcpmesh/python-runtime:3.3.2
     container_name: mcp-mesh-openai-provider
     hostname: openai-provider
     ports:
@@ -512,7 +494,7 @@ services:
       # Mount OpenAI provider agent code
       - ./agents/openai-provider/main.py:/app/agent.py:ro
     working_dir: /app
-    command: ["python", "agent.py"]
+    command: ["agent.py"]
     environment:
       # OpenAI API key
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -557,9 +539,7 @@ services:
 
   # Claude LLM Provider - Provides Anthropic Claude API access to mesh
   claude-provider:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/agents/base/Dockerfile.base
+    image: mcpmesh/python-runtime:3.3.2
     container_name: mcp-mesh-claude-provider
     hostname: claude-provider
     ports:
@@ -568,7 +548,7 @@ services:
       # Mount Claude provider agent code
       - ./agents/claude-provider/main.py:/app/agent.py:ro
     working_dir: /app
-    command: ["python", "agent.py"]
+    command: ["agent.py"]
     environment:
       # Anthropic API key
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}

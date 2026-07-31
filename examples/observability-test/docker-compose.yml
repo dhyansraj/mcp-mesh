@@ -28,9 +28,7 @@ services:
       retries: 5
 
   registry:
-    build:
-      context: ../../
-      dockerfile: examples/docker-examples/registry/Dockerfile
+    image: mcpmesh/registry:3.3.2
     container_name: trace-test-registry
     hostname: registry
     ports:
@@ -63,9 +61,7 @@ services:
   # ============== Agents ==============
 
   orchestrator:
-    build:
-      context: ../../
-      dockerfile: examples/observability-test/Dockerfile.dev
+    image: mcpmesh/python-runtime:3.3.2
     container_name: trace-test-orchestrator
     hostname: orchestrator
     ports:
@@ -73,10 +69,8 @@ services:
     volumes:
       # Mount agent code
       - ./agents/orchestrator.py:/app/agent.py:ro
-      # Mount mcp-mesh source for development
-      - ../../src/runtime/python:/src/mcp-mesh/src/runtime/python:ro
     working_dir: /app
-    command: ["python", "agent.py"]
+    command: ["agent.py"]
     environment:
       # MCP Mesh Configuration
       - MCP_MESH_REGISTRY_URL=http://registry:8000
@@ -120,18 +114,15 @@ services:
     restart: unless-stopped
 
   processor:
-    build:
-      context: ../../
-      dockerfile: examples/observability-test/Dockerfile.dev
+    image: mcpmesh/python-runtime:3.3.2
     container_name: trace-test-processor
     hostname: processor
     ports:
       - "8082:8080"
     volumes:
       - ./agents/processor.py:/app/agent.py:ro
-      - ../../src/runtime/python:/src/mcp-mesh/src/runtime/python:ro
     working_dir: /app
-    command: ["python", "agent.py"]
+    command: ["agent.py"]
     environment:
       - MCP_MESH_REGISTRY_URL=http://registry:8000
       - MCP_MESH_REGISTRY_HOST=registry
@@ -173,18 +164,15 @@ services:
     restart: unless-stopped
 
   analyzer:
-    build:
-      context: ../../
-      dockerfile: examples/observability-test/Dockerfile.dev
+    image: mcpmesh/python-runtime:3.3.2
     container_name: trace-test-analyzer
     hostname: analyzer
     ports:
       - "8083:8080"
     volumes:
       - ./agents/analyzer.py:/app/agent.py:ro
-      - ../../src/runtime/python:/src/mcp-mesh/src/runtime/python:ro
     working_dir: /app
-    command: ["python", "agent.py"]
+    command: ["agent.py"]
     environment:
       - MCP_MESH_REGISTRY_URL=http://registry:8000
       - MCP_MESH_REGISTRY_HOST=registry
@@ -226,18 +214,15 @@ services:
     restart: unless-stopped
 
   storage:
-    build:
-      context: ../../
-      dockerfile: examples/observability-test/Dockerfile.dev
+    image: mcpmesh/python-runtime:3.3.2
     container_name: trace-test-storage
     hostname: storage
     ports:
       - "8084:8080"
     volumes:
       - ./agents/storage.py:/app/agent.py:ro
-      - ../../src/runtime/python:/src/mcp-mesh/src/runtime/python:ro
     working_dir: /app
-    command: ["python", "agent.py"]
+    command: ["agent.py"]
     environment:
       - MCP_MESH_REGISTRY_URL=http://registry:8000
       - MCP_MESH_REGISTRY_HOST=registry
