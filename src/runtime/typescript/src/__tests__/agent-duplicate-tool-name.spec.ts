@@ -480,6 +480,38 @@ describe("addLlmProvider — duplicate advertised tool name (#1442)", () => {
     expect(() => agent.addLlmProvider({ ...config })).not.toThrow();
   });
 
+  it("the error names addLlmProvider, not addTool", () => {
+    // The check is shared with `addTool`; the message must still point at the
+    // API the caller actually invoked.
+    const agent = newAgent();
+    agent.addLlmProvider({
+      model: "anthropic/claude-sonnet-4-5",
+      capability: "llm-claude",
+    });
+    expect(() =>
+      agent.addLlmProvider({
+        model: "openai/gpt-4o-mini",
+        capability: "llm-gpt",
+      }),
+    ).toThrow(/^addLlmProvider: duplicate MCP tool name/);
+  });
+
+  it("addTool's error still names addTool", () => {
+    const agent = newAgent();
+    agent.addTool({
+      name: "greet",
+      parameters: z.object({}),
+      execute: async () => "a",
+    });
+    expect(() =>
+      agent.addTool({
+        name: "greet",
+        parameters: z.object({}),
+        execute: async () => "b",
+      }),
+    ).toThrow(/^addTool: duplicate MCP tool name/);
+  });
+
   it("a provider collides with a same-named addTool declaration", () => {
     // Cross-surface: the wire name is one namespace regardless of which entry
     // point claimed it.
@@ -543,6 +575,54 @@ describe("jobs helper tools — do not clobber a user tool (#1442)", () => {
     expect((agent as any).tools.get("__mesh_job_status").capability).toBe(
       "my_status",
     );
+  });
+
+  it("a helper registered FIRST blocks a later conflicting addTool", () => {
+    // The reverse order. `registerJobsHelperTools` runs from `_autoStart`,
+    // which is process.nextTick-scheduled and awaits the port probe — so any
+    // `addTool` made after an `await` in user startup code lands after the
+    // helpers. Without recording the helper names, that `addTool` passed the
+    // guard and clobbered the helper on the FastMCP server (fastmcp's addTool
+    // filters out the previous entry); the catalog's `tools.has` check only
+    // protected the heartbeat view.
+    const stub = makeFastMCPStub();
+    const agent = new MeshAgent(stub, {
+      name: "test-agent-jobshelper-reverse",
+      httpPort: 0,
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (agent as any).config.registryUrl = "http://registry:8000";
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (agent as any).registerJobsHelperTools();
+
+    expect(() =>
+      agent.addTool({
+        name: "__mesh_job_status",
+        capability: "my_status",
+        parameters: z.object({}),
+        execute: async () => "mine",
+      }),
+    ).toThrow(/duplicate MCP tool name '__mesh_job_status'/);
+  });
+
+  it("a second helper registration pass is idempotent, not a collision", () => {
+    // Same declaration, same names — re-running the pass must not throw.
+    const stub = makeFastMCPStub();
+    const agent = new MeshAgent(stub, {
+      name: "test-agent-jobshelper-twice",
+      httpPort: 0,
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (agent as any).config.registryUrl = "http://registry:8000";
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (agent as any).registerJobsHelperTools();
+    expect(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (agent as any).registerJobsHelperTools();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    }).not.toThrow();
   });
 
   it("registers all three when uncontested", () => {

@@ -68,6 +68,9 @@ public class MeshMcpServerConfiguration {
     private static final Map<String, Object> WRAP_RESULT_META =
         Map.of("fastmcp", Map.of("wrap_result", true));
 
+    /** funcId prefix {@code LlmProviderToolWrapper} builds ({@code llm_provider:<capability>}). */
+    private static final String LLM_PROVIDER_FUNC_ID_PREFIX = "llm_provider:";
+
     // MCP SDK 2.0.0 uses Jackson 3 (tools.jackson)
     private final tools.jackson.databind.json.JsonMapper mcpJsonMapper;
 
@@ -216,9 +219,20 @@ public class MeshMcpServerConfiguration {
                 continue;
             }
             String funcId = handler.getFuncId();
-            String previousFuncId = claimedBy.putIfAbsent(toolName, funcId);
-            if (previousFuncId == null || Objects.equals(previousFuncId, funcId)) {
-                // Unclaimed, or the same declaration re-registered — both fine.
+            // containsKey, NOT putIfAbsent: the map permits null values, and
+            // putIfAbsent REPLACES a null-valued mapping and returns null — so a
+            // name first claimed by a handler with a null funcId would read as
+            // unclaimed for every later claimant, and the collision this guard
+            // exists to catch would walk straight through. Nothing enforces a
+            // non-null funcId: McpToolHandler is a public interface and
+            // getFuncId() has no default.
+            if (!claimedBy.containsKey(toolName)) {
+                claimedBy.put(toolName, funcId);
+                continue;
+            }
+            String previousFuncId = claimedBy.get(toolName);
+            if (Objects.equals(previousFuncId, funcId)) {
+                // The same declaration re-registered — fine.
                 continue;
             }
             throw new IllegalStateException(String.format(
@@ -255,9 +269,6 @@ public class MeshMcpServerConfiguration {
         }
         return "Rename one of the methods, or move one of the tools to a separate agent.";
     }
-
-    /** funcId prefix {@code LlmProviderToolWrapper} builds ({@code llm_provider:<capability>}). */
-    private static final String LLM_PROVIDER_FUNC_ID_PREFIX = "llm_provider:";
 
     /**
      * Register a McpToolHandler as an MCP tool specification.

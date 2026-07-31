@@ -505,7 +505,7 @@ export class MeshAgent {
       this.safeInputSchema(def.parameters),
       handlerSource(execute),
     ]);
-    this.assertToolNameAvailable(toolName, identity, producedCapability);
+    this.assertToolNameAvailable(toolName, identity, producedCapability, "addTool");
 
     // Phase 1 MeshJob substrate: validate `task: true` requires an
     // async function. Long-running tools need a Promise-based control
@@ -1464,6 +1464,7 @@ export class MeshAgent {
       toolDef.name,
       identity,
       config.capability ?? "llm",
+      "addLlmProvider",
     );
     this.toolDeclarations.set(toolDef.name, identity);
 
@@ -1505,18 +1506,22 @@ export class MeshAgent {
    *
    * Re-registering the SAME declaration is tolerated (see
    * {@link declarationIdentity}); that is the PR #1445 lesson.
+   *
+   * @param api the API the caller actually used, so the message points at the
+   *            method they invoked rather than always at `addTool`.
    */
   private assertToolNameAvailable(
     toolName: string,
     identity: string,
     producedCapability: string,
+    api: "addTool" | "addLlmProvider",
   ): void {
     const previousIdentity = this.toolDeclarations.get(toolName);
     if (previousIdentity === undefined || previousIdentity === identity) {
       return;
     }
     throw new Error(
-      `addTool: duplicate MCP tool name '${toolName}' — it is already ` +
+      `${api}: duplicate MCP tool name '${toolName}' — it is already ` +
         `registered by a different tool declaration ` +
         `(capability '${this.tools.get(toolName)?.capability ?? "?"}', now ` +
         `'${producedCapability}'). The tool name is the wire name a client ` +
@@ -1995,6 +2000,18 @@ export class MeshAgent {
       return;
     }
     for (const [name, meta] of helpers.entries()) {
+      // Issue #1442, the reverse order: this runs from `_autoStart`, which is
+      // `process.nextTick`-scheduled and awaits the port probe, so an `addTool`
+      // made after any `await` in user startup code lands AFTER the helpers.
+      // Recording each registered helper keeps `toolDeclarations` a complete
+      // picture of the wire namespace, so that later `addTool` is refused
+      // instead of silently clobbering the helper on the FastMCP server. (The
+      // `tools.has` guard below protects only the mesh catalog, not the wire.)
+      this.toolDeclarations.set(
+        name,
+        declarationIdentity(["jobsHelper", name, meta.version]),
+      );
+
       // Don't overwrite a user-defined tool with the same name.
       if (this.tools.has(name)) continue;
       this.tools.set(name, {

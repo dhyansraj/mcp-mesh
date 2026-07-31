@@ -172,6 +172,49 @@ class MeshMcpServerDuplicateToolNameTest {
         assertTrue(!boom.getMessage().contains("@MeshLlmProvider"), boom.getMessage());
     }
 
+    @Test
+    @DisplayName("a null funcId claims the name — it must not read as unclaimed for the next handler")
+    void aNullFuncIdStillClaimsTheName() {
+        // McpToolHandler is a public interface and getFuncId() has no default,
+        // so nothing enforces non-null. The map permits null values, and
+        // putIfAbsent REPLACES a null-valued mapping and returns null — so on
+        // putIfAbsent the second handler read "unclaimed" and the collision
+        // walked through the one guard whose entire job is to not let it.
+        List<McpToolHandler> handlers = List.of(
+            new StubHandler(null, "first", "analyze"),
+            tool(BetaTools.class, "analyze"));
+
+        IllegalStateException boom = assertThrows(IllegalStateException.class,
+            () -> MeshMcpServerConfiguration.assertUniqueAdvertisedToolNames(handlers));
+        assertTrue(boom.getMessage().contains("'analyze'"), boom.getMessage());
+        assertTrue(boom.getMessage().contains(BetaTools.class.getName() + ".analyze"),
+            boom.getMessage());
+    }
+
+    @Test
+    @DisplayName("a null funcId on the SECOND handler is still a collision")
+    void aNullFuncIdOnTheIncomingHandlerIsACollision() {
+        List<McpToolHandler> handlers = List.of(
+            tool(AlphaTools.class, "analyze"),
+            new StubHandler(null, "second", "analyze"));
+
+        assertThrows(IllegalStateException.class,
+            () -> MeshMcpServerConfiguration.assertUniqueAdvertisedToolNames(handlers));
+    }
+
+    @Test
+    @DisplayName("two handlers that BOTH report a null funcId are treated as one declaration")
+    void twoNullFuncIdsAreNotDistinguishable() {
+        // Nothing distinguishes them, so this stays tolerant rather than
+        // failing a boot on a pair the guard cannot actually tell apart.
+        List<McpToolHandler> handlers = List.of(
+            new StubHandler(null, "a", "analyze"),
+            new StubHandler(null, "b", "analyze"));
+
+        assertDoesNotThrow(() ->
+            MeshMcpServerConfiguration.assertUniqueAdvertisedToolNames(handlers));
+    }
+
     // ─────────────────────────────────────────────────────────────────
     // Idempotent re-registration is NOT a collision (the #1445 lesson)
     // ─────────────────────────────────────────────────────────────────

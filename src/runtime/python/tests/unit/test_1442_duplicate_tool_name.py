@@ -321,6 +321,13 @@ def _fake_llm_provider_tool(user_func):
     Every provider in a process is the same `process_chat` def, renamed to the
     user's function name (the issue #227 fix). Its own source coordinates are
     therefore identical for every provider — hence the origin stamp.
+
+    The attribute name is spelled out as a LITERAL on purpose, where the runtime
+    (`helpers.py` writing it, `decorator_registry.py` reading it) shares a
+    constant. It is a contract between two modules, and a test that imported the
+    constant would follow a rename silently — leaving nothing to notice that
+    anything outside this repo stamping the old name has stopped working. Spelled
+    out, a rename turns these tests red and forces the decision to be conscious.
     """
 
     async def process_chat(request):

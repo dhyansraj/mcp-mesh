@@ -3498,8 +3498,15 @@ def llm_provider(
         # above is about. Stamp the origin so the guard can tell them apart.
         # Set BEFORE the decorators below so `functools.wraps` copies it onto every
         # wrapper layer.
-        process_chat._mesh_declaration_origin = func
-        process_chat_stream._mesh_declaration_origin = func
+        #
+        # The attribute NAME comes from the guard that reads it, not a literal:
+        # a rename on that side would otherwise silently stop this stamp from
+        # landing and take the whole @mesh.llm_provider surface back to being
+        # invisible to the guard, with nothing failing to say so.
+        from _mcp_mesh.engine.decorator_registry import DECLARATION_ORIGIN_ATTR
+
+        setattr(process_chat, DECLARATION_ORIGIN_ATTR, func)
+        setattr(process_chat_stream, DECLARATION_ORIGIN_ATTR, func)
 
         # CRITICAL: Apply @mesh.tool() FIRST (before FastMCP caches the function)
         # This ensures mesh DI wrapper is in place when FastMCP caches the function
