@@ -388,11 +388,14 @@ public final class JobsRuntimeManager implements SmartLifecycle {
             + "." + meta.method().getName();
         MeshToolWrapper wrapper = wrapperRegistry.getWrapper(funcId);
         if (wrapper == null) {
-            // Fall back via method name (defensive — covers any residual
-            // key divergence between registration and lookup).
-            log.debug("Wrapper lookup miss for funcId={}; falling back to method-name lookup '{}'",
-                funcId, meta.method().getName());
-            wrapper = wrapperRegistry.getWrapperByMethodName(meta.method().getName());
+            // Fall back via the METHOD (defensive — covers any residual key
+            // divergence between registration and lookup, e.g. an inherited
+            // @MeshTool whose declaring class is not the bean's target class).
+            // Issue #1437: this used the bare method NAME, which cannot
+            // distinguish two same-named @MeshTool methods in different classes.
+            log.debug("Wrapper lookup miss for funcId={}; falling back to method lookup '{}'",
+                funcId, meta.method());
+            wrapper = wrapperRegistry.getWrapperByMethod(meta.method());
         }
         return wrapper;
     }

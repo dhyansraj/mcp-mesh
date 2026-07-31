@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.lang.reflect.Method;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -16,6 +17,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -34,9 +36,41 @@ public class MeshRouteRegistry {
     private final Map<String, RouteMetadata> routesByPath = new ConcurrentHashMap<>();
 
     /**
-     * Routes indexed by handler method ID (ClassName.methodName).
+     * Routes indexed by the handler {@link Method} — the identity
+     * {@link MeshRouteHandlerInterceptor} resolves each request against.
+     *
+     * <p>Keyed by {@code Method}, NOT by {@code handlerMethodId} (issue #1437).
+     * That id is {@code "ClassName.methodName"} with no parameter types, so two
+     * overloaded {@code @MeshRoute} handlers in one controller collide on it, and
+     * this map is keyed per HANDLER while {@link #routesByPath} is keyed per
+     * MAPPING — both overloads do register, on their own paths. The interceptor
+     * builds the injected dependency list from whatever this map returns, so on
+     * the string id a request to the first overload's path was served the second
+     * overload's dependencies — <b>positionally</b> since #1401, so nothing about
+     * the shape of the result signalled the swap. Matches
+     * {@link MeshA2ADispatcher}'s {@code argPlans} and
+     * {@link MeshInjectArgumentResolver}, both {@code Method}-keyed.
+     *
+     * <p>{@link Method#equals} is value-based over
+     * {@code (declaringClass, name, returnType, parameterTypes)}, so a fresh copy
+     * from a later {@code getDeclaredMethods()} call — which is what Spring MVC
+     * hands the interceptor — hits the entry the bean post-processor wrote.
      */
-    private final Map<String, RouteMetadata> routesByHandler = new ConcurrentHashMap<>();
+    private final Map<Method, RouteMetadata> routesByHandlerMethod = new ConcurrentHashMap<>();
+
+    /**
+     * Routes indexed by handler method ID ({@code "ClassName.methodName"}).
+     * Best-effort only: the id cannot distinguish overloads, so an id claimed by
+     * more than one handler is recorded in {@link #ambiguousHandlerIds} and
+     * refused at lookup rather than resolved to an arbitrary winner. First
+     * registration wins the slot; later ones only mark it ambiguous.
+     *
+     * @see #getByHandlerMethodId(String)
+     */
+    private final Map<String, RouteMetadata> routesByHandlerId = new ConcurrentHashMap<>();
+
+    /** Handler method IDs claimed by more than one distinct handler. */
+    private final Set<String> ambiguousHandlerIds = ConcurrentHashMap.newKeySet();
 
     /**
      * Register a @MeshRoute endpoint.
@@ -44,11 +78,17 @@ public class MeshRouteRegistry {
      * @param httpMethod HTTP method (GET, POST, etc.)
      * @param path       URL path pattern
      * @param metadata   Route metadata
+     * @throws IllegalStateException when a DIFFERENT handler is already
+     *                               registered for the same {@link Method} —
+     *                               a genuine duplicate registration, which
+     *                               fails the boot rather than silently winning
+     *                               (issue #1437, matching
+     *                               {@link MeshA2ARegistry#register})
      */
     public void register(String httpMethod, String path, RouteMetadata metadata) {
         String routeId = buildRouteId(httpMethod, path);
         routesByPath.put(routeId, metadata);
-        routesByHandler.put(metadata.getHandlerMethodId(), metadata);
+        indexHandler(metadata);
 
         // Settling-window grace (#1193): declare this route's dependency
         // capabilities with the process-wide settle state so the
@@ -79,13 +119,82 @@ public class MeshRouteRegistry {
     }
 
     /**
+     * Index one handler's metadata under both its exact {@link Method} identity
+     * and its (ambiguous) string id.
+     *
+     * <p>A {@code @MeshRoute} handler carrying several mappings — {@code @GetMapping}
+     * plus {@code @PostMapping}, or a multi-path {@code @RequestMapping} — is
+     * registered once PER MAPPING with the SAME metadata instance. That is not a
+     * duplicate: the guard fires only when a <b>different</b> metadata instance
+     * claims a {@link Method} that is already registered.
+     */
+    private void indexHandler(RouteMetadata metadata) {
+        Method handlerMethod = metadata.getHandlerMethod();
+        if (handlerMethod != null) {
+            RouteMetadata previous = routesByHandlerMethod.putIfAbsent(handlerMethod, metadata);
+            if (previous != null && previous != metadata) {
+                throw new IllegalStateException(
+                    "@MeshRoute handler collision: " + handlerMethod
+                        + " is already registered with a different route metadata"
+                        + " (dependencies " + previous.getDependencies() + " vs "
+                        + metadata.getDependencies() + "). Each handler method must be"
+                        + " registered exactly once.");
+            }
+        }
+
+        String handlerMethodId = metadata.getHandlerMethodId();
+        if (handlerMethodId == null) {
+            return;
+        }
+        RouteMetadata previousById = routesByHandlerId.putIfAbsent(handlerMethodId, metadata);
+        if (previousById != null && previousById != metadata) {
+            // Overloads. Legal — they map to different paths — but the string id
+            // can no longer name either of them, so refuse it at lookup instead
+            // of handing out whichever registered first.
+            ambiguousHandlerIds.add(handlerMethodId);
+            log.debug("Handler method id '{}' is claimed by more than one @MeshRoute handler "
+                    + "(overloads); it is no longer resolvable by id — lookups use the Method",
+                handlerMethodId);
+        }
+    }
+
+    /**
+     * Get route metadata by the handler {@link Method} — the exact identity,
+     * which distinguishes overloads.
+     *
+     * @param handlerMethod the resolved handler method (e.g.
+     *                      {@code HandlerMethod.getMethod()})
+     * @return route metadata or null if this method carries no {@code @MeshRoute}
+     */
+    public RouteMetadata getByHandlerMethod(Method handlerMethod) {
+        return handlerMethod == null ? null : routesByHandlerMethod.get(handlerMethod);
+    }
+
+    /**
      * Get route metadata by handler method ID.
      *
+     * @deprecated The id is {@code "ClassName.methodName"} with no parameter
+     *     types, so it cannot name one of several overloaded handlers (issue
+     *     #1437). Use {@link #getByHandlerMethod(Method)}, which is exact. This
+     *     accessor is retained for source/binary compatibility and now returns
+     *     {@code null} — logging an error — for an id claimed by more than one
+     *     handler, rather than resolving it to an arbitrary one of them.
+     *
      * @param handlerMethodId "ClassName.methodName" identifier
-     * @return route metadata or null if not found
+     * @return route metadata, or null if not found or the id is ambiguous
      */
+    @Deprecated
     public RouteMetadata getByHandlerMethodId(String handlerMethodId) {
-        return routesByHandler.get(handlerMethodId);
+        if (handlerMethodId == null) {
+            return null;
+        }
+        if (ambiguousHandlerIds.contains(handlerMethodId)) {
+            log.error("Handler method id '{}' names more than one @MeshRoute handler (overloads "
+                    + "differ only in parameter types) — refusing to resolve it to an arbitrary "
+                    + "one. Look the handler up by its Method instead.", handlerMethodId);
+            return null;
+        }
+        return routesByHandlerId.get(handlerMethodId);
     }
 
     /**
@@ -320,19 +429,67 @@ public class MeshRouteRegistry {
      * Metadata for a @MeshRoute annotated endpoint.
      */
     public static class RouteMetadata {
+        private final Method handlerMethod;
         private final String handlerMethodId;
         private final List<DependencySpec> dependencies;
         private final String description;
         private final boolean failOnMissingDependency;
 
+        /**
+         * Canonical constructor: the handler's {@link Method} IS its identity
+         * (issue #1437). The string id is derived from it and kept for logs,
+         * where its ambiguity across overloads is harmless and it is more
+         * readable than {@link Method#toString()}.
+         */
+        public RouteMetadata(Method handlerMethod, List<DependencySpec> dependencies,
+                            String description, boolean failOnMissingDependency) {
+            this(handlerMethod, buildHandlerMethodId(handlerMethod), dependencies,
+                description, failOnMissingDependency);
+        }
+
+        /**
+         * Identity-less variant, for callers that hold only the string id.
+         *
+         * <p>Metadata built this way is indexed by
+         * {@link MeshRouteRegistry#register} under the ambiguous string id ONLY —
+         * {@link MeshRouteHandlerInterceptor} resolves requests by {@link Method}
+         * first and falls back to the id, so such a route still serves, but only
+         * while no other handler shares its id. Prefer
+         * {@link #RouteMetadata(Method, List, String, boolean)}.
+         */
         public RouteMetadata(String handlerMethodId, List<DependencySpec> dependencies,
                             String description, boolean failOnMissingDependency) {
+            this(null, handlerMethodId, dependencies, description, failOnMissingDependency);
+        }
+
+        private RouteMetadata(Method handlerMethod, String handlerMethodId,
+                            List<DependencySpec> dependencies,
+                            String description, boolean failOnMissingDependency) {
+            this.handlerMethod = handlerMethod;
             this.handlerMethodId = handlerMethodId;
             this.dependencies = dependencies != null ? dependencies : Collections.emptyList();
             this.description = description;
             this.failOnMissingDependency = failOnMissingDependency;
         }
 
+        private static String buildHandlerMethodId(Method method) {
+            return method == null ? null
+                : method.getDeclaringClass().getName() + "." + method.getName();
+        }
+
+        /**
+         * The handler method itself — the identity this route is registered
+         * under. {@code null} only for metadata built from a bare string id.
+         */
+        public Method getHandlerMethod() {
+            return handlerMethod;
+        }
+
+        /**
+         * Human-readable {@code "ClassName.methodName"} id, for logs and
+         * diagnostics. <b>Not an identity</b>: it omits parameter types, so
+         * overloaded handlers share one id (issue #1437).
+         */
         public String getHandlerMethodId() {
             return handlerMethodId;
         }

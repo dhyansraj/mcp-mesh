@@ -2014,9 +2014,21 @@ public class MeshToolWrapper implements McpToolHandler {
 
     /**
      * Get the method name (used as MCP tool name to match registry).
+     *
+     * <p>Not an identity — it carries no class (issue #1437). Use
+     * {@link #getMethod()} to identify this wrapper's handler.
      */
     public String getMethodName() {
         return method.getName();
+    }
+
+    /**
+     * The annotated {@code @MeshTool} method this wrapper invokes — the
+     * wrapper's exact identity, qualified by declaring class and parameter
+     * types (issue #1437).
+     */
+    public Method getMethod() {
+        return method;
     }
 
     public String getDescription() {

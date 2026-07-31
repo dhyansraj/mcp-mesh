@@ -89,4 +89,37 @@ class MeshLlmRegistryValidationTest {
         assertTrue(ex.getMessage().contains("non-empty capability"),
             "error should mention non-empty capability, got: " + ex.getMessage());
     }
+
+    static class OverloadedConsumer {
+        @MeshLlm(providerSelector = @Selector(capability = "llm", tags = {"+claude"}),
+                 systemPrompt = "narrow")
+        public String ask(String question) {
+            return "ok";
+        }
+
+        @MeshLlm(providerSelector = @Selector(capability = "llm", tags = {"+gpt"}),
+                 systemPrompt = "wide")
+        public String ask(String question, int maxTokens) {
+            return "ok";
+        }
+    }
+
+    @Test
+    @DisplayName("overloaded @MeshLlm methods keep their own config (#1437)")
+    void overloadsDoNotShareOneConfig() throws Exception {
+        // configsByMethod keyed on "Class#methodName" — no parameter types — so
+        // the second registration silently replaced the first and one overload
+        // ran with the other's provider selector, prompt and model.
+        MeshLlmRegistry registry = new MeshLlmRegistry();
+        Method narrow = OverloadedConsumer.class.getMethod("ask", String.class);
+        Method wide = OverloadedConsumer.class.getMethod("ask", String.class, int.class);
+
+        registry.register(OverloadedConsumer.class, narrow, narrow.getAnnotation(MeshLlm.class));
+        registry.register(OverloadedConsumer.class, wide, wide.getAnnotation(MeshLlm.class));
+
+        assertEquals("narrow", registry.getByMethod(narrow).systemPrompt());
+        assertEquals("wide", registry.getByMethod(wide).systemPrompt());
+        assertTrue(registry.hasConfig(narrow));
+        assertTrue(registry.hasConfig(wide));
+    }
 }

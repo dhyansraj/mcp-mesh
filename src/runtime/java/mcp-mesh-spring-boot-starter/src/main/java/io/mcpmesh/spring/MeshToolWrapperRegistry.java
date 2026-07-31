@@ -5,10 +5,12 @@ import io.mcpmesh.types.MeshLlmAgent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.lang.reflect.Method;
 import java.lang.reflect.Type;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -40,17 +42,37 @@ public class MeshToolWrapperRegistry {
     // funcId → wrapper (MeshToolWrapper only, for dependency updates)
     private final Map<String, MeshToolWrapper> wrappers = new ConcurrentHashMap<>();
 
-    // methodName → wrapper (for dependency resolution by function name from Rust core)
+    /**
+     * Handler {@link Method} → wrapper: the exact identity, qualified by
+     * declaring class AND parameter types (issue #1437). Used by callers that
+     * hold the method — they should never have to degrade to a name.
+     *
+     * <p>{@link Method#equals} is value-based, so a fresh copy from a later
+     * reflective lookup hits the entry registration wrote.
+     */
+    private final Map<Method, MeshToolWrapper> wrappersByMethod = new ConcurrentHashMap<>();
+
+    /**
+     * Bare {@code methodName} → wrapper. The weakest key in the package: no
+     * class qualifier at all, so two {@code @MeshTool} methods named
+     * {@code analyze} in different classes collide (issue #1437). It has to stay
+     * addressable by bare name — this is the wire-facing fallback for a core that
+     * names a slot by function name alone ({@link #resolveWrapper}) — so instead
+     * of a qualifier it gets a collision guard: a name claimed by more than one
+     * wrapper is recorded in {@link #ambiguousMethodNames} and refused at lookup,
+     * rather than resolving to whichever registered last and wiring one tool's
+     * dependency resolution into the other's slot.
+     */
     private final Map<String, MeshToolWrapper> wrappersByMethodName = new ConcurrentHashMap<>();
+
+    /** Bare method names claimed by more than one registered wrapper. */
+    private final Set<String> ambiguousMethodNames = ConcurrentHashMap.newKeySet();
 
     // funcId → handler (all handlers including LLM providers)
     private final Map<String, McpToolHandler> handlers = new ConcurrentHashMap<>();
 
     // capability → handler (for MCP SDK tool lookup by name)
     private final Map<String, McpToolHandler> handlersByCapability = new ConcurrentHashMap<>();
-
-    // methodName → handler (for MCP tool lookup by method name)
-    private final Map<String, McpToolHandler> handlersByMethodName = new ConcurrentHashMap<>();
 
     private final McpMeshToolProxyFactory proxyFactory;
 
@@ -91,12 +113,14 @@ public class MeshToolWrapperRegistry {
 
         // Store in wrapper maps (for dependency updates)
         wrappers.put(funcId, wrapper);
-        wrappersByMethodName.put(methodName, wrapper);
+        if (wrapper.getMethod() != null) {
+            wrappersByMethod.put(wrapper.getMethod(), wrapper);
+        }
+        indexBareMethodName(methodName, wrapper);
 
         // Store in handler maps (for MCP server)
         handlers.put(funcId, wrapper);
         handlersByCapability.put(capability, wrapper);
-        handlersByMethodName.put(methodName, wrapper);
 
         // Settling-window grace (#1193): declare this tool's dependency
         // slots with the process-wide settle state so the agent-level
@@ -129,10 +153,34 @@ public class MeshToolWrapperRegistry {
 
         handlers.put(funcId, handler);
         handlersByCapability.put(capability, handler);
-        handlersByMethodName.put(methodName, handler);
 
         log.info("Registered handler: {} (capability: {}, method: {})",
             funcId, capability, methodName);
+    }
+
+    /**
+     * Index a wrapper under its bare method name, refusing to overwrite a name
+     * another wrapper already claims (issue #1437).
+     *
+     * <p>The loser is not "the second one registered" — BOTH are dropped from
+     * the bare-name index and the name is marked ambiguous, because there is no
+     * defensible way to pick between them and answering with either one wires a
+     * dependency resolution into the wrong tool's slot. Both remain fully
+     * addressable by {@code funcId} and by {@link Method}, which is how they are
+     * addressed in practice.
+     */
+    private void indexBareMethodName(String methodName, MeshToolWrapper wrapper) {
+        if (methodName == null) {
+            return;
+        }
+        MeshToolWrapper previous = wrappersByMethodName.putIfAbsent(methodName, wrapper);
+        if (previous != null && previous != wrapper) {
+            ambiguousMethodNames.add(methodName);
+            log.warn("Method name '{}' is registered by more than one @MeshTool ({} and {}) — "
+                    + "it no longer resolves a wrapper by name alone. Both remain addressable "
+                    + "by their function ids.",
+                methodName, previous.getFuncId(), wrapper.getFuncId());
+        }
     }
 
     /**
@@ -146,12 +194,37 @@ public class MeshToolWrapperRegistry {
     }
 
     /**
-     * Get a wrapper by method name.
+     * Get a wrapper by its handler {@link Method} — exact, qualified by
+     * declaring class and parameter types.
+     *
+     * @param method The annotated {@code @MeshTool} method
+     * @return The wrapper, or null if that method registered no wrapper
+     */
+    public MeshToolWrapper getWrapperByMethod(Method method) {
+        return method == null ? null : wrappersByMethod.get(method);
+    }
+
+    /**
+     * Get a wrapper by bare method name.
+     *
+     * <p><b>Best-effort.</b> The name carries no class, so it cannot name one of
+     * several same-named {@code @MeshTool} methods; when more than one wrapper
+     * claims it this returns {@code null} rather than an arbitrary one of them
+     * (issue #1437). Prefer {@link #getWrapper(String)} with the function id, or
+     * {@link #getWrapperByMethod(Method)}.
      *
      * @param methodName The short method name (e.g., "analyze")
-     * @return The wrapper, or null if not found
+     * @return The wrapper, or null if not found or the name is ambiguous
      */
     public MeshToolWrapper getWrapperByMethodName(String methodName) {
+        if (methodName == null) {
+            return null;
+        }
+        if (ambiguousMethodNames.contains(methodName)) {
+            log.error("Method name '{}' names more than one @MeshTool wrapper — refusing to "
+                + "resolve it to an arbitrary one. Address the tool by its function id.", methodName);
+            return null;
+        }
         return wrappersByMethodName.get(methodName);
     }
 
@@ -229,7 +302,8 @@ public class MeshToolWrapperRegistry {
     private MeshToolWrapper resolveWrapper(String funcId) {
         MeshToolWrapper wrapper = wrappers.get(funcId);
         if (wrapper == null) {
-            wrapper = wrappersByMethodName.get(funcId);
+            // Bare-name fallback — collision-guarded (issue #1437).
+            wrapper = getWrapperByMethodName(funcId);
         }
         return wrapper;
     }
