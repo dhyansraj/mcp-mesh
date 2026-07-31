@@ -166,6 +166,17 @@ export MCP_MESH_HTTP_PORT=8080
 export MCP_MESH_HTTP_ENABLED=true
 ```
 
+!!! tip "This is what decides whether replicas share traffic"
+
+    The registry resolves each dependency to exactly one winner and hands back
+    that agent's registered host — it never round-robins. So whether a second
+    replica sees any traffic depends entirely on what `MCP_MESH_HTTP_HOST`
+    announced. Set it to a **Kubernetes Service name** and kube-proxy spreads
+    calls across the Service's pods; leave it unset and the agent auto-detects
+    its own address (its pod IP in Kubernetes), so every call pins to that one
+    process. The `mcp-mesh-agent` Helm chart sets Service DNS for you — override
+    it with `agent.advertisedHost`. See [Tiebreaker](concepts/audit.md#tiebreaker).
+
 ### Health and Monitoring
 
 ```bash

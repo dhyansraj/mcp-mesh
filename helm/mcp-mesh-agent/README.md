@@ -79,6 +79,14 @@ helm uninstall my-agent -n mcp-mesh
 | `agent.command`             | Container command override                        | `[]`      |
 | `agent.advertisedHost`      | Hostname advertised to registry                   | `""`      |
 
+`agent.advertisedHost` sets `MCP_MESH_HTTP_HOST`, the address consumers actually
+dial. Empty means Service DNS (`<release>-mcp-mesh-agent.<namespace>`), which is
+what lets Kubernetes spread calls across replica pods — the registry itself picks
+one winner per dependency and never round-robins. Set it explicitly for
+cross-namespace (`<service>.<namespace>.svc.cluster.local`) or cross-cluster
+(external ingress hostname) consumers. Pointing it at a pod-specific address
+pins every call to that one pod.
+
 ### HTTP Configuration
 
 | Parameter                 | Description          | Default     |

@@ -235,19 +235,44 @@ override it from its own side.
 
 This is the central trade-off and it deserves a callout.
 
-State pins the agent to a single replica. If you deploy two replicas
-of this agent, tool calls from any given consumer will round-robin
-across them — and each replica has its own independent in-memory
-state. Reads against the wrong replica silently return stale or empty
-data; writes silently land in the wrong bucket.
+State pins the agent to a single replica, and each replica has its own
+independent copy of it. Deploy two and reads silently return stale or
+empty data while writes land in the wrong bucket.
+
+The mesh is not what spreads the calls. The registry selects **one
+winner** per dependency and holds it until the topology changes — it
+never round-robins (see [Tiebreaker](audit.md#tiebreaker)). How this
+breaks you depends on what that winner's endpoint resolves to, and
+both shapes are bad in different ways:
+
+**Deployed with the `mcp-mesh-agent` Helm chart** — the agent advertises
+Kubernetes Service DNS, so the winner is the Service and **kube-proxy**
+spreads consecutive calls across the replica pods. The corruption is
+immediate and obvious: a write and the read that follows it routinely
+land on different pods.
+
+**Deployed from raw manifests, Docker, or bare metal** without
+`MCP_MESH_HTTP_HOST` — the agent advertises an auto-detected address
+(in Kubernetes, its own pod IP). Each replica is a separate registry
+entry, the tiebreaker picks one, and every call pins to that single
+pod. **This is the nastier failure.** State appears to work perfectly
+— through testing, through staging, through weeks of production —
+until something moves the winner: the chosen pod restarts, fails a
+health check, or a rollout renames it. The new winner has an empty
+state, and the failure surfaces far from the deploy that caused it.
+The other replicas, meanwhile, were never carrying any load.
 
 Mitigations are all imperfect:
 
-- Run with `replicas: 1` and accept the loss of redundancy.
+- Run with `replicas: 1` and accept the loss of redundancy. This is
+  the only mitigation that is actually correct, and it is the one to
+  reach for first.
 - Use session-affinity routing (`session_required: True` in
   `dependency_kwargs`) to pin a consumer to a replica for the
   duration of a logical session. This shifts the problem rather
   than solving it: cross-session reads still hit the wrong replica.
+  It also only applies behind a Service — with a pod-IP endpoint
+  there is nothing to pin, because the calls were never spreading.
 - Externalize the state to a state agent — at which point you're
   back to the [MeshJob pattern](stateful-agents.md) and don't need
   this page.

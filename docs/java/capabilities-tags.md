@@ -154,7 +154,9 @@ When an agent requests a dependency, the registry resolves it by:
 1. **Name matching**: Find agents providing the requested capability
 2. **Tag filtering**: Apply tag constraints (if specified)
 3. **Version constraints**: Check semantic version compatibility
-4. **Load balancing**: Select from multiple matching providers
+4. **Tiebreaker**: Select exactly one winner from the survivors — highest tag score, then highest version, then agent ID
+
+The registry does not load balance: it picks a single deterministic winner and holds it until the topology changes. See [Tiebreaker](../concepts/audit.md#tiebreaker).
 
 ## Capability Naming Conventions
 

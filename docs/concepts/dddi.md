@@ -99,8 +99,8 @@ Dependencies are injected as **proxy objects** that transparently handle:
 - Network communication (MCP protocol over HTTP)
 - Serialization and deserialization
 - Retry and failover
-- Load balancing across multiple providers
-- Health-aware routing (skip unhealthy instances)
+- Health-aware routing (unhealthy providers are filtered out at resolution)
+- Re-wiring when the registry picks a different winner
 
 The developer writes a function with typed parameters. The mesh fills them in.
 
@@ -119,9 +119,14 @@ Agent starts --> Registers capabilities with Registry
 Agent declares dependency "calculator"
     --> Registry finds all agents with capability "calculator"
     --> Tag matching scores candidates (+preferred, -excluded)
-    --> Best match selected (or load balanced)
+    --> Exactly one winner selected: score, then version, then agent ID
     --> Proxy object created and injected
 ```
+
+The registry picks a **single deterministic winner** — it does not round-robin
+or spread calls across providers. See [Tiebreaker](audit.md#tiebreaker) for the
+canonical description, including what the winner's endpoint means when that
+agent runs multiple replicas.
 
 ### Heartbeat Phase
 
@@ -210,10 +215,18 @@ async def analyze(query: str, llm: mesh.MeshLlmAgent = None) -> str:
 3. **Analyst calls calculator** -- Proxy handles MCP communication transparently
 4. **Calculator crashes** -- Analyst detects failure, continues with graceful degradation
 5. **Calculator restarts** -- Registry detects, analyst gets 203 heartbeat -- proxy re-injected
-6. **Second calculator starts** -- DDDI load-balances between both instances
+6. **Second calculator starts** -- it becomes a standby candidate, not a second lane. The tiebreaker still picks one winner (equal score and version, so lowest agent ID); the analyst's calls all go there, and the other takes over only if the winner goes unhealthy
 7. **Calculator v2 deployed** -- Version-aware routing sends traffic to v2
 
 All of this happens **without any configuration changes or restarts** to the analyst agent.
+
+!!! note "Redundancy, not throughput"
+
+    Step 6 buys **failover**, not capacity. DDDI selects; it never splits traffic
+    between providers. To actually spread load across replicas, put them behind one
+    Kubernetes Service and advertise the Service DNS name — which is what the
+    `mcp-mesh-agent` Helm chart does by default. See
+    [Tiebreaker](audit.md#tiebreaker).
 
 ## DDDI Design Principles
 
