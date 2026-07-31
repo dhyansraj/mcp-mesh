@@ -25,14 +25,33 @@
  * keyed by `depIndex` (never by "next free position"). These tests exercise
  * that end-to-end through the real `addTool` wrapper so a future refactor
  * that filters/compacts the slot array (e.g. `.filter(Boolean)`) fails here.
+ *
+ * ## Why this file now covers `route` and `a2a` too (issue #1401)
+ *
+ * Until 3.4.0 `mesh.route()` and `mesh.a2a.mount()` handed the handler a
+ * capability-KEYED object, for which slot preservation was vacuous: omitting
+ * an unresolved key from a map cannot move any other key. Under positional
+ * injection an omission shifts every later dependency into the wrong slot —
+ * the exact defect #1390 pinned — so `RouteRegistry.getDependenciesForRoute`
+ * must build the array with an index-preserving `map()` over the DECLARED
+ * dependencies and never by collecting the resolved ones. That is now load
+ * bearing for all three surfaces, so all three are pinned here.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { z } from "zod";
 import { MeshAgent, __resetUnwiredSlotWarnedForTests } from "../agent.js";
 import { PROXY_DISPATCH_META } from "../proxy.js";
 import { MeshJobSubmitter } from "../mesh-job-submitter.js";
-import { RouteRegistry } from "../route.js";
+import { route, RouteRegistry } from "../route.js";
 import { resetSettleStateForTests } from "../settle.js";
+import { A2ATaskStore } from "../a2a/producer/task-store.js";
+import {
+  buildDispatcherMiddleware,
+  type A2AHandler,
+} from "../a2a/producer/dispatcher.js";
+import type { A2ASurfaceMetadata } from "../a2a/producer/registry.js";
+import type { McpMeshTool } from "../types.js";
+import type { Request, Response, NextFunction } from "express";
 
 function makeFastMCPStub() {
   return {
@@ -358,5 +377,166 @@ describe("unresolved middle dependency does not shift", () => {
     expect((received[0] as MeshJobSubmitter).capability).toBe("run_workflow");
     expect(received[1]).toBeNull();
     expect(capabilityOf(received[2])).toBe("cap_c");
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// mesh.route() — issue #1401
+// ────────────────────────────────────────────────────────────────────────
+
+/** Named stand-in proxies; identity is what the assertions compare. */
+function namedProxy(capability: string): McpMeshTool {
+  const fn = (async () => capability) as unknown as McpMeshTool;
+  Object.defineProperty(fn, "capability", { value: capability });
+  return fn;
+}
+
+function capName(dep: unknown): string | null {
+  if (dep === null || dep === undefined) return null;
+  return (dep as { capability?: string }).capability ?? null;
+}
+
+describe("mesh.route: unresolved middle dependency does not shift (#1401)", () => {
+  it("positions 0 and 2 keep their proxies, position 1 stays null", async () => {
+    const handler = vi.fn();
+    const middleware = route(
+      [{ capability: "cap_a" }, { capability: "cap_b" }, { capability: "cap_c" }],
+      handler
+    ) as ReturnType<typeof route> & { _meshRouteId: string };
+
+    const registry = RouteRegistry.getInstance();
+    // Resolve ONLY dep 0 and dep 2 — dep 1 never resolves.
+    registry.setDependency(middleware._meshRouteId, 0, namedProxy("cap_a"));
+    registry.setDependency(middleware._meshRouteId, 2, namedProxy("cap_c"));
+
+    const req = { method: "GET", path: "/x", headers: {} } as unknown as Request;
+    const res = {} as Response;
+    await middleware(req, res, vi.fn() as NextFunction);
+
+    const deps = handler.mock.calls[0][2] as Array<McpMeshTool | null>;
+    // Rule out compaction: a `.filter(Boolean)` build would produce length 2
+    // with cap_c sitting at index 1.
+    expect(deps).toHaveLength(3);
+    expect(capName(deps[0])).toBe("cap_a");
+    expect(deps[1]).toBeNull();
+    expect(capName(deps[2])).toBe("cap_c");
+    expect(deps[2]).not.toBeUndefined();
+  });
+
+  it("leading and trailing unresolved deps hold their own slots", async () => {
+    const handler = vi.fn();
+    const middleware = route(
+      [{ capability: "cap_a" }, { capability: "cap_b" }, { capability: "cap_c" }],
+      handler
+    ) as ReturnType<typeof route> & { _meshRouteId: string };
+
+    RouteRegistry.getInstance().setDependency(
+      middleware._meshRouteId,
+      1,
+      namedProxy("cap_b")
+    );
+
+    const req = { method: "GET", path: "/x", headers: {} } as unknown as Request;
+    await middleware(req, {} as Response, vi.fn() as NextFunction);
+
+    const deps = handler.mock.calls[0][2] as Array<McpMeshTool | null>;
+    expect(deps).toHaveLength(3);
+    expect(deps[0]).toBeNull();
+    expect(capName(deps[1])).toBe("cap_b");
+    expect(deps[2]).toBeNull();
+  });
+
+  it("a dependency going unavailable nulls only its own slot", async () => {
+    const handler = vi.fn();
+    const middleware = route(
+      [{ capability: "cap_a" }, { capability: "cap_b" }, { capability: "cap_c" }],
+      handler
+    ) as ReturnType<typeof route> & { _meshRouteId: string };
+
+    const registry = RouteRegistry.getInstance();
+    registry.setDependency(middleware._meshRouteId, 0, namedProxy("cap_a"));
+    registry.setDependency(middleware._meshRouteId, 1, namedProxy("cap_b"));
+    registry.setDependency(middleware._meshRouteId, 2, namedProxy("cap_c"));
+
+    const req = { method: "GET", path: "/x", headers: {} } as unknown as Request;
+    await middleware(req, {} as Response, vi.fn() as NextFunction);
+    expect(
+      (handler.mock.calls[0][2] as Array<McpMeshTool | null>).map(capName)
+    ).toEqual(["cap_a", "cap_b", "cap_c"]);
+
+    // The middle provider drops out mid-flight.
+    registry.removeDependency(middleware._meshRouteId, 1);
+    await middleware(req, {} as Response, vi.fn() as NextFunction);
+
+    const deps = handler.mock.calls[1][2] as Array<McpMeshTool | null>;
+    expect(capName(deps[0])).toBe("cap_a");
+    expect(deps[1]).toBeNull();
+    expect(capName(deps[2])).toBe("cap_c");
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// mesh.a2a.mount() — issue #1401, driven through a real tasks/send
+// ────────────────────────────────────────────────────────────────────────
+
+describe("mesh.a2a.mount: unresolved middle dependency does not shift (#1401)", () => {
+  it("positions 0 and 2 keep their proxies, position 1 stays null", async () => {
+    const registry = RouteRegistry.getInstance();
+    const declared = [
+      { capability: "cap_a" },
+      { capability: "cap_b" },
+      { capability: "cap_c" },
+    ];
+    const routeId = registry.registerRoute("A2A", "/agents/t", declared);
+    registry.setDependency(routeId, 0, namedProxy("cap_a"));
+    registry.setDependency(routeId, 2, namedProxy("cap_c"));
+
+    const surface: A2ASurfaceMetadata = {
+      path: "/agents/t",
+      skillId: "t",
+      skillName: "T",
+      description: "",
+      tags: [],
+      dependencies: declared.map((d) => ({ ...d, tags: [] })),
+      auth: "",
+      routeId,
+    };
+
+    let received: Array<McpMeshTool | null> | null = null;
+    const handler: A2AHandler = async (deps) => {
+      received = deps as Array<McpMeshTool | null>;
+      return "ok";
+    };
+
+    const middleware = buildDispatcherMiddleware({
+      surface,
+      handler,
+      taskStore: new A2ATaskStore(),
+      routeRegistry: registry,
+    });
+
+    const req = {
+      body: {
+        jsonrpc: "2.0",
+        id: "1",
+        method: "tasks/send",
+        params: { id: "task-1", message: { role: "user" } },
+      },
+      headers: {},
+    } as unknown as Request;
+    const res = {
+      status() { return this; },
+      type() { return this; },
+      send() { return this; },
+    } as unknown as Response;
+
+    await middleware(req, res, vi.fn() as NextFunction);
+
+    expect(received).not.toBeNull();
+    const deps = received as unknown as Array<McpMeshTool | null>;
+    expect(deps).toHaveLength(3);
+    expect(capName(deps[0])).toBe("cap_a");
+    expect(deps[1]).toBeNull();
+    expect(capName(deps[2])).toBe("cap_c");
   });
 });

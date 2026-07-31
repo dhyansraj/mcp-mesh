@@ -185,7 +185,7 @@ describe("RouteRegistry", () => {
       expect(dep).toBeNull();
     });
 
-    it("should get dependencies for route as object", () => {
+    it("should get dependencies for route as a positional array (#1401)", () => {
       const registry = RouteRegistry.getInstance();
       const routeId = registry.registerRoute("GET", "/test", [
         "calculator",
@@ -199,8 +199,53 @@ describe("RouteRegistry", () => {
       // Leave logger unset
 
       const deps = registry.getDependenciesForRoute(routeId);
-      expect(deps.calculator).toBe(mockCalc);
-      expect(deps.logger).toBeNull();
+      expect(Array.isArray(deps)).toBe(true);
+      // Declared count, not resolved count — the unresolved slot is padded,
+      // never omitted (an omission would shift every later dependency).
+      expect(deps).toHaveLength(2);
+      expect(deps[0]).toBe(mockCalc);
+      expect(deps[1]).toBeNull();
+    });
+
+    it("pads an UNRESOLVED LEADING dependency rather than shifting (#1401)", () => {
+      // The failure mode a push-based build would produce: with only the
+      // second dependency resolved, a compacted array would put `logger`'s
+      // proxy at index 0 — the handler's `[calculator, logger]` destructure
+      // would silently bind `calculator` to the logger proxy.
+      const registry = RouteRegistry.getInstance();
+      const routeId = registry.registerRoute("GET", "/test-shift", [
+        "calculator",
+        "logger",
+      ]);
+
+      const mockLogger = (() => Promise.resolve("log")) as unknown as McpMeshTool;
+      registry.setDependency(routeId, 1, mockLogger);
+
+      const deps = registry.getDependenciesForRoute(routeId);
+      expect(deps).toHaveLength(2);
+      expect(deps[0]).toBeNull();
+      expect(deps[1]).toBe(mockLogger);
+    });
+
+    it("gives a duplicate capability TWO independent slots (#1401)", () => {
+      // Under the old capability-keyed object these collapsed into ONE
+      // `deps.calculator` entry (last write won). Positionally each
+      // declaration owns its own index.
+      const registry = RouteRegistry.getInstance();
+      const routeId = registry.registerRoute("GET", "/test-dupe", [
+        "calculator",
+        "calculator",
+      ]);
+
+      const first = (() => Promise.resolve("a")) as unknown as McpMeshTool;
+      const second = (() => Promise.resolve("b")) as unknown as McpMeshTool;
+      registry.setDependency(routeId, 0, first);
+      registry.setDependency(routeId, 1, second);
+
+      const deps = registry.getDependenciesForRoute(routeId);
+      expect(deps).toHaveLength(2);
+      expect(deps[0]).toBe(first);
+      expect(deps[1]).toBe(second);
     });
 
     it("should clear all dependencies", () => {
@@ -254,13 +299,10 @@ describe("route()", () => {
     // Call middleware
     await middleware(mockReq, mockRes, mockNext);
 
-    // Handler should be called with req, res, and deps object
+    // Handler should be called with req, res, and the positional deps array
     expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler).toHaveBeenCalledWith(
-      mockReq,
-      mockRes,
-      expect.objectContaining({ calculator: null }) // No deps resolved yet
-    );
+    expect(handler).toHaveBeenCalledWith(mockReq, mockRes, [null]); // #1401
+
   });
 
   it("should inject resolved dependencies", async () => {
@@ -282,12 +324,9 @@ describe("route()", () => {
     // Call middleware
     await middleware(mockReq, mockRes, mockNext);
 
-    // Handler should receive the resolved dependency
-    expect(handler).toHaveBeenCalledWith(
-      mockReq,
-      mockRes,
-      expect.objectContaining({ calculator: mockCalc })
-    );
+    // Handler should receive the resolved dependency at its declared index
+    expect(handler).toHaveBeenCalledWith(mockReq, mockRes, [mockCalc]); // #1401
+
   });
 
   it("should call next() on error", async () => {
@@ -391,15 +430,13 @@ describe("mesh.route integration", () => {
 
     await middleware(mockReq, mockRes, mockNext);
 
-    expect(handler).toHaveBeenCalledWith(
-      mockReq,
-      mockRes,
-      expect.objectContaining({
-        calculator: mockCalc,
-        logger: mockLogger,
-        formatter: null,
-      })
-    );
+    // #1401: positional — index order is DECLARATION order, and the
+    // unresolved trailing `formatter` holds its own slot as null.
+    expect(handler).toHaveBeenCalledWith(mockReq, mockRes, [
+      mockCalc,
+      mockLogger,
+      null,
+    ]);
   });
 
   it("should handle empty dependencies", async () => {
@@ -412,6 +449,6 @@ describe("mesh.route integration", () => {
 
     await middleware(mockReq, mockRes, mockNext);
 
-    expect(handler).toHaveBeenCalledWith(mockReq, mockRes, {});
+    expect(handler).toHaveBeenCalledWith(mockReq, mockRes, []);
   });
 });

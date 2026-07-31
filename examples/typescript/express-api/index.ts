@@ -61,19 +61,21 @@ app.get("/health", (req, res) => {
  */
 app.post(
   "/api/add",
-  mesh.route([{ capability: "add" }], async (req, res, { add }) => {
+  mesh.route([{ capability: "add" }], async (req, res, [add]) => {
     if (!add) {
-      return res.status(503).json({ error: "Calculator service unavailable" });
+      res.status(503).json({ error: "Calculator service unavailable" });
+      return;
     }
 
     const { a, b } = req.body;
     if (typeof a !== "number" || typeof b !== "number") {
-      return res.status(400).json({ error: "Parameters 'a' and 'b' must be numbers" });
+      res.status(400).json({ error: "Parameters 'a' and 'b' must be numbers" });
+      return;
     }
 
     try {
       const result = await add({ a, b });
-      res.json({ operation: "add", a, b, result: parseFloat(result) });
+      res.json({ operation: "add", a, b, result: parseFloat(String(result)) });
     } catch (err) {
       res.status(500).json({ error: `Calculation failed: ${err}` });
     }
@@ -86,19 +88,21 @@ app.post(
  */
 app.post(
   "/api/subtract",
-  mesh.route([{ capability: "subtract" }], async (req, res, { subtract }) => {
+  mesh.route([{ capability: "subtract" }], async (req, res, [subtract]) => {
     if (!subtract) {
-      return res.status(503).json({ error: "Calculator service unavailable" });
+      res.status(503).json({ error: "Calculator service unavailable" });
+      return;
     }
 
     const { a, b } = req.body;
     if (typeof a !== "number" || typeof b !== "number") {
-      return res.status(400).json({ error: "Parameters 'a' and 'b' must be numbers" });
+      res.status(400).json({ error: "Parameters 'a' and 'b' must be numbers" });
+      return;
     }
 
     try {
       const result = await subtract({ a, b });
-      res.json({ operation: "subtract", a, b, result: parseFloat(result) });
+      res.json({ operation: "subtract", a, b, result: parseFloat(String(result)) });
     } catch (err) {
       res.status(500).json({ error: `Calculation failed: ${err}` });
     }
@@ -111,19 +115,21 @@ app.post(
  */
 app.post(
   "/api/multiply",
-  mesh.route([{ capability: "multiply" }], async (req, res, { multiply }) => {
+  mesh.route([{ capability: "multiply" }], async (req, res, [multiply]) => {
     if (!multiply) {
-      return res.status(503).json({ error: "Calculator service unavailable" });
+      res.status(503).json({ error: "Calculator service unavailable" });
+      return;
     }
 
     const { a, b } = req.body;
     if (typeof a !== "number" || typeof b !== "number") {
-      return res.status(400).json({ error: "Parameters 'a' and 'b' must be numbers" });
+      res.status(400).json({ error: "Parameters 'a' and 'b' must be numbers" });
+      return;
     }
 
     try {
       const result = await multiply({ a, b });
-      res.json({ operation: "multiply", a, b, result: parseFloat(result) });
+      res.json({ operation: "multiply", a, b, result: parseFloat(String(result)) });
     } catch (err) {
       res.status(500).json({ error: `Calculation failed: ${err}` });
     }
@@ -136,23 +142,26 @@ app.post(
  */
 app.post(
   "/api/divide",
-  mesh.route([{ capability: "divide" }], async (req, res, { divide }) => {
+  mesh.route([{ capability: "divide" }], async (req, res, [divide]) => {
     if (!divide) {
-      return res.status(503).json({ error: "Calculator service unavailable" });
+      res.status(503).json({ error: "Calculator service unavailable" });
+      return;
     }
 
     const { a, b } = req.body;
     if (typeof a !== "number" || typeof b !== "number") {
-      return res.status(400).json({ error: "Parameters 'a' and 'b' must be numbers" });
+      res.status(400).json({ error: "Parameters 'a' and 'b' must be numbers" });
+      return;
     }
 
     if (b === 0) {
-      return res.status(400).json({ error: "Division by zero" });
+      res.status(400).json({ error: "Division by zero" });
+      return;
     }
 
     try {
       const result = await divide({ a, b });
-      res.json({ operation: "divide", a, b, result: parseFloat(result) });
+      res.json({ operation: "divide", a, b, result: parseFloat(String(result)) });
     } catch (err) {
       res.status(500).json({ error: `Calculation failed: ${err}` });
     }
@@ -169,14 +178,16 @@ app.post(
  */
 app.post(
   "/api/greet",
-  mesh.route([{ capability: "greet" }], async (req, res, { greet }) => {
+  mesh.route([{ capability: "greet" }], async (req, res, [greet]) => {
     if (!greet) {
-      return res.status(503).json({ error: "Greeter service unavailable" });
+      res.status(503).json({ error: "Greeter service unavailable" });
+      return;
     }
 
     const { name } = req.body;
     if (typeof name !== "string") {
-      return res.status(400).json({ error: "Parameter 'name' must be a string" });
+      res.status(400).json({ error: "Parameter 'name' must be a string" });
+      return;
     }
 
     try {
@@ -194,20 +205,22 @@ app.post(
  */
 app.post(
   "/api/greet/lucky",
-  mesh.route([{ capability: "greet-lucky" }], async (req, res, deps) => {
-    const greetLucky = deps["greet-lucky"];
+  mesh.route([{ capability: "greet-lucky" }], async (req, res, [greetLucky]) => {
     if (!greetLucky) {
-      return res.status(503).json({ error: "Greeter service unavailable" });
+      res.status(503).json({ error: "Greeter service unavailable" });
+      return;
     }
 
     const { name, birthYear, birthMonth } = req.body;
     if (typeof name !== "string") {
-      return res.status(400).json({ error: "Parameter 'name' must be a string" });
+      res.status(400).json({ error: "Parameter 'name' must be a string" });
+      return;
     }
     if (typeof birthYear !== "number" || typeof birthMonth !== "number") {
-      return res
+      res
         .status(400)
         .json({ error: "Parameters 'birthYear' and 'birthMonth' must be numbers" });
+      return;
     }
 
     try {
@@ -225,18 +238,20 @@ app.post(
  */
 app.post(
   "/api/greet/age",
-  mesh.route([{ capability: "greet-age" }], async (req, res, deps) => {
-    const greetAge = deps["greet-age"];
+  mesh.route([{ capability: "greet-age" }], async (req, res, [greetAge]) => {
     if (!greetAge) {
-      return res.status(503).json({ error: "Greeter service unavailable" });
+      res.status(503).json({ error: "Greeter service unavailable" });
+      return;
     }
 
     const { name, birthYear } = req.body;
     if (typeof name !== "string") {
-      return res.status(400).json({ error: "Parameter 'name' must be a string" });
+      res.status(400).json({ error: "Parameter 'name' must be a string" });
+      return;
     }
     if (typeof birthYear !== "number") {
-      return res.status(400).json({ error: "Parameter 'birthYear' must be a number" });
+      res.status(400).json({ error: "Parameter 'birthYear' must be a number" });
+      return;
     }
 
     try {
@@ -254,18 +269,20 @@ app.post(
  */
 app.post(
   "/api/greet/math",
-  mesh.route([{ capability: "greet-math" }], async (req, res, deps) => {
-    const greetMath = deps["greet-math"];
+  mesh.route([{ capability: "greet-math" }], async (req, res, [greetMath]) => {
     if (!greetMath) {
-      return res.status(503).json({ error: "Greeter service unavailable" });
+      res.status(503).json({ error: "Greeter service unavailable" });
+      return;
     }
 
     const { name, a, b } = req.body;
     if (typeof name !== "string") {
-      return res.status(400).json({ error: "Parameter 'name' must be a string" });
+      res.status(400).json({ error: "Parameter 'name' must be a string" });
+      return;
     }
     if (typeof a !== "number" || typeof b !== "number") {
-      return res.status(400).json({ error: "Parameters 'a' and 'b' must be numbers" });
+      res.status(400).json({ error: "Parameters 'a' and 'b' must be numbers" });
+      return;
     }
 
     try {

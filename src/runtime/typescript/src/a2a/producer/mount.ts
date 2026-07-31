@@ -12,7 +12,8 @@
  *    non-empty).
  * 2. Register the dependencies as a synthetic route in `RouteRegistry` so
  *    DDDI events from the Rust core wire up resolved `McpMeshTool` proxies
- *    keyed by capability name — same plumbing `mesh.route()` uses.
+ *    keyed by dependency index, surfaced to the handler as a positional
+ *    array (#1401) — same plumbing `mesh.route()` uses.
  * 3. Store surface metadata in {@link A2AProducerRegistry} for heartbeat,
  *    card render, and auth gate lookups.
  * 4. Wire `app.post(path, [auth?,] dispatcher)` for JSON-RPC dispatch.
@@ -177,8 +178,9 @@ function buildCardRenderContext(surface: A2ASurfaceMetadata): CardRenderContext 
  * @param app     - Express application instance
  * @param config  - Mount configuration (path, skill id, dependencies, ...)
  * @param handler - User handler invoked on every `tasks/send` call. Receives
- *                  resolved `McpMeshTool` dependency proxies and the A2A
- *                  `tasks/send` `params` payload; returns a value (or
+ *                  resolved `McpMeshTool` dependency proxies **by position**
+ *                  (issue #1401 — `deps[i]` is `config.dependencies[i]`) and
+ *                  the A2A `tasks/send` `params` payload; returns a value (or
  *                  Promise of one) that the framework wraps into the A2A
  *                  `Task` envelope. Throw to surface as `state=failed`.
  *
@@ -192,11 +194,17 @@ function buildCardRenderContext(surface: A2ASurfaceMetadata): CardRenderContext 
  *   tags: ["system", "date"],
  *   dependencies: ["date_service"],
  *   auth: "bearer",
- * }, async (deps, payload) => {
- *   const result = await deps.date_service.call({});
+ * }, async ([dateService], payload) => {
+ *   // A slot holds `null` until the registry resolves it — narrow before use.
+ *   if (!dateService) return { error: "date_service unavailable" };
+ *   const result = await dateService({});
  *   return { date: result };
  * });
  * ```
+ *
+ * `mesh.a2a.mount` cannot guarantee a resolved slot, so per-slot type
+ * arguments stay nullable:
+ * `mesh.a2a.mount<[McpMeshTool | null]>(app, config, handler)`.
  */
 export function mount<D extends A2ADependencies = A2ADependencies>(
   app: Application,
@@ -245,8 +253,8 @@ export function mount<D extends A2ADependencies = A2ADependencies>(
   // mesh.route(). Each surface registers a synthetic route in
   // RouteRegistry with method/path placeholders; the Rust core's
   // dependency-resolution events then drive resolved McpMeshTool proxies
-  // into the registry, keyed by capability name, which the dispatcher
-  // pulls out via getDependenciesForRoute(routeId).
+  // into the registry, keyed by dependency INDEX, which the dispatcher
+  // pulls out as a positional array via getDependenciesForRoute(routeId).
   const routeRegistry = RouteRegistry.getInstance();
   const routeId = routeRegistry.registerRoute(
     "A2A",

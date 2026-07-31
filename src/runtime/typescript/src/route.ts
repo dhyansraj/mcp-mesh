@@ -17,9 +17,10 @@
  * app.use(express.json());
  *
  * // mesh.route() triggers auto-init - no meshExpress() or start() needed!
+ * // Dependencies bind BY POSITION: the Nth declared dependency is deps[N].
  * app.post("/compute", mesh.route(
  *   [{ capability: "calculator" }],
- *   async (req, res, { calculator }) => {
+ *   async (req, res, [calculator]) => {
  *     const result = await calculator({ a: req.body.a, b: req.body.b });
  *     res.json({ result });
  *   }
@@ -32,6 +33,7 @@
 import type { Request, Response, NextFunction, RequestHandler } from "express";
 import type { DependencySpec, McpMeshTool, DependencyKwargs, TagSpec } from "./types.js";
 import { normalizeDependency, runWithPropagatedHeaders, runWithTraceContext } from "./proxy.js";
+import { resolvePositionalDeps, type PositionalDependencies } from "./positional-deps.js";
 import { assertNoServiceViewDeps } from "./service-view.js";
 import { getApiRuntime, introspectExpressRoutes } from "./api-runtime.js";
 import { getSettleState, type PendingSettleDep } from "./settle.js";
@@ -51,31 +53,56 @@ import {
 let expressAutoDetected = false;
 
 /**
- * Dependencies object passed to route handlers.
- * Keys are capability names, values are proxy instances (or null if unavailable).
+ * Dependencies passed to route handlers — **positional** as of 3.4.0
+ * (issue #1401). `deps[i]` is the proxy for the i-th declared dependency, or
+ * `null` when it is not currently resolved. Slots are never compacted, so an
+ * unavailable dependency nulls its own index and never shifts a later one.
+ *
+ * Before 3.4.0 this was a capability-keyed object. Destructure positionally:
+ *
+ * ```typescript
+ * mesh.route([{ capability: "a" }, { capability: "b" }],
+ *   async (req, res, [a, b]) => { ... })
+ * ```
+ *
+ * A handler may narrow this to a tuple for per-slot typing, e.g.
+ * `MeshRouteHandler<[McpMeshTool, McpMeshTool | null]>`.
  */
-export type RouteDependencies = Record<string, McpMeshTool | null>;
+export type RouteDependencies = PositionalDependencies;
 
 /**
  * Route handler function with dependency injection.
  *
  * @param req - Express request object
  * @param res - Express response object
- * @param deps - Resolved dependencies as an object (keys are capability names)
+ * @param deps - Resolved dependencies **by position** — `deps[i]` is the i-th
+ *               declared dependency (see {@link RouteDependencies})
  */
-export type MeshRouteHandler = (
+export type MeshRouteHandler<D extends RouteDependencies = RouteDependencies> = (
   req: Request,
   res: Response,
-  deps: RouteDependencies
+  deps: D
 ) => void | Promise<void>;
 
 /**
  * Extended route handler with next function for middleware chaining.
+ *
+ * This is also the type {@link route} accepts — deliberately NOT a union with
+ * {@link MeshRouteHandler}. A 3-parameter handler is assignable here (fewer
+ * parameters always are), whereas a *union* of the two signatures defeats
+ * contextual typing for the `deps` array binding pattern: TypeScript cannot
+ * pick a contextual signature out of the union, falls back to the pattern's
+ * implied tuple (`[add]` → `[any]`), and then rejects the assignment because
+ * an array "may have fewer elements". The keyed object form masked this — its
+ * implied type `{ add: any }` happened to be satisfied by
+ * `Record<string, McpMeshTool | null>` — so it only surfaced under #1401.
  */
-export type MeshRouteHandlerWithNext = (
+export type MeshRouteHandlerWithNext<
+  D extends RouteDependencies = RouteDependencies,
+> = (
   req: Request,
   res: Response,
-  deps: RouteDependencies,
+  deps: D,
   next: NextFunction
 ) => void | Promise<void>;
 
@@ -241,23 +268,29 @@ export class RouteRegistry {
   }
 
   /**
-   * Get all resolved dependencies for a route as an object.
-   * Keys are capability names for easy destructuring in handlers.
+   * Get all resolved dependencies for a route as a **positional array**
+   * (issue #1401) — index i holds the i-th declared dependency's proxy, or
+   * `null` when it is unresolved.
+   *
    * Handles remapped route IDs (e.g., route_0_UNKNOWN:UNKNOWN -> GET:/time).
+   *
+   * Built with an index-preserving `map()` over the DECLARED dependencies —
+   * never by pushing resolved entries. A push-based build would omit
+   * unresolved slots and shift every later dependency into the wrong
+   * position; harmless for the old capability-keyed object, fatal for an
+   * array. Returns a plain array; the migration guard is applied at the
+   * user-code boundary (see `wrapPositionalDeps`).
    */
   getDependenciesForRoute(routeId: string): RouteDependencies {
     // Use getRoute to handle remapped IDs
     const route = this.getRoute(routeId);
-    if (!route) return {};
+    if (!route) return [];
 
     // Use the resolved route ID for dependency lookup
     const resolvedId = route.routeId;
-    const deps: RouteDependencies = {};
-    route.dependencies.forEach((dep, idx) => {
-      deps[dep.capability] = this.getDependency(resolvedId, idx);
-    });
-
-    return deps;
+    return route.dependencies.map((_dep, idx) =>
+      this.getDependency(resolvedId, idx)
+    );
   }
 
   /**
@@ -347,16 +380,18 @@ export function resetAutoDetection(): void {
  * Create an Express middleware that injects mesh dependencies.
  *
  * @param dependencies - Array of dependency specifications
- * @param handler - Route handler receiving (req, res, deps)
+ * @param handler - Route handler receiving (req, res, deps) where `deps` is
+ *                  **positional**: `deps[i]` is the i-th declared dependency
  * @returns Express middleware
  *
  * @example
  * ```typescript
  * app.post("/compute", mesh.route(
  *   [{ capability: "calculator" }],
- *   async (req, res, { calculator }) => {
+ *   async (req, res, [calculator]) => {
  *     if (!calculator) {
- *       return res.status(503).json({ error: "Calculator service unavailable" });
+ *       res.status(503).json({ error: "Calculator service unavailable" });
+ *       return;
  *     }
  *     const result = await calculator({ a: req.body.a, b: req.body.b });
  *     res.json({ result });
@@ -364,9 +399,9 @@ export function resetAutoDetection(): void {
  * ));
  * ```
  */
-export function route(
+export function route<D extends RouteDependencies = RouteDependencies>(
   dependencies: DependencySpec[],
-  handler: MeshRouteHandler | MeshRouteHandlerWithNext,
+  handler: MeshRouteHandlerWithNext<D>,
   options?: { dependencyKwargs?: DependencyKwargs[] }
 ): RequestHandler {
   const registry = RouteRegistry.getInstance();
@@ -399,13 +434,18 @@ export function route(
 
   // Issue #1249: does this route declare any required dep? Precomputed once so
   // the perimeter check below is a no-op for the common (all-optional) route.
-  // Every declared dep always has a slot in the `deps` object keyed by
-  // capability, so — unlike Python's positional injection — there is no
-  // "required perimeter INACTIVE (no injectable slot)" case to warn about.
+  // Every declared dep always has its own index in the positional `deps`
+  // array, so — unlike Python's positional injection, where a dep can be
+  // declared without a matching parameter — there is no "required perimeter
+  // INACTIVE (no injectable slot)" case to warn about.
   // TS `mesh.route` has no declared streaming/SSE variant either, and the 503
   // is emitted before the handler runs (nothing written to `res` yet), so
   // there is no stream to break and no creation-time bypass warning to emit.
   const hasRequiredDep = normalizedDeps.some((dep) => dep.required === true);
+
+  // Capability names in declaration order — the migration guard prints these
+  // when an un-migrated handler reads `deps.<capability>` (issue #1401).
+  const declaredCapabilities = normalizedDeps.map((dep) => dep.capability);
 
   // Return Express middleware
   const middleware: RequestHandler = async (
@@ -443,16 +483,19 @@ export function route(
         }
       }
 
-      // Get resolved dependencies as object (use ref to get current ID after introspection)
-      const deps = registry.getDependenciesForRoute(routeRef.id);
-
-      // Also try to resolve by capability name if route-specific resolution isn't available yet
-      // This handles the case where dependencies were resolved before the route was registered
-      for (const dep of normalizedDeps) {
-        if (deps[dep.capability] === undefined) {
-          deps[dep.capability] = null;
-        }
-      }
+      // Resolve, pad and guard the positional dependency array (issue #1401).
+      // Shared with the A2A producer dispatcher so the two injection sites
+      // cannot drift. `depValues` is the unguarded view the required-dependency
+      // perimeter below reads by index; `deps` is what user code receives —
+      // an un-migrated `deps.<capability>` access throws a prescriptive error
+      // instead of evaluating to `undefined`. Uses the ref to get the current
+      // route ID after introspection.
+      const { values: depValues, deps } = resolvePositionalDeps(
+        registry,
+        routeRef.id,
+        declaredCapabilities,
+        "mesh.route"
+      );
 
       // Issue #1249 perimeter: a route dep declared `required: true` whose
       // proxy is unavailable AT CALL TIME (after the settle wait above) makes
@@ -460,24 +503,24 @@ export function route(
       // capability, so monitoring alarms on 5xx and clients see a retryable
       // "unavailable" rather than a hand-written null check.
       //
-      // Evaluate required-ness PER UNIQUE CAPABILITY against the same
-      // capability-keyed `deps` object the handler receives — NOT per index.
-      // Injection is capability-keyed (a capability declared twice collapses to
-      // one `deps[cap]` slot, last resolution winning), so an index-based check
-      // could 503 on a dead sibling slot while `deps[cap]` is actually live.
-      // Deduping with "required wins" (a capability required in any slot is
-      // required) keeps the perimeter and the handler seeing identical state.
+      // Evaluate required-ness PER INDEX against the same positional array the
+      // handler receives (issue #1401). Injection used to be capability-keyed,
+      // which collapsed a capability declared twice into ONE `deps[cap]` slot —
+      // so the check had to dedupe per capability to avoid 503-ing on a dead
+      // sibling while the slot the handler read was live. Under positional
+      // injection each declaration owns its own index: two slots declaring the
+      // same capability are two distinct slots, either of which can be null in
+      // the handler. Deduping now would let a required slot the handler will
+      // read as `null` slip past the perimeter.
       if (hasRequiredDep) {
-        const checkedCaps = new Set<string>();
-        for (const dep of normalizedDeps) {
+        for (let i = 0; i < normalizedDeps.length; i++) {
+          const dep = normalizedDeps[i];
           if (dep.required !== true) continue;
-          if (checkedCaps.has(dep.capability)) continue;
-          checkedCaps.add(dep.capability);
           // `== null` catches both the resolved-null and never-set cases.
-          if (deps[dep.capability] == null) {
+          if (depValues[i] == null) {
             console.warn(
               `🚫 Route '${req.method} ${req.path}': required dependency ` +
-                `'${dep.capability}' unavailable — returning 503`
+                `[${i}] '${dep.capability}' unavailable — returning 503`
             );
             res.status(503).json({
               error: "dependency_unavailable",
@@ -566,7 +609,7 @@ export function route(
           argsCount: 0,
           kwargsCount: 0,
           dependencies: [],
-          injectedDependencies: Object.values(deps).filter((d) => d !== null).length,
+          injectedDependencies: depValues.filter((d) => d !== null).length,
           meshPositions: [],
         }).catch(() => {
           // Silently ignore publish errors
@@ -594,16 +637,16 @@ export function route(
  * app.post("/compute", mesh.routeWithConfig({
  *   dependencies: [{ capability: "calculator" }],
  *   dependencyKwargs: [{ timeout: 60 }],
- * }, async (req, res, { calculator }) => {
+ * }, async (req, res, [calculator]) => {
  *   // ...
  * }));
  * ```
  */
-export function routeWithConfig(
+export function routeWithConfig<D extends RouteDependencies = RouteDependencies>(
   config: MeshRouteConfig,
-  handler: MeshRouteHandler | MeshRouteHandlerWithNext
+  handler: MeshRouteHandlerWithNext<D>
 ): RequestHandler {
-  return route(config.dependencies, handler, {
+  return route<D>(config.dependencies, handler, {
     dependencyKwargs: config.dependencyKwargs,
   });
 }
