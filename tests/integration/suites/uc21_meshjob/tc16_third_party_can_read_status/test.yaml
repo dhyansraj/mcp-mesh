@@ -22,7 +22,9 @@ tags:
   - issue-872
   - helpers
   - auth
-timeout: 120
+# 180 (was 120) so the completion status gate's failure-path diagnostics
+# can actually land instead of being cut off by the case timeout.
+timeout: 180
 
 pre_run:
   - routine: global.setup_for_python_agent
@@ -112,9 +114,48 @@ test:
     capture: submit_resp
     timeout: 15
 
-  - name: "Wait for completion"
-    handler: wait
-    seconds: 8
+  # Deterministic completion gate: poll job status until terminal
+  # (replaces a fixed 8s wait — the bystander reads below assert
+  # 'completed', and under `--parallel 8` contention the job outlived
+  # that fixed budget, so the bystanders observed status=working).
+  # Polls via the CONSUMER's __mesh_job_status helper so the bystander
+  # reads below remain the first third-party observations — polling
+  # through a bystander would pre-empt the very thing under test.
+  # Same shape as uc23/tc16's status gate.
+  - name: "Wait for job completion (status gate)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-consumer") | .id')
+      echo "AGENT=${AGENT} JOB=${JOB_ID}"
+      RESP=""
+      STATUS=""
+      for i in $(seq 1 45); do
+        RESP=$(meshctl call "${AGENT}:__mesh_job_status" "{\"job_id\":\"${JOB_ID}\"}" --raw 2>&1 || true)
+        STATUS=$(echo "$RESP" | jq -r '.. | objects | select(has("status")) | .status' 2>/dev/null | head -1)
+        if [ "$STATUS" = "completed" ]; then
+          echo "job completed after ~${i}s"
+          exit 0
+        fi
+        case "$STATUS" in
+          failed|cancelled)
+            echo "ERROR: job reached terminal status=$STATUS (expected completed)"
+            echo "=== last status response ==="
+            echo "$RESP"
+            exit 1
+            ;;
+        esac
+        sleep 1
+      done
+      echo "ERROR: job not completed within 45s (last status=$STATUS)"
+      echo "=== last status response ==="
+      echo "$RESP"
+      echo "=== long-task-provider log tail ==="
+      meshctl logs long-task-provider 2>&1 | tail -50 || true
+      exit 1
+    capture: wait_completion
+    timeout: 90
 
   - name: "Bystander X reads status"
     handler: shell
