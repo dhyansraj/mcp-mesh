@@ -1,12 +1,78 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.3.2...HEAD)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.4.0...HEAD)
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.3.2...v3.4.0)
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.3.1...v3.3.2)
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.3.0...v3.3.1)
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.2.3...v3.3.0)
+
+## v3.4.0 (2026-08-01)
+
+A minor release with breaking changes in two runtimes. Dependency injection is now positional at every injection site in every runtime — Java `@MeshRoute`/`@MeshA2A` and TypeScript `mesh.route`/`mesh.a2a.mount` change how declared dependencies reach handler parameters. Three declaration shapes that used to fail silently now fail at boot instead, so an agent that started on 3.3.2 can refuse to start on 3.4.0. The bundled tempo chart no longer requests a PVC by default, and the Python vendor-SDK ranges are corrected and bounded. No wire-protocol, registry-schema or dependency-resolution changes.
+
+> **⚠️ Java and TypeScript agents need a migration step, and some agents that boot on 3.3.2 will not boot on 3.4.0.** Read the [3.4 positional DI migration guide](https://mcp-mesh.ai/migration/3.4-positional-di/) before upgrading, and see Notes for the Helm and packaging changes. Python is unaffected by the DI change.
+
+### 🔗 Dependency injection — breaking
+
+- **Java `@MeshRoute` and `@MeshA2A` bind by position (#1436).** The Nth declared dependency binds to the Nth injectable parameter; parameter names are never consulted. `@MeshInject` no longer *selects* a dependency — it *asserts* the one position already assigns, and a contradicting value fails the boot unconditionally. It is now also honoured on `@MeshTool` parameters, where it was previously ignored.
+- **TypeScript `mesh.route` and `mesh.a2a.mount` bind by position (#1438).** The handler's dependency argument is an array, not a capability-keyed object: `({ dep })` becomes `([dep])`. Reading a declared capability off it by name throws a `TypeError` naming the index, and `route<{ … }>` / `mount<{ … }>` object type arguments no longer compile.
+- Both are covered end to end — what breaks, what does not, and how to find your exposure on 3.3.x — in the [migration guide](https://mcp-mesh.ai/migration/3.4-positional-di/). Python, Java `@MeshTool` and TypeScript `addTool` were already positional and are unchanged.
+- **Java gains DI arity validation and a legacy-shape detector (#1435, #1434).** A declared-dependency count that disagrees with the handler's injectable slots, and a handler whose parameter names contradict its declaration order, are now reported: WARN by default, a boot failure under `MCP_MESH_STRICT_DI=true`. The positional binder was extracted as a pure refactor first (#1434).
+
+### 🚦 Duplicate declarations now fail at boot — breaking
+
+- **Two declarations advertising the same MCP tool name fail at startup, in all three runtimes (#1446).** Previously one tool silently disappeared — replaced by the Java SDK, overwritten in Python's registry, filtered out by fastmcp — while both capabilities stayed advertised. ⚠️ Two `@MeshLlmProvider` classes on one Java agent both advertise `llm_generate` and no longer boot; one was already dead on the wire, but the arrangement looks supported by construction. A phantom route at the controller base path is also dropped.
+- **Two `@MeshTool` overloads in one class are rejected at boot (#1449).** They share a funcId, so the second evicted the first: two capabilities advertised with one tool behind them, and because both advertise the same wire name the registry merged their dependency lists — the survivor could be handed the other overload's dependency.
+
+### ☕ Java
+
+- **Route registries are keyed by `Method` rather than a name that cannot distinguish overloads (#1441).** Two overloaded `@MeshRoute` handlers shared one registry entry, so one could be injected with the other's proxies — nondeterministically, since `getDeclaredMethods()` order is unspecified.
+- **Re-registering the same handler is a replacement, not a collision (#1445).** Prototype scope, a context refresh or two bean definitions of one controller no longer fail the boot or poison the bare-method-name index.
+
+### 🤖 LLM
+
+- **Native Responses streaming and image input on the OpenAI path (#1453).** GPT-5/o-series reasoning models with tools streamed as a single terminal chunk; they now stream token deltas and incremental tool-call arguments. `{type: "image_url"}` content translates to Responses `input_image` instead of raising.
+- **`@mesh.llm` injection is covered by the settling-window grace (#1457).** A call arriving before the second heartbeat got `None` for the LLM agent, because providers and consumers register in the same instant and the first heartbeat always reports zero providers. The injection path now waits on the settle window like every other dependency.
+
+### ☸️ Helm
+
+- **⚠️ Tempo persistence defaults to off (#1452).** The chart requested a 5Gi ReadWriteOnce claim against its own `retention: "1h"` — measured at ~3MB in practice, ~1600x oversized — and the RWO mode it required is what deadlocked rollouts on multi-node clusters. Storage is now an `emptyDir`; **upgrading deletes the tempo PVC**, see Notes. The advertised Helm floor is corrected to 3.2.0+.
+- **`helm uninstall` no longer takes out what it does not own (#1413, #1426).** The core chart's Namespace and Grafana's data volume both carry `helm.sh/resource-policy: keep`; uninstalling the core release previously cascaded to every unrelated workload, Service, Secret and PVC in the namespace.
+- **The Grafana admin password is GitOps-discoverable (#1415).** It was regenerated on every render, so Argo CD and Flux saw permanent unresolvable drift. Generation stays the default, now with the same credential shape as `mcp-mesh-postgres`.
+- **Single-replica RWO rollouts can finish (#1418, #1410).** Grafana and tempo derive `maxSurge: 0` / `maxUnavailable: 1`, and agent, grafana, tempo and redis gain a `strategy` passthrough so a chart mounting an RWO volume can select `Recreate`.
+- **Charts no longer advertise surfaces that cannot work (#1429), and every core install recipe was rewritten to a form that has actually been executed (#1417)** on both Helm 3 and Helm 4. Neither changes the default render.
+
+### 📦 Packaging and dependencies
+
+- **The vendor SDKs are bounded at their next major, and a false `openai` floor is corrected (#1455).** `openai>=1.60` was never installable — the native adapter imports `openai.types.responses`, which lands in 1.66 — and is now `>=2.14,<3`; `anthropic`, `google-genai` and `litellm` gain `<1`, `<3` and `<2`. Resolution is identical today; the bounds fail later, deliberately. ⚠️ See Notes.
+
+### 🔭 Registry and telemetry
+
+- **Telemetry aggregates are bounded, and the event cap is decoupled from retention (#1433).** The in-memory aggregate layer grew without limit and no knob reached it; it now prunes by age with a hard cap as a backstop (`MCP_MESH_TELEMETRY_AGGREGATE_RETENTION`, `MCP_MESH_TELEMETRY_AGGREGATE_MAX_ENTRIES`). Disabling the sweep no longer removes the unrelated event-table cap, and the trace stream is capped at the producer instead of relying on the registry being up.
+
+### 📚 Examples and docs
+
+- **Examples consume published images instead of rebuilding mesh from source (#1447).** That duplicate build had drifted three ways — a Go base older than `go.mod`, hand-listed Python deps resolving past the runtime's pins, and a source bind-mount that cannot carry the compiled Rust module. There is now no `FROM golang:` anywhere in the repo, and the six compose files are covered by version automation.
+- **Node engine floors, a tutorial chart pin and Dockerfile lint debt corrected across the examples (#1431)**, with a check that derives the floor from the runtime manifest rather than hardcoding it.
+- **The positional DI contract is stated on every documentation surface (#1439)**, including the offline `meshctl man` pages and the new migration guide.
+- **One canonical account of dependency selection (#1440).** Three concept docs made three different claims; the registry picks a single deterministic winner (tag score, then version, then agent ID) and never round-robins. Whether calls spread across replicas is a deployment property of the endpoint the winner registered.
+
+### 🔧 CI and release tooling
+
+- **The TypeScript SDK is type-checked in CI (#1451)** — across both halves of its Express 4/5 peer range. The dashboard was already checked; the runtime SDK was not, so a type error in `agent.ts` could reach `main` with every check green.
+- **Chart and bump-guard checks that already existed now run on every PR (#1427)**, and four release-tooling defects are fixed (#1428), including a bump reminder that told operators to re-resolve the whole Rust dependency graph.
+
+### ⚠️ Notes
+
+- **Java and TypeScript agents need a code change.** `@MeshRoute`/`@MeshA2A` and `mesh.route`/`mesh.a2a.mount` bind by position; see the [migration guide](https://mcp-mesh.ai/migration/3.4-positional-di/) for the before/after shapes and how to audit your handlers on 3.3.x first. Python is unchanged, as is binding at Java `@MeshTool` and TypeScript `addTool`.
+- **⚠️ Agents that boot on 3.3.2 can refuse to start on 3.4.0.** Unconditional boot failures: two declarations advertising the same MCP tool name (all runtimes, including two `@MeshLlmProvider` classes on one Java agent), two `@MeshTool` overloads in one class (Java), and a `@MeshInject` value that contradicts the position it annotates (Java). Arity and parameter-name mismatches are WARN by default and fatal only under `MCP_MESH_STRICT_DI=true`. Each of these was already broken silently, but stage the rollout rather than treating this as a drop-in upgrade.
+- **⚠️ Upgrading the Helm core chart deletes the tempo PVC.** Tempo persistence now defaults to off, so Helm removes the claim on the next upgrade and up to `retention` (1 hour, a few MB) of buffered traces goes with it. Set `mcp-mesh-tempo.tempo.persistence.enabled=true` before upgrading to keep it.
+- **Fresh installs resolve differently.** `openai` moves `>=1.60` → `>=2.14,<3`, and `anthropic`, `google-genai` and `litellm` gain `<1`, `<3` and `<2`. A `pip install` today resolves to exactly the same package set — the bounds exist to fail on a future major. Existing environments are unchanged until you reinstall.
+- **No wire-protocol, registry-schema or dependency-resolution changes.** The binding change is internal to the Java and TypeScript runtimes; #1433's registry change is telemetry housekeeping plus two new environment knobs.
 
 ## v3.3.2 (2026-07-28)
 

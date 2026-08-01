@@ -3,8 +3,8 @@
 
 The fixtures build throwaway git repos rather than reusing the real tree, so
 the failure cases prove the check can actually go red instead of asserting
-that the tree happens to be clean today. Every fixture version (`>=8`, `>=99`)
-appears nowhere in the repo.
+that the tree happens to be clean today. Every fixture version (`>=8`, `>=99`,
+`0.0.0-test`) appears nowhere in the repo.
 """
 
 import importlib.util
@@ -120,7 +120,14 @@ def test_a_floor_below_the_runtime_is_flagged(tmp_path):
             "examples/agent-ts/package.json": {
                 "name": "agent-ts",
                 "engines": {"node": ">=8"},
-                "dependencies": {"@mcpmesh/sdk": "^3.3.2"},
+                # The dependency VERSION is inert here and in every fixture
+                # below: the check keys on the dependency *name* and never
+                # reads its value. It is deliberately unreal, because a
+                # realistic one is indistinguishable from a live pin to
+                # bump_version.py's coverage guard, which then reports these
+                # lines as stale mesh references on every single release.
+                # Do not "fix" it back to a plausible version.
+                "dependencies": {"@mcpmesh/sdk": "^0.0.0-test"},
             },
         },
     )
@@ -137,7 +144,7 @@ def test_a_missing_engines_field_is_flagged(tmp_path):
             cne.RUNTIME_MANIFEST: _runtime(),
             "examples/agent-ts/package.json": {
                 "name": "agent-ts",
-                "dependencies": {"@mcpmesh/sdk": "^3.3.2"},
+                "dependencies": {"@mcpmesh/sdk": "^0.0.0-test"},
             },
         },
     )
@@ -170,7 +177,7 @@ def test_raising_the_runtime_floor_turns_a_compliant_tree_red(tmp_path):
         "examples/agent-ts/package.json": {
             "name": "agent-ts",
             "engines": {"node": ">=22.0.0"},
-            "dependencies": {"@mcpmesh/sdk": "^3.3.2"},
+            "dependencies": {"@mcpmesh/sdk": "^0.0.0-test"},
         },
     }
     root = _repo(tmp_path, files)
@@ -206,8 +213,8 @@ def test_the_cli_wrapper_shape_is_not_flagged(tmp_path):
                 "name": "@mcpmesh/cli",
                 "engines": {"node": ">=18"},
                 "optionalDependencies": {
-                    "@mcpmesh/cli-linux-x64": "3.3.2",
-                    "@mcpmesh/cli-darwin-arm64": "3.3.2",
+                    "@mcpmesh/cli-linux-x64": "0.0.0-test",
+                    "@mcpmesh/cli-darwin-arm64": "0.0.0-test",
                 },
             },
         },

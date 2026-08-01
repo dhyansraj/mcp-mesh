@@ -10,8 +10,8 @@ MCP Mesh supports multiple deployment patterns for TypeScript agents. Use `meshc
 
 | Image                            | Description                                        |
 | -------------------------------- | -------------------------------------------------- |
-| `mcpmesh/registry:3.3.2`           | Registry service for agent discovery               |
-| `mcpmesh/typescript-runtime:3.3.2` | TypeScript runtime with @mcpmesh/sdk pre-installed |
+| `mcpmesh/registry:3.4.0`           | Registry service for agent discovery               |
+| `mcpmesh/typescript-runtime:3.4.0` | TypeScript runtime with @mcpmesh/sdk pre-installed |
 
 ## Local Development
 
@@ -75,7 +75,7 @@ meshctl stop               # Stop all
 
 ```dockerfile
 # Dockerfile for my-agent MCP Mesh agent
-FROM mcpmesh/typescript-runtime:3.3.2
+FROM mcpmesh/typescript-runtime:3.4.0
 
 WORKDIR /app
 
@@ -123,8 +123,8 @@ meshctl scaffold --compose --observability
 Generated `docker-compose.yml` includes:
 
 - PostgreSQL database for registry
-- Registry service (`mcpmesh/registry:3.3.2`)
-- TypeScript agents with `mcpmesh/typescript-runtime:3.3.2`
+- Registry service (`mcpmesh/registry:3.4.0`)
+- TypeScript agents with `mcpmesh/typescript-runtime:3.4.0`
 - Health checks and dependency ordering
 - Optional: Redis, Tempo, Grafana (with `--observability`)
 
@@ -146,13 +146,13 @@ For production Kubernetes deployment:
 # Install core infrastructure
 # --set namespaceCreate=false is required — run `meshctl man deployment`
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 3.3.2 \
+  --version 3.4.0 \
   -n mcp-mesh --create-namespace \
   --set namespaceCreate=false
 
 # Deploy TypeScript agent
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 3.3.2 \
+  --version 3.4.0 \
   -n mcp-mesh \
   -f my-agent/helm-values.yaml
 ```
@@ -198,7 +198,7 @@ docker buildx build --platform linux/amd64 -t your-registry/my-agent:v1.0.0 --pu
 
 # 3. Deploy with Helm
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 3.3.2 \
+  --version 3.4.0 \
   -n mcp-mesh \
   -f helm-values.yaml \
   --set image.repository=your-registry/my-agent \
