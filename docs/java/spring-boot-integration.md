@@ -23,7 +23,7 @@ MCP Mesh provides the `@MeshRoute` annotation for Spring Boot REST controllers t
     <dependency>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-        <version>3.3.2</version>
+        <version>3.4.0</version>
     </dependency>
     <dependency>
         <groupId>org.springframework.boot</groupId>

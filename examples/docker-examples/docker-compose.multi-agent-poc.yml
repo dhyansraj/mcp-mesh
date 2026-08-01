@@ -39,7 +39,7 @@ services:
       - mcp-mesh-ma-poc
 
   registry:
-    image: mcpmesh/registry:3.3.2
+    image: mcpmesh/registry:3.4.0
     container_name: mcp-mesh-registry-ma-poc
     ports:
       - "8003:8000"
@@ -64,7 +64,7 @@ services:
 
   # Executor Agent - Provides basic tools (bash, write_file, read_file, grep_files)
   executor-agent:
-    image: mcpmesh/python-runtime:3.3.2
+    image: mcpmesh/python-runtime:3.4.0
     container_name: mcp-mesh-executor-agent
     environment:
       MCP_MESH_REGISTRY_URL: http://registry:8000
@@ -101,7 +101,7 @@ services:
 
   # Claude Provider - LLM provider for specialist agents (Preferred)
   claude-provider:
-    image: mcpmesh/python-runtime:3.3.2
+    image: mcpmesh/python-runtime:3.4.0
     container_name: mcp-mesh-claude-provider
     environment:
       MCP_MESH_REGISTRY_URL: http://registry:8000
@@ -137,7 +137,7 @@ services:
 
   # OpenAI Provider - LLM provider for specialist agents (Fallback)
   openai-provider:
-    image: mcpmesh/python-runtime:3.3.2
+    image: mcpmesh/python-runtime:3.4.0
     container_name: mcp-mesh-openai-provider
     environment:
       MCP_MESH_REGISTRY_URL: http://registry:8000
@@ -173,7 +173,7 @@ services:
 
   # Developer Agent - Software development specialist using mesh delegation
   developer-agent:
-    image: mcpmesh/python-runtime:3.3.2
+    image: mcpmesh/python-runtime:3.4.0
     container_name: mcp-mesh-developer-agent
     environment:
       MCP_MESH_REGISTRY_URL: http://registry:8000
@@ -213,7 +213,7 @@ services:
 
   # QA Agent - Quality Assurance specialist
   qa-agent:
-    image: mcpmesh/python-runtime:3.3.2
+    image: mcpmesh/python-runtime:3.4.0
     container_name: mcp-mesh-qa-agent
     environment:
       MCP_MESH_REGISTRY_URL: http://registry:8000
@@ -253,7 +253,7 @@ services:
 
   # Intent Agent - Conversational orchestrator
   intent-agent:
-    image: mcpmesh/python-runtime:3.3.2
+    image: mcpmesh/python-runtime:3.4.0
     container_name: mcp-mesh-intent-agent
     environment:
       MCP_MESH_REGISTRY_URL: http://registry:8000
