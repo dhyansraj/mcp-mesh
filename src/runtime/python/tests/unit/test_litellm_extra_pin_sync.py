@@ -1,17 +1,18 @@
-"""Guard the deliberately-duplicated ``litellm`` pin (issue #1383).
+"""Guard the ``[litellm]`` extra as the sole install path for LiteLLM (#1383).
 
-``litellm`` is declared twice in each Python manifest:
+As of 3.5.0 ``litellm`` is NOT a base dependency. It is declared exactly once
+per manifest, under ``[project.optional-dependencies] litellm``, and that entry
+is the only thing that installs it — ``pip install mcp-mesh`` is slim and
+big-3-native, ``pip install mcp-mesh[litellm]`` adds the long-tail provider
+path that ``meshctl scaffold`` and ``mesh.helpers._require_litellm`` tell users
+to pin.
 
-  * in ``[project] dependencies``  — it is still a BASE dependency today, so
-    nothing breaks for existing installs;
-  * in ``[project.optional-dependencies] litellm`` — the forward-compatible
-    opt-in extra that ``meshctl scaffold`` and
-    ``mesh.helpers._require_litellm`` tell users to pin.
+Two things can silently break that contract:
 
-The duplication is intentional (see the comments in both manifests), but a
-version bump or a new upstream exclusion applied to only one of the two would
-silently change what ``mcp-mesh[litellm]`` resolves to versus ``mcp-mesh``.
-These checks fail loudly on that drift.
+  * litellm creeping back into ``[project] dependencies`` — the extra would
+    still resolve, so nothing would fail, and every user would quietly get the
+    ~30 MB tree back;
+  * the two manifests drifting apart on the pin.
 
 Both manifests are checked because ``packaging/pypi/pyproject.toml`` is the one
 PyPI publishes and ``src/runtime/python/pyproject.toml`` is the one editable /
@@ -61,15 +62,25 @@ def _requirements_named(reqs: list[str], name: str) -> list[str]:
 
 
 @pytest.mark.parametrize("rel", sorted(_MANIFESTS))
-def test_litellm_extra_pin_matches_base_pin(rel: str) -> None:
-    """The ``[litellm]`` extra must restate the base pin verbatim."""
-    data = _load(rel)
-    project = data["project"]
+def test_litellm_is_not_a_base_dependency(rel: str) -> None:
+    """``pip install mcp-mesh`` must stay slim (#1383)."""
+    project = _load(rel)["project"]
 
     base = _requirements_named(project["dependencies"], "litellm")
-    assert len(base) == 1, f"{rel}: expected exactly one base litellm pin, got {base}"
+    assert base == [], (
+        f"{rel}: litellm is back in [project] dependencies as {base}. It was "
+        "removed in 3.5.0 (#1383): the big-3 vendors dispatch through the "
+        "bundled native SDK adapters and must not carry litellm's ~30 MB "
+        "transitive tree. It belongs in the [litellm] extra only."
+    )
 
+
+@pytest.mark.parametrize("rel", sorted(_MANIFESTS))
+def test_litellm_extra_declares_litellm_explicitly(rel: str) -> None:
+    """The extra is the only thing that installs litellm, so it must say so."""
+    project = _load(rel)["project"]
     extras = project["optional-dependencies"]
+
     assert "litellm" in extras, (
         f"{rel}: the [litellm] extra is missing. It is what "
         "'pip install mcp-mesh[litellm]' resolves against — the install "
@@ -79,37 +90,29 @@ def test_litellm_extra_pin_matches_base_pin(rel: str) -> None:
 
     extra = _requirements_named(extras["litellm"], "litellm")
     assert len(extra) == 1, (
-        f"{rel}: the [litellm] extra must declare litellm explicitly, got "
-        f"{extras['litellm']!r}. An empty/stub extra resolves cleanly today "
-        "(litellm is still a base dependency) but would silently install "
-        "nothing once the base entry is removed."
-    )
-
-    assert extra[0] == base[0], (
-        f"{rel}: the [litellm] extra pin drifted from the base pin.\n"
-        f"  base : {base[0]}\n"
-        f"  extra: {extra[0]}\n"
-        "Both must be updated together — otherwise 'mcp-mesh[litellm]' and "
-        "'mcp-mesh' resolve to different litellm versions."
+        f"{rel}: the [litellm] extra must declare litellm exactly once, got "
+        f"{extras['litellm']!r}. Nothing else installs litellm since 3.5.0, so "
+        "an empty/stub extra resolves cleanly and installs nothing."
     )
 
 
-def test_litellm_pin_is_the_same_across_manifests() -> None:
+def test_litellm_extra_pin_is_the_same_across_manifests() -> None:
     """The published manifest and the source manifest must agree on litellm.
 
     They deliberately differ on upper bounds for some other deps, but litellm
-    is one pin: a user installing from PyPI and a contributor installing the
-    source tree editable must get the same long-tail provider path.
+    is one pin: a user installing ``mcp-mesh[litellm]`` from PyPI and a
+    contributor installing the source tree editable must get the same
+    long-tail provider path.
     """
     pins = {}
     for rel in _MANIFESTS:
         project = _load(rel)["project"]
-        pins[rel] = (
-            _requirements_named(project["dependencies"], "litellm")[0],
-            _requirements_named(project["optional-dependencies"]["litellm"], "litellm")[
-                0
-            ],
-        )
+        pins[rel] = _requirements_named(
+            project["optional-dependencies"]["litellm"], "litellm"
+        )[0]
 
-    values = list(pins.values())
-    assert len(set(values)) == 1, f"litellm pins diverge across manifests: {pins}"
+    assert len(set(pins.values())) == 1, (
+        f"the [litellm] extra pin diverges across manifests: {pins}\n"
+        "Both must be updated together — otherwise 'mcp-mesh[litellm]' means "
+        "one thing from PyPI and another from a source checkout."
+    )

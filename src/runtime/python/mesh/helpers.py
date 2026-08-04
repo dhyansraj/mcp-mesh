@@ -2726,7 +2726,7 @@ def llm_provider(
 
         app = current_module.app
 
-        # Extract vendor from model name using LiteLLM
+        # Extract vendor from model name using LiteLLM when it is available.
         vendor = "unknown"
         try:
             import litellm
@@ -2742,17 +2742,29 @@ def llm_provider(
             # AttributeError: get_llm_provider doesn't exist
             # ValueError: invalid model format
             # KeyError: model not in provider mapping
+            #
+            # Since #1383 litellm is an optional extra, so "not installed" is
+            # the DEFAULT state of a big-3 install, not a degradation — logging
+            # it at warning level would fire on every provider startup and be a
+            # pure false alarm. Any other failure means litellm IS present and
+            # still could not resolve the model, which is worth a warning.
+            litellm_absent = isinstance(e, ModuleNotFoundError) and e.name == "litellm"
             if "/" in model:
                 vendor = model.split("/")[0]
-                logger.warning(
-                    f"⚠️  Could not extract vendor using LiteLLM ({e}), "
-                    f"falling back to prefix extraction: '{vendor}'"
-                )
-            else:
-                logger.warning(
-                    f"⚠️  Could not extract vendor from model '{model}', "
-                    f"using 'unknown'"
-                )
+                if litellm_absent:
+                    logger.debug(
+                        f"litellm not installed; extracted vendor '{vendor}' "
+                        f"from the '{model}' prefix"
+                    )
+                else:
+                    logger.warning(
+                        f"⚠️  Could not extract vendor using LiteLLM ({e}), "
+                        f"falling back to prefix extraction: '{vendor}'"
+                    )
+            # A bare (unprefixed) name is not necessarily unresolvable — the
+            # big-3 inference below still gets a shot at it — so the "unknown"
+            # warning is deferred until after that block rather than emitted
+            # here and immediately contradicted.
 
         # Gap #1 (RFC #1100): route UNPREFIXED big-3 names to the native
         # handler. LiteLLM's get_llm_provider only resolves bare names that
@@ -2785,6 +2797,13 @@ def llm_provider(
                     f"name; normalized to '{provider_model}' for native "
                     f"dispatch (RFC #1100 Gap #1)"
                 )
+
+        if vendor == "unknown":
+            logger.warning(
+                f"⚠️  Could not extract vendor from model '{model}', using "
+                f"'unknown'. It will dispatch through the LiteLLM long-tail "
+                f"path, which needs: pip install 'mcp-mesh[litellm]'"
+            )
 
         def _prepare_provider_request(
             request: MeshLlmRequest,
