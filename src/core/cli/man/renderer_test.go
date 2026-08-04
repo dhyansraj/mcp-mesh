@@ -193,8 +193,15 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // explain `--set namespaceCreate=false` (now redundant, and dropped from every
 // recipe). The new section's version table contributes nothing: a `|` line is
 // skipped by all three tests.
+// #1383: +1 / +0 / +0. `llm.md`'s LiteLLM note is rewritten for the base
+// install losing `litellm`: the "moving to an opt-in extra" wording becomes a
+// statement of fact plus a `pip install 'mcp-mesh[litellm]'` block (fenced, so
+// it contributes nothing), and the long-tail bullet gains the `[litellm]`
+// extra. That bullet is the whole delta — the reworked paragraph swaps spans
+// one-for-one. The two list goldens are unmoved because the new span sits on
+// the bullet's wrapped continuation line, which is not itself a list line.
 const (
-	wantInlineCodeSpans = 1685
+	wantInlineCodeSpans = 1686
 	wantListCodeSpans   = 506
 	wantMarkupListLines = 442
 )

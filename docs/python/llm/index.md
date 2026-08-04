@@ -21,9 +21,9 @@ MCP Mesh provides first-class support for LLM-powered agents through the `@mesh.
 The `mcp-mesh` package includes LLM support out of the box:
 
 - **Claude** (Anthropic), **GPT** (OpenAI) and **Gemini** (Google) dispatch through bundled native SDK adapters
-- **100+ other providers** (Bedrock, Cohere, Ollama, …) dispatch through LiteLLM
+- **100+ other providers** (Bedrock, Cohere, Ollama, …) dispatch through LiteLLM, installed via the `[litellm]` extra
 
-No additional packages needed. Just set your API keys:
+For the big-3, no additional packages are needed. Just set your API keys:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
@@ -32,16 +32,21 @@ export OPENAI_API_KEY=sk-...
 
 !!! note "LiteLLM"
 
-    The big-3 vendors above need nothing beyond the base install. LiteLLM is
-    also part of the base install today, so long-tail providers work with no
-    extra step either — but it is moving to an opt-in extra in a future major
-    release. Declaring `mcp-mesh[litellm]` now is a no-op today and keeps a
-    long-tail agent working across that change; `meshctl scaffold` already
-    writes that pin into the generated `requirements.txt` when the selected
-    model is not Anthropic, OpenAI, Gemini or Vertex AI. `vertex_ai/*` is
-    native despite the long-tail-looking name: it runs the same Gemini models
-    through the same bundled SDK, only the auth differs (ADC / Workload
-    Identity instead of an AI Studio API key).
+    The big-3 vendors above need nothing beyond the base install. Every other
+    vendor dispatches through LiteLLM, which is an opt-in extra:
+
+    ```bash
+    pip install 'mcp-mesh[litellm]'
+    ```
+
+    For containerized agents, add `mcp-mesh[litellm]==<version>` to the
+    agent's `requirements.txt` so the image build picks it up — `meshctl
+    scaffold` writes that pin for you when the selected model is not
+    Anthropic, OpenAI, Gemini or Vertex AI. Without it the agent starts and
+    registers normally and fails on its first LLM call, with an error naming
+    the extra. `vertex_ai/*` is native despite the long-tail-looking name: it
+    runs the same Gemini models through the same bundled SDK, only the auth
+    differs (ADC / Workload Identity instead of an AI Studio API key).
 
 ## @mesh.llm Decorator
 

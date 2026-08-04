@@ -46,9 +46,9 @@ requires-python = ">=3.11"
 # openai SDK is included by default for native OpenAI dispatch (issue #834
 # PR 2). When MCP_MESH_NATIVE_LLM is unset (default ON), OpenAI provider
 # agents dispatch through the native openai SDK; without it they would
-# silently fall back to LiteLLM. (openai is also a transitive dep of
-# litellm today; promoting to a direct base dep prevents breakage if
-# litellm ever drops it as transitive.)
+# silently fall back to LiteLLM. (openai used to arrive transitively via
+# litellm; since litellm left the base install in 3.5.0 — issue #1383 —
+# this direct entry is the ONLY thing that installs it.)
 #
 # google-genai SDK is included by default for native Gemini dispatch
 # (issue #834 PR 3). Supports both AI Studio (gemini/*) and Vertex AI
@@ -103,7 +103,9 @@ dependencies = [
     # google-genai is capped <3, not <2: 2.0 shipped 2026-05 and a fresh
     # install has resolved 2.x ever since, so <2 would roll us back onto a 1.x
     # line nothing has tested in months.
-    "litellm>=1.80.5,!=1.82.7,!=1.82.8,<2",
+    #
+    # litellm is NOT here (issue #1383, removed in 3.5.0). It lives in the
+    # [litellm] optional extra; see the comment there.
     "anthropic>=0.77,<1",
     "openai>=2.14,<3",
     "google-genai>=1.22,<3",
@@ -127,7 +129,13 @@ dev = [
     "mypy>=1.16.0",
     "pre-commit>=4.0.0",
     "isort>=6.0.0",
-    "bandit[toml]>=1.7.0"
+    "bandit[toml]>=1.7.0",
+    # The unit suite covers the LiteLLM long-tail path (tests/unit/
+    # test_provider_agentic_loop_*.py patch ``litellm.acompletion`` directly),
+    # so a dev/CI environment needs the package even though a user install no
+    # longer does (#1383). Self-referenced rather than restated so there is
+    # exactly one litellm pin per manifest.
+    "mcp-mesh[litellm]"
 ]
 docs = [
     "mkdocs>=1.5.0",
@@ -178,22 +186,30 @@ gemini = [
 litellm = [
     # LiteLLM long-tail provider path (issue #1383).
     #
-    # DELIBERATELY REDUNDANT TODAY: ``litellm`` is still a BASE dependency
-    # above, so ``pip install mcp-mesh[litellm]`` resolves to exactly the same
-    # set as ``pip install mcp-mesh``. The extra exists now, ahead of the move,
-    # so that a pin written today (by a user, by ``meshctl scaffold``'s
-    # generated requirements.txt, or by the install guidance in
-    # ``mesh.helpers._require_litellm``) keeps working unchanged when the base
-    # entry is deleted at the next major — at that point THIS is the only
-    # declaration that installs litellm.
+    # THIS IS THE ONLY DECLARATION THAT INSTALLS LITELLM. The base entry was
+    # deleted in 3.5.0; ``pip install mcp-mesh`` no longer pulls litellm or its
+    # ~30 MB transitive tree. Anthropic / OpenAI / Gemini dispatch through the
+    # bundled native SDK adapters (base dependencies) and need nothing extra.
+    # Every other vendor — bedrock/*, vertex_ai/*, cohere/*, ollama/*, … —
+    # routes through GenericHandler → LiteLLM and requires:
+    #   pip install 'mcp-mesh[litellm]'
+    # Containerized agents add the same pin to requirements.txt; ``meshctl
+    # scaffold`` emits it automatically for non-big-3 models.
     #
-    # This is why the requirement is spelled out in full rather than left as an
-    # empty stub: an empty extra resolves cleanly today but would silently
-    # install nothing the day the base entry goes away.
+    # Missing-package failures are caught at the import site and re-raised with
+    # that guidance by ``mesh.helpers._require_litellm``.
     #
-    # The pin MUST stay identical to the ``litellm`` entry in [project]
-    # dependencies above. Enforced by
-    # tests/unit/test_litellm_extra_pin_sync.py.
+    # The extra existed as a deliberate no-op from 3.3.2 through 3.4.x so a pin
+    # written against those releases keeps resolving unchanged here.
+    #
+    # The pin MUST stay identical to the ``litellm`` entry in the [litellm]
+    # extra of packaging/pypi/pyproject.toml (the manifest PyPI publishes).
+    # Enforced by tests/unit/test_litellm_extra_pin_sync.py.
+    #
+    # Bounded, never pinned exactly, for the same reason as the vendor SDKs
+    # above: an exact pin would export our testing constraint onto every user
+    # who depends on litellm directly. 1.82.7/1.82.8 are excluded upstream
+    # breakages.
     "litellm>=1.80.5,!=1.82.7,!=1.82.8,<2"
 ]
 
