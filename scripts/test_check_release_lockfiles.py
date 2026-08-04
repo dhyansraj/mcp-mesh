@@ -167,6 +167,252 @@ def test_chart_lock_flags_a_foreign_chart_move():
     assert foreign == ["postgresql: 15.1.0 -> 15.2.0"]
 
 
+# ---------------------------------------------------------------------------
+# Python constraints.txt (#1454)
+# ---------------------------------------------------------------------------
+
+CONSTRAINTS = """#
+# mcp-mesh Python dependency lock. DO NOT EDIT BY HAND.
+#
+anyio==9.9.0
+    # via
+    #   mcp-mesh (pyproject.toml)
+    #   openai
+openai=={openai}
+    # via mcp-mesh (pyproject.toml)
+zipp==9.9.1
+    # via importlib-metadata
+"""
+
+
+def _constraints(openai="1.2.3"):
+    return CONSTRAINTS.format(openai=openai)
+
+
+PYPROJECT = """[build-system]
+requires = ["hatchling>=1.21.0"]
+
+[project]
+name = "mcp-mesh"
+version = "{v}"
+dependencies = ["openai>=1.0"]
+
+[tool.poetry]
+version = "0.0.0-decoy"
+"""
+
+
+def test_parse_python_constraints_reads_only_column_zero_pins():
+    """pip-compile indents a `# via ...` provenance block under every pin. Those
+    lines name real distributions, so reading them would invent packages — the
+    same trap the Cargo parser's column-0 rule exists for."""
+    assert cl.parse_python_constraints(_constraints()) == {
+        "anyio": "9.9.0",
+        "openai": "1.2.3",
+        "zipp": "9.9.1",
+    }
+
+
+def test_parse_python_constraints_normalizes_names():
+    """PEP 503: `google_auth`, `Google-Auth` and `google-auth` are one project.
+    A regenerate that changed the spelling would otherwise read as one package
+    removed and another added — a re-resolution that never happened."""
+    pins = cl.parse_python_constraints("Google_Auth==1.2.3\npy.key.value==4.5.6\n")
+    assert pins == {"google-auth": "1.2.3", "py-key-value": "4.5.6"}
+
+
+def test_python_constraints_clean_bump_moves_nothing():
+    """The whole point: unlike Cargo.lock, this file has no mesh entry, so a
+    release bump must move NOTHING in it."""
+    moved, foreign = cl.python_constraints_findings(
+        _constraints(), _constraints(), mesh_moved=True
+    )
+    assert moved
+    assert foreign == []
+
+
+def test_python_graph_re_resolution_is_caught():
+    """The #1453 shape: a vendor SDK minor sliding in under an unchanged
+    manifest. 2.14 -> 2.52 added a required response field and broke CI."""
+    moved, foreign = cl.python_constraints_findings(
+        _constraints(openai="2.14.0"), _constraints(openai="2.52.0"), mesh_moved=True
+    )
+    assert moved
+    assert foreign == ["openai: 2.14.0 -> 2.52.0"]
+
+
+def test_python_added_and_removed_pins_are_caught():
+    """A re-resolution also pulls new transitives in and drops others.
+    Comparing only the names present in both files would miss both."""
+    moved, foreign = cl.python_constraints_findings(
+        _constraints(), _constraints() + "brand-new-dep==0.1.0\n", mesh_moved=True
+    )
+    assert foreign == ["brand-new-dep: added at 0.1.0"]
+
+    moved, foreign = cl.python_constraints_findings(
+        _constraints() + "brand-new-dep==0.1.0\n", _constraints(), mesh_moved=True
+    )
+    assert foreign == ["brand-new-dep: removed (was 0.1.0)"]
+
+
+def test_deliberate_python_dependency_bump_is_not_this_scripts_business():
+    """Upgrading dependencies on purpose is a fine thing to do — it just has to
+    be its own reviewed PR. Such a PR leaves the package version alone, so the
+    gate must not fire on it, or people route around the gate."""
+    moved, foreign = cl.python_constraints_findings(
+        _constraints(openai="1.2.3"), _constraints(openai="1.3.0"), mesh_moved=False
+    )
+    assert not moved
+    assert foreign == ["openai: 1.2.3 -> 1.3.0"]
+
+
+def test_mesh_owned_python_distributions_are_exempt():
+    """Nothing matches today — mesh's own packages are deliberately absent from
+    the lock. The exemption exists so that adding an `mcp-mesh-core==` pin later
+    does not make every release a red gate."""
+    before = _constraints() + "mcp-mesh-core==1.2.3\nmcp_mesh_extras==1.2.3\n"
+    after = _constraints() + "mcp-mesh-core==1.2.4\nmcp_mesh_extras==1.2.4\n"
+    moved, foreign = cl.python_constraints_findings(before, after, mesh_moved=True)
+    assert foreign == []
+
+
+def test_parse_project_version_is_section_scoped():
+    """`version` is a common TOML key. A bare regex over the file would pick up
+    whichever `[tool.*]` table happened to be nearest."""
+    assert cl.parse_project_version(PYPROJECT.format(v="1.2.3")) == "1.2.3"
+    assert cl.parse_project_version("[tool.poetry]\nversion = \"9.9.9\"\n") is None
+
+
+def test_python_constraints_violations_flag_a_range():
+    """A range in a constraints file is accepted by pip and locks nothing, so
+    the file goes on existing while doing no work at all."""
+    violations = cl.python_constraints_violations("openai>=2.14,<3\n")
+    assert len(violations) == 1
+    assert "not an exact '==' pin" in violations[0]
+
+
+def test_python_constraints_violations_flag_an_extra():
+    """pip hard-errors 'Constraints cannot have extras'. pip-compile emits five
+    such lines the moment --strip-extras is dropped from the generator, which
+    would fail both image builds and the CI install at once."""
+    violations = cl.python_constraints_violations("google-auth[requests]==2.56.2\n")
+    assert len(violations) == 1
+    assert "extra" in violations[0]
+
+
+def test_python_constraints_violations_flag_includes_and_urls():
+    for bad in ("-r other.txt", "-e .", "https://example.com/pkg.whl"):
+        assert len(cl.python_constraints_violations(bad + "\n")) == 1, bad
+
+
+def test_python_constraints_violations_accept_the_real_shapes():
+    """Comments, blank lines, indented annotations and an environment marker are
+    all legitimate and must not be reported."""
+    text = _constraints() + '\nbackports-tarfile==1.2.0 ; python_version < "3.12"\n'
+    assert cl.python_constraints_violations(text) == []
+
+
+MANIFEST = """[build-system]
+requires = ["hatchling>=1.21.0"]
+
+[project]
+name = "mcp-mesh"
+version = "1.2.3"
+# A comment block between entries, the way the real manifests carry their
+# provenance notes. It mentions "openai" in prose and must not be read as one.
+dependencies = [
+    "anyio>=1.0",
+    "openai>=1.0,<2",
+    "mcp-mesh-core>=1.2.3",
+    "anthropic[bedrock]>=0.77,<1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+litellm = ["zipp>=1.0"]
+"""
+
+
+# Same manifest minus anthropic, so the fixture lock covers it exactly and a
+# green run is genuinely green rather than green-by-skip.
+FIXTURE_MANIFEST = MANIFEST.replace('    "anthropic[bedrock]>=0.77,<1",\n', "")
+
+
+def test_declared_dependencies_reads_names_only():
+    """Names, not specifiers: the manifest owns the range, the lock owns the
+    version. Extras are stripped because `anthropic[bedrock]` and `anthropic`
+    are one distribution and the lock records distributions."""
+    assert cl.parse_declared_dependencies(MANIFEST) == {
+        "anyio",
+        "openai",
+        "mcp-mesh-core",
+        "anthropic",
+    }
+
+
+def test_declared_dependencies_pull_in_named_extras_only():
+    """[litellm] is locked because CI installs it; [dev] is not, so its entries
+    must not be demanded of the lock."""
+    names = cl.parse_declared_dependencies(MANIFEST, ("litellm",))
+    assert "zipp" in names
+    assert "pytest" not in names
+
+
+def test_declared_dependencies_ignore_prose_in_comments():
+    """The real manifests carry ~40 lines of provenance comments inside the
+    dependencies array, quoting package names and versions. Reading a comment
+    would invent a dependency the lock can never satisfy."""
+    commented = MANIFEST.replace(
+        '    "anyio>=1.0",', '    # see "prose" for why\n    "anyio>=1.0",'
+    )
+    assert "prose" not in cl.parse_declared_dependencies(commented)
+
+
+def test_an_unlocked_new_dependency_is_caught():
+    """The one manifest change the `-c` install does NOT already fail on. A pin
+    that conflicts with the lock is loud on every PR; a dependency simply
+    missing from the lock installs at whatever pip picks, silently."""
+    lock = "anyio==9.9.0\nopenai==1.2.3\nzipp==9.9.1\n"
+    assert cl.unlocked_declared_dependencies(MANIFEST, lock) == ["anthropic"]
+
+
+def test_mesh_distributions_are_not_demanded_of_the_lock():
+    """mcp-mesh-core is declared by the published manifest and deliberately
+    excluded from the lock, so it must not read as an unlocked dependency —
+    that would make the check red on day one."""
+    lock = "anyio==9.9.0\nopenai==1.2.3\nzipp==9.9.1\nanthropic==9.9.2\n"
+    assert cl.unlocked_declared_dependencies(MANIFEST, lock) == []
+
+
+def test_real_manifest_is_fully_covered_by_the_real_lock():
+    """Against the files in the tree, so adding a dependency without
+    regenerating goes red here rather than shipping unpinned."""
+    manifest = cl.PROJECT_ROOT / cl.PYPI_PYPROJECT
+    lock = cl.PROJECT_ROOT / cl.PY_CONSTRAINTS
+    if not (manifest.exists() and lock.exists()):
+        return
+    declared = cl.parse_declared_dependencies(manifest.read_text(), cl.LOCKED_EXTRAS)
+    assert len(declared) > 15, sorted(declared)
+    assert cl.unlocked_declared_dependencies(
+        manifest.read_text(), lock.read_text()
+    ) == []
+
+
+def test_real_constraints_txt_is_a_usable_lock():
+    """Run the structural check against the file actually in the tree, so the
+    day someone hand-edits a range into it this file goes red rather than the
+    release."""
+    path = cl.PROJECT_ROOT / cl.PY_CONSTRAINTS
+    if not path.exists():
+        return
+    text = path.read_text()
+    assert cl.python_constraints_violations(text) == []
+    pins = cl.parse_python_constraints(text)
+    assert len(pins) > 50, len(pins)
+    # The two distributions whose drift produced #1312 and #1453.
+    assert "fastmcp" in pins and "openai" in pins
+
+
 CHART_YAML = """apiVersion: v2
 name: mcp-mesh-core
 version: 1.2.3
@@ -267,7 +513,7 @@ def test_real_cargo_lock_parses():
 
 
 @contextlib.contextmanager
-def _temp_repo(with_cargo=True):
+def _temp_repo(with_cargo=True, with_python=True):
     """A throwaway git repo standing in for PROJECT_ROOT.
 
     Real git, because the thing under test is exactly how git reports a bad
@@ -288,6 +534,12 @@ def _temp_repo(with_cargo=True):
         if with_cargo:
             (root / cl.CARGO_LOCK).parent.mkdir(parents=True, exist_ok=True)
             (root / cl.CARGO_LOCK).write_text(_cargo())
+        if with_python:
+            (root / cl.PY_CONSTRAINTS).parent.mkdir(parents=True, exist_ok=True)
+            (root / cl.PY_CONSTRAINTS).write_text(_constraints())
+            (root / cl.PY_PYPROJECT).write_text(PYPROJECT.format(v="1.2.3"))
+            (root / cl.PYPI_PYPROJECT).parent.mkdir(parents=True, exist_ok=True)
+            (root / cl.PYPI_PYPROJECT).write_text(FIXTURE_MANIFEST)
         run("git", "add", "-A")
         run("git", "commit", "-q", "-m", "init")
         original = cl.PROJECT_ROOT
@@ -334,6 +586,135 @@ def test_absent_path_at_a_valid_ref_still_skips():
         rc, out = _run_main("--base", "HEAD")
     assert rc == 0, out
     assert "Cargo.lock" in out and "skipped" in out
+
+
+def test_python_lock_end_to_end_green():
+    """A real bump: the package version moves, the lock does not. Exit 0."""
+    with _temp_repo() as root:
+        (root / cl.PY_PYPROJECT).write_text(PYPROJECT.format(v="1.2.4"))
+        rc, out = _run_main("--base", "HEAD")
+    assert rc == 0, out
+    assert "✅ constraints.txt: the mesh version moved and nothing else did." in out
+
+
+def test_python_lock_end_to_end_red():
+    """The same bump with one third-party pin dragged along. Exit 1, and the
+    offending package is named — a gate that only says "something moved" makes
+    a reviewer re-derive the diff by hand."""
+    with _temp_repo() as root:
+        (root / cl.PY_PYPROJECT).write_text(PYPROJECT.format(v="1.2.4"))
+        (root / cl.PY_CONSTRAINTS).write_text(_constraints(openai="2.52.0"))
+        rc, out = _run_main("--base", "HEAD")
+    assert rc == 1, out
+    assert "openai: 1.2.3 -> 2.52.0" in out
+    assert "lock_python_deps.sh" in out
+
+
+def test_python_lock_moves_outside_a_bump_are_allowed():
+    """Same lock move, no version bump: a deliberate dependency-upgrade PR.
+    Exit 0, because blocking those would make the gate something to route
+    around rather than something to keep."""
+    with _temp_repo() as root:
+        (root / cl.PY_CONSTRAINTS).write_text(_constraints(openai="2.52.0"))
+        rc, out = _run_main("--base", "HEAD")
+    assert rc == 0, out
+    assert "constraints.txt: the mesh version did not move" in out
+
+
+def test_python_lock_without_a_manifest_fails_instead_of_skipping():
+    """The lock carries no mesh entry, so the bump signal comes from a SECOND
+    file. If that file cannot be read, the answer is unknown — and "unknown"
+    resolving to `False` would mean "not a bump", which means skip, which means
+    pass. That is the #1407 defect in a new location, so it must be loud."""
+    with _temp_repo() as root:
+        (root / cl.PY_PYPROJECT).unlink()
+        (root / cl.PY_CONSTRAINTS).write_text(_constraints(openai="2.52.0"))
+        rc, out = _run_main("--base", "HEAD")
+    assert rc == 1, out
+    assert "cannot be determined" in out
+    assert "must not be reported as a pass" in out
+
+
+DYNAMIC_PYPROJECT = """[build-system]
+requires = ["hatchling>=1.21.0"]
+
+[project]
+name = "mcp-mesh"
+dynamic = ["version"]
+dependencies = ["openai>=1.0"]
+
+[tool.poetry]
+version = "0.0.0-decoy"
+"""
+
+
+def test_python_lock_with_a_dynamic_version_fails_instead_of_skipping():
+    """The manifest is readable but declares `dynamic = ["version"]`, so there
+    is no `[project] version` to compare — the second way the bump signal can
+    come back unknown, and one a backend switch (hatch-vcs, setuptools-scm)
+    would arrive as. `parse_project_version` is section-scoped, so the
+    `[tool.poetry]` decoy below is not mistaken for an answer; unknown must
+    stay unknown and go red, because returning `False` reads as "not a bump",
+    which skips, which passes."""
+    with _temp_repo() as root:
+        (root / cl.PY_PYPROJECT).write_text(DYNAMIC_PYPROJECT)
+        (root / cl.PY_CONSTRAINTS).write_text(_constraints(openai="2.52.0"))
+        rc, out = _run_main("--base", "HEAD")
+    assert rc == 1, out
+    assert "no [project] version" in out
+    assert "cannot be determined" in out
+    assert "0.0.0-decoy" not in out
+
+
+def test_a_range_in_the_lock_is_red_end_to_end():
+    """Ungated, so it fires with no bump in sight — a hand-edited range makes
+    the file stop locking anything, and pip will not complain."""
+    with _temp_repo() as root:
+        (root / cl.PY_CONSTRAINTS).write_text(
+            _constraints().replace("openai==1.2.3", "openai>=1.2.3")
+        )
+        rc, out = _run_main("--base", "HEAD")
+    assert rc == 1, out
+    assert "not an exact '==' pin" in out
+
+
+def test_an_extra_in_the_lock_is_red_end_to_end():
+    """What dropping --strip-extras from the generator produces. pip rejects the
+    whole file, so this would fail both image builds at once."""
+    with _temp_repo() as root:
+        (root / cl.PY_CONSTRAINTS).write_text(
+            _constraints() + "google-auth[requests]==2.56.2\n"
+        )
+        rc, out = _run_main("--base", "HEAD")
+    assert rc == 1, out
+    assert "Constraints cannot have extras" in out
+
+
+def test_a_dependency_added_without_relocking_is_red_end_to_end():
+    with _temp_repo() as root:
+        (root / cl.PYPI_PYPROJECT).write_text(MANIFEST)  # adds anthropic
+        rc, out = _run_main("--base", "HEAD")
+    assert rc == 1, out
+    assert "anthropic" in out
+    assert "lock_python_deps.sh" in out
+
+
+def test_python_gate_bites():
+    """The red test above is only worth having if it goes green when the
+    comparison is defeated, so defeat it and require the failure."""
+    original = cl.python_constraints_findings
+    cl.python_constraints_findings = lambda b, a, mesh_moved: (mesh_moved, [])
+    try:
+        try:
+            test_python_lock_end_to_end_red()
+        except AssertionError:
+            return
+        raise AssertionError(
+            "the gate passed with the constraints comparison stubbed out — the "
+            "red test would not notice the check being deleted"
+        )
+    finally:
+        cl.python_constraints_findings = original
 
 
 def test_ref_validation_bites():

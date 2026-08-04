@@ -75,8 +75,13 @@ dependencies = [
     "typer>=0.9.0",
     # Pinned exact (#1312): an upstream FastMCP default-flip enabling
     # DNS-rebinding Host validation drifted in on rebuild and broke every
-    # k8s Service-DNS /mcp call with 421. Loose ranges hid it. Follow-up:
-    # add a full transitive lockfile.
+    # k8s Service-DNS /mcp call with 421. Loose ranges hid it.
+    #
+    # The follow-up this note used to ask for has landed: constraints.txt beside
+    # this file is the full transitive lock (#1454), so the ranges below no
+    # longer decide what CI tests or what the runtime images ship. Keep the
+    # exact pins anyway — they are the bound a USER installing from PyPI gets,
+    # and the lock is not published with the package.
     "mcp==1.28.1",
     "fastmcp==3.4.3",
     # Bounded, never pinned exactly (#1454). The vendor SDKs ship breaking

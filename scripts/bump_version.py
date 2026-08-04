@@ -1592,10 +1592,32 @@ def main() -> int:
             "one-line diff."
         )
 
-    if cargo_lock.exists() or chart_lock.exists():
+    py_constraints = PROJECT_ROOT / "src" / "runtime" / "python" / "constraints.txt"
+    if py_constraints.exists():
+        print()
+        # #1454: unlike Cargo.lock and Chart.lock there is NOTHING to regenerate
+        # here. The Python lock carries no mcp-mesh entry — mesh's own versions
+        # live in the manifests this script already rewrites — so a version bump
+        # leaves it byte-identical. Saying so explicitly matters: the two
+        # reminders above ask for a command, and a reader pattern-matching on
+        # them would reach for 'scripts/lock_python_deps.sh', which re-resolves
+        # against whatever PyPI holds today and turns the bump into an
+        # unreviewed dependency upgrade — the #1407 mistake in a new file.
+        print(
+            "Reminder: do NOT regenerate src/runtime/python/constraints.txt for "
+            "a bump. It holds no mesh version, so a release must leave it "
+            "unchanged."
+        )
+        print(
+            "  'scripts/lock_python_deps.sh' resolves against PyPI as it is "
+            "today; running it here would ship an unreviewed dependency upgrade "
+            "inside the release (#1454). Dependency moves are their own PR."
+        )
+
+    if cargo_lock.exists() or chart_lock.exists() or py_constraints.exists():
         print()
         print(
-            "Then verify both lockfiles moved only mesh versions:\n"
+            "Then verify the lockfiles moved only mesh versions:\n"
             "  python3 scripts/check_release_lockfiles.py"
         )
 
