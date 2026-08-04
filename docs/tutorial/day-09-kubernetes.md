@@ -218,9 +218,9 @@ $ helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
     --wait --timeout 5m
 ```
 
-`values-core.yaml` sets `namespaceCreate: false`, which is what lets the chart
-install into the namespace `kubectl` created in Part 2. Without it the install
-fails with `invalid ownership metadata`.
+The chart renders no `Namespace` of its own, which is what lets it install into
+the namespace `kubectl` created in Part 2 — a chart-templated `Namespace` would
+collide with it and fail with `invalid ownership metadata`.
 
 Wait for the registry to become available:
 

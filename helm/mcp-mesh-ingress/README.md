@@ -124,7 +124,7 @@ agents:
 ```bash
 # Deploy core infrastructure
 helm install mcp-core ./mcp-mesh-core \
-  -n mcp-mesh --create-namespace --set namespaceCreate=false
+  -n mcp-mesh --create-namespace
 
 # Deploy individual agents
 helm install hello-world ./mcp-mesh-agent --set agent.name=hello-world

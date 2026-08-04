@@ -203,11 +203,12 @@ For production Kubernetes deployment:
 
 ```bash
 # Install core infrastructure
-# --set namespaceCreate=false is required — run `meshctl man deployment`
+# --create-namespace creates the namespace; the chart renders none of its
+# own. Run `meshctl man deployment` for the namespace rules, including
+# the upgrade order for a release installed with chart 3.4.x or earlier.
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
   --version 3.4.0 \
-  -n mcp-mesh --create-namespace \
-  --set namespaceCreate=false
+  -n mcp-mesh --create-namespace
 
 # Deploy Java agent
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \

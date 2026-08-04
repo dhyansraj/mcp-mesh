@@ -6,9 +6,8 @@
 #   helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
 #     --version 3.4.0 -n trip-planner --create-namespace -f values-core.yaml
 
-# install.sh creates the namespace with kubectl, so the chart must not render
-# one of its own — see "Namespace handling" in the mcp-mesh-core chart README.
-namespaceCreate: false
+# install.sh creates the namespace with kubectl; the chart renders no Namespace
+# of its own — see "Namespace handling" in the mcp-mesh-core chart README.
 
 # All components enabled
 postgres:

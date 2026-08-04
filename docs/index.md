@@ -395,7 +395,7 @@ A `kubectl`-style command-line tool that follows you from first agent to product
 
     ```bash
     helm install mcp-mesh oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-      -n mcp-mesh --create-namespace --set namespaceCreate=false
+      -n mcp-mesh --create-namespace
     ```
 
     Kubernetes deployment with the umbrella chart.

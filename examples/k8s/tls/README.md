@@ -51,7 +51,6 @@ kubectl get secret mcp-mesh-ca-secret -n mcp-mesh --show-labels
 
 # Install MCP Mesh core with TLS enabled
 helm install mcp-core helm/mcp-mesh-core -n mcp-mesh \
-  --set namespaceCreate=false \
   -f helm-values-tls.yaml
 
 # Install an agent with TLS
@@ -132,7 +131,6 @@ kubectl label secret mcp-mesh-ca-secret -n mcp-mesh \
 
 # Install with TLS values
 helm install mcp-core helm/mcp-mesh-core -n mcp-mesh \
-  --set namespaceCreate=false \
   -f helm-values-tls.yaml
 
 helm install my-agent helm/mcp-mesh-agent -n mcp-mesh \

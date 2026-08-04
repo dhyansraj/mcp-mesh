@@ -45,11 +45,12 @@ mkdir -p helm/mcp-mesh-grafana/files/dashboards
 cp observability/grafana/dashboards/*.json helm/mcp-mesh-grafana/files/dashboards/
 
 # 1. Install core infrastructure (registry + observability)
-#    --set namespaceCreate=false is required: see "Namespace handling" in
-#    mcp-mesh-core/README.md
+#    --create-namespace is what creates the namespace; the chart renders no
+#    Namespace object of its own. See "Namespace handling" in
+#    mcp-mesh-core/README.md — including the upgrade order for a release
+#    installed with chart 3.4.x or earlier.
 helm dependency update helm/mcp-mesh-core
-helm install mcp-core helm/mcp-mesh-core -n mcp-mesh --create-namespace \
-  --set namespaceCreate=false
+helm install mcp-core helm/mcp-mesh-core -n mcp-mesh --create-namespace
 
 # 2. Install agents (repeat for each agent)
 helm install hello-world helm/mcp-mesh-agent -n mcp-mesh \
@@ -75,13 +76,11 @@ helm install mcp-ingress helm/mcp-mesh-ingress -n mcp-mesh
 ```bash
 # Core without observability
 helm install mcp-core helm/mcp-mesh-core -n mcp-mesh --create-namespace \
-  --set namespaceCreate=false \
   --set grafana.enabled=false \
   --set tempo.enabled=false
 
 # Core without PostgreSQL (in-memory registry)
 helm install mcp-core helm/mcp-mesh-core -n mcp-mesh --create-namespace \
-  --set namespaceCreate=false \
   --set postgres.enabled=false
 ```
 

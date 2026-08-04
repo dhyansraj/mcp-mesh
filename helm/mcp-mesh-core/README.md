@@ -22,13 +22,11 @@ This umbrella chart deploys the core MCP Mesh infrastructure components:
 ```bash
 # Install core infrastructure
 helm install mcp-core ./mcp-mesh-core \
-  -n mcp-mesh --create-namespace \
-  --set namespaceCreate=false
+  -n mcp-mesh --create-namespace
 
 # Or with custom values
 helm install mcp-core ./mcp-mesh-core \
   -n mcp-mesh --create-namespace \
-  --set namespaceCreate=false \
   -f my-values.yaml
 ```
 
@@ -36,8 +34,8 @@ Deploy into any namespace by changing `-n`. Nothing else needs to change:
 every component lands in the release namespace, and short service names
 resolve within it.
 
-`--set namespaceCreate=false` is not optional decoration — without it the
-install fails on Helm 3 and on any pre-created namespace. See
+`--create-namespace` is what creates the namespace; the chart does not, and
+must not, render one for the namespace its own release installs into. See
 [Namespace handling](#namespace-handling) for why, for how to adopt a namespace
 that already exists, and for what applies to a release that already exists.
 
@@ -68,7 +66,7 @@ for the namespace a release installs into:
 | Mechanism                                                              | What it does                                                                                                                              |
 | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `helm install --create-namespace` (Argo CD: `syncOptions: CreateNamespace=true`) | Creates the `-n` namespace as a plain object that no release owns, before the manifest is applied.                                        |
-| `namespaceCreate` (chart value, default `true`)                        | Renders a `Namespace` object **named `global.namespace`, not the release namespace** into the release manifest. Nothing else reads `global.namespace`. |
+| `namespaceCreate` (chart value, default `false`)                       | Renders a `Namespace` object **named `global.namespace`, not the release namespace** into the release manifest. Nothing else reads `global.namespace`. |
 
 Helm writes the release secret into the `-n` namespace *before* it applies the
 rendered manifest, so a chart-templated `Namespace` can never create the
@@ -77,31 +75,39 @@ already exists — and re-declaring an object the release does not own is exactl
 what Helm's ownership check rejects. Measured against a live cluster with the
 full chart:
 
-| Install shape                                                        | Helm 3.19.0                              | Helm 4.0.1                       |
+| Install shape (with `namespaceCreate` as marked)                     | Helm 3.19.0                              | Helm 4.0.1                       |
 | ---------------------------------------------------------------------- | ------------------------------------------ | ---------------------------------- |
-| `-n <new-ns>`, no `--create-namespace`                               | fails: `namespaces "<ns>" not found`     | fails the same way               |
-| `-n <ns> --create-namespace`                                         | fails: `namespaces "<ns>" already exists` | works — Helm 4 adopts the object |
-| `kubectl create namespace` first, then install                       | fails: `invalid ownership metadata`      | fails the same way               |
-| `-n <ns> --create-namespace --set namespaceCreate=false`             | **works**                                | **works**                        |
-| `kubectl create namespace` first, `--set namespaceCreate=false`      | **works**                                | **works**                        |
-| `kubectl create namespace` first, `--take-ownership`                 | works                                    | works                            |
+| `-n <new-ns>`, no `--create-namespace`, `namespaceCreate=true`       | fails: `namespaces "<ns>" not found`     | fails the same way               |
+| `-n <ns> --create-namespace`, `namespaceCreate=true`                 | fails: `namespaces "<ns>" already exists` | works — Helm 4 adopts the object |
+| `kubectl create namespace` first, `namespaceCreate=true`             | fails: `invalid ownership metadata`      | fails the same way               |
+| `-n <ns> --create-namespace` (**default**)                           | **works**                                | **works**                        |
+| `kubectl create namespace` first, then install (**default**)         | **works**                                | **works**                        |
+| `kubectl create namespace` first, `namespaceCreate=true --take-ownership` | works                               | works                            |
 
-Hence the recipe in "Installation": **new installs set `namespaceCreate=false`**
-and let `--create-namespace` (or `kubectl create namespace`, or Argo CD) create
-the namespace. With `namespaceCreate=false`, `global.namespace` is inert and can
-be left alone — there is no second name to keep in sync, and no stray namespace
-to create by getting it wrong.
+Hence the default and the recipe in "Installation": **the chart renders no
+`Namespace`**, and `--create-namespace` (or `kubectl create namespace`, or Argo
+CD) creates it. `global.namespace` is then inert and can be left alone — there
+is no second name to keep in sync, and no stray namespace to create by getting
+it wrong.
+
+`namespaceCreate` defaulted to `true` through chart 3.4.x, so an existing
+release very likely has a `Namespace` in its manifest even though nobody asked
+for one. Read
+[Existing releases](#existing-releases-upgrading-past-the-default-flip) before
+upgrading such a release — the flip is not automatically safe.
 
 ### Adopting a namespace that already exists
 
 If you want the release to own its `Namespace` anyway — GitOps setups that
 render the namespace from the chart, for instance — create the namespace first
-and install with `--take-ownership` (Helm 3.17+ and Helm 4):
+and install with `namespaceCreate` on plus `--take-ownership` (Helm 3.17+ and
+Helm 4):
 
 ```bash
 kubectl create namespace mcp-mesh
 helm install mcp-core ./mcp-mesh-core \
-  -n mcp-mesh --set global.namespace=mcp-mesh --take-ownership
+  -n mcp-mesh --set namespaceCreate=true --set global.namespace=mcp-mesh \
+  --take-ownership
 ```
 
 Helm stamps its ownership metadata plus `helm.sh/resource-policy: keep` onto the
@@ -110,43 +116,80 @@ existing namespace. `global.namespace` must match `-n`, or the release owns a
 when that happens. `--take-ownership` applies to every object in the manifest,
 not just the namespace, so use it deliberately.
 
-### Existing releases: do not flip `namespaceCreate` on its own
+### Existing releases: upgrading past the default flip
 
-The `Namespace` is already recorded in the release manifest. Dropping it from
-the rendered output makes the next `helm upgrade` **delete the namespace and
-everything in it** — agents, Secrets, PVCs the chart never created — while
-reporting `STATUS: deployed` and exit `0`. When `global.namespace` matches `-n`,
-that is also unrecoverable: the release secret lives in the namespace being
+**Upgrade `3.3.x` → `3.4.x` → `3.5.0`. Do not go from `3.3.x` straight to
+`3.5.0`.**
+
+`namespaceCreate` defaulted to `true` up to and including chart 3.4.x, so such
+a release has a `Namespace` recorded in its manifest. Chart 3.5.0 defaults it
+to `false`, which drops that object from the rendered output — and dropping a
+`Namespace` from the manifest makes `helm upgrade` **delete the namespace and
+everything in it**: agents, Secrets, PVCs the chart never created. It reports
+`STATUS: deployed` and exit `0` while doing so. When `global.namespace` matches
+`-n`, it is also unrecoverable: the release secret lives in the namespace being
 deleted. While the namespace drains, a retried `helm upgrade --install` fails
 with `secrets "sh.helm.release.v1.<release>.vN" is forbidden: ... because it is
 being terminated`; once it is gone, so is the release history, and
 `helm history` reports `release: not found`.
 
-From chart 3.4.0 the rendered `Namespace` carries `helm.sh/resource-policy:
-keep`, and Helm reads that policy from the manifest of the revision it is
-replacing. So the flip becomes safe only once the release's *current* revision
-was rendered by 3.4.0 or later — two separate upgrades:
+`--reuse-values` does not protect you. It replays the values *you* supplied, so
+a release that simply took the old default carries nothing to replay and picks
+up the new one.
+
+What makes the removal safe is `helm.sh/resource-policy: keep` on the
+`Namespace`. Helm reads that policy off the **live** object, and chart 3.4.0 is
+the first version that puts it there — a plain `helm upgrade` to 3.4.x applies
+it with no values change. So:
+
+- **Currently on 3.4.x** — nothing to do. The live namespace already carries
+  `keep`, and upgrading to 3.5.0 removes the object from the manifest without
+  deleting anything.
+- **Currently on 3.3.x or older** — upgrade to the latest 3.4.x first, confirm
+  the annotation landed, then upgrade to 3.5.0.
 
 ```bash
-# 1. Upgrade to >= 3.4.0, leaving namespaceCreate alone.
-helm upgrade mcp-core ./mcp-mesh-core -n mcp-mesh --reuse-values
+# 1. Land the keep annotation (latest 3.4.x, no values change).
+helm upgrade mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  -n mcp-mesh --version '~3.4.0' --reuse-values
 
-# Confirm the live namespace picked up the policy before going further.
+# 2. Confirm it is on the LIVE namespace before going further.
 kubectl get ns mcp-mesh -o jsonpath='{.metadata.annotations}'
 #   {"helm.sh/resource-policy":"keep","meta.helm.sh/release-name":...}
 
-# 2. Only then, and only if you want it, drop the Namespace from the release.
-helm upgrade mcp-core ./mcp-mesh-core -n mcp-mesh --reuse-values \
-  --set namespaceCreate=false
+# 3. Now 3.5.0 can drop the Namespace from the manifest safely.
+helm upgrade mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  -n mcp-mesh --reuse-values
 ```
 
-There is no hurry to do step 2. Once `keep` is on the namespace, leaving
-`namespaceCreate: true` is harmless — `helm uninstall` no longer deletes it (see
-"Uninstall").
+If you must go to 3.5.0 in one step, pin the old default for that upgrade and
+split it into the same two moves:
+
+```bash
+# keeps the Namespace in the manifest, which is what applies `keep` to it
+helm upgrade mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  -n mcp-mesh --reuse-values --set namespaceCreate=true
+kubectl get ns mcp-mesh -o jsonpath='{.metadata.annotations}'
+helm upgrade mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  -n mcp-mesh --reuse-values
+```
+
+There is no hurry to do the second step at all. Once `keep` is on the
+namespace, leaving `namespaceCreate=true` pinned is harmless —
+`helm uninstall` no longer deletes it (see "Uninstall").
+
+The chart cannot detect this situation and stop you. Telling the two cases
+apart needs to read the live namespace, and `lookup` returns nothing under
+`helm template` — which is how Argo CD and every other GitOps renderer
+evaluates the chart, and those are the pipelines that prune without a human
+watching.
 
 ### Recovering from a failed `--create-namespace` install
 
-On Helm 3, `-n <ns> --create-namespace` with `namespaceCreate: true` fails
+This applies to installs that turned `namespaceCreate` on, and to any install
+from chart 3.4.x or earlier, where it defaulted on.
+
+On Helm 3, `-n <ns> --create-namespace` with `namespaceCreate` enabled fails
 **non-atomically**. Helm creates the namespace, then the manifest's `Namespace`
 collides with it — but the rest of the manifest has already been applied.
 Deployments, the StatefulSet, PVCs, and Secrets are all live and running under a
@@ -157,15 +200,14 @@ Error: INSTALLATION FAILED: 1 error occurred:
 	* namespaces "<ns>" already exists
 ```
 
-Do **not** try to fix this with `helm upgrade --set namespaceCreate=false`. That
-reports `STATUS: deployed` and then deletes the namespace it just deployed into,
-cascading the release secret with it. Uninstall the wreckage and reinstall with
-the recipe from "Installation":
+Do **not** try to fix this by turning `namespaceCreate` back off with
+`helm upgrade`. That reports `STATUS: deployed` and then deletes the namespace
+it just deployed into, cascading the release secret with it. Uninstall the
+wreckage and reinstall with the recipe from "Installation":
 
 ```bash
 helm uninstall mcp-core -n mcp-mesh
-helm install mcp-core ./mcp-mesh-core \
-  -n mcp-mesh --set namespaceCreate=false
+helm install mcp-core ./mcp-mesh-core -n mcp-mesh
 ```
 
 The uninstall keeps the namespace (`resource-policy: keep`), so the reinstall
@@ -461,7 +503,7 @@ global:
 
 ```bash
 helm install mcp-core ./mcp-mesh-core \
-  -n mcp-mesh --create-namespace --set namespaceCreate=false \
+  -n mcp-mesh --create-namespace \
   -f values.yaml
 ```
 
@@ -568,9 +610,10 @@ single-writer local file.
 
 The core infrastructure follows this deployment pattern:
 
-1. **Namespace** - Creates `global.namespace` (default `mcp-mesh`) when
-   `namespaceCreate` is enabled — which new installs should not do, see
-   [Namespace handling](#namespace-handling)
+1. **Namespace** - Not created by the chart. `--create-namespace` (or
+   `kubectl create namespace`, or Argo CD) creates it; `namespaceCreate`
+   renders `global.namespace` as a release-owned object only if you turn it on,
+   see [Namespace handling](#namespace-handling)
 2. **PostgreSQL** - StatefulSet with persistent storage
 3. **Redis** - Deployment with emptyDir (cache-only)
 4. **Registry** - StatefulSet connected to PostgreSQL
@@ -735,7 +778,7 @@ deliberate:
 | `postgres-data-<release>-mcp-mesh-postgres-0` | yes (not release-owned) | Created by the StatefulSet's claim template, so Helm never had it to delete |
 | `<release>-mcp-mesh-postgres-credentials` | yes (`resource-policy: keep`) | Must keep matching the provisioned data directory |
 | `<release>-mcp-mesh-tempo-pvc` | **no** — and not rendered at all by default | A rolling trace buffer, not durable storage: `retention` (default `1h`) prunes it continuously, so what it holds is minutes old and already expiring. `mcp-mesh-tempo.tempo.persistence.enabled` defaults to `false`; opted back in, the claim is reclaimed on uninstall. See [Trace storage (Tempo)](#trace-storage-tempo) |
-| Namespace | yes (`resource-policy: keep`) | See [Namespace handling](#namespace-handling) |
+| Namespace | yes — and not rendered at all by default | Never release-owned unless `namespaceCreate` is on or `--take-ownership` was used, and then annotated `resource-policy: keep`. See [Namespace handling](#namespace-handling) |
 
 Reinstalling under the same release name adopts all of the kept objects, with
 their data. To reclaim the storage instead, delete the claims yourself — the
@@ -755,24 +798,25 @@ PostgreSQL's is a StatefulSet, so scale
 `statefulset/mcp-core-mcp-mesh-postgres` instead — its volume claim template
 recreates the PVC by itself on the next scale-up.)
 
-The namespace is left in place, whichever way it was created. A release
-installed with `namespaceCreate=false` never owned the namespace in the first
-place, so there is nothing for Helm to delete. A release that does own one —
-`namespaceCreate: true`, or `--take-ownership` — renders it with
-`"helm.sh/resource-policy": keep`, so from chart 3.4.0 onward Helm skips the
-object on uninstall and the delete cannot cascade to agents, Services, Secrets,
-and PVCs the chart never created. Releases installed with an older chart pick
-the annotation up automatically on `helm upgrade`; no other action is needed.
+The namespace is left in place, whichever way it was created. At the default
+the release never owned the namespace, so there is nothing for Helm to delete.
+A release that does own one — `namespaceCreate` turned on, or
+`--take-ownership` — renders it with `"helm.sh/resource-policy": keep`, so from
+chart 3.4.0 onward Helm skips the object on uninstall and the delete cannot
+cascade to agents, Services, Secrets, and PVCs the chart never created.
+Releases installed with an older chart pick the annotation up automatically on
+`helm upgrade`; no other action is needed.
 
-Do **not** try to get the same effect by setting `namespaceCreate=false` on an
-existing release — on its own that upgrade *deletes* the namespace. See
-[Existing releases](#existing-releases-do-not-flip-namespacecreate-on-its-own).
+Do **not** try to get the same effect by turning `namespaceCreate` off on an
+existing release that owns its namespace — on its own that upgrade *deletes*
+the namespace. See
+[Existing releases](#existing-releases-upgrading-past-the-default-flip).
 
 ## Values
 
 | Key                | Type   | Default      | Description                          |
 | ------------------ | ------ | ------------ | ------------------------------------ |
-| `global.namespace` | string | `"mcp-mesh"` | Name of the `Namespace` object rendered by `namespaceCreate`, and inert without it. Nothing else reads it — components always deploy to the release namespace (`-n`) |
+| `global.namespace` | string | `"mcp-mesh"` | Name of the `Namespace` object rendered by `namespaceCreate`, and inert without it — so inert by default. Nothing else reads it — components always deploy to the release namespace (`-n`) |
 | `global.imageRegistry` | string | `""` | Registry prefix applied to every image (repository paths preserved — see "Air-gapped / private registry installs"); per-component `image.registry` overrides win |
 | `global.imagePullSecrets` | list | `[]` | Pull secrets (`- name: ...`) added to every pod spec, merged with each chart's own `imagePullSecrets` and deduplicated by name |
 | `global.postgres.*` | object | bundled postgres | PostgreSQL endpoint/credentials inherited by all consumers (`host`, `port`, `name`, `username`, `password`, `sslmode`, `existingSecret`, `existingSecretUrlKey`, `existingSecretPasswordKey`, `tls.caSecret`, `tls.caKey`) |
@@ -785,7 +829,7 @@ existing release — on its own that upgrade *deletes* the namespace. See
 | `grafana.enabled`  | bool   | `true`       | Enable Grafana deployment            |
 | `tempo.enabled`    | bool   | `true`       | Enable Tempo deployment              |
 | `mcp-mesh-tempo.tempo.persistence.enabled` | bool | `false` | Give Tempo a `ReadWriteOnce` claim instead of an `emptyDir`. Off by default: the volume is a rolling buffer that `retention` prunes continuously. See [Trace storage (Tempo)](#trace-storage-tempo) |
-| `namespaceCreate`  | bool   | `true`       | Render `global.namespace` as a release-owned `Namespace`, annotated `"helm.sh/resource-policy": keep` so uninstall never deletes it. **Set `false` on new installs** — left `true`, the install fails on Helm 3 and on any pre-created namespace. Never flip it to `false` on an existing release in isolation. See [Namespace handling](#namespace-handling) |
+| `namespaceCreate`  | bool   | `false`      | Render `global.namespace` as a release-owned `Namespace`, annotated `"helm.sh/resource-policy": keep` so uninstall never deletes it. Off by default: turned on, the install fails on Helm 3 and against any pre-created namespace — the supported way to own the namespace is `--take-ownership`. Defaulted `true` through chart 3.4.x, so **upgrade 3.3.x → 3.4.x → 3.5.0** and never turn it off on an existing release in isolation. See [Namespace handling](#namespace-handling) |
 
 ## Service Discovery
 

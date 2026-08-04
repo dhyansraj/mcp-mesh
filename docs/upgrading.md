@@ -10,6 +10,29 @@ job safety for upgrading a mesh that is already serving traffic. For local
 development you can restart freely; this page is about upgrading a running
 deployment without dropping in-flight work.
 
+!!! danger "Upgrade order for the Helm charts: 3.3.x → 3.4.x → 3.5.0"
+
+    **Do not upgrade the `mcp-mesh-core` chart from 3.3.x straight to 3.5.0.**
+    Chart 3.5.0 changes `namespaceCreate` to default `false`, which drops the
+    release's `Namespace` object from the rendered manifest — and Helm
+    *deletes* a resource that leaves the manifest, cascading to every agent,
+    Service, Secret and PVC in the namespace. What makes that removal safe is
+    `helm.sh/resource-policy: keep` on the live `Namespace`, and chart 3.4.0
+    is the first version that puts it there.
+
+    - **On chart 3.4.x already:** nothing to do — the annotation is on the
+      live namespace, so 3.5.0 removes the object without deleting anything.
+    - **On chart 3.3.x or older:** upgrade to the latest 3.4.x first, verify
+      with `kubectl get ns <ns> -o jsonpath='{.metadata.annotations}'`, then
+      upgrade to 3.5.0. To jump in one step instead, pin
+      `--set namespaceCreate=true` for that upgrade, verify the annotation,
+      and drop the pin on a second upgrade.
+
+    `--reuse-values` does **not** protect you: it replays the values you
+    supplied, and a release that simply took the old default has nothing to
+    replay. Details in
+    [Namespace handling](https://github.com/dhyansraj/mcp-mesh/blob/main/helm/mcp-mesh-core/README.md#existing-releases-upgrading-past-the-default-flip).
+
 !!! warning "Source migration required for 3.4.0 (Java and TypeScript)"
 
     3.4.0 aligns every dependency-injection site on positional binding. Java
@@ -197,35 +220,35 @@ helm get values <release>
   provisions a new, empty claim rather than recovering the reclaimed one. This
   is the deliberate opposite of Grafana's treatment above — Grafana's volume
   holds state you authored and nothing can replay.
-- **The core release owns its `Namespace`** (`namespaceCreate`, default
-  `true`). Older charts let `helm uninstall` delete that namespace and cascade
-  to every co-located agent, Secret, and PVC. Upgrading fixes this with no
-  action on your part: the `Namespace` picks up a
-  `"helm.sh/resource-policy": keep` annotation, so Helm skips it on uninstall
-  and the deletion cannot cascade to co-located agents, Secrets, and PVCs.
-  `helm uninstall` still removes the release's own resources — registry,
-  PostgreSQL, Redis, and any observability components.
-- **`helm.sh/resource-policy` is reserved in `commonAnnotations`.** The chart's
-  `keep` on the `Namespace` is what keeps that cascade from happening and a
-  `commonAnnotations` value would override it on last-wins, so the chart fails
+- **The core chart no longer renders a `Namespace`.** `namespaceCreate` now
+  defaults to `false`: `helm install --create-namespace`, `kubectl create
+  namespace`, or Argo CD's `CreateNamespace=true` creates the namespace, and
+  the release does not own it. The old default could not be installed at all
+  on Helm 3, or against any pre-created namespace on any client — Helm writes
+  the release secret into the `-n` namespace before applying the manifest, so
+  a chart-templated `Namespace` can only re-declare a namespace that already
+  exists, which Helm's ownership check rejects. **Read the upgrade-order
+  warning at the top of this page before upgrading an existing release**, and
+  see
+  [Namespace handling](https://github.com/dhyansraj/mcp-mesh/blob/main/helm/mcp-mesh-core/README.md#namespace-handling)
+  for the `--take-ownership` path if you want the release to own its namespace
+  deliberately.
+- **`helm.sh/resource-policy` is reserved in `commonAnnotations`.** When the
+  chart does render a `Namespace`, its `keep` is the only thing standing
+  between `helm uninstall` and everything in that namespace, and a
+  `commonAnnotations` value would override it on last-wins. So the chart fails
   the render when the key is set to anything but `keep` — remove it from
-  `commonAnnotations`, or set it to `keep`, before upgrading.
-- **Do not set `namespaceCreate=false` on an existing release as part of this
-  upgrade.** New installs should set it (the chart cannot create the namespace
-  it installs into — see
-  [Namespace handling](https://github.com/dhyansraj/mcp-mesh/blob/main/helm/mcp-mesh-core/README.md#namespace-handling)),
-  but on a release that already has it enabled the namespace is already in the
-  release manifest, so dropping it from the rendered output makes the very next
-  `helm upgrade` delete the namespace and everything in it — reporting
-  `STATUS: deployed` and exit 0 while doing so. When `global.namespace` matches
-  the namespace passed to `-n`, the change is also unrecoverable: Helm keeps
-  the release secret in the `-n` namespace, which is the one being deleted. A
-  retry while the namespace drains fails with `... is forbidden: ... because it
-  is being terminated`, and once it is gone `helm history` reports
-  `release: not found`.
-  The `keep` annotation above is what makes the flip safe, and Helm reads that
-  policy off the manifest of the revision being replaced — so if you want it,
-  do it as a *second*, separate upgrade, once this one has landed and
-  `kubectl get ns <ns> -o jsonpath='{.metadata.annotations}'` shows
-  `helm.sh/resource-policy: keep`. There is no need to rush it: with the
-  annotation in place, leaving `namespaceCreate` enabled is harmless.
+  `commonAnnotations`, or set it to `keep`, before upgrading. This check runs
+  whether or not `namespaceCreate` is on.
+- **What the namespace deletion actually looks like, if you skip the ordering
+  above.** The upgrade reports `STATUS: deployed` and exit 0 while deleting the
+  namespace and everything in it. When `global.namespace` matches the namespace
+  passed to `-n`, it is also unrecoverable: Helm keeps the release secret in
+  the `-n` namespace, which is the one being deleted. A retry while the
+  namespace drains fails with `... is forbidden: ... because it is being
+  terminated`, and once it is gone `helm history` reports `release: not found`.
+  Helm reads `helm.sh/resource-policy` off the **live** object, which is why
+  the annotation has to have landed on a previous upgrade — the chart cannot
+  check for it at render time, because `lookup` returns nothing under
+  `helm template`, the way Argo CD and every other GitOps renderer evaluates
+  it.

@@ -1,8 +1,11 @@
 {{- /* These are the SOLE invocations of both guards in the chart, and they
        must stay above the `if` so they run regardless of namespaceCreate.
-       Before deleting this file, or making it render nothing
-       unconditionally, move the includes to a template that always renders —
-       otherwise the guards silently stop firing. */ -}}
+       namespaceCreate defaults to false, so the `if` is closed on virtually
+       every install and this file's only output is the guards. Before
+       deleting it, or making it render nothing unconditionally, move the
+       includes to a template that always renders — otherwise the guards
+       silently stop firing. Covered by scripts/check_helm_render_matrix.py,
+       which pins namespaceCreate: false on a fail case for each. */ -}}
 {{- include "mcp-mesh-core.validateNoRemovedKeys" . -}}
 {{- include "mcp-mesh-core.validateNamespaceResourcePolicy" . -}}
 {{- if .Values.namespaceCreate }}
