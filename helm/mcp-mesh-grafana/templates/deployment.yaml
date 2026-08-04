@@ -109,8 +109,10 @@ spec:
         {{- end }}
         {{- /* /var/lib/grafana and /tmp must be writable (data, sqlite db,
                plugin install) — always volumes since the root filesystem is
-               read-only. */}}
-        - name: storage
+               read-only. The storage name is conditional on
+               persistence.enabled and must stay in lockstep with the volume
+               below — see the helper (#1461). */}}
+        - name: {{ include "mcp-mesh-grafana.storageVolumeName" . }}
           mountPath: /var/lib/grafana
         - name: tmp
           mountPath: /tmp
@@ -151,7 +153,8 @@ spec:
         configMap:
           name: {{ include "mcp-mesh-grafana.fullname" . }}-dashboard
       {{- end }}
-      - name: storage
+      {{- /* Name carries the volume type on purpose — see the helper (#1461). */}}
+      - name: {{ include "mcp-mesh-grafana.storageVolumeName" . }}
         {{- if .Values.grafana.persistence.enabled }}
         persistentVolumeClaim:
           claimName: {{ include "mcp-mesh-grafana.fullname" . }}-pvc
