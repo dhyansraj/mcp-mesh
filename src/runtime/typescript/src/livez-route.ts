@@ -27,9 +27,10 @@ import type { FastMCP } from "fastmcp";
  * the server has started, so this must be called after
  * `server.start()`.
  *
- * A failure here is loud: with the chart's liveness probe pointing at
- * `/livez`, a missing route 404s and Kubernetes restarts a perfectly
- * healthy agent.
+ * Each failure branch logs the CAUSE only. The consequence — that the
+ * agent cannot serve without this route, and startup is aborted — is
+ * stated once, by the caller that throws (see `agent.ts`), so the two
+ * messages complement rather than repeat each other.
  */
 export function registerLivezRoute(server: FastMCP, agentName: string): boolean {
   let app: ReturnType<FastMCP["getApp"]> | null = null;
@@ -39,16 +40,13 @@ export function registerLivezRoute(server: FastMCP, agentName: string): boolean 
     const reason = err instanceof Error ? err.message : String(err);
     console.error(
       `[mesh] /livez route NOT registered — FastMCP.getApp() ` +
-        `unavailable: ${reason}. A Kubernetes liveness probe pointed at ` +
-        `/livez will 404 and restart this agent.`,
+        `unavailable: ${reason}`,
     );
     return false;
   }
   if (!app) {
     console.error(
-      `[mesh] /livez route NOT registered — FastMCP.getApp() returned ` +
-        `null. A Kubernetes liveness probe pointed at /livez will 404 ` +
-        `and restart this agent.`,
+      `[mesh] /livez route NOT registered — FastMCP.getApp() returned null`,
     );
     return false;
   }
@@ -65,9 +63,7 @@ export function registerLivezRoute(server: FastMCP, agentName: string): boolean 
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     console.error(
-      `[mesh] /livez route NOT registered — app.on() raised: ${reason}. ` +
-        `A Kubernetes liveness probe pointed at /livez will 404 and ` +
-        `restart this agent.`,
+      `[mesh] /livez route NOT registered — app.on() raised: ${reason}`,
     );
     return false;
   }

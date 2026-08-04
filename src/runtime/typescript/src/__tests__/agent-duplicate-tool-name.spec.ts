@@ -38,7 +38,13 @@ beforeEach(() => {
     });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Flush the auto-start tick a constructor may have scheduled in this
+  // test WHILE the stub above is still installed. Restoring first lets
+  // the real `_autoStart` run against the stub FastMCP, which aborts
+  // startup (no /livez route — issue #1467) and process.exit(1)s the
+  // worker.
+  await new Promise<void>((resolve) => process.nextTick(resolve));
   if (autoStartSpy) {
     autoStartSpy.mockRestore();
     autoStartSpy = null;

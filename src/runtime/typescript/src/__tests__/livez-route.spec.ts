@@ -16,6 +16,7 @@ import type { Server } from "http";
 import express from "express";
 import { registerLivezRoute } from "../livez-route.js";
 import { MeshExpress } from "../express.js";
+import { MeshAgent } from "../agent.js";
 
 describe("registerLivezRoute — FastMCP/Hono surface", () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
@@ -97,6 +98,87 @@ describe("registerLivezRoute — FastMCP/Hono surface", () => {
     expect(errorSpy).toHaveBeenCalledOnce();
     expect(errorSpy.mock.calls[0][0] as string).toContain(
       "hono internal: route conflict",
+    );
+  });
+});
+
+describe("_autoStart aborts when /livez cannot be registered", () => {
+  // There is no degraded mode: an agent that serves without /livez is
+  // restarted by the kubelet every probe interval. `_autoStart` must
+  // therefore honour the boolean and fail fast (same class as
+  // #1387/#1389 in Python, made fail-fast in v3.3.2).
+  //
+  // The auto-scheduled `_autoStart` tick from the constructor is stubbed
+  // out (existing convention) — its rejection handler calls
+  // `process.exit(1)`, which would take the test runner down. The
+  // ORIGINAL method is captured and invoked explicitly instead.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const originalAutoStart = (MeshAgent.prototype as any)._autoStart;
+  const spies: ReturnType<typeof vi.spyOn>[] = [];
+
+  function stubPrototype(name: string, impl: () => unknown = () => undefined) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    spies.push(vi.spyOn(MeshAgent.prototype as any, name).mockImplementation(impl));
+  }
+
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    stubPrototype("_autoStart", async () => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    spies.length = 0;
+  });
+
+  function newAgent(getApp: () => unknown): MeshAgent {
+    const server = {
+      addTool: vi.fn(),
+      start: vi.fn().mockResolvedValue(undefined),
+      getApp,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+    return new MeshAgent(server, { name: "livez-abort-test", httpPort: 0 });
+  }
+
+  it("rejects with an actionable message when the route cannot be mounted", async () => {
+    const agent = newAgent(() => {
+      throw new Error("FastMCP server not started");
+    });
+
+    await expect(originalAutoStart.call(agent)).rejects.toThrow(
+      /\/livez liveness route failed to register/,
+    );
+  });
+
+  it("names the agent and the restart consequence in the abort message", async () => {
+    const agent = newAgent(() => null);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const err = await originalAutoStart.call(agent).catch((e: any) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toContain("livez-abort-test");
+    expect(err.message).toContain("cannot start");
+    expect(err.message).toMatch(/restart/i);
+  });
+
+  it("continues past the /livez step when registration succeeds", async () => {
+    const on = vi.fn();
+    const agent = newAgent(() => ({ on, post: vi.fn() }));
+    // Everything after the /livez step reaches the registry, the napi
+    // handle and process-wide signal handlers — out of scope here.
+    stubPrototype("registerLlmTools");
+    stubPrototype("registerJobsHelperTools");
+    stubPrototype("startHeartbeat", async () => undefined);
+    stubPrototype("startClaimDispatchers");
+    stubPrototype("installSignalHandlers");
+
+    await expect(originalAutoStart.call(agent)).resolves.toBeUndefined();
+    expect(on).toHaveBeenCalledWith(
+      ["GET", "HEAD"],
+      "/livez",
+      expect.any(Function),
     );
   });
 });
