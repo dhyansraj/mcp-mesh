@@ -10,6 +10,7 @@ that happens to sit at our version — cannot regress either.
 """
 
 import importlib.util
+import os
 import pathlib
 import re
 import tempfile
@@ -23,6 +24,21 @@ _spec.loader.exec_module(bv)
 
 def _matches(old: str, line: str, new: str | None = None) -> bool:
     return any(p.search(line) for p in bv._guard_patterns(old, new))
+
+
+def _repo_relative(paths) -> set[str]:
+    """Repo-relative POSIX form of each path, symlinks resolved.
+
+    `_glob_files` yields `PROJECT_ROOT`-prefixed paths built by walking (and it
+    follows symlinks), so comparing a hand-built `Path` against its output is
+    only sound if both sides are normalized the same way. A comparison that
+    never matches makes a `not in` assertion pass while asserting nothing.
+    """
+    root = os.path.realpath(bv.PROJECT_ROOT)
+    return {
+        pathlib.Path(os.path.relpath(os.path.realpath(p), root)).as_posix()
+        for p in paths
+    }
 
 
 def test_mcpmesh_package_json_forms():
@@ -543,11 +559,36 @@ def test_no_handler_can_reach_the_python_lock():
     reaches 6.4.0). This pins that reach, because the collision arrives on its
     own schedule and the guard's message would point at the wrong culprit."""
     lock = bv.PROJECT_ROOT / "src" / "runtime" / "python" / "constraints.txt"
-    if not lock.exists():
-        return
-    for handler in bv.HANDLERS:
-        assert lock not in bv._glob_files(handler.globs), (
-            f"handler {handler.name!r} now scans the Python lock. A bump must "
+    assert lock.is_file(), (
+        f"{lock} is gone. If the lock moved, point this test at its new home — "
+        "returning early here would leave the reach assertion untested while "
+        "still reporting green."
+    )
+
+    scanned = {h.name: _repo_relative(bv._glob_files(h.globs)) for h in bv.HANDLERS}
+
+    # Positive control, through the SAME comparison the assertion below uses.
+    # `lock not in scanned` passes for two reasons — the glob really does not
+    # reach it, or the two sides are not comparable at all (absolute vs
+    # relative, symlink-resolved vs not) so nothing ever matches. Only files
+    # known to be scanned can tell those apart, so require both _glob_files
+    # code paths to find one: a literal glob and a wildcard one.
+    for control in (
+        bv.PROJECT_ROOT / "packaging" / "pypi" / "pyproject.toml",  # literal glob
+        bv.PROJECT_ROOT / "docs" / "contributing.md",  # matched via docs/**/*.md
+    ):
+        assert control.is_file(), control
+        rel = _repo_relative([control]).pop()
+        assert any(rel in files for files in scanned.values()), (
+            f"positive control failed: no handler reports scanning {rel}, and "
+            "the globs plainly do. The two sides of this comparison do not "
+            "line up, so the lock assertion below proves nothing."
+        )
+
+    lock_rel = _repo_relative([lock]).pop()
+    for name, files in scanned.items():
+        assert lock_rel not in files, (
+            f"handler {name!r} now scans the Python lock. A bump must "
             "not rewrite it; exclude the path or narrow the glob."
         )
 

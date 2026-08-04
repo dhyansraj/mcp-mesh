@@ -84,7 +84,10 @@ dependencies = [
     # src/runtime/python/constraints.txt is the full transitive lock (#1454),
     # and it is resolved against THIS manifest rather than the source tree's
     # copy — this is the metadata PyPI serves, and its bounds are the tighter
-    # of the two on ten packages. The runtime images install against it.
+    # of the two on ten packages. CI and the runtime images install against it.
+    #
+    # Keep the exact pins anyway: the lock is not shipped inside the wheel, so
+    # the ranges here are the only bound a user installing from PyPI gets.
     "mcp==1.28.1",
     "fastmcp==3.4.3",
     # Bounded, never pinned exactly (#1454). The vendor SDKs ship breaking

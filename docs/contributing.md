@@ -124,7 +124,7 @@ put litellm back into a default install.
 If you install by hand rather than via `make install-dev`, pass it:
 
 ```bash
-pip install -e src/runtime/python/[dev] -c src/runtime/python/constraints.txt
+pip install -e 'src/runtime/python/[dev]' -c src/runtime/python/constraints.txt
 ```
 
 Two production incidents came from not having this: an unpinned FastMCP flipped

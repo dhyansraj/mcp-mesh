@@ -421,7 +421,7 @@ install-deps:
 	go mod download
 	# Python dependencies
 	@echo "🐍 Installing Python dependencies..."
-	pip install -e src/runtime/python/[dev] -c src/runtime/python/constraints.txt
+	pip install -e 'src/runtime/python/[dev]' -c src/runtime/python/constraints.txt
 	# Development tools
 	@echo "🛠️  Installing development tools..."
 	@if ! command -v golangci-lint >/dev/null 2>&1; then

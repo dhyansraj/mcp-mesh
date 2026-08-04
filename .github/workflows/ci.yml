@@ -255,11 +255,11 @@ jobs:
           pip install target/wheels/*.whl
 
       # Issue #1454: installed against constraints.txt, the dependency lock, so
-      # this job tests the same transitive set a user gets and a rebuild of a
-      # given mesh version gets. Previously pip resolved at job time, which is
-      # how PR #1453's Responses streaming tests passed on a laptop holding
-      # openai 2.14.0 and failed in CI on 2.52.0 — a *minor* that had added a
-      # required field to InputTokensDetails.
+      # this job tests the same transitive set the runtime images ship and a
+      # rebuild of a given commit gets. Previously pip resolved at job time,
+      # which is how PR #1453's Responses streaming tests passed on a laptop
+      # holding openai 2.14.0 and failed in CI on 2.52.0 — a *minor* that had
+      # added a required field to InputTokensDetails.
       #
       # `-c` constrains without installing, so this still installs exactly
       # `.[dev]` — including litellm, which [dev] pulls via mcp-mesh[litellm]

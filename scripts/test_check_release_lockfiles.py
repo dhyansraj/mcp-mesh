@@ -635,6 +635,37 @@ def test_python_lock_without_a_manifest_fails_instead_of_skipping():
     assert "must not be reported as a pass" in out
 
 
+DYNAMIC_PYPROJECT = """[build-system]
+requires = ["hatchling>=1.21.0"]
+
+[project]
+name = "mcp-mesh"
+dynamic = ["version"]
+dependencies = ["openai>=1.0"]
+
+[tool.poetry]
+version = "0.0.0-decoy"
+"""
+
+
+def test_python_lock_with_a_dynamic_version_fails_instead_of_skipping():
+    """The manifest is readable but declares `dynamic = ["version"]`, so there
+    is no `[project] version` to compare — the second way the bump signal can
+    come back unknown, and one a backend switch (hatch-vcs, setuptools-scm)
+    would arrive as. `parse_project_version` is section-scoped, so the
+    `[tool.poetry]` decoy below is not mistaken for an answer; unknown must
+    stay unknown and go red, because returning `False` reads as "not a bump",
+    which skips, which passes."""
+    with _temp_repo() as root:
+        (root / cl.PY_PYPROJECT).write_text(DYNAMIC_PYPROJECT)
+        (root / cl.PY_CONSTRAINTS).write_text(_constraints(openai="2.52.0"))
+        rc, out = _run_main("--base", "HEAD")
+    assert rc == 1, out
+    assert "no [project] version" in out
+    assert "cannot be determined" in out
+    assert "0.0.0-decoy" not in out
+
+
 def test_a_range_in_the_lock_is_red_end_to_end():
     """Ungated, so it fires with no bump in sight — a hand-edited range makes
     the file stop locking anything, and pip will not complain."""

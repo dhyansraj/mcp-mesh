@@ -226,7 +226,28 @@ def parse_project_version(text: str) -> str | None:
 
 
 def _strip_toml_comment(line: str) -> str:
-    """Drop a trailing ``#`` comment, ignoring ``#`` inside a quoted string."""
+    """Drop a trailing ``#`` comment, ignoring ``#`` inside a DOUBLE-quoted string.
+
+    Deliberately partial. One quoting state, toggled by ``"`` only, so:
+
+      * TOML literal strings (``'...'``) are not recognised; a ``#`` inside one
+        would truncate the line.
+      * an escaped ``\\"`` toggles the state like a real delimiter, inverting
+        the polarity for the rest of the line.
+
+    Both are safe for the only caller, ``_toml_array_strings``, which reads
+    flat arrays of PEP 508 requirement strings: the manifests write those with
+    double quotes, and a requirement carries neither a ``#`` nor an escape.
+    That is the same assumption ``_toml_array_strings`` makes when it extracts
+    with ``"([^"]*)"`` — a single-quoted requirement is invisible to both, so
+    they agree rather than disagreeing.
+
+    The failure direction matters: a mis-parse drops a requirement from the
+    array, and ``unlocked_declared_dependencies`` then under-reports — the
+    guard goes quiet about a package it should have flagged. If a manifest ever
+    adopts single-quoted or escape-carrying requirements, move to ``tomllib``
+    rather than growing this; do not let it keep guessing.
+    """
     in_string = False
     for i, ch in enumerate(line):
         if ch == '"':
@@ -251,6 +272,9 @@ def _toml_array_strings(text: str, section: str, key: str) -> list[str]:
         OUTSIDE the quoted strings. Reading it naively truncated the base
         dependency list at ``anthropic`` and silently under-reported what the
         lock has to cover, which is the opposite of what this check is for.
+
+    Double quotes only, both here and in ``_strip_toml_comment``: see that
+    docstring for what the shared assumption does and does not cover.
     """
     out: list[str] = []
     in_section = False

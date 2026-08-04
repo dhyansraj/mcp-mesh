@@ -159,12 +159,15 @@ cat constraints.txt
 # whatever is installed alongside it:
 #
 #     pip install -e '.[dev]' -c constraints.txt
-#     pip install "mcp-mesh==X.Y.Z" -c constraints.txt
+#
+# Its scope is this repository: CI installs against it and the runtime images
+# build against it. It is NOT shipped inside the published wheel, so a plain
+# `pip install mcp-mesh` from PyPI is not governed by it.
 #
 # Resolved against packaging/pypi/pyproject.toml — the manifest PyPI publishes,
 # whose bounds are tighter than the source tree's on ten packages. Pinning from
-# the published side is what makes one file valid for a user, for the runtime
-# images and for an editable CI install at the same time.
+# the published side is what makes one file valid for the runtime images and
+# for an editable CI install at the same time.
 #
 # Entries for packages a given environment does not install are inert, which is
 # what lets one file cover linux/amd64, linux/arm64, macOS and Python 3.11-3.14

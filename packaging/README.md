@@ -61,10 +61,10 @@ docker run --rm mcpmesh/cli:latest version
 pip install mcp-mesh
 
 # Install with Kubernetes support
-pip install mcp-mesh[kubernetes]
+pip install 'mcp-mesh[kubernetes]'
 
 # Install development dependencies
-pip install mcp-mesh[dev]
+pip install 'mcp-mesh[dev]'
 ```
 
 ### Package Managers
