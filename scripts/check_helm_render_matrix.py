@@ -18,6 +18,15 @@ Each case declares the values that reach the guard and what must happen:
 The substring matters as much as the exit code. A guard rewritten to fire on
 the wrong condition still fails the render, just with someone else's message.
 
+A pass-path case may additionally pin which objects that render contains:
+
+  requires_kind="Namespace"  the render must contain an object of this kind
+  forbids_kind="Namespace"   it must not
+
+That is for values whose whole purpose is to add or remove a resource — an
+opt-in object silently becoming opt-out (or the reverse) is a behaviour change
+a non-empty render cannot detect.
+
 Usage: python3 scripts/check_helm_render_matrix.py  (run from anywhere)
 Exit code 0 = every case behaved as declared.
 """
@@ -52,6 +61,8 @@ class Case:
     values: dict
     expect_fail: str | None = None
     extra_args: tuple[str, ...] = field(default_factory=tuple)
+    requires_kind: str | None = None
+    forbids_kind: str | None = None
 
 
 CASES: list[Case] = [
@@ -66,6 +77,45 @@ CASES: list[Case] = [
         "mcp-mesh-core",
         "an explicit keep is a tolerated no-op",
         {"commonAnnotations": {"helm.sh/resource-policy": "keep"}},
+    ),
+    # Both guards live in namespace.yaml, above its `{{- if .Values.namespaceCreate }}`
+    # so they run whether or not the Namespace renders. namespaceCreate now
+    # defaults to false, which means that `if` is closed on virtually every
+    # install and the guards are the file's only output — pin the flag
+    # explicitly on one fail case each, so moving the includes below the `if`
+    # (or deleting the file once it renders nothing) is caught here rather
+    # than in the field.
+    Case(
+        "mcp-mesh-core",
+        "the resource-policy guard still fires with namespaceCreate off",
+        {
+            "namespaceCreate": False,
+            "commonAnnotations": {"helm.sh/resource-policy": "delete"},
+        },
+        expect_fail="blast radius",
+    ),
+    Case(
+        "mcp-mesh-core",
+        "the removed-key guard still fires with namespaceCreate off",
+        {"namespaceCreate": False, "networkPolicies": {"enabled": True}},
+        expect_fail="networkPolicies.enabled was never consumed",
+    ),
+    # --- mcp-mesh-core: the Namespace object is opt-in --------------------
+    # A release that renders a Namespace it did not create cannot be installed
+    # (Helm's ownership check), and one that stops rendering a Namespace it did
+    # DELETES it, cascading to everything inside. Both directions are silent,
+    # so pin the default explicitly.
+    Case(
+        "mcp-mesh-core",
+        "no Namespace object at the shipped default",
+        {},
+        forbids_kind="Namespace",
+    ),
+    Case(
+        "mcp-mesh-core",
+        "...and one only when namespaceCreate is turned on",
+        {"namespaceCreate": True},
+        requires_kind="Namespace",
     ),
     # --- mcp-mesh-core: removed-key guards --------------------------------
     Case(
@@ -346,6 +396,14 @@ def run_case(case: Case, values_file: Path) -> str | None:
             return f"expected a clean render, helm template failed:\n{_indent(output)}"
         if not result.stdout.strip():
             return "expected a clean render, helm template produced no manifests"
+        kinds = _rendered_kinds(result.stdout)
+        if case.requires_kind and case.requires_kind not in kinds:
+            return f"the render contains no {case.requires_kind} object"
+        if case.forbids_kind and case.forbids_kind in kinds:
+            return (
+                f"the render contains a {case.forbids_kind} object, which "
+                "these values must not produce"
+            )
         return None
 
     if result.returncode == 0:
@@ -359,6 +417,14 @@ def run_case(case: Case, values_file: Path) -> str | None:
             f"guard (or a template error) fired:\n{_indent(output)}"
         )
     return None
+
+
+def _rendered_kinds(manifests: str) -> set[str]:
+    return {
+        doc["kind"]
+        for doc in yaml.safe_load_all(manifests)
+        if isinstance(doc, dict) and "kind" in doc
+    }
 
 
 def _indent(text: str) -> str:

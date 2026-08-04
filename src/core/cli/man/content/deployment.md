@@ -156,8 +156,7 @@ For production Kubernetes deployment, use the official Helm charts from the MCP 
 # No "helm repo add" needed - uses OCI registry directly
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
   --version 3.4.0 \
-  -n mcp-mesh --create-namespace \
-  --set namespaceCreate=false
+  -n mcp-mesh --create-namespace
 
 # Deploy agent using scaffold-generated helm-values.yaml
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
@@ -166,16 +165,28 @@ helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
   -f my-agent/helm-values.yaml
 ```
 
-`--create-namespace` creates the namespace, and `--set namespaceCreate=false`
-stops the core chart from rendering a second `Namespace` object that would
-collide with it. Both are required: Helm writes the release secret into the
-`-n` namespace before applying the manifest, so a chart-templated `Namespace`
-can never create the namespace its own release installs into. Left at the
-default, the install fails on Helm 3 (`namespaces "<ns>" already exists`) and,
-on any client, against a pre-created namespace (`invalid ownership metadata`).
+`--create-namespace` is what creates the namespace, and the core chart
+deliberately renders no `Namespace` object of its own — a second one would
+collide with it. Helm writes the release secret into the `-n` namespace before
+applying the manifest, so a chart-templated `Namespace` can never create the
+namespace its own release installs into: turn `namespaceCreate` on and the
+install fails on Helm 3 (`namespaces "<ns>" already exists`) and, on any
+client, against a pre-created namespace (`invalid ownership metadata`).
+
+**Upgrading an existing release: go `3.3.x` → `3.4.x` → `3.5.0`.**
+`namespaceCreate` defaulted to `true` through chart 3.4.x, so those releases
+carry a `Namespace` in their manifest, and 3.5.0 drops it. Removing a
+`Namespace` from a manifest *deletes* it — with every agent, Secret and PVC
+inside — unless the live object already carries
+`helm.sh/resource-policy: keep`, which chart 3.4.0 is the first to apply.
+`--reuse-values` does not protect you: a release that took the old default has
+nothing to replay and picks up the new one. To jump versions in one step, pin
+`--set namespaceCreate=true` for that upgrade, confirm the annotation with
+`kubectl get ns <ns> -o jsonpath='{.metadata.annotations}'`, then drop the pin
+on a second upgrade.
 
 Full detail, including how to adopt an existing namespace with
-`--take-ownership` and why an existing release must not flip the value:
+`--take-ownership`:
 https://github.com/dhyansraj/mcp-mesh/blob/main/helm/mcp-mesh-core/README.md#namespace-handling
 
 ### Custom Namespace
@@ -185,8 +196,7 @@ Deploy into any namespace — change `-n` and nothing else:
 ```bash
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
   --version 3.4.0 \
-  -n my-namespace --create-namespace \
-  --set namespaceCreate=false
+  -n my-namespace --create-namespace
 
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
   --version 3.4.0 \
@@ -209,7 +219,7 @@ its own namespace. Short service names resolve independently within each namespa
 # Team A
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
   --version 3.4.0 \
-  -n team-a --create-namespace --set namespaceCreate=false
+  -n team-a --create-namespace
 
 helm install greeter oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
   --version 3.4.0 -n team-a -f greeter/helm-values.yaml
@@ -217,7 +227,7 @@ helm install greeter oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
 # Team B — same helm-values.yaml, different namespace
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
   --version 3.4.0 \
-  -n team-b --create-namespace --set namespaceCreate=false
+  -n team-b --create-namespace
 
 helm install greeter oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
   --version 3.4.0 -n team-b -f greeter/helm-values.yaml
@@ -288,7 +298,6 @@ helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
   --version 3.4.0 \
   -n mcp-mesh --create-namespace \
-  --set namespaceCreate=false \
   --set grafana.enabled=false \
   --set tempo.enabled=false
 
@@ -296,7 +305,6 @@ helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
   --version 3.4.0 \
   -n mcp-mesh --create-namespace \
-  --set namespaceCreate=false \
   --set postgres.enabled=false
 ```
 
@@ -421,7 +429,6 @@ The published `mcpmesh/ui` image serves at `/ops/dashboard` by default.
 ```bash
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
   -n mcp-mesh --create-namespace \
-  --set namespaceCreate=false \
   --set ui.enabled=true
 ```
 
@@ -452,7 +459,6 @@ docker run -e MCP_MESH_UI_BASE_PATH=/my/custom/path mcpmesh/ui:3.4.0
 # Helm
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
   -n mcp-mesh --create-namespace \
-  --set namespaceCreate=false \
   --set ui.enabled=true \
   --set mcp-mesh-ui.ui.basePath=/my/custom/path
 ```
@@ -466,7 +472,6 @@ For prerelease versions, override the image tag (floating major-minor tags only 
 ```bash
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
   -n mcp-mesh --create-namespace \
-  --set namespaceCreate=false \
   --set ui.enabled=true \
   --set mcp-mesh-ui.image.tag=2.0.0-beta.3
 ```

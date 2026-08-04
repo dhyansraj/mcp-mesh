@@ -19,7 +19,6 @@ The published `mcpmesh/ui` image serves at `/ops/dashboard` by default. Enable i
 ```bash
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
   -n mcp-mesh --create-namespace \
-  --set namespaceCreate=false \
   --set ui.enabled=true
 ```
 

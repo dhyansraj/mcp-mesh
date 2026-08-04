@@ -5,10 +5,10 @@
 global:
   # Name of the Namespace object rendered by namespaceCreate, and read by
   # nothing else: every component deploys to .Release.Namespace (the -n flag).
-  # With the recommended namespaceCreate: false this value is inert. It only
-  # matters when the release owns its Namespace (namespaceCreate: true or
-  # --take-ownership), and then it has to match -n — otherwise the release owns
-  # a stray namespace that nothing is deployed into.
+  # namespaceCreate is off by default, so this value is inert unless you turn
+  # it on. It only matters when the release owns its Namespace (namespaceCreate
+  # plus --take-ownership), and then it has to match -n — otherwise the release
+  # owns a stray namespace that nothing is deployed into.
   namespace: mcp-mesh
 
   # Private/air-gapped registry prefix applied to EVERY image in the stack:
@@ -356,24 +356,31 @@ mcp-mesh-ui:
 # Render global.namespace (above) as a release-owned Namespace object. Note
 # that is global.namespace, NOT the release namespace (-n).
 #
-# SET THIS TO false ON NEW INSTALLS. Helm writes the release secret into the -n
-# namespace before it applies the manifest, so a chart-templated Namespace can
-# never create the namespace its own release installs into — it can only
-# re-declare an existing one, which Helm's ownership check rejects. Left true,
-# the install fails on Helm 3 ("namespaces <ns> already exists") and, on any
-# client, against a pre-created namespace ("invalid ownership metadata"). Let
-# `helm install --create-namespace`, `kubectl create namespace`, or Argo CD's
-# CreateNamespace=true create the namespace instead; with namespaceCreate
-# false, global.namespace is inert.
+# OFF BY DEFAULT, and new installs should leave it off. Helm writes the release
+# secret into the -n namespace before it applies the manifest, so a
+# chart-templated Namespace can never create the namespace its own release
+# installs into — it can only re-declare an existing one, which Helm's
+# ownership check rejects. Turned on, the install fails on Helm 3 ("namespaces
+# <ns> already exists") and, on any client, against a pre-created namespace
+# ("invalid ownership metadata"). Let `helm install --create-namespace`,
+# `kubectl create namespace`, or Argo CD's CreateNamespace=true create the
+# namespace instead; off, global.namespace is inert.
 #
-# The default stays true because flipping it on an EXISTING release deletes the
-# namespace and everything in it: the Namespace is already in the release
-# manifest, and dropping it from the rendered output makes the next
-# `helm upgrade` garbage-collect it. The rendered Namespace carries
-# "helm.sh/resource-policy": keep, which makes `helm uninstall` skip it and
-# makes the flip safe — but only once the release's current revision came from
-# a chart that has the annotation. See "Namespace handling" in README.md.
-namespaceCreate: true
+# The one supported way to have the release own its Namespace is to create the
+# namespace first and install with --take-ownership (Helm 3.17+), which needs
+# this on and global.namespace equal to -n.
+#
+# UPGRADING FROM CHART < 3.4.0: turn this ON for that one upgrade
+# (`--set namespaceCreate=true`), or upgrade to a 3.4.x chart first. The
+# default used to be true, so the Namespace is in those releases' manifests;
+# dropping it from the rendered output makes `helm upgrade` delete the
+# namespace and everything in it, reporting STATUS: deployed while doing so.
+# What makes the flip safe is the "helm.sh/resource-policy": keep annotation
+# the rendered Namespace carries — Helm reads that policy off the LIVE object,
+# and 3.4.0 is the first chart that puts it there. A release whose current
+# revision came from 3.4.x already has it and needs nothing.
+# See "Namespace handling" in README.md.
+namespaceCreate: false
 
 # Common labels for all resources
 commonLabels:

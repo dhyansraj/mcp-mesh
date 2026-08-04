@@ -183,9 +183,19 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // the PVC deletion that flip causes on upgrade; the Grafana one (4 spans)
 // backfills the `resource-policy: keep` note that #1426 landed in `docs/` but
 // not here, since the Tempo bullet contrasts against it.
+// #1414: +29 / +2 / +0. `upgrading.md` +18 for the new "3.5.0 — Helm chart
+// upgrade order" section, which states the 3.3.x → 3.4.x → 3.5.0 sequence the
+// `namespaceCreate` default flip requires, plus a reworded `commonAnnotations`
+// bullet in "Helm Mechanics" (the +2 that also lands in the list golden — a
+// rewrite of an existing list line, so no new line and the third golden is
+// unmoved); `deployment.md` +11 for the same upgrade constraint restated where
+// the install recipe lives, plus the rewrite of the paragraph that used to
+// explain `--set namespaceCreate=false` (now redundant, and dropped from every
+// recipe). The new section's version table contributes nothing: a `|` line is
+// skipped by all three tests.
 const (
-	wantInlineCodeSpans = 1656
-	wantListCodeSpans   = 504
+	wantInlineCodeSpans = 1685
+	wantListCodeSpans   = 506
 	wantMarkupListLines = 442
 )
 

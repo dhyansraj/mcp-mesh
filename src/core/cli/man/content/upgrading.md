@@ -2,6 +2,35 @@
 
 > Order of operations, version-skew guarantees, schema migrations, in-flight job safety, and source migrations for upgrading a running mesh
 
+## 3.5.0 — Helm chart upgrade order: 3.3.x → 3.4.x → 3.5.0
+
+**Do not upgrade the `mcp-mesh-core` chart from 3.3.x straight to 3.5.0.** Chart 3.5.0 changes `namespaceCreate` to default `false`, which drops the release's `Namespace` object from the rendered manifest — and Helm *deletes* a resource that leaves the manifest, cascading to every agent, Service, Secret and PVC in the namespace. What makes the removal safe is `helm.sh/resource-policy: keep` on the live `Namespace`, and chart 3.4.0 is the first version that applies it.
+
+| Current chart | What to do |
+| ------------- | ---------- |
+| 3.4.x | Nothing. The annotation is already on the live namespace; 3.5.0 removes the object without deleting anything. |
+| 3.3.x or older | Upgrade to the latest 3.4.x first, verify, then go to 3.5.0. |
+
+```bash
+# 1. Land the keep annotation (latest 3.4.x, no values change)
+helm upgrade mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  -n mcp-mesh --version '~3.4.0' --reuse-values
+
+# 2. Verify it is on the LIVE namespace
+kubectl get ns mcp-mesh -o jsonpath='{.metadata.annotations}'
+#   {"helm.sh/resource-policy":"keep",...}
+
+# 3. Now 3.5.0 can drop the Namespace safely
+helm upgrade mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  -n mcp-mesh --reuse-values
+```
+
+To jump straight to 3.5.0 instead, pin `--set namespaceCreate=true` on that upgrade (which keeps the object, and applies the annotation), verify it landed, then drop the pin on a second upgrade.
+
+`--reuse-values` does **not** protect you: it replays the values *you* supplied, and a release that simply took the old default has nothing to replay. The chart cannot guard against this either — telling the safe case from the unsafe one means reading the live namespace, and `lookup` returns nothing under `helm template`, which is how Argo CD and every other GitOps renderer evaluates the chart.
+
+Skipping the order deletes the namespace while reporting `STATUS: deployed` and exit 0. Where `global.namespace` matches `-n` it is unrecoverable: the release secret lives in the namespace being deleted, a retry during the drain fails with `... is forbidden: ... because it is being terminated`, and afterwards `helm history` reports `release: not found`.
+
 ## 3.4.0 — Dependency injection is positional everywhere
 
 **Breaking, Java and TypeScript. Python is unchanged.** As of 3.4.0 the Nth declared dependency binds to the Nth injectable parameter, at every injection site in every runtime. Parameter names, capability keys and `@MeshInject` values are never used to *select* a dependency.
@@ -173,7 +202,7 @@ helm get values <release>
 
 - **`--reuse-values`** carries forward the environment configuration set at install time so an upgrade does not silently reset it. Confirm with `helm get values` that the values you expect are still present.
 - **Do not use `helm uninstall` as an upgrade mechanism.** To change the core, `helm upgrade` the existing release — uninstalling and reinstalling discards the release's history and values along with the running workloads, for no benefit.
-- **`helm uninstall` is still a legitimate, explicit teardown.** It removes the core workloads (registry, PostgreSQL, Redis, and any observability components), takes the registry offline with them, and leaves the `Namespace` in place — the core chart's `Namespace` carries `"helm.sh/resource-policy": keep`, so Helm skips it on uninstall and the deletion cannot cascade to co-located agents, Secrets, and PVCs. (Releases installed with an older chart pick the annotation up on `helm upgrade`, with no values change.) The registry's contents are derived state: agents re-register on their next heartbeat, so the registry repopulates itself and the cost is a transient topology gap, not data loss. Agents keep serving while it is down — resolved dependencies are never cleared on a registry disconnect. What pauses is topology detection: discovering new capabilities, re-resolving changed ones, and looking up an agent a client has not already resolved. What is *not* derived is application data — if your own workloads used the bundled PostgreSQL or Redis for their own storage, that data is yours to protect before you tear anything down.
-- **`helm.sh/resource-policy` is reserved in `commonAnnotations`.** The chart's `keep` on the `Namespace` is what keeps that cascade from happening and a `commonAnnotations` value would override it on last-wins, so the chart fails the render when the key is set to anything but `keep` — remove it from `commonAnnotations`, or set it to `keep`, before upgrading.
+- **`helm uninstall` is still a legitimate, explicit teardown.** It removes the core workloads (registry, PostgreSQL, Redis, and any observability components), takes the registry offline with them, and leaves the namespace in place — from chart 3.5.0 the release does not own it at all (`namespaceCreate` defaults to `false`), and a release that does own one, from an older chart or from `--take-ownership`, carries `"helm.sh/resource-policy": keep` on the object, so Helm skips it on uninstall and the deletion cannot cascade to co-located agents, Secrets, and PVCs. The registry's contents are derived state: agents re-register on their next heartbeat, so the registry repopulates itself and the cost is a transient topology gap, not data loss. Agents keep serving while it is down — resolved dependencies are never cleared on a registry disconnect. What pauses is topology detection: discovering new capabilities, re-resolving changed ones, and looking up an agent a client has not already resolved. What is *not* derived is application data — if your own workloads used the bundled PostgreSQL or Redis for their own storage, that data is yours to protect before you tear anything down.
+- **`helm.sh/resource-policy` is reserved in `commonAnnotations`.** When the chart does render a `Namespace`, its `keep` is the only thing standing between `helm uninstall` and everything in that namespace, and a `commonAnnotations` value would override it on last-wins. So the chart fails the render when the key is set to anything but `keep` — remove it from `commonAnnotations`, or set it to `keep`, before upgrading. This check runs whether or not `namespaceCreate` is on.
 - **`helm uninstall` no longer reclaims Grafana's data volume.** Grafana's PVC picks up `"helm.sh/resource-policy": keep` on upgrade — a metadata-only patch, no pod restart — because the dashboards, annotations, users, and API keys in `grafana.db` are not derived from anything the mesh can replay. A reinstall under the same release name adopts the claim, data intact; reclaim it deliberately with `kubectl delete pvc <release>-mcp-mesh-grafana-pvc -n <ns>`.
 - **Tempo's PVC is deleted by this upgrade, and that is intended.** `mcp-mesh-tempo.tempo.persistence.enabled` now defaults to `false`, so the claim leaves the rendered manifest and Helm reclaims it on the next `helm upgrade` — Tempo comes back on an `emptyDir`. What is lost is the volume plus up to `retention` (default `1h`) of buffered traces: it is a rolling buffer under active retention, not durable storage (3.1MB measured after 25 hours of uptime on a live install). Nothing else on the release is affected, and ingestion resumes normally. The `ReadWriteOnce` claim it required is a real rollout constraint on a single-replica Deployment, which is what deadlocked the chart on multi-node clusters — paid for minutes of traces. To keep the volume, pin the old value in the same upgrade: `--set mcp-mesh-tempo.tempo.persistence.enabled=true`. Setting it afterward provisions a new, empty claim rather than recovering the reclaimed one. Deliberately the opposite of Grafana's treatment above.

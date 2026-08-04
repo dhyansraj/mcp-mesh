@@ -19,18 +19,18 @@ The `mcp-mesh-core` chart deploys registry + PostgreSQL + Redis + Grafana + Temp
 # Deploy core (OCI registry - no "helm repo add" needed)
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
   --version 3.4.0 \
-  -n mcp-mesh --create-namespace \
-  --set namespaceCreate=false
+  -n mcp-mesh --create-namespace
 
 # Wait for registry
 kubectl wait --for=condition=available deployment/mcp-core-mcp-mesh-registry \
   -n mcp-mesh --timeout=120s
 ```
 
-`--create-namespace` creates the namespace; `--set namespaceCreate=false` stops
-the chart from also rendering one, which would collide with it. Both are
-required — see [Namespace handling](https://github.com/dhyansraj/mcp-mesh/blob/main/helm/mcp-mesh-core/README.md#namespace-handling)
-for why, and for what applies to a release that already exists.
+`--create-namespace` is what creates the namespace. The chart deliberately
+renders no `Namespace` of its own — one would collide with it — so nothing
+else is needed here. See [Namespace handling](https://github.com/dhyansraj/mcp-mesh/blob/main/helm/mcp-mesh-core/README.md#namespace-handling)
+for why, and for the upgrade order that applies to a release installed with
+chart 3.4.x or earlier.
 
 ### 2. Build Your Agent Image
 
@@ -143,7 +143,6 @@ resources:
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
   --version 3.4.0 \
   -n mcp-mesh --create-namespace \
-  --set namespaceCreate=false \
   --set grafana.enabled=false \
   --set tempo.enabled=false
 ```
@@ -166,8 +165,7 @@ namespace — change `-n` and nothing else:
 # Deploy core to a custom namespace
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
   --version 3.4.0 \
-  -n my-namespace --create-namespace \
-  --set namespaceCreate=false
+  -n my-namespace --create-namespace
 
 # Deploy agent to the same namespace
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
@@ -185,12 +183,12 @@ For **multi-tenant** clusters (separate core per team), deploy each core to its 
 # Team A
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
   --version 3.4.0 \
-  -n team-a --create-namespace --set namespaceCreate=false
+  -n team-a --create-namespace
 
 # Team B — same values, different namespace
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
   --version 3.4.0 \
-  -n team-b --create-namespace --set namespaceCreate=false
+  -n team-b --create-namespace
 ```
 
 For **cross-namespace** access (agent in one namespace, core in another), use FQDNs:
