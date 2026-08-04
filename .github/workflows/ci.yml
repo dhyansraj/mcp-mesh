@@ -254,10 +254,23 @@ jobs:
           maturin build --release
           pip install target/wheels/*.whl
 
+      # Issue #1454: installed against constraints.txt, the dependency lock, so
+      # this job tests the same transitive set a user gets and a rebuild of a
+      # given mesh version gets. Previously pip resolved at job time, which is
+      # how PR #1453's Responses streaming tests passed on a laptop holding
+      # openai 2.14.0 and failed in CI on 2.52.0 — a *minor* that had added a
+      # required field to InputTokensDetails.
+      #
+      # `-c` constrains without installing, so this still installs exactly
+      # `.[dev]` — including litellm, which [dev] pulls via mcp-mesh[litellm]
+      # and which the lock therefore covers. If the lock and the manifest ever
+      # disagree (a floor raised past a pin, say), pip fails here loudly on
+      # every PR rather than at release time.
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e .[dev]
+          pip install -e .[dev] -c constraints.txt
+          python -c "import openai, fastmcp; print('openai', openai.__version__, '| fastmcp', fastmcp.__version__)"
 
       - name: Run unit tests
         if: matrix.test-group == 'unit'
@@ -305,6 +318,11 @@ jobs:
       # half-present (is_json_stream lands in 0.134.0, is_sse_stream in
       # 0.135.0). scripts/test_ci_fastapi_floor.py asserts this literal equals
       # the manifest floor, so the two cannot drift apart again.
+      #
+      # Deliberately installed WITHOUT `-c constraints.txt` (#1454): the lock
+      # pins the FastAPI the suite normally runs on, and the entire purpose of
+      # this step is to leave it. The lock covers "the set we ship"; this covers
+      # "the oldest set we claim to support".
       # Runs last so it cannot perturb coverage/test-result artifacts.
       - name: Route integration tests against older FastAPI
         if: matrix.test-group == 'unit' && matrix.python-version == '3.11'

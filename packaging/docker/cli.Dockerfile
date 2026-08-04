@@ -22,10 +22,16 @@ RUN if [ -z "$VERSION" ]; then echo "VERSION build arg is required" && exit 1; f
     echo "Installing meshctl and registry ${VERSION} using install.sh..." && \
     curl -sSL "https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh" | bash -s -- --all --version ${VERSION} --install-dir /usr/local/bin
 
+# The dependency lock (#1454) — same reproducibility argument as the python
+# runtime image; see packaging/docker/python-runtime.Dockerfile for the full
+# note. A constraints file adds nothing to the image, it only fixes which
+# version pip may choose for what the published metadata already requires.
+COPY src/runtime/python/constraints.txt /etc/mcp-mesh/constraints.txt
+
 # Install mcp-mesh package from PyPI (remove 'v' prefix if present)
 RUN VERSION_NO_V="${VERSION#v}" && \
-    echo "Installing mcp-mesh==${VERSION_NO_V} from PyPI" && \
-    pip install --no-cache-dir "mcp-mesh==${VERSION_NO_V}"
+    echo "Installing mcp-mesh==${VERSION_NO_V} from PyPI against the locked set" && \
+    pip install --no-cache-dir -c /etc/mcp-mesh/constraints.txt "mcp-mesh==${VERSION_NO_V}"
 
 # Create workspace
 RUN mkdir -p /workspace && chown mcp-mesh:mcp-mesh /workspace

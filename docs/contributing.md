@@ -91,6 +91,47 @@ mcp-mesh/
 - Docstrings for public functions
 - Follow existing patterns in `src/runtime/python/_mcp_mesh/`
 
+### Python dependencies
+
+`src/runtime/python/constraints.txt` is the Python dependency lock — the
+transitive set CI tests against and the runtime images install. Every runtime
+has one (`Cargo.lock`, `package-lock.json`, `Chart.lock`); this is Python's.
+
+**Changing a Python dependency is its own PR.** It never rides along inside a
+feature change or a release bump:
+
+```bash
+# after editing packaging/pypi/pyproject.toml
+scripts/lock_python_deps.sh              # move only what the manifest forced
+
+# to deliberately take newer versions of everything
+scripts/lock_python_deps.sh --upgrade
+
+python3 scripts/check_release_lockfiles.py
+```
+
+The generator runs pip-compile inside `python:3.11-slim` so the result does not
+depend on whose laptop produced it, and resolves against
+`packaging/pypi/pyproject.toml` — the manifest PyPI publishes, whose bounds are
+tighter than the source tree's. Both are why you should not run `pip-compile`
+by hand.
+
+It is a *constraints* file, so it installs nothing; it only fixes which version
+pip may pick. That is what lets one file cover linux/amd64, linux/arm64, macOS
+and Python 3.11–3.14 without markers, and why an entry for `litellm` does not
+put litellm back into a default install.
+
+If you install by hand rather than via `make install-dev`, pass it:
+
+```bash
+pip install -e src/runtime/python/[dev] -c src/runtime/python/constraints.txt
+```
+
+Two production incidents came from not having this: an unpinned FastMCP flipped
+a DNS-rebinding default on a rebuild and returned 421 for every Kubernetes
+Python provider (#1312), and an `openai` *minor* added a required response
+field that broke CI while local environments stayed green (#1453).
+
 ### Go (CLI/Registry)
 
 - Go 1.23+

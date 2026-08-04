@@ -380,7 +380,7 @@ install-python-user:
 	fi
 	@echo "📦 Installing Python package in .venv..."
 	@.venv/bin/pip install --upgrade pip --quiet
-	@.venv/bin/pip install src/runtime/python/
+	@.venv/bin/pip install src/runtime/python/ -c src/runtime/python/constraints.txt
 	@echo "✅ Python package installed in .venv"
 
 # Development installation - editable Python package + Go binaries
@@ -395,7 +395,11 @@ install-dev: build
 	# Install Python package in editable mode
 	@echo "📦 Installing Python package in editable mode..."
 	@.venv/bin/pip install --upgrade pip --quiet
-	@.venv/bin/pip install -e src/runtime/python/
+	# -c: the dependency lock (#1454), so a local env resolves the same
+	# transitive set as CI and the runtime images. Without it a laptop can sit
+	# several minor versions away from what ships and never notice — PR #1453
+	# was exactly that, an openai 2.14 laptop against a 2.52 CI.
+	@.venv/bin/pip install -e src/runtime/python/ -c src/runtime/python/constraints.txt
 	# Create symlinks for binaries in development
 	@echo "🔗 Creating development symlinks..."
 	@mkdir -p ~/.local/bin
@@ -417,7 +421,7 @@ install-deps:
 	go mod download
 	# Python dependencies
 	@echo "🐍 Installing Python dependencies..."
-	pip install -e src/runtime/python/[dev]
+	pip install -e src/runtime/python/[dev] -c src/runtime/python/constraints.txt
 	# Development tools
 	@echo "🛠️  Installing development tools..."
 	@if ! command -v golangci-lint >/dev/null 2>&1; then

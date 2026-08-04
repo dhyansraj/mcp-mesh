@@ -533,6 +533,25 @@ def test_no_exemption_covers_bare_prose_versions():
         )
 
 
+def test_no_handler_can_reach_the_python_lock():
+    """src/runtime/python/constraints.txt (#1454) holds 112 third-party pins and
+    not one mesh version, so a release bump must leave it byte-identical —
+    that is the whole assertion scripts/check_release_lockfiles.py makes about
+    it. Today no handler glob reaches it, which is why the over-match guard
+    stays quiet even though the file is full of version literals that will
+    eventually collide with a release number (`redis==6.4.0` the day mesh
+    reaches 6.4.0). This pins that reach, because the collision arrives on its
+    own schedule and the guard's message would point at the wrong culprit."""
+    lock = bv.PROJECT_ROOT / "src" / "runtime" / "python" / "constraints.txt"
+    if not lock.exists():
+        return
+    for handler in bv.HANDLERS:
+        assert lock not in bv._glob_files(handler.globs), (
+            f"handler {handler.name!r} now scans the Python lock. A bump must "
+            "not rewrite it; exclude the path or narrow the glob."
+        )
+
+
 def test_scaffold_dockerfile_handler_matches_old_only():
     """Used to replace `[^\\s]+` — any tag, whether or not it was OLD, which
     silently clobbers a deliberately different pin."""
