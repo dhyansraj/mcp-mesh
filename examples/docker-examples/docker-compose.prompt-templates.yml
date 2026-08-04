@@ -54,7 +54,7 @@ services:
       - mcp-mesh-prompt-template-test
 
   registry:
-    image: mcpmesh/registry:3.4.0
+    image: mcpmesh/registry:3.5.0
     container_name: mcp-mesh-registry-prompt-template-test
     ports:
       - "8002:8000" # Different port
@@ -79,7 +79,7 @@ services:
 
   # System agent (provides base tools for tests)
   system-agent:
-    image: mcpmesh/python-runtime:3.4.0
+    image: mcpmesh/python-runtime:3.5.0
     container_name: mcp-mesh-system-agent-prompt-template-test
     environment:
       MCP_MESH_REGISTRY_URL: http://registry:8000
@@ -111,7 +111,7 @@ services:
 
   # Test PT-001: Basic Template with Dict Context
   test-pt-001-basic-template:
-    image: mcpmesh/python-runtime:3.4.0
+    image: mcpmesh/python-runtime:3.5.0
     container_name: mcp-mesh-test-pt-001-basic-template
     profiles:
       - test-pt-001
@@ -149,7 +149,7 @@ services:
 
   # Test PT-002: MeshContextModel with Field Descriptions
   test-pt-002-context-model:
-    image: mcpmesh/python-runtime:3.4.0
+    image: mcpmesh/python-runtime:3.5.0
     container_name: mcp-mesh-test-pt-002-context-model
     profiles:
       - test-pt-002
@@ -189,7 +189,7 @@ services:
 
   # Test PT-003: Convention-Based Context Detection
   test-pt-003-convention:
-    image: mcpmesh/python-runtime:3.4.0
+    image: mcpmesh/python-runtime:3.5.0
     container_name: mcp-mesh-test-pt-003-convention
     profiles:
       - test-pt-003
@@ -227,7 +227,7 @@ services:
 
   # Test PT-004: Control Structures
   test-pt-004-control-structures:
-    image: mcpmesh/python-runtime:3.4.0
+    image: mcpmesh/python-runtime:3.5.0
     container_name: mcp-mesh-test-pt-004-control-structures
     profiles:
       - test-pt-004
@@ -267,7 +267,7 @@ services:
 
   # Test PT-005: Hierarchical Context Models
   test-pt-005-hierarchical:
-    image: mcpmesh/python-runtime:3.4.0
+    image: mcpmesh/python-runtime:3.5.0
     container_name: mcp-mesh-test-pt-005-hierarchical
     profiles:
       - test-pt-005
@@ -307,7 +307,7 @@ services:
 
   # Test PT-006: LLM Chain - Analyzer
   test-pt-006-analyzer:
-    image: mcpmesh/python-runtime:3.4.0
+    image: mcpmesh/python-runtime:3.5.0
     container_name: mcp-mesh-test-pt-006-analyzer
     profiles:
       - test-pt-006
@@ -345,7 +345,7 @@ services:
 
   # Test PT-006: LLM Chain - Orchestrator
   test-pt-006-orchestrator:
-    image: mcpmesh/python-runtime:3.4.0
+    image: mcpmesh/python-runtime:3.5.0
     container_name: mcp-mesh-test-pt-006-orchestrator
     profiles:
       - test-pt-006
@@ -385,7 +385,7 @@ services:
 
   # Test PT-007: Dual Injection (LLM + MCP Agent)
   test-pt-007-dual-injection:
-    image: mcpmesh/python-runtime:3.4.0
+    image: mcpmesh/python-runtime:3.5.0
     container_name: mcp-mesh-test-pt-007-dual-injection
     profiles:
       - test-pt-007

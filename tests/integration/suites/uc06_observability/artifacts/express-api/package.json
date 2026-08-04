@@ -10,7 +10,7 @@
     "start": "tsx index.ts"
   },
   "dependencies": {
-    "@mcpmesh/sdk": "^3.4.0",
+    "@mcpmesh/sdk": "^3.5.0",
     "express": "^4.21.2"
   },
   "devDependencies": {
