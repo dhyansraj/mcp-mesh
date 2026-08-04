@@ -341,8 +341,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      # PyYAML because the chart guards parse rendered manifests, and pytest
+      # imports their test modules to collect them — without it the whole
+      # directory fails at collection rather than one file. Pinned to the
+      # version the helm-charts job installs so both jobs parse identically.
+      # This job deliberately has no helm: the chart guards' tests are mostly
+      # pure functions over parsed manifests and run here, while their few
+      # end-to-end cases skip and are covered for real in helm-charts.
       - name: Install pytest
-        run: pip install pytest
+        run: pip install pytest pyyaml==6.0.3
 
       - name: Run scripts/ tests
         run: python3 -m pytest scripts/ -v
@@ -464,6 +471,16 @@ jobs:
       # guard's fail path and the pass path next to it.
       - name: Render chart guards with non-default values
         run: python3 scripts/check_helm_render_matrix.py
+
+      # Both steps above assert things about a single render. #1461 was a
+      # defect *between* two renders: a volume that kept its name while
+      # changing type, which server-side apply can merge into an object the
+      # API server rejects. Nothing that renders one state at a time can see
+      # it. This one renders each persistence toggle in every state and
+      # compares them. (It still cannot see field-manager ownership — see the
+      # script header.)
+      - name: Check volume names carry volume types
+        run: python3 scripts/check_helm_volume_keys.py
 
       # Reviewer aid, not a gate — see the header of the script for why CI
       # cannot decide whether a chart delta is intended.

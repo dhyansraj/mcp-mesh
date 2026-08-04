@@ -96,3 +96,26 @@ imagePullSecrets:
 {{- end -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+Name of the /var/tempo volume — deliberately not a constant.
+
+Kubernetes merges spec.template.spec.volumes by name, so a stable name whose
+type flips between persistentVolumeClaim and emptyDir can end up carrying BOTH
+under server-side apply, when the two field sets have different owners; the API
+server then rejects the object with "may not specify more than 1 volume type"
+and the Deployment sticks unsyncable (#1461). Encoding the type in the key turns
+a tempo.persistence.enabled toggle into a remove-item + add-item on distinct
+keys, which is always representable, in either direction, under Helm, Argo,
+client-side and server-side apply alike.
+
+The persistent branch keeps the historical name so installations that never
+disabled persistence see no change at all.
+
+The matching volumeMounts entry MUST use this same helper — that list is keyed
+by name too, and a mount naming a volume that no longer exists is its own
+invalid-Deployment failure.
+*/}}
+{{- define "mcp-mesh-tempo.storageVolumeName" -}}
+{{- if .Values.tempo.persistence.enabled -}}storage{{- else -}}storage-ephemeral{{- end -}}
+{{- end }}

@@ -76,8 +76,10 @@ spec:
           subPath: tempo.yaml
           readOnly: true
         {{- /* /var/tempo (wal/blocks) and /tmp must be writable — always
-               volumes since the root filesystem is read-only. */}}
-        - name: storage
+               volumes since the root filesystem is read-only. The storage
+               name is conditional on persistence.enabled and must stay in
+               lockstep with the volume below — see the helper (#1461). */}}
+        - name: {{ include "mcp-mesh-tempo.storageVolumeName" . }}
           mountPath: /var/tempo
         - name: tmp
           mountPath: /tmp
@@ -103,7 +105,8 @@ spec:
       - name: config
         configMap:
           name: {{ include "mcp-mesh-tempo.fullname" . }}-config
-      - name: storage
+      {{- /* Name carries the volume type on purpose — see the helper (#1461). */}}
+      - name: {{ include "mcp-mesh-tempo.storageVolumeName" . }}
         {{- if .Values.tempo.persistence.enabled }}
         persistentVolumeClaim:
           claimName: {{ include "mcp-mesh-tempo.fullname" . }}-pvc

@@ -87,7 +87,9 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
-            - name: redis-data
+            {{- /* Name is conditional on persistence.enabled and must stay in
+                   lockstep with the volume — see the helper (#1461). */}}
+            - name: {{ include "mcp-mesh-redis.dataVolumeName" . }}
               mountPath: /data
             {{- if .Values.customConfig }}
             - name: config
@@ -97,7 +99,8 @@ spec:
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
       volumes:
-        - name: redis-data
+        {{- /* Name carries the volume type on purpose — see the helper (#1461). */}}
+        - name: {{ include "mcp-mesh-redis.dataVolumeName" . }}
           {{- /* This chart provisions no volume — there is no PVC template and
                  never was. persistence.enabled therefore mounts a claim you
                  created yourself and named in persistence.existingClaim; the

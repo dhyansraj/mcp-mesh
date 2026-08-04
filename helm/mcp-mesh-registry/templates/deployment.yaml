@@ -292,7 +292,9 @@ spec:
             - name: tmp
               mountPath: /tmp
             {{- if or .Values.persistence.enabled (eq .Values.registry.database.type "sqlite") }}
-            - name: data
+            {{- /* Name is conditional on persistence.enabled and must stay in
+                   lockstep with the volume — see the helper (#1461). */}}
+            - name: {{ include "mcp-mesh-registry.dataVolumeName" . }}
               mountPath: {{ .Values.persistence.mountPath }}
               {{- if .Values.persistence.subPath }}
               subPath: {{ .Values.persistence.subPath }}
@@ -376,7 +378,8 @@ spec:
         - name: tmp
           emptyDir: {}
         {{- if or .Values.persistence.enabled (eq .Values.registry.database.type "sqlite") }}
-        - name: data
+        {{- /* Name carries the volume type on purpose — see the helper (#1461). */}}
+        - name: {{ include "mcp-mesh-registry.dataVolumeName" . }}
           {{- if .Values.persistence.enabled }}
           persistentVolumeClaim:
             claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "mcp-mesh-registry.fullname" .)) }}
