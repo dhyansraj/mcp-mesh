@@ -1,5 +1,5 @@
 # Dockerfile for budget-analyst MCP Mesh LLM agent
-FROM mcpmesh/python-runtime:3.4.0
+FROM mcpmesh/python-runtime:3.5.0
 
 WORKDIR /app
 

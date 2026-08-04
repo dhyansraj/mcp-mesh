@@ -1,7 +1,7 @@
 # --8<-- [start:full_file]
 # Helm values for flight-agent — scaffolded by meshctl, adapted for k8s
 # Usage: helm install flight-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-#          --version 3.4.0 -n trip-planner -f values-flight-agent.yaml
+#          --version 3.5.0 -n trip-planner -f values-flight-agent.yaml
 
 image:
   repository: trip-planner/flight-agent

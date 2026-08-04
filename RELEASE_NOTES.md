@@ -1,6 +1,8 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.4.0...HEAD)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.5.0...HEAD)
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.4.0...v3.5.0)
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.3.2...v3.4.0)
 
@@ -9,6 +11,29 @@
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.3.0...v3.3.1)
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.2.3...v3.3.0)
+
+## v3.5.0 (2026-08-04)
+
+A small release with two breaking changes, both in deployment and packaging rather than in any runtime. The Helm core chart no longer renders a `Namespace`, which makes chart 3.4.x a required stop on the way to 3.5.0, and `litellm` leaves the Python base install. Alongside them: a server-side-apply fix for persistence toggles in four charts, and a lock for the Python dependency set. No wire-protocol, registry-schema, dependency-resolution or declaration-syntax changes.
+
+> **⚠️ Upgrade the Helm core chart to 3.4.x before 3.5.0** — going straight from 3.3.x deletes the namespace and everything in it, and `--reuse-values` does not protect you. Python agents on a vendor other than Anthropic, OpenAI or Gemini need the `mcp-mesh[litellm]` extra. Both in Notes.
+
+### ☸️ Helm
+
+- **⚠️ `namespaceCreate` now defaults to `false` (#1414).** A chart-templated `Namespace` can never create the namespace its own release installs into, so the flag never did what its name suggests; every documented recipe has passed `namespaceCreate=false` explicitly since 3.4.0, and the default now matches. **Chart 3.4.x is a required stop** — the `helm.sh/resource-policy: keep` that makes the removal safe shipped in 3.4.0 and Helm reads it from the live object. See Notes.
+- **A volume's type is now part of its name (#1461).** Toggling `persistence.enabled` in the tempo, grafana, registry and redis charts left a volume carrying both `persistentVolumeClaim` and `emptyDir` under server-side apply — which the API server rejects, sticking the Deployment and its PVC `OutOfSync`. The persistent branch keeps its historical name, so an install that never disabled persistence renders unchanged. ⚠️ Anyone already wedged has a pre-step, see Notes.
+
+### 📦 Packaging and dependencies
+
+- **⚠️ `litellm` is no longer in the base install (#1383).** `pip install mcp-mesh` drops from 110 to 101 dependencies, 311 MB to 189 MB of site-packages. Anthropic, OpenAI and Gemini are unaffected — they dispatch through the bundled native SDKs. Any other vendor now needs `mcp-mesh[litellm]`, an extra valid since 3.3.2; missing it fails with an error naming the model, the vendor and the install command.
+- **The Python dependency set is locked (#1454).** `src/runtime/python/constraints.txt` pins the resolved tree and the runtime images install from it, so a rebuild of a given mesh version is reproducible. Python was the last runtime without a lock. It is not shipped in the wheel — it governs this repo, CI and the images, not your own install.
+
+### ⚠️ Notes
+
+- **⚠️ Be on chart 3.4.x before upgrading to 3.5.0.** 3.5.0 drops the `Namespace` from the rendered manifest, and Helm deletes a resource that leaves the manifest unless the live object carries `helm.sh/resource-policy: keep` — which chart 3.4.0 is the first version to add. From 3.3.x or older, upgrade to the latest 3.4.x first, or pin `--set namespaceCreate=true` for a one-step jump and drop the pin on a second upgrade. **`--reuse-values` does not protect you**: it replays only the values you supplied, so a release that simply took the old default silently picks up the new one. Full ordering in [Upgrading a Live Mesh](https://mcp-mesh.ai/upgrading/).
+- **Python agents on any vendor other than Anthropic, OpenAI or Gemini need `mcp-mesh[litellm]`** in `requirements.txt`. The extra has been installable since 3.3.2 and layers over an existing install without upgrading the base. The big three need no change.
+- **⚠️ If a chart is already wedged in the dual-type volume state, delete the Deployment and let it be recreated before upgrading.** The rename is a clean remove-and-add only when the applying field manager owns the existing volume; otherwise the rename itself can stick.
+- **No wire-protocol, registry-schema, dependency-resolution or declaration-syntax changes.** The only runtime code change is the Python provider's vendor extraction, which now treats an absent `litellm` as the normal case instead of logging a startup warning.
 
 ## v3.4.0 (2026-08-01)
 
