@@ -27,6 +27,18 @@ That is for values whose whole purpose is to add or remove a resource — an
 opt-in object silently becoming opt-out (or the reverse) is a behaviour change
 a non-empty render cannot detect.
 
+It may also pin the container probe paths:
+
+  probe_paths={"livenessProbe": "/livez", "readinessProbe": "/ready"}
+
+Issue #1467: liveness and readiness pointing at the SAME url is the bug —
+a dependency outage that should only make an agent unready instead restarts
+the pod, which cannot fix the dependency and launders the failing agent back
+into resolution. A values default is one careless edit away from collapsing
+back, and every render stays green when it does. Declaring the paths makes
+that edit fail here. Two probes sharing a path is additionally rejected
+outright, whatever the declared paths were.
+
 Usage: python3 scripts/check_helm_render_matrix.py  (run from anywhere)
 Exit code 0 = every case behaved as declared.
 """
@@ -63,6 +75,7 @@ class Case:
     extra_args: tuple[str, ...] = field(default_factory=tuple)
     requires_kind: str | None = None
     forbids_kind: str | None = None
+    probe_paths: dict[str, str] | None = None
 
 
 CASES: list[Case] = [
@@ -348,6 +361,20 @@ CASES: list[Case] = [
         "the v2.4.0 agent.environment defaults verbatim",
         {"agent": {"environment": dict(V240_AGENT_ENVIRONMENT)}},
     ),
+    # --- mcp-mesh-agent: liveness and readiness are different URLs --------
+    # Issue #1467. Liveness may only fail for something a restart can fix;
+    # /ready is what an unhealthy dependency is allowed to fail. The startup
+    # probe restarts the container too, so it gates on /livez as well.
+    Case(
+        "mcp-mesh-agent",
+        "probes at the shipped defaults point at distinct endpoints",
+        {},
+        probe_paths={
+            "startupProbe": "/livez",
+            "livenessProbe": "/livez",
+            "readinessProbe": "/ready",
+        },
+    ),
     # --- mcp-mesh-ingress (standalone chart) ------------------------------
     Case(
         "mcp-mesh-ingress",
@@ -404,6 +431,8 @@ def run_case(case: Case, values_file: Path) -> str | None:
                 f"the render contains a {case.forbids_kind} object, which "
                 "these values must not produce"
             )
+        if case.probe_paths:
+            return _check_probe_paths(result.stdout, case.probe_paths)
         return None
 
     if result.returncode == 0:
@@ -416,6 +445,45 @@ def run_case(case: Case, values_file: Path) -> str | None:
             f"render failed, but not with {case.expect_fail!r} — a different "
             f"guard (or a template error) fired:\n{_indent(output)}"
         )
+    return None
+
+
+def _check_probe_paths(manifests: str, expected: dict[str, str]) -> str | None:
+    """Assert every workload container's probes use the declared httpGet paths.
+
+    Also rejects two probes sharing one path regardless of what was declared —
+    the invariant behind issue #1467 is that liveness (restart) and readiness
+    (stop routing) can never be the same signal.
+    """
+    containers = [
+        container
+        for doc in yaml.safe_load_all(manifests)
+        if isinstance(doc, dict)
+        and doc.get("kind") in {"Deployment", "StatefulSet", "DaemonSet"}
+        for container in doc["spec"]["template"]["spec"].get("containers", [])
+    ]
+    if not containers:
+        return "the render contains no workload containers to probe"
+
+    for container in containers:
+        for probe, want in expected.items():
+            spec = container.get(probe)
+            if not spec:
+                return f"container {container['name']!r} has no {probe}"
+            got = spec.get("httpGet", {}).get("path")
+            if got != want:
+                return (
+                    f"container {container['name']!r} {probe} probes {got!r}, "
+                    f"expected {want!r}"
+                )
+        liveness = container.get("livenessProbe", {}).get("httpGet", {}).get("path")
+        readiness = container.get("readinessProbe", {}).get("httpGet", {}).get("path")
+        if liveness is not None and liveness == readiness:
+            return (
+                f"container {container['name']!r} probes liveness and readiness "
+                f"at the same path {liveness!r} — a dependency outage would "
+                "restart the pod instead of only taking it out of rotation"
+            )
     return None
 
 

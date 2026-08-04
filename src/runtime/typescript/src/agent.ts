@@ -73,6 +73,7 @@ import {
   type HelperToolMeta,
 } from "./jobs-helper-tools.js";
 import { registerCancelRoute } from "./jobs-cancel-route.js";
+import { registerLivezRoute } from "./livez-route.js";
 import {
   clusterStrictEnabled,
   normalizeSchemaWithPolicy,
@@ -1916,6 +1917,37 @@ export class MeshAgent {
       });
 
       console.log(`Agent listening on port ${this.config.httpPort}`);
+    }
+
+    // 1.5 Issue #1467: mount GET|HEAD /livez as early as possible —
+    // FastMCP serves /health and /ready itself, but liveness needs its
+    // own URL so a dependency outage can make the agent unready without
+    // also making Kubernetes restart it. Unconditional (no registry
+    // required): the kubelet probes the pod either way.
+    //
+    // Fail-fast, deliberately, against mesh's usual soft-fail posture:
+    // there is no degraded mode to fall back to. With the chart probing
+    // /livez, an unregistered route means the kubelet 404s liveness and
+    // Kubernetes restarts the pod every ~30s — continuing does not
+    // degrade gracefully, it produces a CrashLoopBackOff whose only
+    // stated cause is "liveness probe failed", with nothing pointing at
+    // the missing route. Throwing produces the same CrashLoopBackOff
+    // with an accurate, actionable message.
+    //
+    // Same class as #1387/#1389 in Python: route rebuilding depended on
+    // private FastAPI internals, one was renamed, the ImportError was
+    // swallowed and success reported. That was made fail-fast in v3.3.2
+    // as a documented behaviour change. registerLivezRoute reaches into
+    // FastMCP internals for its Hono app and is exactly as fragile — if
+    // fastmcp's shape changes this returns false, and every TypeScript
+    // agent restart-loops. Do not soften this back to a warning.
+    if (!registerLivezRoute(this.server, this.config.name)) {
+      throw new Error(
+        `agent ${this.agentId} cannot start: the /livez liveness route ` +
+          `failed to register (cause logged above). Kubernetes probes ` +
+          `/livez for liveness, so serving without it would restart this ` +
+          `agent on every probe interval.`,
+      );
     }
 
     // 2. Register LLM tools from LlmToolRegistry

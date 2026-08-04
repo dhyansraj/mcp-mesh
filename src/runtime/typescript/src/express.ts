@@ -208,6 +208,20 @@ export class MeshExpress {
         serviceId: this.serviceId,
       });
     });
+
+    // Liveness endpoint (issue #1467) — always 200 while the process is
+    // up. Deliberately consults NOTHING: liveness must not share a URL
+    // with readiness, or a dependency outage that should only make the
+    // service unready restarts the pod instead. Mirrors Python's
+    // `build_livez_response`.
+    this.app.get("/livez", (_req: Request, res: Response) => {
+      res.status(200).json({
+        alive: true,
+        agent: this.config.name,
+        serviceId: this.serviceId,
+        timestamp: new Date().toISOString(),
+      });
+    });
   }
 
   /**
