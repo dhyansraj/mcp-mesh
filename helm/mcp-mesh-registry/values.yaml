@@ -366,7 +366,14 @@ envFrom: []
   # - secretRef:
   #     name: special-secret
 
-# Liveness and readiness probes
+# Liveness and readiness probes.
+#
+# Unlike the agent chart (issue #1467), both may share /health here: the
+# registry's GET /health (src/core/registry/ent_handlers.go) returns a
+# static 200 with uptime and never consults the database, a dependency,
+# or a user-supplied check. It is already a pure liveness signal, so it
+# cannot turn an outage elsewhere into a registry restart. Should it ever
+# grow a dependency check, split the probes as the agent chart does.
 livenessProbe:
   httpGet:
     path: /health
@@ -378,7 +385,7 @@ livenessProbe:
 
 readinessProbe:
   httpGet:
-    path: /health # Matches working examples
+    path: /health
     port: http
   initialDelaySeconds: 10
   periodSeconds: 5

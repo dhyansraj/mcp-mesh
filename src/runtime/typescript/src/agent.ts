@@ -73,6 +73,7 @@ import {
   type HelperToolMeta,
 } from "./jobs-helper-tools.js";
 import { registerCancelRoute } from "./jobs-cancel-route.js";
+import { registerLivezRoute } from "./livez-route.js";
 import {
   clusterStrictEnabled,
   normalizeSchemaWithPolicy,
@@ -1917,6 +1918,13 @@ export class MeshAgent {
 
       console.log(`Agent listening on port ${this.config.httpPort}`);
     }
+
+    // 1.5 Issue #1467: mount GET|HEAD /livez as early as possible —
+    // FastMCP serves /health and /ready itself, but liveness needs its
+    // own URL so a dependency outage can make the agent unready without
+    // also making Kubernetes restart it. Unconditional (no registry
+    // required): the kubelet probes the pod either way.
+    registerLivezRoute(this.server, this.config.name);
 
     // 2. Register LLM tools from LlmToolRegistry
     this.registerLlmTools();
