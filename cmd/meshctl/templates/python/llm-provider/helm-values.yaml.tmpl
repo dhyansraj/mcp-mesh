@@ -31,32 +31,52 @@ registry:
   host: "mcp-core-mcp-mesh-registry"
   port: "8000"
 
-# LLM provider needs API keys for the backend LLM service.
-# The refs below point to a secret named `llm-secrets` — update the `name:` values
-# below to match your cluster's secret, or create the secret:
+{{- /* Only the credential the SELECTED model actually authenticates with is
+     wired. Wiring all three vendor keys told a Gemini scaffold it needed
+     ANTHROPIC_API_KEY, and told a gateway scaffold to create exactly the
+     credentials its own README (correctly) says are the wrong ones —
+     issues #1479/#1483. `.ProbeVendor` is "" for gateway-prefixed and
+     long-tail models; do NOT gate this on `contains .Model "<vendor>"`,
+     which matches bedrock/anthropic.* and vertex_ai/gemini-*. */}}
+{{- $envVar := "" }}
+{{- $secretKey := "" }}
+{{- $keyExample := "" }}
+{{- if eq .ProbeVendor "anthropic" }}{{ $envVar = "ANTHROPIC_API_KEY" }}{{ $secretKey = "anthropic-api-key" }}{{ $keyExample = "sk-ant-..." }}
+{{- else if eq .ProbeVendor "openai" }}{{ $envVar = "OPENAI_API_KEY" }}{{ $secretKey = "openai-api-key" }}{{ $keyExample = "sk-..." }}
+{{- else if eq .ProbeVendor "gemini" }}{{ $envVar = "GOOGLE_API_KEY" }}{{ $secretKey = "google-api-key" }}{{ $keyExample = "AIza..." }}
+{{- end }}
+{{ if .ProbeVendor -}}
+# {{ .Model }} authenticates with {{ $envVar }}, and that is
+# the only credential wired below. The ref points to a secret named
+# `llm-secrets` — update the `name:` value to match your cluster's secret, or
+# create the secret:
 #   kubectl create secret generic llm-secrets \
-#     --from-literal=anthropic-api-key=sk-ant-... \
-#     --from-literal=openai-api-key=sk-... \
-#     --from-literal=google-api-key=...
+#     --from-literal={{ $secretKey }}={{ $keyExample }}
 env:
-  - name: ANTHROPIC_API_KEY
+  - name: {{ $envVar }}
     valueFrom:
       secretKeyRef:
         name: llm-secrets
-        key: anthropic-api-key
+        key: {{ $secretKey }}
         optional: true
-  - name: OPENAI_API_KEY
-    valueFrom:
-      secretKeyRef:
-        name: llm-secrets
-        key: openai-api-key
-        optional: true
-  - name: GOOGLE_API_KEY
-    valueFrom:
-      secretKeyRef:
-        name: llm-secrets
-        key: google-api-key
-        optional: true
+{{- else -}}
+# No credentials are wired here.
+# {{ .Model }} is not served by a direct
+# big-3 API, so there is no vendor key to reference: for a gateway-prefixed model
+# (bedrock/..., vertex_ai/..., databricks/...) it authenticates with the
+# gateway's own credentials — AWS credentials, ADC / Workload Identity, a
+# workspace token — not the underlying model vendor's API key, and this
+# template cannot know which. Create the secret described in the README, then
+# reference it here:
+#
+# env:
+#   - name: <VARIABLE>
+#     valueFrom:
+#       secretKeyRef:
+#         name: llm-secrets
+#         key: <credential-name>
+#         optional: true
+{{- end }}
 
 # Optional: Configure model settings
 # - name: DEFAULT_MODEL
@@ -68,4 +88,3 @@ env:
 # Uncomment to add — leaving commented avoids overriding base values
 # secrets:
 #   DATABASE_URL: "postgres://user:pass@host:5432/db"
-#   API_KEY: "your-api-key"

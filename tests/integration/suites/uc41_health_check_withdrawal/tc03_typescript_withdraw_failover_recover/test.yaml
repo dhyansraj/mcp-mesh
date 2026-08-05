@@ -24,13 +24,19 @@
 # the process or tears down the server would satisfy the failover assertions
 # and be caught here and by the pid.
 #
-# WHY THE VERDICT IS READ FROM THE LOG AND NOT FROM /health
+# THE VERDICT IS READ FROM /health, NOT FROM THE LOG
 #
-# Unlike Python and Java, TypeScript's `/health` and `/ready` are FastMCP's
-# built-ins and do NOT reflect the user health check's verdict — that is
-# #1478, known and deliberately out of scope for #1481. So the TS tests read
-# the verdict from the runtime's own `[mesh-health]` log line instead. If
-# #1478 lands, this is the assertion to move onto /health.
+# Since #1478 TypeScript's `/ready` and `/health` are mesh-owned routes that
+# reflect the user health check's verdict, exactly as Python's and Java's do.
+# That is what is asserted here, and it is strictly stronger than the log line
+# it replaced: a runtime that printed `[mesh-health] ... reports UNHEALTHY`
+# while serving a 200 `/ready` would still be shipping the #1478 bug — direct
+# Kubernetes Service traffic keeps arriving at a provider mesh consumers have
+# already abandoned — and the log grep could not see it.
+#
+# `/ready` is checked by STATUS CODE rather than body text because that is the
+# only thing the kubelet reads: #1468 made the agent chart gate Service
+# endpoints on it, so a 200 here is the outage this test exists to catch.
 #
 # The rest of the design (file-toggled flag, poll-for-the-condition rather
 # than fixed waits, provider B as the control) is documented in tc01.
@@ -236,25 +242,20 @@ test:
     capture: withdrawal
     timeout: 120
 
-  # The verdict, read from the runtime's own log rather than /health — see the
-  # #1478 note in the header.
+  # The verdict, read from provider A's own endpoints (#1478) — see the header.
   #
-  # Every log is grepped rather than `meshctl logs <agent>`, because meshctl
-  # names the log file from its own static analysis of the entrypoint and for
-  # this TS agent that comes out as `probe_a.log` (the first tool's name), not
-  # the registered agent name. Grepping all of them is name-proof AND still
-  # specific: provider A is the only agent here with a health check, so a
-  # `[mesh-health]` line can only be its output.
-  - name: "Phase B: the runtime must have logged the UNHEALTHY verdict"
+  # `/ready` is captured as a bare status code: `curl -o /dev/null -w` prints
+  # nothing else, so the assertion below matches an exact `READY_HTTP_CODE: 503`
+  # rather than a substring that a body could satisfy by accident. `--max-time`
+  # on both so a hung server fails the step instead of the whole run.
+  - name: "Phase B: A's own /health and /ready must report the unhealthy verdict, not a crash"
     handler: shell
     workdir: /workspace
     command: |
-      LOG=$(cat ~/.mcp-mesh/logs/*.log 2>/dev/null || true)
-      N=$(printf '%s' "$LOG" | grep -c "reports UNHEALTHY" || true)
-      echo "UNHEALTHY_LOG_LINES: $N"
-      printf '%s' "$LOG" | grep 'mesh-health' | tail -10 || echo 'NO_MESH_HEALTH_LINES'
-    capture: verdict_log
-    ignore_errors: true
+      echo "HEALTH_BODY: $(curl -s --max-time 5 http://localhost:3421/health || echo 'HEALTH_UNREACHABLE')"
+      echo "READY_HTTP_CODE: $(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:3421/ready || echo 'READY_UNREACHABLE')"
+      echo "READY_BODY: $(curl -s --max-time 5 http://localhost:3421/ready || echo 'READY_UNREACHABLE')"
+    capture: provider_a_health_during_outage
 
   - name: "Phase B: poll until the consumer fails over to provider B"
     handler: shell
@@ -389,8 +390,23 @@ assertions:
   - expr: "${captured.withdrawal} contains 'LIVEZ_FAILURES: 0'"
     message: "WITHDRAWAL: provider A's process must stay alive and serving /livez for the ENTIRE outage — withdrawn is not dead"
 
-  - expr: "${captured.verdict_log} not contains 'UNHEALTHY_LOG_LINES: 0'"
-    message: "WITHDRAWAL: the runtime must log the UNHEALTHY verdict, proving the withdrawal came from the user's healthCheck (TS /health cannot be used — see #1478)"
+  # #1478. /health carries the verdict and /ready answers 503, so this is the
+  # same statement Python's tc01 and Java's tc05 make.
+  - expr: "${captured.provider_a_health_during_outage} contains 'unhealthy'"
+    message: "WITHDRAWAL: provider A's own /health must report the unhealthy verdict while withdrawn"
+  - expr: "${captured.provider_a_health_during_outage} contains 'simulated vendor outage'"
+    message: "WITHDRAWAL: /health must carry the health check's own error string, proving the verdict came from the user check rather than a generic failure"
+  - expr: "${captured.provider_a_health_during_outage} not contains 'HEALTH_UNREACHABLE'"
+    message: "WITHDRAWAL: provider A's HTTP server must still answer /health while withdrawn — withdrawn is not dead"
+
+  # The Kubernetes half, and the reason #1478 was a bug rather than a cosmetic
+  # gap: #1468 gates Service endpoints on /ready, so a provider that keeps
+  # answering 200 here goes on receiving direct traffic that mesh consumers
+  # have already routed away from.
+  - expr: "${captured.provider_a_health_during_outage} contains 'READY_HTTP_CODE: 503'"
+    message: "WITHDRAWAL: /ready must answer 503 while the health check reports unhealthy — a 200 keeps the pod in the Service and sends direct traffic to a provider the mesh has abandoned"
+  - expr: "${captured.provider_a_health_during_outage} not contains 'READY_UNREACHABLE'"
+    message: "WITHDRAWAL: provider A must still answer /ready while withdrawn — an unreachable endpoint is a different failure from an honest 503"
 
   - expr: "${captured.fault_trace} not contains 'FAIL_TICKS: 0'"
     message: "WITHDRAWAL: the health check must have been invoked at least once while the flag said fail"

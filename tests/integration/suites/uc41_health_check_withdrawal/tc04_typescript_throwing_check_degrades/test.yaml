@@ -24,12 +24,18 @@
 #
 #   1. the invocation trace shows the check ran REPEATEDLY while the flag
 #      said `throw` (the loop survived the throw and kept rescheduling);
-#   2. the runtime logged the degrade decision naming this agent;
+#   2. the agent's own `/health` reports `degraded` and carries the thrown
+#      message, and the mesh core recorded the matching transition;
 #   3. only then: the registry never moves A off `healthy`, and the consumer
 #      is still routed to A.
 #
-# Unlike Python and Java, TS `/health` is FastMCP's built-in and does not
-# reflect the verdict (#1478), so (2) is read from the `[mesh-health]` log.
+# Since #1478 TS `/health` reflects the verdict, exactly as Python's and
+# Java's do, so (2) is read from the endpoint rather than from a log line.
+# The core-transition grep stays alongside it: `/health` is what the runtime
+# BELIEVES, and `Health status changed: Healthy -> Degraded` is what actually
+# crossed the napi boundary and became the core's state. A runtime that
+# rendered `degraded` in its body while publishing something else would
+# satisfy the first and fail the second.
 #
 # WHY THE WATCH IS 30s AND WHY IT IS NOT A SLEEP
 #
@@ -229,9 +235,28 @@ test:
       tail -12 /workspace/hc-invocations.log 2>/dev/null || echo 'NO_TRACE'
     capture: throw_trace
 
-  # Non-vacuity, part 2: the runtime saw the throw and classified it as
-  # degraded. Read from the log because TS /health does not carry the verdict
-  # (#1478).
+  # Non-vacuity, part 2a: the runtime saw the throw and classified it as
+  # degraded, read from the agent's own endpoint (#1478).
+  #
+  # /ready is captured as a bare status code alongside it. `degraded` answers
+  # 503 there on all three runtimes — deliberately: readiness is a load
+  # balancer's "stop adding load", while the heartbeat below keeps running so
+  # the mesh can still resolve an impaired provider that may be the only one.
+  - name: "A's /health must report degraded, carrying the thrown message"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "HEALTH_BODY: $(curl -s --max-time 5 http://localhost:3421/health || echo 'HEALTH_UNREACHABLE')"
+      echo "READY_HTTP_CODE: $(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:3421/ready || echo 'READY_UNREACHABLE')"
+    capture: provider_a_health
+
+  # Non-vacuity, part 2b: the degraded verdict crossed the napi boundary and
+  # became the CORE's state, not just the runtime's rendering of it.
+  #
+  # THREW_LOG_LINES and DEGRADE_CLASSIFIED_LINES are still printed but no
+  # longer asserted: /health above makes both statements more directly, and
+  # about the verdict the agent is actually SERVING rather than one it once
+  # logged. They stay because a failing run wants them.
   #
   # Every log is grepped rather than `meshctl logs <agent>`, because meshctl
   # names the log file from its own static analysis of the entrypoint and for
@@ -239,7 +264,7 @@ test:
   # the registered agent name. Grepping all of them is name-proof AND still
   # specific: provider A is the only agent here with a health check, so a
   # `[mesh-health]` line can only be its output.
-  - name: "The runtime must have logged the degrade decision for this agent"
+  - name: "The degraded verdict must have reached the mesh core"
     handler: shell
     workdir: /workspace
     command: |
@@ -320,17 +345,22 @@ assertions:
   # one of the neuters this file is meant to catch. So the verdict has to be
   # asserted in the affirmative, at two points on the chain:
   #
-  #   - `[mesh-health] ... threw — reporting degraded ...` (health-check.ts's
-  #     catch): the loop caught THIS throw and took the degrade branch;
+  #   - `/health` (#1478): the endpoint reports `degraded` and carries the
+  #     thrown exception's own message, so the loop caught THIS throw and took
+  #     the degrade branch;
   #   - `Health status changed: Healthy -> Degraded` (mcp_mesh_core::heartbeat,
   #     logged only on a real transition): the degraded verdict crossed the
   #     napi boundary and became the core's state. This one is computed from
   #     the verdict rather than printed alongside it, so a throw branch that
   #     returns `healthy` produces NO such line and fails here.
-  - expr: "${captured.degrade_log} not contains 'THREW_LOG_LINES: 0'"
-    message: "CLASSIFICATION: the runtime must log that the check threw — proving it caught THIS throw rather than never running"
-  - expr: "${captured.degrade_log} not contains 'DEGRADE_CLASSIFIED_LINES: 0'"
-    message: "CLASSIFICATION: a throwing healthCheck must be classified DEGRADED by the runtime — 'not unhealthy' is also true of a runtime that wrongly called it healthy"
+  - expr: "${captured.provider_a_health} contains 'degraded'"
+    message: "CLASSIFICATION: a healthCheck that throws must be recorded as DEGRADED, not healthy and not unhealthy"
+  - expr: "${captured.provider_a_health} contains 'simulated broken health check'"
+    message: "CLASSIFICATION: /health must carry the thrown error's own message, proving the runtime caught THIS throw"
+  - expr: "${captured.provider_a_health} not contains 'HEALTH_UNREACHABLE'"
+    message: "CLASSIFICATION: provider A's HTTP server must still answer /health while its check is throwing"
+  - expr: "${captured.provider_a_health} contains 'READY_HTTP_CODE: 503'"
+    message: "CLASSIFICATION: /ready must answer 503 for a degraded agent — a load balancer is told to stop adding load even though the mesh keeps resolving it"
   - expr: "${captured.degrade_log} not contains 'CORE_DEGRADE_TRANSITIONS: 0'"
     message: "CLASSIFICATION: the degraded verdict must reach the mesh core (Health status changed: Healthy -> Degraded) — otherwise the runtime only printed the word and published something else"
   - expr: "${captured.degrade_log} contains 'UNHEALTHY_LOG_LINES: 0'"

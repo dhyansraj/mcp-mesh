@@ -315,9 +315,12 @@ agentCode:
 # runtime serves three endpoints with three different meanings:
 #
 #   /livez   always 200 while the process is serving. Nothing else.
-#   /ready   should traffic be routed here? On Python this consults the
-#            user's health_check, so an upstream vendor outage makes the
-#            agent unready and the registry evicts it from resolution.
+#   /ready   should traffic be routed here? All three runtimes consult
+#            the user's health check (Python #1472, Java #1474,
+#            TypeScript #1478), so an upstream vendor outage takes the
+#            pod out of the Service. The same verdict separately stops
+#            the heartbeat, and THAT is what evicts the agent from mesh
+#            resolution — the registry never reads this probe.
 #   /health  the diagnostic view for humans and `kubectl exec` curls.
 #            No probe points at it: it carries no consequence of its own.
 #
