@@ -6,6 +6,8 @@ generation into a single module.
 """
 
 import logging
+import os
+import re
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -14,6 +16,94 @@ from typing import Any
 from .support_types import HealthStatus, HealthStatusType
 
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# TTL Resolution (issue #1492)
+# =============================================================================
+
+# TypeScript's DEFAULT_HEALTH_CHECK_TTL_SECONDS and Java's DEFAULT_TTL_SECONDS.
+DEFAULT_HEALTH_CHECK_TTL_SECONDS = 15
+
+# Overrides the ``health_check_ttl`` decorator argument when set.
+HEALTH_CHECK_TTL_ENV = "MCP_MESH_HEALTH_CHECK_TTL"
+
+# Integers only — "15s", "1.5" and "0x10" are all rejected. Mirrors
+# TypeScript's INTEGER_RE and Java's Integer.parseInt, both of which take a
+# leading sign and nothing else. Bare `int()` would additionally accept
+# "1_0" and non-ASCII digits, neither of which TypeScript honours.
+#
+# re.ASCII is deliberate: Python's `\d` and `int()` both accept non-ASCII
+# digits ("١٥" -> 15), as does Java's Integer.parseInt, but TypeScript
+# rejects them. Following TypeScript — an env var carrying an Arabic-Indic
+# numeral is far likelier an encoding accident than an intent, and a loud
+# fallback beats silently running a TTL the operator cannot read back.
+_INTEGER_RE = re.compile(r"^[+-]?\d+$", re.ASCII)
+
+
+def resolve_health_check_ttl(
+    configured: Any = None, override: str | None = None
+) -> int:
+    """Resolve the health-check refresh period, in seconds.
+
+    Priority: ``MCP_MESH_HEALTH_CHECK_TTL`` > ``health_check_ttl`` > 15s.
+    Every rejected value warns and falls through to the next source rather
+    than raising — a malformed TTL must not stop an agent from booting, but
+    it must not be silently rounded into something else either.
+
+    ``override`` is a parameter rather than an ambient ``os.environ`` read so
+    the resolution rules are testable without mutating the environment (same
+    shape as TypeScript's ``resolveHealthCheckTtl`` and Java's
+    ``MeshHealthCheckRegistry.ttlSeconds(String)``).
+
+    Args:
+        configured: value from ``agent_config["health_check_ttl"]``
+        override: raw ``MCP_MESH_HEALTH_CHECK_TTL`` value, or None if unset
+    """
+    ttl = DEFAULT_HEALTH_CHECK_TTL_SECONDS
+    # Collected, not logged inline: a warning names the value that is
+    # actually used, and that is not known until every source has been
+    # considered. Warning "using 15s" while a valid env override goes on to
+    # win would print a number the agent never runs with.
+    rejected: list[str] = []
+
+    if configured is not None:
+        # bool is an int subclass in Python; True is not 1 second.
+        if isinstance(configured, bool) or not isinstance(configured, int):
+            rejected.append(
+                f"health_check_ttl={configured!r} is not a whole number of seconds >= 1"
+            )
+        elif configured < 1:
+            rejected.append(
+                f"health_check_ttl={configured} is not a whole number of seconds >= 1"
+            )
+        else:
+            ttl = configured
+
+    if isinstance(override, str) and override.strip():
+        text = override.strip()
+        if not _INTEGER_RE.match(text):
+            rejected.append(
+                f"{HEALTH_CHECK_TTL_ENV}={override} is not an integer number of seconds"
+            )
+        else:
+            parsed = int(text)
+            if parsed < 1:
+                rejected.append(
+                    f"{HEALTH_CHECK_TTL_ENV}={override} is below the 1s minimum"
+                )
+            else:
+                ttl = parsed
+
+    for reason in rejected:
+        logger.warning("%s — using %ss", reason, ttl)
+
+    return ttl
+
+
+def resolve_health_check_ttl_from_env(configured: Any = None) -> int:
+    """Read ``MCP_MESH_HEALTH_CHECK_TTL`` and resolve against it."""
+    return resolve_health_check_ttl(configured, os.environ.get(HEALTH_CHECK_TTL_ENV))
+
 
 # =============================================================================
 # Health Result Storage (moved from DecoratorRegistry)

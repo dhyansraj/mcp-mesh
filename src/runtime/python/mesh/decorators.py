@@ -1487,6 +1487,7 @@ def agent(
             Called before heartbeat and on /health endpoint with TTL caching
         health_check_ttl: Cache TTL for health check results in seconds (default: 15)
             Reduces expensive health check calls by caching results
+            Environment variable: MCP_MESH_HEALTH_CHECK_TTL (takes precedence)
         auto_run: Automatically start service and keep process alive (default: True)
             Environment variable: MCP_MESH_AUTO_RUN (takes precedence)
         auto_run_interval: Keep-alive heartbeat interval in seconds (default: 10)
@@ -1499,6 +1500,7 @@ def agent(
         MCP_MESH_HTTP_ENABLED: Override enable_http parameter (boolean: true/false)
         MCP_MESH_NAMESPACE: Override namespace parameter (string)
         MCP_MESH_HEALTH_INTERVAL: Override heartbeat_interval parameter (integer, ≥1)
+        MCP_MESH_HEALTH_CHECK_TTL: Override health_check_ttl parameter (integer, ≥1)
         MCP_MESH_AUTO_RUN: Override auto_run parameter (boolean: true/false)
         MCP_MESH_AUTO_RUN_INTERVAL: Override auto_run_interval parameter (integer, ≥1)
 

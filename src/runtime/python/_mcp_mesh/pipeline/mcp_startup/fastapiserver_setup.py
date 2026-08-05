@@ -323,9 +323,17 @@ class FastAPIServerSetupStep(PipelineStep):
         """
         from fastapi import Response
 
+        from ...shared.health_check_manager import resolve_health_check_ttl_from_env
+
         agent_name = agent_config.get("name", "mcp-mesh-agent")
         health_check_fn = agent_config.get("health_check")
-        health_check_ttl = agent_config.get("health_check_ttl", 15)
+        # Issue #1492: MCP_MESH_HEALTH_CHECK_TTL > decorator argument > 15,
+        # the precedence TypeScript and Java already use. The decorator
+        # argument is baked into the image; the env var can be retuned in
+        # Helm values against a live incident.
+        health_check_ttl = resolve_health_check_ttl_from_env(
+            agent_config.get("health_check_ttl")
+        )
 
         # Create a background task to update health check results periodically
         async def update_health_result(publish_to_core: bool = False):
