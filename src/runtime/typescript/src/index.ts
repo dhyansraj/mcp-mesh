@@ -198,6 +198,20 @@ export {
 // `A2ADependencies` are both aliases of `PositionalDependencies`.
 export type { PositionalDependencies } from "./positional-deps.js";
 
+// Health check (issue #1476) — an `unhealthy` verdict withdraws the agent
+// from dependency resolution until the check passes again.
+export {
+  DEFAULT_HEALTH_CHECK_TTL_SECONDS,
+  HEALTH_CHECK_TTL_ENV,
+  normalizeHealthResult,
+  resolveHealthCheckTtl,
+  runHealthCheck,
+  type MeshHealthCheck,
+  type MeshHealthResult,
+  type MeshHealthStatus,
+  type HealthVerdict,
+} from "./health-check.js";
+
 // Service views (RFC #1280) — consumer view factory + facade types.
 export {
   serviceView,

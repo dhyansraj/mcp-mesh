@@ -10,6 +10,7 @@
 import { randomBytes } from "crypto";
 import { createServer } from "net";
 import type { AgentConfig, ResolvedAgentConfig } from "./types.js";
+import { resolveHealthCheckTtlFromEnv } from "./health-check.js";
 import {
   resolveConfig as rustResolveConfig,
   resolveConfigInt,
@@ -186,6 +187,7 @@ export function generateAgentIdSuffix(): string {
  * - MCP_MESH_NAMESPACE: Override namespace
  * - MCP_MESH_REGISTRY_URL: Override registry URL
  * - MCP_MESH_HEALTH_INTERVAL: Override heartbeat interval
+ * - MCP_MESH_HEALTH_CHECK_TTL: Override health-check refresh period
  */
 export function resolveConfig(config: AgentConfig): ResolvedAgentConfig {
   // All config resolution via Rust core - ensures consistent ENV > param > default
@@ -214,6 +216,11 @@ export function resolveConfig(config: AgentConfig): ResolvedAgentConfig {
     namespace: resolvedNamespace,
     registryUrl: resolvedRegistryUrl,
     heartbeatInterval: resolvedHeartbeatInterval,
+    healthCheck: config.healthCheck,
+    // Issue #1476: resolved here (not in Rust core) because the TTL is an
+    // SDK-side timer, not part of the registration envelope — the same
+    // reason Java resolves MCP_MESH_HEALTH_CHECK_TTL in its own registry.
+    healthCheckTtl: resolveHealthCheckTtlFromEnv(config.healthCheckTtl),
   };
 }
 

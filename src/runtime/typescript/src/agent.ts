@@ -75,6 +75,12 @@ import {
 import { registerCancelRoute } from "./jobs-cancel-route.js";
 import { registerLivezRoute } from "./livez-route.js";
 import {
+  startHealthCheckLoop,
+  DEFAULT_HEALTH_CHECK_TTL_SECONDS,
+  type HealthCheckLoop,
+  type HealthVerdict,
+} from "./health-check.js";
+import {
   clusterStrictEnabled,
   normalizeSchemaWithPolicy,
 } from "./schema-normalize.js";
@@ -296,6 +302,12 @@ export class MeshAgent {
    */
   private llmProviderVendors: Map<string, string> = new Map();
   private handle: JsAgentHandle | null = null;
+  /**
+   * Issue #1476: the periodic health-check refresh, when the agent
+   * declared a `healthCheck`. Null otherwise — an agent without one
+   * starts no timer and behaves exactly as before.
+   */
+  private healthLoop: HealthCheckLoop | null = null;
   private httpsProxy?: import("node:https").Server;
   private started = false;
   private tracingEnabled = false;
@@ -423,6 +435,9 @@ export class MeshAgent {
         namespace: "default",
         registryUrl: "",
         heartbeatInterval: 0,
+        // Issue #1476: a worker thread never starts the refresh loop
+        // (no `_autoStart`), so this is a placeholder like the rest.
+        healthCheckTtl: DEFAULT_HEALTH_CHECK_TTL_SECONDS,
       };
       this.agentId = "";
       return;
@@ -1990,8 +2005,57 @@ export class MeshAgent {
     // registration" race).
     this.startClaimDispatchers();
 
+    // 3.6 Issue #1476: start the health-check refresh. AFTER the
+    // heartbeat, deliberately — the agent registers and becomes visible
+    // first, and only the refreshes that follow can withdraw it. Returns
+    // immediately; the seed run is scheduled, never awaited.
+    this.startHealthCheckLoop();
+
     // 4. Install signal handlers for graceful shutdown
     this.installSignalHandlers();
+  }
+
+  /**
+   * Issue #1476: run the user's `healthCheck` on a timer and report each
+   * verdict to the Rust core, which stops heartbeating while the agent is
+   * `unhealthy` so the registry withdraws it from dependency resolution.
+   *
+   * The process keeps running throughout: an upstream outage makes this
+   * agent invisible to resolution, not dead. When the check passes again
+   * heartbeats resume and the registry restores the agent through its
+   * `410 Gone` re-register path.
+   */
+  private startHealthCheckLoop(): void {
+    const healthCheck = this.config.healthCheck;
+    if (!healthCheck || this.healthLoop) return;
+
+    const ttlSeconds = this.config.healthCheckTtl;
+    console.log(
+      `Health check runs every ${ttlSeconds}s for agent ${this.agentId}; an ` +
+        `unhealthy verdict stops the heartbeat and withdraws this agent from ` +
+        `dependency resolution`,
+    );
+
+    this.healthLoop = startHealthCheckLoop({
+      agentName: this.agentId,
+      healthCheck,
+      ttlSeconds,
+      publish: async (status) => {
+        // The handle is nulled by shutdown(); a verdict landing after
+        // teardown has nowhere to go and is not an error.
+        const handle = this.handle;
+        if (!handle || this.shutdownRequested) return false;
+        return await handle.updateHealth(status);
+      },
+    });
+  }
+
+  /**
+   * Issue #1476: the latest health verdict, or null before the first run
+   * completes (or when no `healthCheck` is configured).
+   */
+  getHealthVerdict(): HealthVerdict | null {
+    return this.healthLoop?.latest() ?? null;
   }
 
   /**
@@ -2774,6 +2838,13 @@ export class MeshAgent {
     if (this.shutdownPromise) return this.shutdownPromise;
     this.shutdownRequested = true;
     this.shutdownPromise = (async () => {
+      // Issue #1476: stop the health refresh first. Its verdicts are only
+      // meaningful while the agent is serving, and a tick landing mid-
+      // teardown would push a status at a handle that is about to close.
+      if (this.healthLoop) {
+        this.healthLoop.stop();
+        this.healthLoop = null;
+      }
       // Phase 1 MeshJob substrate: stop claim dispatchers first so they
       // don't pull a fresh job mid-shutdown. Issue #1173: all dispatchers
       // drain CONCURRENTLY under one shared, hard-capped budget — never

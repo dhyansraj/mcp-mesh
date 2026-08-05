@@ -1,0 +1,376 @@
+/**
+ * Periodic health check that can withdraw this agent from dependency
+ * resolution while its own upstream is down (issue #1476).
+ *
+ * The verdict of the user's `healthCheck` is pushed to the Rust core on
+ * every tick. While it is `unhealthy` the core stops heartbeating, the
+ * registry's staleness sweep marks the agent unhealthy, and resolution
+ * stops selecting it — consumers fail over to a surviving provider.
+ * Reporting `healthy` (or `degraded`) again resumes heartbeats and the
+ * registry restores the agent through the `410 Gone` re-register path,
+ * with no process restart. The TTL is therefore the detection latency in
+ * BOTH directions: outage and recovery.
+ *
+ * TypeScript half of the mechanism shipped for Python in #1472/#1473 and
+ * for Java in #1474/#1475; the verdict vocabulary, the "a broken check
+ * degrades, it does not withdraw" rule, and the `checks`/`errors` keys
+ * are deliberately identical across the three.
+ *
+ * ## Only providers are gated
+ *
+ * This loop runs for MCP agents (`mesh(server, ...)`) only. `mesh.route`
+ * and A2A agents are fan-out points: withdrawing a provider is correct,
+ * withdrawing a gateway takes down every path that enters through it.
+ * Python encodes the same asymmetry by giving its API and A2A pipelines
+ * no health-refresh loop at all.
+ */
+
+/** The verdict vocabulary shared by all three runtimes. */
+export type MeshHealthStatus = "healthy" | "degraded" | "unhealthy";
+
+/**
+ * The rich shape a `healthCheck` may return. A bare `boolean` is also
+ * accepted (`true` → healthy, `false` → unhealthy).
+ */
+export interface MeshHealthResult {
+  /**
+   * `"healthy"`, `"degraded"` or `"unhealthy"`. Omitted means healthy —
+   * a result that carries only `checks` is reporting success (Python
+   * parity: `user_result.get("status", "healthy")`).
+   */
+  status?: MeshHealthStatus | string;
+  /** Named sub-probes, surfaced verbatim for operators. */
+  checks?: Record<string, unknown>;
+  /** Human-readable reasons, surfaced verbatim for operators. */
+  errors?: string[];
+}
+
+/**
+ * A user health check. May be sync or async.
+ *
+ * Return `unhealthy` only for conditions the mesh should route AROUND —
+ * the upstream this agent needs is genuinely not serving. An
+ * indeterminate probe (cancelled, cut short) says nothing about the
+ * upstream and must be `degraded`, which keeps the heartbeat alive.
+ */
+export type MeshHealthCheck = () =>
+  | boolean
+  | MeshHealthResult
+  | Promise<boolean | MeshHealthResult>;
+
+/** A normalized verdict — what the loop stores and publishes. */
+export interface HealthVerdict {
+  status: MeshHealthStatus;
+  checks: Record<string, unknown>;
+  errors: string[];
+}
+
+/** Python's `health_check_ttl` default, and Java's `DEFAULT_TTL_SECONDS`. */
+export const DEFAULT_HEALTH_CHECK_TTL_SECONDS = 15;
+
+/** Overrides the configured `healthCheckTtl` when set. */
+export const HEALTH_CHECK_TTL_ENV = "MCP_MESH_HEALTH_CHECK_TTL";
+
+/** Integers only — `"15s"`, `"1.5"` and `"0x10"` are all rejected. */
+const INTEGER_RE = /^[+-]?\d+$/;
+
+/**
+ * Render anything a `throw` can produce, including non-`Error` values and
+ * objects whose `toString` itself throws. The health loop must survive
+ * every one of them: a formatting failure here would take out the very
+ * mechanism whose job is to notice failures.
+ */
+export function describeThrown(err: unknown): string {
+  if (err instanceof Error) return err.message || err.name;
+  try {
+    return String(err);
+  } catch {
+    return "<unprintable value>";
+  }
+}
+
+/**
+ * Convert whatever a health check returned into a verdict.
+ *
+ * Never throws. Anything unrecognized becomes `degraded`, NOT
+ * `unhealthy`: an unparseable result is a reporting defect, and
+ * withdrawing a working agent from the mesh over one is a far worse
+ * failure than keeping it. Same rule as Java's `MeshHealthCheckRegistry.coerce`.
+ */
+export function normalizeHealthResult(raw: unknown): HealthVerdict {
+  if (typeof raw === "boolean") {
+    // Python parity: true → healthy, false → unhealthy.
+    return raw
+      ? { status: "healthy", checks: { health_check: true }, errors: [] }
+      : {
+          status: "unhealthy",
+          checks: { health_check: false },
+          errors: ["Health check returned false"],
+        };
+  }
+
+  if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+    const result = raw as MeshHealthResult;
+    const rawStatus = result.status;
+    // A result with no `status` is reporting success (Python parity).
+    const status =
+      rawStatus === undefined || rawStatus === null
+        ? "healthy"
+        : toStatus(rawStatus);
+    if (status === null) {
+      return {
+        status: "degraded",
+        checks: { health_check_status_value: false },
+        errors: [`Unrecognized health status: ${describeThrown(rawStatus)}`],
+      };
+    }
+    return {
+      status,
+      checks: isPlainRecord(result.checks) ? result.checks : {},
+      errors: Array.isArray(result.errors)
+        ? result.errors.map((e) => (typeof e === "string" ? e : describeThrown(e)))
+        : [],
+    };
+  }
+
+  return {
+    status: "degraded",
+    checks: { health_check_return_type: false },
+    errors: [
+      `Invalid return type: ${raw === null ? "null" : typeof raw}. A health ` +
+        `check returns a boolean or { status, checks, errors }.`,
+    ],
+  };
+}
+
+function toStatus(value: unknown): MeshHealthStatus | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  return normalized === "healthy" ||
+    normalized === "degraded" ||
+    normalized === "unhealthy"
+    ? normalized
+    : null;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Run a health check and normalize its verdict. Never throws and never
+ * rejects.
+ *
+ * A check that THROWS becomes `degraded`, not `unhealthy`: a buggy health
+ * check must not be able to withdraw a working agent from the mesh.
+ */
+export async function runHealthCheck(
+  healthCheck: MeshHealthCheck,
+  agentName: string,
+): Promise<HealthVerdict> {
+  try {
+    return normalizeHealthResult(await healthCheck());
+  } catch (err) {
+    const reason = describeThrown(err);
+    console.warn(
+      `[mesh-health] health check for agent '${agentName}' threw — ` +
+        `reporting degraded (the agent keeps heartbeating): ${reason}`,
+    );
+    return {
+      status: "degraded",
+      checks: { health_check_execution: false },
+      errors: [`Health check failed: ${reason}`],
+    };
+  }
+}
+
+/**
+ * Resolve the refresh period, in seconds.
+ *
+ * Priority: `MCP_MESH_HEALTH_CHECK_TTL` > `healthCheckTtl` > 15s. Every
+ * rejected value warns and falls through to the next source rather than
+ * throwing — a malformed TTL must not stop an agent from booting, but it
+ * must not be silently rounded into something else either.
+ *
+ * `override` is a parameter rather than an ambient `process.env` read so
+ * the resolution rules are testable without mutating the environment.
+ *
+ * @param configured value from `AgentConfig.healthCheckTtl`
+ * @param override raw {@link HEALTH_CHECK_TTL_ENV} value, or null/undefined
+ */
+export function resolveHealthCheckTtl(
+  configured?: number | null,
+  override?: string | null,
+): number {
+  let ttl = DEFAULT_HEALTH_CHECK_TTL_SECONDS;
+
+  if (configured !== undefined && configured !== null) {
+    if (Number.isInteger(configured) && configured >= 1) {
+      ttl = configured;
+    } else {
+      console.warn(
+        `[mesh-health] healthCheckTtl=${describeThrown(configured)} is not a ` +
+          `whole number of seconds >= 1 — using ${ttl}s`,
+      );
+    }
+  }
+
+  if (typeof override === "string" && override.trim() !== "") {
+    const text = override.trim();
+    const parsed = INTEGER_RE.test(text) ? Number(text) : Number.NaN;
+    if (Number.isInteger(parsed) && parsed >= 1) {
+      return parsed;
+    }
+    console.warn(
+      Number.isInteger(parsed)
+        ? `[mesh-health] ${HEALTH_CHECK_TTL_ENV}=${override} is below the 1s ` +
+            `minimum — using ${ttl}s`
+        : `[mesh-health] ${HEALTH_CHECK_TTL_ENV}=${override} is not an ` +
+            `integer number of seconds — using ${ttl}s`,
+    );
+  }
+
+  return ttl;
+}
+
+/** Read {@link HEALTH_CHECK_TTL_ENV} and resolve against it. */
+export function resolveHealthCheckTtlFromEnv(configured?: number | null): number {
+  return resolveHealthCheckTtl(configured, process.env[HEALTH_CHECK_TTL_ENV]);
+}
+
+export interface HealthCheckLoopOptions {
+  agentName: string;
+  healthCheck: MeshHealthCheck;
+  /** Refresh period in seconds (already resolved). */
+  ttlSeconds: number;
+  /**
+   * Push the verdict to the mesh runtime. Not called for the seed run —
+   * see {@link startHealthCheckLoop}.
+   */
+  publish: (status: MeshHealthStatus) => boolean | Promise<boolean>;
+  /** Notified for every verdict, seed included. Must not throw. */
+  onVerdict?: (verdict: HealthVerdict) => void;
+}
+
+export interface HealthCheckLoop {
+  /** The most recent verdict, or null before the seed run completes. */
+  latest(): HealthVerdict | null;
+  /** Stop refreshing. Idempotent. */
+  stop(): void;
+  /**
+   * Resolves once the seed run (and its scheduling) has settled. Exposed
+   * for tests; production code never awaits it — see below.
+   */
+  seeded(): Promise<void>;
+}
+
+/**
+ * Start the refresh loop. Returns immediately.
+ *
+ * ## Startup ordering (deliberate)
+ *
+ * The seed run is scheduled, not awaited, and does NOT publish. Two
+ * reasons, both shared with Python and Java:
+ *
+ * 1. A scaffolded provider's check is an HTTP call to a vendor. Awaiting
+ *    it here would stall agent startup for as long as that vendor takes
+ *    to answer — a hung vendor would hang the boot.
+ * 2. A check that fails during boot (a pool not warm yet, a lazily built
+ *    client) must not withdraw an agent that has only just registered.
+ *    The agent registers and becomes visible first; the first PUBLISHED
+ *    verdict is one TTL later.
+ *
+ * ## Failure containment
+ *
+ * A tick can never stop the loop. `runHealthCheck` already converts a
+ * throwing check to `degraded`, and every remaining step — the verdict
+ * callback, the publish, and the formatting of their own errors — is
+ * guarded, with rescheduling in a `finally`. The failure this prevents is
+ * specific and silent: one unhandled rejection would leave the agent
+ * running with a health check that never runs again, so it could never
+ * be withdrawn, and nothing after the first error would appear in the
+ * logs.
+ *
+ * The timer is `unref`'d: a pending health refresh must not be the reason
+ * a finished Node process stays alive.
+ */
+export function startHealthCheckLoop(
+  options: HealthCheckLoopOptions,
+): HealthCheckLoop {
+  const { agentName, healthCheck, ttlSeconds, publish, onVerdict } = options;
+  const periodMs = ttlSeconds * 1000;
+
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let latest: HealthVerdict | null = null;
+
+  const scheduleNext = (): void => {
+    if (stopped) return;
+    timer = setTimeout(() => {
+      timer = null;
+      void run();
+    }, periodMs);
+    // `unref` is Node-only; a non-Node timer shim simply keeps a ref.
+    timer.unref?.();
+  };
+
+  const tick = async (publishVerdict: boolean): Promise<void> => {
+    const verdict = await runHealthCheck(healthCheck, agentName);
+    latest = verdict;
+
+    if (onVerdict) {
+      try {
+        onVerdict(verdict);
+      } catch (err) {
+        console.warn(
+          `[mesh-health] health verdict listener for agent '${agentName}' ` +
+            `threw: ${describeThrown(err)}`,
+        );
+      }
+    }
+
+    if (verdict.status === "unhealthy") {
+      console.warn(
+        `[mesh-health] agent '${agentName}' reports UNHEALTHY: ` +
+          `${verdict.errors.join("; ") || "(no detail)"}`,
+      );
+    }
+
+    if (!publishVerdict || stopped) return;
+
+    try {
+      await publish(verdict.status);
+    } catch (err) {
+      console.warn(
+        `[mesh-health] failed to report health status '${verdict.status}' for ` +
+          `agent '${agentName}' to the mesh runtime: ${describeThrown(err)}`,
+      );
+    }
+  };
+
+  const run = (publishVerdict = true): Promise<void> =>
+    tick(publishVerdict)
+      .catch((err) => {
+        // Defence in depth: `tick` is already total. Reaching here means
+        // the guarding itself broke, and the loop must still continue.
+        console.warn(
+          `[mesh-health] health refresh for agent '${agentName}' failed ` +
+            `unexpectedly: ${describeThrown(err)}`,
+        );
+      })
+      .finally(() => scheduleNext());
+
+  const seedPromise = run(false);
+
+  return {
+    latest: () => latest,
+    stop: () => {
+      stopped = true;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    },
+    seeded: () => seedPromise,
+  };
+}

@@ -471,6 +471,42 @@ impl JsAgentHandle {
         Ok(handle.update_port_async(port).await)
     }
 
+    /// Report the agent's health verdict to the runtime loop (issue #1476).
+    ///
+    /// The napi counterpart of `AgentHandle::update_health` (pyo3:
+    /// `handle.update_health`) and of the C ABI's `mesh_update_health`. Call
+    /// this from the SDK's periodic health-check loop with the verdict of the
+    /// user-supplied `healthCheck`. While the status is `unhealthy` the runtime
+    /// stops heartbeating, so the registry's staleness sweep withdraws the agent
+    /// from dependency resolution; pushing `healthy` (or `degraded`) resumes
+    /// heartbeats and the registry restores it — with no process restart.
+    ///
+    /// Pushing the same status repeatedly is cheap and idempotent — the runtime
+    /// only acts on transitions — so SDKs push on every health-check tick.
+    ///
+    /// @param status - "healthy", "degraded", or "unhealthy"
+    /// @returns true if the update was queued successfully
+    #[napi]
+    pub async fn update_health(&self, status: String) -> Result<bool> {
+        // Strict parse, deliberately — same contract as the C ABI. Callers
+        // normalize an unrecognized status to "degraded" BEFORE crossing the
+        // boundary (a reporting defect must never withdraw a working agent);
+        // silently accepting junk here would hide the day they stop.
+        let health_status = match status.as_str() {
+            "healthy" => HealthStatus::Healthy,
+            "degraded" => HealthStatus::Degraded,
+            "unhealthy" => HealthStatus::Unhealthy,
+            other => {
+                return Err(Error::from_reason(format!(
+                    "Invalid health status '{}', expected: healthy, degraded, or unhealthy",
+                    other
+                )))
+            }
+        };
+        let handle = self.inner.lock().await;
+        Ok(handle.update_health_async(health_status).await)
+    }
+
     /// Update the A2A surfaces and agent_type registered with the registry
     /// (issue #938 — mid-flight `mesh.a2a.mount(...)` parity with Python's
     /// per-heartbeat `_build_a2a_surfaces`).
@@ -1022,7 +1058,72 @@ pub fn get_vendor_capabilities(provider: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::handle::HandleState;
+    use crate::runtime::RuntimeCommand;
     use crate::spec::AgentType;
+    use tokio::sync::{mpsc, RwLock};
+
+    /// Build a `JsAgentHandle` over a bare `AgentHandle`, returning the
+    /// command receiver so a test can observe what the binding enqueued.
+    fn js_handle() -> (JsAgentHandle, mpsc::Receiver<RuntimeCommand>) {
+        let (_event_tx, event_rx) = mpsc::channel(10);
+        let (shutdown_tx, _shutdown_rx) = mpsc::channel(1);
+        let (command_tx, command_rx) = mpsc::channel(10);
+        let state = Arc::new(RwLock::new(HandleState::default()));
+        let handle = RustAgentHandle::new(event_rx, state, shutdown_tx, command_tx);
+        (
+            JsAgentHandle {
+                inner: Arc::new(Mutex::new(handle)),
+            },
+            command_rx,
+        )
+    }
+
+    /// Issue #1476: the napi binding is the ONLY channel between a
+    /// TypeScript agent's health check and heartbeat suppression. Each
+    /// accepted verdict must reach the runtime as `UpdateHealth`.
+    #[tokio::test]
+    async fn test_1476_update_health_enqueues_command() {
+        for (input, expected) in [
+            ("unhealthy", HealthStatus::Unhealthy),
+            ("healthy", HealthStatus::Healthy),
+            ("degraded", HealthStatus::Degraded),
+        ] {
+            let (handle, mut command_rx) = js_handle();
+            assert!(
+                handle.update_health(input.to_string()).await.unwrap(),
+                "updateHealth({input}) must be queued"
+            );
+            match command_rx.try_recv() {
+                Ok(RuntimeCommand::UpdateHealth(got)) => assert_eq!(got, expected),
+                other => panic!("expected UpdateHealth({expected:?}), got {other:?}"),
+            }
+        }
+    }
+
+    /// Unknown statuses are rejected rather than coerced. The SDK maps
+    /// anything it cannot parse to "degraded" BEFORE calling this, so junk
+    /// arriving here means that mapping broke — silently accepting it would
+    /// hide the regression (and the C ABI rejects it for the same reason).
+    #[tokio::test]
+    async fn test_1476_update_health_rejects_unknown_status() {
+        for input in ["", "HEALTHY", "ok", "unknown", "down"] {
+            let (handle, mut command_rx) = js_handle();
+            let err = handle
+                .update_health(input.to_string())
+                .await
+                .expect_err("unknown status must be rejected");
+            assert!(
+                err.reason.contains("Invalid health status"),
+                "unhelpful error for {input:?}: {}",
+                err.reason
+            );
+            assert!(
+                command_rx.try_recv().is_err(),
+                "a rejected status must not enqueue a command"
+            );
+        }
+    }
 
     #[test]
     fn test_js_spec_conversion() {

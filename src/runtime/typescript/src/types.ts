@@ -4,6 +4,7 @@
 
 import { z } from "zod";
 import type { ServiceView } from "./service-view.js";
+import type { MeshHealthCheck } from "./health-check.js";
 
 /**
  * Metadata for media-typed tool parameters.
@@ -264,6 +265,7 @@ export interface ResolvedDependency {
  * - MCP_MESH_NAMESPACE: Override namespace
  * - MCP_MESH_REGISTRY_URL: Override registry URL
  * - MCP_MESH_HEALTH_INTERVAL: Override heartbeat interval
+ * - MCP_MESH_HEALTH_CHECK_TTL: Override health-check refresh period
  */
 export interface AgentConfig {
   /** Unique agent name/identifier. Env: MCP_MESH_AGENT_NAME */
@@ -280,6 +282,40 @@ export interface AgentConfig {
   namespace?: string;
   /** Heartbeat interval in seconds. Env: MCP_MESH_HEALTH_INTERVAL. Defaults to 5 */
   heartbeatInterval?: number;
+  /**
+   * Issue #1476: a check the agent runs on a timer to decide whether it
+   * should keep receiving traffic.
+   *
+   * While it reports `unhealthy` the agent stops heartbeating, so the
+   * registry withdraws it from dependency resolution and consumers fail
+   * over to a surviving provider. Reporting `healthy` (or `degraded`)
+   * again restores it — the process keeps running throughout.
+   *
+   * Return `unhealthy` only for conditions the mesh should route AROUND:
+   * the upstream this agent needs is genuinely not serving. A check that
+   * throws, or that could not reach a conclusion, is `degraded` and keeps
+   * the heartbeat alive — a broken probe says nothing about the upstream,
+   * and withdrawing a working agent over one is the worse failure.
+   *
+   * Honoured by MCP agents (`mesh(server, ...)`). `mesh.route` and A2A
+   * agents deliberately ignore it: they are fan-out points, and
+   * withdrawing a gateway takes down every path that enters through it.
+   *
+   * @example
+   * ```typescript
+   * healthCheck: async () => {
+   *   const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+   *   return res.ok ? true : { status: "unhealthy", errors: [`HTTP ${res.status}`] };
+   * }
+   * ```
+   */
+  healthCheck?: MeshHealthCheck;
+  /**
+   * Issue #1476: how often {@link healthCheck} runs, in seconds. This is
+   * also the detection latency in both directions — outage and recovery.
+   * Env: MCP_MESH_HEALTH_CHECK_TTL. Defaults to 15.
+   */
+  healthCheckTtl?: number;
 }
 
 /**
@@ -295,6 +331,10 @@ export interface ResolvedAgentConfig {
   namespace: string;
   registryUrl: string;
   heartbeatInterval: number;
+  /** Issue #1476: user health check, or undefined when none is declared. */
+  healthCheck?: MeshHealthCheck;
+  /** Issue #1476: resolved refresh period in seconds (env > config > 15). */
+  healthCheckTtl: number;
 }
 
 /**

@@ -227,10 +227,33 @@ TypeScript agents automatically expose health endpoints:
 There are three of them, and Kubernetes probes must not share one:
 
 - `/livez` - `livenessProbe` and `startupProbe`. 200 for as long as the process is serving; consults nothing else.
-- `/ready` - `readinessProbe`. Whether traffic should be routed here. TypeScript has no user health check, so this reports only that the mesh runtime is running.
+- `/ready` - `readinessProbe`. Whether traffic should be routed here. Reports mesh runtime state only; your `healthCheck` drives the heartbeat, not this endpoint.
 - `/health` - no probe. A fixed `{ status: "healthy" }` that reflects nothing.
 
 `/ready` answers 503 until the mesh runtime is up, so pointing liveness or startup at it restarts pods that are merely still booting; `/health` never fails at all. The Helm chart is already wired this way.
+
+Pass a `healthCheck` to `mesh()` to say what "able to serve" means for this agent:
+
+```typescript
+const agent = mesh(server, {
+  name: "claude-provider",
+  httpPort: 9001,
+  healthCheckTtl: 30,
+  healthCheck: async () => {
+    const response = await fetch("https://api.anthropic.com/v1/models", {
+      headers: { "x-api-key": process.env.ANTHROPIC_API_KEY!, "anthropic-version": "2023-06-01" },
+      signal: AbortSignal.timeout(5_000),
+    });
+    return response.ok
+      ? { status: "healthy", checks: { vendor_api_reachable: true } }
+      : { status: "unhealthy", errors: [`vendor returned ${response.status}`] };
+  },
+});
+```
+
+While the check returns unhealthy the agent stops heartbeating, the registry withdraws it, and consumers resolve to another provider - restored automatically when the check passes, with no restart. Returning `boolean` works too: `true` is healthy, `false` unhealthy. A check that throws is recorded as `degraded` and keeps heartbeating, so a bug in the check cannot take a working agent out of the mesh. `MCP_MESH_HEALTH_CHECK_TTL` overrides `healthCheckTtl` (default 15s).
+
+Route (`mesh.route`) and A2A agents are the exception: they ignore `healthCheck` entirely. A gateway is a fan-out point, and withdrawing it takes the application down.
 
 ### Graceful Shutdown
 

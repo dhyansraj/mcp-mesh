@@ -194,3 +194,50 @@ describe("Issue #969: agent description plumbing", () => {
     expect(resolved.description).toBe("");
   });
 });
+
+// Issue #1476: the health check and its refresh period must survive
+// resolveConfig — the loop that can withdraw this agent from resolution
+// reads them off ResolvedAgentConfig and nowhere else.
+describe("Issue #1476: health check plumbing", () => {
+  it("passes the health check function through untouched", () => {
+    const healthCheck = async () => true;
+    const resolved = resolveConfig({
+      name: "provider",
+      httpPort: 9001,
+      healthCheck,
+    });
+    expect(resolved.healthCheck).toBe(healthCheck);
+  });
+
+  it("leaves healthCheck undefined when none is declared", () => {
+    const resolved = resolveConfig({ name: "provider", httpPort: 9001 });
+    expect(resolved.healthCheck).toBeUndefined();
+    // The TTL is always resolved, so the loop never has to null-guard it.
+    expect(resolved.healthCheckTtl).toBe(15);
+  });
+
+  it("honours a configured TTL", () => {
+    const resolved = resolveConfig({
+      name: "provider",
+      httpPort: 9001,
+      healthCheckTtl: 30,
+    });
+    expect(resolved.healthCheckTtl).toBe(30);
+  });
+
+  it("MCP_MESH_HEALTH_CHECK_TTL overrides the configured TTL", () => {
+    const previous = process.env.MCP_MESH_HEALTH_CHECK_TTL;
+    try {
+      process.env.MCP_MESH_HEALTH_CHECK_TTL = "4";
+      const resolved = resolveConfig({
+        name: "provider",
+        httpPort: 9001,
+        healthCheckTtl: 30,
+      });
+      expect(resolved.healthCheckTtl).toBe(4);
+    } finally {
+      if (previous === undefined) delete process.env.MCP_MESH_HEALTH_CHECK_TTL;
+      else process.env.MCP_MESH_HEALTH_CHECK_TTL = previous;
+    }
+  });
+});

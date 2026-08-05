@@ -177,6 +177,20 @@ export class MeshExpress {
     // Generate unique service ID with suffix (e.g., "my-api-a1b2c3d4")
     this.serviceId = `${this.config.name}-${generateAgentIdSuffix()}`;
 
+    // Issue #1476: a route agent is a fan-out point — withdrawing a
+    // provider is correct, withdrawing a gateway takes down every path
+    // that enters through it. Python and Java draw the same line (no
+    // health-refresh loop on their API/A2A pipelines). Say so rather than
+    // accepting the option and quietly doing nothing with it.
+    if (config.healthCheck) {
+      console.warn(
+        `[mesh-health] healthCheck is IGNORED on MeshExpress ('${this.config.name}'): ` +
+          `a route agent is a fan-out point, so an unhealthy verdict must not ` +
+          `withdraw it from the mesh. Declare the check on the MCP agents behind ` +
+          `this gateway instead.`,
+      );
+    }
+
     // Add health check endpoint
     this.setupHealthEndpoints();
 
