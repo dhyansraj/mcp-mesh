@@ -74,6 +74,7 @@ import {
 } from "./jobs-helper-tools.js";
 import { registerCancelRoute } from "./jobs-cancel-route.js";
 import { registerLivezRoute } from "./livez-route.js";
+import { registerHealthRoutes } from "./health-routes.js";
 import {
   startHealthCheckLoop,
   DEFAULT_HEALTH_CHECK_TTL_SECONDS,
@@ -1965,6 +1966,40 @@ export class MeshAgent {
       );
     }
 
+    // 1.6 Issue #1478: take over GET|HEAD /ready and /health from FastMCP's
+    // built-ins so both reflect the user health check's verdict, matching
+    // Python (#1472) and Java (#1474). Before this, `/ready` answered a
+    // hardcoded 200 and `/health` the literal string `✓ Ok`, so a TS
+    // provider whose vendor was down kept receiving direct Service traffic
+    // that mesh consumers had already routed away from, and `kubectl exec
+    // curl /health` told an operator nothing.
+    //
+    // Owning /ready also removes a latent trap: FastMCP's built-in returns
+    // 503 when `totalSessions === 0` in STATEFUL mode, and mesh escapes it
+    // today only because the server above is started with `stateless: true`
+    // (where the built-in is hardcoded 200). Flipping that flag would
+    // otherwise have made every TypeScript agent unready in Kubernetes
+    // until its first session.
+    //
+    // Fail-fast for the same reason as /livez, one step up: the agent chart
+    // gates Service endpoints on /ready (#1468). An unregistered route here
+    // is not a silent fallback to the built-in — the built-in is the wrong
+    // answer (always-200), so the agent would serve traffic while lying
+    // about its readiness, which is precisely the bug this fixes. Throwing
+    // makes the cause visible instead of shipping the regression.
+    if (
+      !registerHealthRoutes(this.server, this.config.name, () =>
+        this.getHealthVerdict(),
+      )
+    ) {
+      throw new Error(
+        `agent ${this.agentId} cannot start: the /ready and /health routes ` +
+          `failed to register (cause logged above). Kubernetes gates Service ` +
+          `endpoints on /ready, so serving without them would keep sending ` +
+          `traffic to this agent after its health check reported it unhealthy.`,
+      );
+    }
+
     // 2. Register LLM tools from LlmToolRegistry
     this.registerLlmTools();
 
@@ -2068,6 +2103,10 @@ export class MeshAgent {
   /**
    * Issue #1476: the latest health verdict, or null before the first run
    * completes (or when no `healthCheck` is configured).
+   *
+   * Read per request by the `/ready` and `/health` routes (#1478); null
+   * is answered as healthy there, so an agent with no `healthCheck` is
+   * unaffected by those endpoints becoming mesh-aware.
    */
   getHealthVerdict(): HealthVerdict | null {
     return this.healthLoop?.latest() ?? null;
