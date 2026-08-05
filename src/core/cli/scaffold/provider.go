@@ -136,9 +136,19 @@ func (ctx *ScaffoldContext) Validate() error {
 		return fmt.Errorf("unsupported agent type: %s (supported: %v)", ctx.AgentType, supportedAgentTypes)
 	}
 
-	// Validate LLM-provider specific fields
-	if ctx.AgentType == "llm-provider" && ctx.Model == "" {
-		return fmt.Errorf("model is required for llm-provider agent type")
+	// Validate LLM-provider specific fields.
+	//
+	// Gated on the TEMPLATE as well as the agent type. `meshctl scaffold --name x
+	// --lang java --template llm-provider` leaves AgentType empty (it was dropped
+	// as a flag in #957), so an agent-type-only check let a provider scaffold
+	// through with no model at all — and the Java template then defaulted the
+	// model for its code while the README described the raw, empty one. The
+	// generated probe demanded ANTHROPIC_API_KEY, the README told the operator to
+	// set gateway credentials instead, and the agent withdrew itself for good
+	// (issue #1479). There is no correct rendering of an llm-provider without a
+	// model, so it is rejected before any template runs.
+	if (ctx.AgentType == "llm-provider" || ctx.Template == "llm-provider") && ctx.Model == "" {
+		return fmt.Errorf("model is required for the llm-provider template (e.g. --model anthropic/claude-sonnet-5)")
 	}
 
 	return nil

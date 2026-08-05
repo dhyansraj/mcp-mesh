@@ -107,6 +107,30 @@ func TestStaticProvider_Validate(t *testing.T) {
 			wantErr: true,
 			errMsg:  "name is required",
 		},
+		{
+			// This is the path `meshctl scaffold --name x --lang java
+			// --template llm-provider --no-interactive` takes: AgentType is
+			// left empty, so before #1479 the modelless provider rendered and
+			// shipped a README that contradicted its own generated code.
+			name: "llm-provider template without model is rejected here",
+			ctx: &ScaffoldContext{
+				Name:     "my-provider",
+				Language: "java",
+				Template: "llm-provider",
+			},
+			wantErr: true,
+			errMsg:  "model is required",
+		},
+		{
+			name: "llm-provider template with model passes",
+			ctx: &ScaffoldContext{
+				Name:     "my-provider",
+				Language: "java",
+				Template: "llm-provider",
+				Model:    "anthropic/claude-sonnet-5",
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

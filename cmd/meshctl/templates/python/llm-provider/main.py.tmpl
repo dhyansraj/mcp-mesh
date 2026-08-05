@@ -247,7 +247,11 @@ async def health_check() -> dict:
 @mesh.llm_provider(
     model="{{ .Model }}",
     capability="llm",
-    tags={{ if .Tags }}{{ toJSON .Tags }}{{ else if eq .ProbeVendor "anthropic" }}["llm", "claude", "anthropic", "provider"]{{ else if eq .ProbeVendor "openai" }}["llm", "openai", "gpt", "provider"]{{ else if eq .ProbeVendor "gemini" }}["llm", "gemini", "google", "provider"]{{ else }}["llm", "provider"]{{ end }},
+    {{/* Tags follow the model FAMILY, not the probeable vendor: a
+         bedrock/anthropic.claude-* provider is still Claude and must stay
+         discoverable by a consumer pinning +claude, even though it has no
+         probeable direct vendor API (issue #1479). */ -}}
+    tags={{ if .Tags }}{{ toJSON .Tags }}{{ else if eq .ModelFamily "anthropic" }}["llm", "claude", "anthropic", "provider"]{{ else if eq .ModelFamily "openai" }}["llm", "openai", "gpt", "provider"]{{ else if eq .ModelFamily "gemini" }}["llm", "gemini", "google", "provider"]{{ else }}["llm", "provider"]{{ end }},
     version="1.0.0",
 )
 def {{ toSnakeCase .Name }}():

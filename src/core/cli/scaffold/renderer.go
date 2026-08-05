@@ -42,11 +42,12 @@ func NewTemplateRenderer() *TemplateRenderer {
 			"join":             strings.Join,
 			"split":            strings.Split,
 			"toJSON":           toJSON,
-			// Same resolver as the .ProbeVendor data field, exposed as a
-			// function for templates that compute their own model string
-			// (the Java llm-provider defaults $model when .Model is empty and
-			// must gate on that value, not on the raw context).
+			// Same resolvers as the .ProbeVendor / .ModelFamily data fields,
+			// exposed as functions for templates that compute their own model
+			// string (the Java llm-provider defaults $model when .Model is
+			// empty and must gate on that value, not on the raw context).
 			"probeVendor": DirectProbeVendor,
+			"modelFamily": ModelFamily,
 		},
 	}
 }
@@ -292,12 +293,25 @@ func TemplateDataFromContext(ctx *ScaffoldContext) map[string]interface{} {
 		// probe that vendor's own API for this model, "" when it may not and
 		// the generic skeleton must be emitted instead (issue #1479).
 		//
-		// Templates MUST gate the health probe (and the vendor-specific tags,
-		// env vars and README text that go with it) on this, never on
+		// Templates MUST gate the health probe (and the env vars and README
+		// credential text that go with it) on this, never on
 		// `contains .Model "<vendor>"` — a substring test routes
 		// bedrock/anthropic.* and vertex_ai/gemini-* into a probe of
 		// credentials those deployments do not have.
+		//
+		// Discovery TAGS are not part of that set: they follow ModelFamily
+		// below, because "who serves it" and "who built it" are different
+		// questions and a gateway model still belongs to its family.
 		"ProbeVendor": DirectProbeVendor(ctx.Model),
+
+		// "anthropic" / "openai" / "gemini" when the model belongs to that
+		// big-3 family, "" otherwise — a different question from ProbeVendor,
+		// and the two answers diverge on gateway models. Templates gate the
+		// DISCOVERY TAGS on this: `bedrock/anthropic.claude-*` is genuinely a
+		// Claude model and must keep advertising the claude/anthropic tags a
+		// `--vendor claude` consumer pins with `+claude`, even though it has no
+		// probeable direct vendor API (issue #1479).
+		"ModelFamily": ModelFamily(ctx.Model),
 
 		// Tool fields
 		"ToolName":        ctx.ToolName,

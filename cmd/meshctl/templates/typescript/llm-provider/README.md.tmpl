@@ -32,7 +32,7 @@ Other agents can use this provider via `mesh.llm()`:
 server.addTool(
   mesh.llm({
     name: "my_tool",
-    provider: { capability: "llm", tags: {{ if eq .ProbeVendor "anthropic" }}["claude"]{{ else if eq .ProbeVendor "openai" }}["gpt"]{{ else if eq .ProbeVendor "gemini" }}["gemini"]{{ else }}["llm"]{{ end }} },
+    provider: { capability: "llm", tags: {{ if eq .ModelFamily "anthropic" }}["claude"]{{ else if eq .ModelFamily "openai" }}["gpt"]{{ else if eq .ModelFamily "gemini" }}["gemini"]{{ else }}["llm"]{{ end }} },
     // ... rest of config
   })
 );

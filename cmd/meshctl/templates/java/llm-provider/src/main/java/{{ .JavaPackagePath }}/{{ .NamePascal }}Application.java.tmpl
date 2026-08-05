@@ -15,6 +15,12 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
      bedrock/anthropic.* and vertex_ai/gemini-* into a probe of credentials
      those deployments never have (issue #1479). */}}
 {{- $probeVendor := probeVendor $model }}
+{{- /* Which big-3 family built this model, if any. A DIFFERENT question from
+     $probeVendor, and the answers diverge on gateways: bedrock/anthropic.* is
+     genuinely Claude and must keep the claude/anthropic discovery tags a
+     `--vendor claude` consumer pins with +claude, while having no probeable
+     direct vendor API. */}}
+{{- $family := modelFamily $model }}
 {{- if $probeVendor }}
 
 import java.net.URI;
@@ -40,7 +46,7 @@ import java.time.Duration;
 @MeshLlmProvider(
     model = "{{ $model }}",
     capability = "llm",
-    tags = {{ "{" }}{{ if .Tags }}{{ range $i, $t := .Tags }}{{ if $i }}, {{ end }}"{{ $t }}"{{ end }}{{ else if eq $probeVendor "anthropic" }}"llm", "claude", "anthropic", "provider"{{ else if eq $probeVendor "openai" }}"llm", "openai", "gpt", "provider"{{ else if eq $probeVendor "gemini" }}"llm", "gemini", "google", "provider"{{ else }}"llm", "provider"{{ end }}{{ "}" }},
+    tags = {{ "{" }}{{ if .Tags }}{{ range $i, $t := .Tags }}{{ if $i }}, {{ end }}"{{ $t }}"{{ end }}{{ else if eq $family "anthropic" }}"llm", "claude", "anthropic", "provider"{{ else if eq $family "openai" }}"llm", "openai", "gpt", "provider"{{ else if eq $family "gemini" }}"llm", "gemini", "google", "provider"{{ else }}"llm", "provider"{{ end }}{{ "}" }},
     version = "1.0.0"
 )
 @SpringBootApplication

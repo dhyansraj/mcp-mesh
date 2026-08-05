@@ -152,3 +152,101 @@ func DirectProbeVendor(model string) string {
 	}
 	return inferBig3VendorFromBareName(m)
 }
+
+// big3FamilyNames are the names a big-3 model FAMILY goes by when it appears as
+// a segment of a model id — the vendor that built the model, regardless of who
+// serves it.
+//
+// Deliberately separate from directProbeVendorPrefixes even though the three
+// names coincide today: that map answers "may a health check call this vendor's
+// own API", this one answers "whose model is this". They are allowed to
+// diverge, and TestModelFamilyAndProbeVendorDivergeOnGateways pins the models
+// where they already do.
+var big3FamilyNames = map[string]string{
+	"anthropic": "anthropic",
+	"openai":    "openai",
+	"gemini":    "gemini",
+}
+
+// ModelFamily resolves model to the big-3 family that built it — "anthropic",
+// "openai", "gemini" — or "" for anything else.
+//
+// This is NOT DirectProbeVendor, and conflating the two is the mistake this
+// function exists to prevent. `bedrock/anthropic.claude-3-5-sonnet-...` IS a
+// Claude model: it must register the claude/anthropic discovery tags, or a
+// consumer scaffolded with `--vendor claude` (which pins `+claude`) stops
+// resolving it. What it must NOT get is a probe of api.anthropic.com gated on
+// ANTHROPIC_API_KEY, because AWS serves it with AWS credentials — that is
+// DirectProbeVendor's answer, and it is "" (issue #1479).
+//
+// Matching is case-insensitive and segment-based, never a substring test. A
+// gateway carries the family in the segment AFTER its own prefix, separated by
+// either "/" or "." depending on the gateway:
+//
+//	bedrock/anthropic.claude-3-5-sonnet-...  -> anthropic
+//	bedrock/us.anthropic.claude-3-5-sonnet   -> anthropic (cross-region profile)
+//	vertex_ai/gemini-2.5-flash               -> gemini    (bare-name inference)
+//	azure/openai/gpt-4o                      -> openai
+//	bedrock/meta.llama3-70b-instruct-v1:0    -> ""        (not a big-3 family)
+func ModelFamily(model string) string {
+	return big3Family(strings.ToLower(strings.TrimSpace(model)))
+}
+
+// big3Family resolves an already-lowercased, already-trimmed model id.
+func big3Family(m string) string {
+	if m == "" {
+		return ""
+	}
+
+	// `vendor/rest`: the prefix names the family for a native vendor
+	// (anthropic/, openai/, gemini/). For everything else the prefix is a
+	// gateway, and the family — if any — lives in the remainder.
+	if idx := strings.Index(m, "/"); idx >= 0 {
+		if family := big3FamilyNames[m[:idx]]; family != "" {
+			return family
+		}
+		return big3Family(m[idx+1:])
+	}
+
+	// Gateway model ids namespace with "." rather than "/": `anthropic.claude-*`
+	// on Bedrock, `us.anthropic.claude-*` for a cross-region inference profile.
+	// Each dot-delimited segment is matched WHOLE, so "meta.llama3" stays "" and
+	// a hypothetical "openai-clone" never matches "openai".
+	if strings.Contains(m, ".") {
+		for _, segment := range strings.Split(m, ".") {
+			if family := big3FamilyNames[segment]; family != "" {
+				return family
+			}
+		}
+	}
+
+	// No vendor segment to go on: fall back to the same conservative bare-name
+	// rules the Python runtime uses, so `claude-sonnet-5`, `gpt-4o` and
+	// `gemini-2.5-flash` resolve whether they arrived bare or as a gateway
+	// remainder. Note this also covers dotted names with no vendor segment
+	// (e.g. "gpt-4.1"), which the loop above deliberately leaves alone.
+	return inferBig3VendorFromBareName(m)
+}
+
+// providerTagsByFamily are the discovery tags a scaffolded provider registers
+// for each big-3 family. The templates emit the same lists in their own syntax;
+// this copy serves the Go-side callers (the interactive wizard).
+var providerTagsByFamily = map[string][]string{
+	"anthropic": {"llm", "claude", "anthropic", "provider"},
+	"openai":    {"llm", "openai", "gpt", "provider"},
+	"gemini":    {"llm", "gemini", "google", "provider"},
+}
+
+// ProviderTagsForModel returns the discovery tags an llm-provider should
+// register for model: the family tags when the model belongs to a big-3 family,
+// otherwise the generic ["llm", "provider"].
+//
+// Keyed on ModelFamily, never on a substring of the model string: a
+// case-sensitive `strings.Contains(model, "anthropic")` both misses
+// `Claude-Sonnet-5` and has no gemini answer at all.
+func ProviderTagsForModel(model string) []string {
+	if tags, ok := providerTagsByFamily[ModelFamily(model)]; ok {
+		return append([]string{}, tags...)
+	}
+	return []string{"llm", "provider"}
+}

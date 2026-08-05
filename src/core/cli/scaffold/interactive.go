@@ -447,14 +447,14 @@ func promptLLMProviderConfig(config *InteractiveConfig) error {
 		config.Model = strings.Split(model, " - ")[0]
 	}
 
-	// Set tags based on model
-	if strings.Contains(config.Model, "anthropic") {
-		config.Tags = []string{"llm", "claude", "anthropic", "provider"}
-	} else if strings.Contains(config.Model, "openai") {
-		config.Tags = []string{"llm", "openai", "gpt", "provider"}
-	} else {
-		config.Tags = []string{"llm", "provider"}
-	}
+	// Set tags from the model FAMILY.
+	//
+	// This used to be a case-sensitive `strings.Contains` with no gemini arm at
+	// all, so `Claude-Sonnet-5` and every gemini model fell through to the
+	// generic tags. It also mattered more than it looked: the templates gate
+	// their own tag arms on `{{ if .Tags }}` first, so whatever is set here wins
+	// outright and the resolvers are never consulted (issue #1479).
+	config.Tags = ProviderTagsForModel(config.Model)
 
 	// Allow adding custom tags
 	addTags := false
