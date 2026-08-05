@@ -270,7 +270,10 @@ public class MeshHandle implements Closeable {
      * {@code publish_health_status_to_core}.
      *
      * @param status "healthy", "degraded", or "unhealthy"
-     * @return true if the update was queued successfully
+     * @return true if the update was queued successfully; false if the native
+     *         call rejected it (never throws on a failed publish — health
+     *         reporting runs on a timer and must not take the loop down)
+     * @throws MeshException if the handle has been closed
      */
     public boolean updateHealth(String status) {
         String normalized = status == null ? null : status.trim().toLowerCase(java.util.Locale.ROOT);

@@ -57,20 +57,28 @@ public class MeshHealthController {
      * whatever the vendor's status is. Taking the worse of the two is the only
      * answer that is true in both directions.
      */
-    private MeshHealthStatus effectiveStatus() {
+    private MeshHealthStatus effectiveStatus(MeshHealth latest) {
         boolean running = runtime != null && runtime.isRunning();
         if (!running) {
             return MeshHealthStatus.UNHEALTHY;
         }
-        MeshHealth latest = latestHealth();
         return latest == null ? MeshHealthStatus.HEALTHY : latest.status();
     }
 
-    private MeshHealth latestHealth() {
-        if (healthChecks == null) {
-            return null;
-        }
-        MeshHealthCheckRegistry.Result result = healthChecks.latest();
+    /**
+     * Snapshot the latest verdict ONCE per request.
+     *
+     * <p>{@code latest} is written by the health-check thread between calls, so
+     * reading it more than once while building a response can mix two different
+     * results — a body whose {@code status} came from one verdict and whose
+     * {@code checks} / {@code errors} came from the next. Every handler takes
+     * one snapshot and derives the whole response from it.
+     */
+    private MeshHealthCheckRegistry.Result latestResult() {
+        return healthChecks == null ? null : healthChecks.latest();
+    }
+
+    private static MeshHealth healthOf(MeshHealthCheckRegistry.Result result) {
         return result == null ? null : result.health();
     }
 
@@ -94,14 +102,14 @@ public class MeshHealthController {
 
     @GetMapping("/health")
     public ResponseEntity<Map<String, Object>> health() {
-        MeshHealthStatus status = effectiveStatus();
+        MeshHealthCheckRegistry.Result result = latestResult();
+        MeshHealthStatus status = effectiveStatus(healthOf(result));
+
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("status", status.wireValue());
         if (runtime != null && runtime.getAgentSpec() != null) {
             body.put("agent", runtime.getAgentSpec().getName());
         }
-        MeshHealthCheckRegistry.Result result =
-            healthChecks == null ? null : healthChecks.latest();
         if (result != null) {
             body.put("checks", result.health().checks());
             body.put("errors", result.health().errors());
@@ -112,7 +120,8 @@ public class MeshHealthController {
 
     @RequestMapping(value = "/health", method = RequestMethod.HEAD)
     public ResponseEntity<Void> healthHead() {
-        return ResponseEntity.status(serving(effectiveStatus()) ? 200 : 503).build();
+        return ResponseEntity.status(
+            serving(effectiveStatus(healthOf(latestResult()))) ? 200 : 503).build();
     }
 
     /**
@@ -126,7 +135,8 @@ public class MeshHealthController {
     @GetMapping("/ready")
     public ResponseEntity<Map<String, Object>> ready() {
         boolean running = runtime != null && runtime.isRunning();
-        MeshHealthStatus status = effectiveStatus();
+        MeshHealth latest = healthOf(latestResult());
+        MeshHealthStatus status = effectiveStatus(latest);
         boolean ready = serving(status);
 
         Map<String, Object> body = new LinkedHashMap<>();
@@ -136,7 +146,6 @@ public class MeshHealthController {
             body.put("reason", running
                 ? "service is " + status.wireValue()
                 : "mesh runtime is not running");
-            MeshHealth latest = latestHealth();
             if (latest != null && !latest.errors().isEmpty()) {
                 body.put("errors", latest.errors());
             }
@@ -146,7 +155,8 @@ public class MeshHealthController {
 
     @RequestMapping(value = "/ready", method = RequestMethod.HEAD)
     public ResponseEntity<Void> readyHead() {
-        return ResponseEntity.status(serving(effectiveStatus()) ? 200 : 503).build();
+        return ResponseEntity.status(
+            serving(effectiveStatus(healthOf(latestResult()))) ? 200 : 503).build();
     }
 
     /**

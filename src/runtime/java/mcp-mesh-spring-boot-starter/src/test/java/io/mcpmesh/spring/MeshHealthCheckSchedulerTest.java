@@ -140,8 +140,9 @@ class MeshHealthCheckSchedulerTest {
 
         scheduler.start();
         try {
+            waitUntil(() -> registry.latest() != null);
             assertEquals(MeshHealthStatus.UNHEALTHY, registry.latest().health().status(),
-                "the seed must reach /health and /ready immediately");
+                "the seed must reach /health and /ready");
             assertTrue(published.isEmpty(), "the seed must not publish to the runtime");
 
             // ttlSeconds=1 — the first scheduled tick publishes.
@@ -220,6 +221,72 @@ class MeshHealthCheckSchedulerTest {
         } finally {
             scheduler.stop();
         }
+    }
+
+    @Test
+    @Timeout(30)
+    void startDoesNotBlockOnASlowHealthCheck() throws Exception {
+        // A scaffolded provider's check is an HTTP call to a vendor. Running the
+        // startup seed on the Spring lifecycle thread would stall application
+        // boot for as long as the vendor takes to answer — a hung vendor would
+        // hang the boot outright.
+        java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+
+        class SlowChecks {
+            @MeshHealthCheck(ttlSeconds = 1)
+            public MeshHealth check() {
+                entered.countDown();
+                try {
+                    release.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return MeshHealth.healthy();
+            }
+        }
+        SlowChecks bean = new SlowChecks();
+        MeshHealthCheckRegistry registry = new MeshHealthCheckRegistry();
+        registry.register(bean, SlowChecks.class.getMethod("check"), 1);
+
+        MeshHealthCheckScheduler scheduler = new MeshHealthCheckScheduler(
+            runtimeOf("mcp_agent", Collections.synchronizedList(new ArrayList<>())), registry);
+
+        long start = System.nanoTime();
+        scheduler.start();
+        long startMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+
+        try {
+            assertTrue(entered.await(10, TimeUnit.SECONDS), "the seed must still run");
+            assertTrue(startMs < 2000,
+                "start() blocked on the health check for " + startMs + "ms");
+        } finally {
+            release.countDown();
+            scheduler.stop();
+        }
+    }
+
+    @Test
+    void anErrorFromPublishingDoesNotKillTheRefreshLoop() {
+        // A ScheduledExecutorService silently cancels ALL future runs when a
+        // task throws. catch(Exception) would let an Error through — and the
+        // agent would stop refreshing its health permanently, with nothing in
+        // the logs after the first failure and no recovery short of a restart.
+        MeshRuntime runtime = mock(MeshRuntime.class);
+        when(runtime.isRunning()).thenReturn(true);
+        AgentSpec spec = new AgentSpec();
+        spec.setAgentType("mcp_agent");
+        when(runtime.getAgentSpec()).thenReturn(spec);
+        when(runtime.updateHealth(anyString()))
+            .thenThrow(new UnsatisfiedLinkError("mesh_update_health"));
+
+        MeshHealthCheckRegistry registry = registryFor(new Checks());
+        MeshHealthCheckScheduler scheduler = new MeshHealthCheckScheduler(runtime, registry);
+
+        assertDoesNotThrow(() -> scheduler.refresh(true));
+        assertNotNull(registry.latest(), "the verdict is still stored for /health");
+        // And the next tick still runs.
+        assertDoesNotThrow(() -> scheduler.refresh(true));
     }
 
     @Test

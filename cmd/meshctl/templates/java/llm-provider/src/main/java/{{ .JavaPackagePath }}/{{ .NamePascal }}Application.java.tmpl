@@ -101,21 +101,26 @@ public class {{ .NamePascal }}Application {
                     .withCheck("anthropic_api_key_valid", false)
                     .withError("Anthropic API key is invalid");
             }
-            // Degraded, not unhealthy: an unexpected status may be transient,
-            // and this agent keeps serving while the mesh keeps routing to it.
+            // The vendor answered and it is not serving. Unhealthy: this is the
+            // outage the mesh has to route around, and DEGRADED would keep
+            // heartbeating and keep consumers pointed here.
             return health
-                .withStatus(io.mcpmesh.MeshHealthStatus.DEGRADED)
+                .withStatus(io.mcpmesh.MeshHealthStatus.UNHEALTHY)
                 .withCheck("anthropic_api_reachable", false)
                 .withError("Anthropic API returned status: " + status);
         } catch (InterruptedException e) {
+            // Degraded, deliberately: the probe was cut short, which says
+            // nothing about the vendor. Withdrawing on an indeterminate
+            // result would take the agent out on shutdown or thread interrupt.
             Thread.currentThread().interrupt();
             return health
                 .withStatus(io.mcpmesh.MeshHealthStatus.DEGRADED)
                 .withCheck("anthropic_api_reachable", false)
                 .withError("Anthropic API probe interrupted");
         } catch (Exception e) {
+            // The vendor is not answering at all (DNS, connect, timeout, TLS).
             return health
-                .withStatus(io.mcpmesh.MeshHealthStatus.DEGRADED)
+                .withStatus(io.mcpmesh.MeshHealthStatus.UNHEALTHY)
                 .withCheck("anthropic_api_reachable", false)
                 .withError("Anthropic API unreachable: " + e);
         }
@@ -162,21 +167,26 @@ public class {{ .NamePascal }}Application {
                     .withCheck("openai_api_key_valid", false)
                     .withError("OpenAI API key is invalid");
             }
-            // Degraded, not unhealthy: an unexpected status may be transient,
-            // and this agent keeps serving while the mesh keeps routing to it.
+            // The vendor answered and it is not serving. Unhealthy: this is the
+            // outage the mesh has to route around, and DEGRADED would keep
+            // heartbeating and keep consumers pointed here.
             return health
-                .withStatus(io.mcpmesh.MeshHealthStatus.DEGRADED)
+                .withStatus(io.mcpmesh.MeshHealthStatus.UNHEALTHY)
                 .withCheck("openai_api_reachable", false)
                 .withError("OpenAI API returned status: " + status);
         } catch (InterruptedException e) {
+            // Degraded, deliberately: the probe was cut short, which says
+            // nothing about the vendor. Withdrawing on an indeterminate
+            // result would take the agent out on shutdown or thread interrupt.
             Thread.currentThread().interrupt();
             return health
                 .withStatus(io.mcpmesh.MeshHealthStatus.DEGRADED)
                 .withCheck("openai_api_reachable", false)
                 .withError("OpenAI API probe interrupted");
         } catch (Exception e) {
+            // The vendor is not answering at all (DNS, connect, timeout, TLS).
             return health
-                .withStatus(io.mcpmesh.MeshHealthStatus.DEGRADED)
+                .withStatus(io.mcpmesh.MeshHealthStatus.UNHEALTHY)
                 .withCheck("openai_api_reachable", false)
                 .withError("OpenAI API unreachable: " + e);
         }
@@ -225,21 +235,26 @@ public class {{ .NamePascal }}Application {
                     .withCheck("google_api_key_valid", false)
                     .withError("Google API key is invalid");
             }
-            // Degraded, not unhealthy: an unexpected status may be transient,
-            // and this agent keeps serving while the mesh keeps routing to it.
+            // The vendor answered and it is not serving. Unhealthy: this is the
+            // outage the mesh has to route around, and DEGRADED would keep
+            // heartbeating and keep consumers pointed here.
             return health
-                .withStatus(io.mcpmesh.MeshHealthStatus.DEGRADED)
+                .withStatus(io.mcpmesh.MeshHealthStatus.UNHEALTHY)
                 .withCheck("gemini_api_reachable", false)
                 .withError("Gemini API returned status: " + status);
         } catch (InterruptedException e) {
+            // Degraded, deliberately: the probe was cut short, which says
+            // nothing about the vendor. Withdrawing on an indeterminate
+            // result would take the agent out on shutdown or thread interrupt.
             Thread.currentThread().interrupt();
             return health
                 .withStatus(io.mcpmesh.MeshHealthStatus.DEGRADED)
                 .withCheck("gemini_api_reachable", false)
                 .withError("Gemini API probe interrupted");
         } catch (Exception e) {
+            // The vendor is not answering at all (DNS, connect, timeout, TLS).
             return health
-                .withStatus(io.mcpmesh.MeshHealthStatus.DEGRADED)
+                .withStatus(io.mcpmesh.MeshHealthStatus.UNHEALTHY)
                 .withCheck("gemini_api_reachable", false)
                 .withError("Gemini API unreachable: " + e);
         }

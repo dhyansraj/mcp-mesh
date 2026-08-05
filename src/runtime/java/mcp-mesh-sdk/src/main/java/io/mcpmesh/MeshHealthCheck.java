@@ -31,11 +31,16 @@ import java.lang.annotation.Target;
  * {@code true} = healthy, {@code false} = unhealthy). Anything else fails the
  * boot with an actionable message rather than being silently ignored.
  *
- * <pre>{@code
- * @Component
+ * <p>Escaped as {@code &#64;} rather than wrapped in {@code {@code ...}}: an
+ * annotation is the first token on those lines, and Javadoc reads a leading
+ * {@code @} as a block tag even inside a code block — which would silently
+ * truncate this description at the first sample line.
+ *
+ * <pre>
+ * &#64;Component
  * public class VendorHealth {
  *
- *     @MeshHealthCheck(ttlSeconds = 30)
+ *     &#64;MeshHealthCheck(ttlSeconds = 30)
  *     public MeshHealth check() {
  *         if (!vendorReachable()) {
  *             return MeshHealth.unhealthy("anthropic API unreachable")
@@ -44,7 +49,7 @@ import java.lang.annotation.Target;
  *         return MeshHealth.healthy().withCheck("anthropic_api_reachable", true);
  *     }
  * }
- * }</pre>
+ * </pre>
  *
  * <h2>Only an explicit unhealthy verdict withdraws the agent</h2>
  *

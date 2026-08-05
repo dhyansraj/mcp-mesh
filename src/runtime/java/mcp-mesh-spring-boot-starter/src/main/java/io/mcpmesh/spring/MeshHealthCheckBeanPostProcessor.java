@@ -4,6 +4,7 @@ import io.mcpmesh.MeshHealth;
 import io.mcpmesh.MeshHealthCheck;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.aop.framework.AopProxyUtils;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.BeanPostProcessor;
@@ -54,15 +55,44 @@ public class MeshHealthCheckBeanPostProcessor implements BeanPostProcessor, Orde
 
     @Override
     public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
-        Class<?> targetClass = AopUtils.getTargetClass(bean);
+        // Reflect on, and invoke against, the SAME object (issue #1474 review).
+        //
+        // A Spring JDK dynamic proxy is TargetClassAware, so getTargetClass
+        // returns the target class — but the proxy does not EXTEND it (it
+        // implements the interface and extends java.lang.reflect.Proxy). A
+        // Method resolved on the target class then cannot be invoked with the
+        // proxy as receiver: Method.invoke throws "object is not an instance of
+        // declaring class", which the registry records as DEGRADED on every
+        // tick — a health check that silently never works. Spring produces JDK
+        // proxies for any interface-implementing bean when proxyTargetClass is
+        // false (@Transactional, @Async, @Validated, ...).
+        //
+        // Unwrapping to the singleton target fixes it and is also the right
+        // receiver: a health check should run against the real object, not
+        // through an advice chain that may open a transaction around it.
+        // CGLIB proxies have no such mismatch (the proxy IS a subclass), but
+        // unwrapping them is equally correct and keeps one code path.
+        Object receiver = AopProxyUtils.getSingletonTarget(bean);
+        if (receiver == null) {
+            // No singleton target (a prototype-targeted or otherwise opaque
+            // proxy). Reflect on the proxy's own runtime type instead, so the
+            // Method we register is one the proxy can actually receive.
+            receiver = bean;
+        }
+        Class<?> targetClass = AopUtils.getTargetClass(receiver);
+        if (!targetClass.isInstance(receiver)) {
+            targetClass = receiver.getClass();
+        }
 
         Map<Method, MeshHealthCheck> annotated = MethodIntrospector.selectMethods(targetClass,
             (MethodIntrospector.MetadataLookup<MeshHealthCheck>) method ->
                 AnnotationUtils.findAnnotation(method, MeshHealthCheck.class));
 
+        Object registrationTarget = receiver;
+        Class<?> registrationClass = targetClass;
         annotated.forEach((method, annotation) -> {
-            validate(targetClass, method, annotation);
-            registry.register(bean, method, annotation.ttlSeconds());
+            validate(registrationClass, method, annotation);
+            registry.register(registrationTarget, method, annotation.ttlSeconds());
         });
 
         return bean;

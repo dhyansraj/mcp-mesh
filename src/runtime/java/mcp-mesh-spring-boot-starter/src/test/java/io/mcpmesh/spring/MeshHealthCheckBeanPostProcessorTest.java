@@ -89,6 +89,19 @@ class MeshHealthCheckBeanPostProcessorTest {
         }
     }
 
+    /** A JDK-proxyable health check: the annotation lives on the interface. */
+    public interface ProxyableCheck {
+        @MeshHealthCheck
+        MeshHealth check();
+    }
+
+    public static class ProxyableCheckImpl implements ProxyableCheck {
+        @Override
+        public MeshHealth check() {
+            return MeshHealth.degraded("from the real target");
+        }
+    }
+
     private static MeshHealthCheckRegistry process(Object bean) {
         MeshHealthCheckRegistry registry = new MeshHealthCheckRegistry();
         new MeshHealthCheckBeanPostProcessor(registry)
@@ -155,6 +168,54 @@ class MeshHealthCheckBeanPostProcessorTest {
 
         assertThrows(IllegalStateException.class,
             () -> processor.postProcessAfterInitialization(new ValidBoolean(), "b"));
+    }
+
+    @Test
+    void aSpringJdkDynamicProxyBeanIsStillInvocable() {
+        // A Spring JDK proxy is TargetClassAware, so AopUtils.getTargetClass
+        // returns ProxyableCheckImpl — but the proxy itself does NOT extend it
+        // (it implements the interface and extends java.lang.reflect.Proxy).
+        // Registering the PROXY alongside a Method resolved on the TARGET CLASS
+        // makes Method.invoke throw "object is not an instance of declaring
+        // class", which the registry reports as DEGRADED forever: an agent
+        // whose health check silently never works. Spring produces JDK proxies
+        // for any interface-implementing bean under proxyTargetClass=false
+        // (@Transactional, @Async, @Validated, ...).
+        org.springframework.aop.framework.ProxyFactory factory =
+            new org.springframework.aop.framework.ProxyFactory(new ProxyableCheckImpl());
+        factory.setInterfaces(ProxyableCheck.class);
+        factory.setProxyTargetClass(false);
+        Object proxy = factory.getProxy();
+
+        assertTrue(java.lang.reflect.Proxy.isProxyClass(proxy.getClass()),
+            "fixture must produce a JDK proxy, not CGLIB");
+        assertEquals(ProxyableCheckImpl.class,
+            org.springframework.aop.support.AopUtils.getTargetClass(proxy),
+            "fixture must be TargetClassAware — that is what creates the mismatch");
+
+        MeshHealthCheckRegistry registry = new MeshHealthCheckRegistry();
+        new MeshHealthCheckBeanPostProcessor(registry)
+            .postProcessAfterInitialization(proxy, "proxied");
+
+        assertTrue(registry.hasHealthCheck());
+        MeshHealth health = registry.execute();
+        assertEquals(io.mcpmesh.MeshHealthStatus.DEGRADED, health.status());
+        assertEquals(java.util.List.of("from the real target"), health.errors(),
+            "the check must actually run, not fail into a DEGRADED placeholder");
+    }
+
+    @Test
+    void aCglibProxyBeanIsStillInvocable() {
+        org.springframework.aop.framework.ProxyFactory factory =
+            new org.springframework.aop.framework.ProxyFactory(new ProxyableCheckImpl());
+        factory.setProxyTargetClass(true);
+        Object proxy = factory.getProxy();
+
+        MeshHealthCheckRegistry registry = new MeshHealthCheckRegistry();
+        new MeshHealthCheckBeanPostProcessor(registry)
+            .postProcessAfterInitialization(proxy, "proxied");
+
+        assertEquals(java.util.List.of("from the real target"), registry.execute().errors());
     }
 
     @Test

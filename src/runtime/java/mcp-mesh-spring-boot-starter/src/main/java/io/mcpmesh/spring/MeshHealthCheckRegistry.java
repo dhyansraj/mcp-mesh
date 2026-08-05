@@ -84,9 +84,19 @@ public class MeshHealthCheckRegistry {
 
     /** Effective refresh period: the annotation value, or {@link #TTL_ENV_VAR}. */
     public int ttlSeconds() {
+        return ttlSeconds(System.getenv(TTL_ENV_VAR));
+    }
+
+    /**
+     * The env-free core of {@link #ttlSeconds()}, so the resolution rules can be
+     * driven directly instead of depending on the ambient environment (which the
+     * JDK gives no supported way to set from a test).
+     *
+     * @param override raw {@link #TTL_ENV_VAR} value, or null for "not set"
+     */
+    int ttlSeconds(String override) {
         Registration reg = registration;
         int ttl = reg != null ? reg.ttlSeconds() : DEFAULT_TTL_SECONDS;
-        String override = System.getenv(TTL_ENV_VAR);
         if (override != null && !override.isBlank()) {
             try {
                 int parsed = Integer.parseInt(override.trim());

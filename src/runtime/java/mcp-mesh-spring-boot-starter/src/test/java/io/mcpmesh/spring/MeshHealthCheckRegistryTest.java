@@ -140,11 +140,37 @@ class MeshHealthCheckRegistryTest {
 
     @Test
     void ttlComesFromTheAnnotation() {
-        assertEquals(30, registryFor(new Checks(), "withTtl").ttlSeconds());
-        assertEquals(15, registryFor(new Checks(), "detailed").ttlSeconds(),
+        // Drive the env-free overload: the public ttlSeconds() reads
+        // MCP_MESH_HEALTH_CHECK_TTL, and an ambient value in the developer's or
+        // CI's environment would silently flip these assertions.
+        assertEquals(30, registryFor(new Checks(), "withTtl").ttlSeconds(null));
+        assertEquals(15, registryFor(new Checks(), "detailed").ttlSeconds(null),
             "default must match Python's health_check_ttl");
         assertEquals(MeshHealthCheckRegistry.DEFAULT_TTL_SECONDS,
-            new MeshHealthCheckRegistry().ttlSeconds());
+            new MeshHealthCheckRegistry().ttlSeconds(null));
+    }
+
+    @Test
+    void theEnvVarOverridesTheAnnotation() {
+        MeshHealthCheckRegistry registry = registryFor(new Checks(), "withTtl");
+
+        assertEquals(5, registry.ttlSeconds("5"));
+        assertEquals(5, registry.ttlSeconds("  5  "), "surrounding whitespace is the operator's");
+    }
+
+    @Test
+    void anUnusableEnvVarFallsBackToTheAnnotation() {
+        MeshHealthCheckRegistry registry = registryFor(new Checks(), "withTtl");
+
+        // Sub-1s would busy-probe the vendor; not an integer is a typo. Both
+        // fall back rather than failing the boot — a bad override must not stop
+        // an agent from starting, and 30s is a safe answer.
+        assertEquals(30, registry.ttlSeconds("0"));
+        assertEquals(30, registry.ttlSeconds("-1"));
+        assertEquals(30, registry.ttlSeconds("thirty"));
+        assertEquals(30, registry.ttlSeconds("15s"));
+        assertEquals(30, registry.ttlSeconds(""), "blank is 'not set'");
+        assertEquals(30, registry.ttlSeconds("   "));
     }
 
     @Test

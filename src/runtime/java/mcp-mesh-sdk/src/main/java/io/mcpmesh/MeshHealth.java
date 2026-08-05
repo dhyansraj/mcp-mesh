@@ -46,9 +46,12 @@ public record MeshHealth(
         checks = checks == null || checks.isEmpty()
             ? Map.of()
             : Collections.unmodifiableMap(new LinkedHashMap<>(checks));
+        // Null-tolerant, not List.copyOf: a null error string must not throw
+        // out of the canonical constructor either — every other path
+        // (withError, a direct `new MeshHealth(...)`) funnels through here.
         errors = errors == null || errors.isEmpty()
             ? List.of()
-            : List.copyOf(errors);
+            : List.copyOf(errors.stream().filter(Objects::nonNull).toList());
     }
 
     /** Healthy, with no detail. */
@@ -59,20 +62,21 @@ public record MeshHealth(
     /**
      * Impaired but still serving — keeps heartbeating and stays in resolution.
      *
-     * @param errors reasons, rendered into {@code /health}
+     * @param errors reasons, rendered into {@code /health}; nulls are dropped
      */
     public static MeshHealth degraded(String... errors) {
-        return new MeshHealth(MeshHealthStatus.DEGRADED, null, List.of(errors));
+        return new MeshHealth(MeshHealthStatus.DEGRADED, null, cleanErrors(errors));
     }
 
     /**
      * Cannot serve — suppresses the heartbeat, so the registry withdraws this
      * agent and consumers fail over to another provider.
      *
-     * @param errors reasons, rendered into {@code /health} and {@code /ready}
+     * @param errors reasons, rendered into {@code /health} and {@code /ready};
+     *               nulls are dropped
      */
     public static MeshHealth unhealthy(String... errors) {
-        return new MeshHealth(MeshHealthStatus.UNHEALTHY, null, List.of(errors));
+        return new MeshHealth(MeshHealthStatus.UNHEALTHY, null, cleanErrors(errors));
     }
 
     /**
@@ -80,9 +84,32 @@ public record MeshHealth(
      * {@link MeshHealthStatus#DEGRADED} rather than unhealthy.
      *
      * @param status wire value: {@code healthy} / {@code degraded} / {@code unhealthy}
+     * @param errors reasons; nulls are dropped
      */
     public static MeshHealth of(String status, String... errors) {
-        return new MeshHealth(MeshHealthStatus.fromWire(status), null, List.of(errors));
+        return new MeshHealth(MeshHealthStatus.fromWire(status), null, cleanErrors(errors));
+    }
+
+    /**
+     * Drop nulls (and a null array) instead of letting {@link List#of} throw.
+     *
+     * <p>{@code unhealthy(null)} used to raise a {@link NullPointerException}
+     * out of the health check, which the runtime then recorded as DEGRADED —
+     * so an agent that explicitly declared itself unable to serve kept
+     * heartbeating. The requested STATUS is what routing depends on; a missing
+     * error string is a cosmetic defect and must not change it.
+     */
+    private static List<String> cleanErrors(String... errors) {
+        if (errors == null || errors.length == 0) {
+            return List.of();
+        }
+        List<String> cleaned = new ArrayList<>(errors.length);
+        for (String error : errors) {
+            if (error != null) {
+                cleaned.add(error);
+            }
+        }
+        return cleaned;
     }
 
     /** A copy with one more entry in {@link #checks()}. */

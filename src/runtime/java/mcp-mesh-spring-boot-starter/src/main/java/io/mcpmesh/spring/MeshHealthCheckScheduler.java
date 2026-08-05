@@ -97,17 +97,25 @@ public class MeshHealthCheckScheduler implements SmartLifecycle {
                 registry.registration().describe(), ttl, agentType());
         }
 
-        // Seed the endpoints immediately, but do NOT publish (Python parity).
-        // A check that fails during boot — a pool not warm yet, a lazily-built
-        // client — must not withdraw an agent that has only just registered.
-        // The first published verdict is one TTL later, once the agent is up.
-        refresh(false);
-
         executor = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "mesh-health-check");
             t.setDaemon(true);
             return t;
         });
+
+        // Seed the endpoints, but do NOT publish (Python parity). A check that
+        // fails during boot — a pool not warm yet, a lazily-built client — must
+        // not withdraw an agent that has only just registered. The first
+        // PUBLISHED verdict is one TTL later, once the agent is up.
+        //
+        // Submitted to the executor rather than run inline: a scaffolded
+        // provider's check is an HTTP call to a vendor, and running it on the
+        // Spring lifecycle thread would stall application startup for as long
+        // as that vendor takes to answer — a hung vendor would hang the boot.
+        // It shares the single-threaded executor with the periodic task, so the
+        // seed still strictly precedes the first scheduled refresh.
+        executor.execute(() -> refresh(false));
+
         // Fixed DELAY, not rate: a check that takes longer than its TTL (a
         // vendor probe timing out is exactly that) must not queue up back-to-back
         // runs against an already-struggling upstream.
@@ -145,10 +153,14 @@ public class MeshHealthCheckScheduler implements SmartLifecycle {
      * Run the check, store the verdict, and (optionally) report it to the
      * runtime.
      *
-     * <p>Never throws: this runs on a scheduled executor, where an escaping
-     * exception silently cancels all future runs — the agent would stop
-     * refreshing its health forever, with nothing in the logs after the first
-     * failure.
+     * <p>Never throws — {@code Throwable}, not {@code Exception}. This runs on
+     * a {@link java.util.concurrent.ScheduledExecutorService}, which silently
+     * cancels all future runs when a task throws. A single {@code Error} (an
+     * {@code UnsatisfiedLinkError} from the native handle, an
+     * {@code OutOfMemoryError} in a user check) would therefore stop health
+     * refreshes permanently, with nothing in the logs after the first failure
+     * and no recovery short of a restart — the worst possible failure for a
+     * mechanism whose entire job is to notice failures.
      */
     void refresh(boolean publish) {
         MeshHealth health;
@@ -177,9 +189,11 @@ public class MeshHealthCheckScheduler implements SmartLifecycle {
         }
         try {
             runtime.updateHealth(health.status().wireValue());
-        } catch (Exception e) {
+        } catch (Throwable t) {
+            // Throwable, not Exception: see the method comment — an Error
+            // escaping here would cancel every future refresh silently.
             log.warn("Failed to report health status '{}' to the mesh runtime: {}",
-                health.status(), e.toString());
+                health.status(), t.toString());
         }
     }
 
