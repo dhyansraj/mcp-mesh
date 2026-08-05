@@ -18,9 +18,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *
  * <p>Each tick stores the result for {@link MeshHealthController} and reports it
  * to the mesh runtime, where {@code unhealthy} suppresses the heartbeat so the
- * registry withdraws this agent from dependency resolution. The TTL is
- * therefore the detection latency in <b>both</b> directions — outage and
- * recovery. Mirrors Python's {@code update_health_result} refresh task.
+ * registry withdraws this agent from dependency resolution. The TTL is the
+ * <b>cadence</b> of that check, not the end-to-end latency in either
+ * direction: withdrawal costs up to one TTL plus the registry's staleness
+ * window once heartbeats stop, and recovery costs up to one TTL plus the
+ * heartbeat resume and re-register round trip. Mirrors Python's
+ * {@code update_health_result} refresh task.
  *
  * <h2>Why a ScheduledExecutorService and not {@code @Scheduled}</h2>
  *

@@ -446,8 +446,12 @@ class FastAPIServerSetupStep(PipelineStep):
                     Since issue #1472 this loop also drives dependency
                     resolution: each refresh reports its verdict to the
                     Rust core, which stops heartbeating while the agent
-                    is unhealthy. The TTL is therefore the detection
-                    latency for both directions — outage and recovery.
+                    is unhealthy. The TTL is the cadence of that check,
+                    not the end-to-end latency in either direction:
+                    withdrawal costs up to one TTL plus the registry's
+                    staleness window once heartbeats stop, and recovery
+                    costs up to one TTL plus the heartbeat resume and
+                    re-register round trip.
                     """
                     try:
                         await asyncio.wrap_future(ready_future)
