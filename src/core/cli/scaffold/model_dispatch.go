@@ -229,8 +229,11 @@ func big3Family(m string) string {
 }
 
 // providerTagsByFamily are the discovery tags a scaffolded provider registers
-// for each big-3 family. The templates emit the same lists in their own syntax;
-// this copy serves the Go-side callers (the interactive wizard).
+// for each big-3 family. Single source of truth for every caller: the Go-side
+// ones (the interactive wizard) go through ProviderTagsForModel directly, and
+// the three language templates reach the same function through the
+// `providerTags` template func. Each template supplies only its own literal
+// syntax around the list — none of them restates the tags.
 var providerTagsByFamily = map[string][]string{
 	"anthropic": {"llm", "claude", "anthropic", "provider"},
 	"openai":    {"llm", "openai", "gpt", "provider"},

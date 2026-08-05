@@ -48,6 +48,16 @@ func NewTemplateRenderer() *TemplateRenderer {
 			// empty and must gate on that value, not on the raw context).
 			"probeVendor": DirectProbeVendor,
 			"modelFamily": ModelFamily,
+			// The discovery tags an llm-provider registers for a model, so the
+			// three language templates render one Go-side list instead of
+			// hand-writing four family arms each. Each template still supplies
+			// its own literal syntax (`[...]` vs `{...}`) around the range;
+			// only the tag CONTENT comes from here.
+			//
+			// The templates used to duplicate these lists, which is exactly the
+			// copy-divergence shape that let the inverted health-check verdict
+			// propagate from Python to Java unnoticed (issues #1476/#1479).
+			"providerTags": ProviderTagsForModel,
 		},
 	}
 }

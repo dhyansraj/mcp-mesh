@@ -251,7 +251,7 @@ async def health_check() -> dict:
          bedrock/anthropic.claude-* provider is still Claude and must stay
          discoverable by a consumer pinning +claude, even though it has no
          probeable direct vendor API (issue #1479). */ -}}
-    tags={{ if .Tags }}{{ toJSON .Tags }}{{ else if eq .ModelFamily "anthropic" }}["llm", "claude", "anthropic", "provider"]{{ else if eq .ModelFamily "openai" }}["llm", "openai", "gpt", "provider"]{{ else if eq .ModelFamily "gemini" }}["llm", "gemini", "google", "provider"]{{ else }}["llm", "provider"]{{ end }},
+    tags={{ if .Tags }}{{ toJSON .Tags }}{{ else }}[{{ range $i, $t := providerTags .Model }}{{ if $i }}, {{ end }}"{{ $t }}"{{ end }}]{{ end }},
     version="1.0.0",
 )
 def {{ toSnakeCase .Name }}():

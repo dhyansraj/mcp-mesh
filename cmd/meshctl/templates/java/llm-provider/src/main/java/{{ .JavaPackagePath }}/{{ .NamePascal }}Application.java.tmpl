@@ -15,12 +15,13 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
      bedrock/anthropic.* and vertex_ai/gemini-* into a probe of credentials
      those deployments never have (issue #1479). */}}
 {{- $probeVendor := probeVendor $model }}
-{{- /* Which big-3 family built this model, if any. A DIFFERENT question from
+{{- /* The discovery tags below come from `providerTags`, which resolves the
+     big-3 FAMILY that built the model - a DIFFERENT question from
      $probeVendor, and the answers diverge on gateways: bedrock/anthropic.* is
      genuinely Claude and must keep the claude/anthropic discovery tags a
      `--vendor claude` consumer pins with +claude, while having no probeable
-     direct vendor API. */}}
-{{- $family := modelFamily $model }}
+     direct vendor API. The tag lists themselves live in Go
+     (providerTagsByFamily) so the three language templates cannot drift. */}}
 {{- if $probeVendor }}
 
 import java.net.URI;
@@ -46,7 +47,7 @@ import java.time.Duration;
 @MeshLlmProvider(
     model = "{{ $model }}",
     capability = "llm",
-    tags = {{ "{" }}{{ if .Tags }}{{ range $i, $t := .Tags }}{{ if $i }}, {{ end }}"{{ $t }}"{{ end }}{{ else if eq $family "anthropic" }}"llm", "claude", "anthropic", "provider"{{ else if eq $family "openai" }}"llm", "openai", "gpt", "provider"{{ else if eq $family "gemini" }}"llm", "gemini", "google", "provider"{{ else }}"llm", "provider"{{ end }}{{ "}" }},
+    tags = {{ "{" }}{{ if .Tags }}{{ range $i, $t := .Tags }}{{ if $i }}, {{ end }}"{{ $t }}"{{ end }}{{ else }}{{ range $i, $t := providerTags $model }}{{ if $i }}, {{ end }}"{{ $t }}"{{ end }}{{ end }}{{ "}" }},
     version = "1.0.0"
 )
 @SpringBootApplication

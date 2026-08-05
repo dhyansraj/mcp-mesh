@@ -42,9 +42,13 @@ server.addTool(
 
 ```bash
 docker build -t {{ .Name }}:latest .
+{{ if .ProbeVendor }}docker run -p {{ .Port }}:{{ .Port }} \
+  -e {{ if eq .ProbeVendor "anthropic" }}ANTHROPIC_API_KEY{{ else if eq .ProbeVendor "openai" }}OPENAI_API_KEY{{ else if eq .ProbeVendor "gemini" }}GOOGLE_API_KEY{{ end }}=${{ if eq .ProbeVendor "anthropic" }}ANTHROPIC_API_KEY{{ else if eq .ProbeVendor "openai" }}OPENAI_API_KEY{{ else if eq .ProbeVendor "gemini" }}GOOGLE_API_KEY{{ end }} \
+  {{ .Name }}:latest{{ else }}# Pass in the credentials {{ .Model }} authenticates with (for a gateway-prefixed
+# model those are the gateway's own - AWS credentials, ADC, a workspace token),
+# as -e vars or a mounted credential file.
 docker run -p {{ .Port }}:{{ .Port }} \
-  -e {{ if eq .ProbeVendor "anthropic" }}ANTHROPIC_API_KEY{{ else if eq .ProbeVendor "openai" }}OPENAI_API_KEY{{ else if eq .ProbeVendor "gemini" }}GOOGLE_API_KEY{{ else }}API_KEY{{ end }}=${{ if eq .ProbeVendor "anthropic" }}ANTHROPIC_API_KEY{{ else if eq .ProbeVendor "openai" }}OPENAI_API_KEY{{ else if eq .ProbeVendor "gemini" }}GOOGLE_API_KEY{{ else }}API_KEY{{ end }} \
-  {{ .Name }}:latest
+  {{ .Name }}:latest{{ end }}
 ```
 
 ## Kubernetes
@@ -52,8 +56,12 @@ docker run -p {{ .Port }}:{{ .Port }} \
 Create a secret first:
 
 ```bash
+{{ if .ProbeVendor }}kubectl create secret generic llm-secrets \
+  --from-literal={{ if eq .ProbeVendor "anthropic" }}anthropic-api-key{{ else if eq .ProbeVendor "openai" }}openai-api-key{{ else if eq .ProbeVendor "gemini" }}google-api-key{{ end }}=${{ if eq .ProbeVendor "anthropic" }}ANTHROPIC_API_KEY{{ else if eq .ProbeVendor "openai" }}OPENAI_API_KEY{{ else if eq .ProbeVendor "gemini" }}GOOGLE_API_KEY{{ end }}{{ else }}# The secret holds the credentials {{ .Model }} authenticates with (for a
+# gateway-prefixed model those are the gateway's own - AWS credentials, ADC, a
+# workspace token). Reference it from helm-values.yaml.
 kubectl create secret generic llm-secrets \
-  --from-literal={{ if eq .ProbeVendor "anthropic" }}anthropic-api-key{{ else if eq .ProbeVendor "openai" }}openai-api-key{{ else if eq .ProbeVendor "gemini" }}google-api-key{{ else }}api-key{{ end }}=${{ if eq .ProbeVendor "anthropic" }}ANTHROPIC_API_KEY{{ else if eq .ProbeVendor "openai" }}OPENAI_API_KEY{{ else if eq .ProbeVendor "gemini" }}GOOGLE_API_KEY{{ else }}API_KEY{{ end }}
+  --from-literal=<credential-name>=<credential-value>{{ end }}
 ```
 
 Then deploy:

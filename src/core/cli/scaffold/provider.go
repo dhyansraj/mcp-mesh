@@ -6,6 +6,7 @@ package scaffold
 import (
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -147,7 +148,14 @@ func (ctx *ScaffoldContext) Validate() error {
 	// set gateway credentials instead, and the agent withdrew itself for good
 	// (issue #1479). There is no correct rendering of an llm-provider without a
 	// model, so it is rejected before any template runs.
-	if (ctx.AgentType == "llm-provider" || ctx.Template == "llm-provider") && ctx.Model == "" {
+	//
+	// Trimmed first: `--model "   "` is the same empty case wearing a disguise.
+	// ModelFamily and DirectProbeVendor both trim before resolving, so a
+	// whitespace-only model answers "" to every question the templates ask —
+	// same skeleton, same missing family tags — while the decorator gets the
+	// blank string embedded as its model id.
+	if (ctx.AgentType == "llm-provider" || ctx.Template == "llm-provider") &&
+		strings.TrimSpace(ctx.Model) == "" {
 		return fmt.Errorf("model is required for the llm-provider template (e.g. --model anthropic/claude-sonnet-5)")
 	}
 

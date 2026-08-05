@@ -173,6 +173,22 @@ func TestScaffoldContext_Validate(t *testing.T) {
 			errMsg:  "model is required",
 		},
 		{
+			// A whitespace-only --model is the same "no model" case wearing a
+			// disguise: ModelFamily and DirectProbeVendor both trim before
+			// resolving, so it answers "" for every question the templates ask
+			// and renders the skeleton — with the blank string embedded in the
+			// decorator as the model id.
+			name: "llm-provider template with whitespace-only model",
+			ctx: &ScaffoldContext{
+				Name:     "my-provider",
+				Language: "java",
+				Template: "llm-provider",
+				Model:    "   ",
+			},
+			wantErr: true,
+			errMsg:  "model is required",
+		},
+		{
 			name: "llm-provider template with model",
 			ctx: &ScaffoldContext{
 				Name:     "my-provider",

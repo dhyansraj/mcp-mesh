@@ -358,6 +358,21 @@ func TestLlmProviderTemplates_GatewayModelKeepsFamilyTagsButNotVendorCredentials
 				require.NotContains(t, readme, "export "+gw.bannedKey,
 					"the README tells the operator to export a key the gateway "+
 						"does not use")
+
+				// Not just the vendor's key: a generic `API_KEY` / `api-key`
+				// fallback is no better. The TypeScript README's Docker and
+				// kubectl blocks ended their vendor chain with one, so a Bedrock
+				// scaffold told the operator to pass `API_KEY=$API_KEY` and
+				// create a secret keyed `api-key` — names neither gateway reads,
+				// in the same file whose prose says to use the gateway's own
+				// credentials.
+				require.NotContains(t, readme, "API_KEY",
+					"%s authenticates with its gateway's credentials: naming any "+
+						"API key here, vendor-specific or generic, sends the "+
+						"operator to configure something nothing reads", gw.model)
+				require.NotContains(t, readme, "api-key",
+					"%s authenticates with its gateway's credentials, so no "+
+						"api-key secret name applies", gw.model)
 			})
 		}
 	}
@@ -374,21 +389,25 @@ func TestLlmProviderTemplates_GatewayModelKeepsFamilyTagsButNotVendorCredentials
 // degrades a real probe into the skeleton, which is the case that takes a
 // working health check away.
 func TestLlmProviderTemplates_BareBig3NameStillProbes(t *testing.T) {
+	// wantTags is the whole rendered tag literal, matched via tagsMarker, not a
+	// bare family word: "anthropic" appears in the API host, the import path and
+	// the comments of every Anthropic render, so `Contains(content, "anthropic")`
+	// holds even with the tag list absent or carrying another family's tags.
 	bare := []struct {
-		model     string
-		wantAPI   string
-		wantKey   string
-		wantTagIn string
+		model    string
+		wantAPI  string
+		wantKey  string
+		wantTags []string
 	}{
-		{"claude-sonnet-5", "api.anthropic.com", "ANTHROPIC_API_KEY", "anthropic"},
-		{"gpt-4o", "api.openai.com", "OPENAI_API_KEY", "openai"},
-		{"gemini-2.5-flash", "generativelanguage.googleapis.com", "GOOGLE_API_KEY", "gemini"},
+		{"claude-sonnet-5", "api.anthropic.com", "ANTHROPIC_API_KEY", []string{"llm", "claude", "anthropic", "provider"}},
+		{"gpt-4o", "api.openai.com", "OPENAI_API_KEY", []string{"llm", "openai", "gpt", "provider"}},
+		{"gemini-2.5-flash", "generativelanguage.googleapis.com", "GOOGLE_API_KEY", []string{"llm", "gemini", "google", "provider"}},
 
 		// --model is free-form, so the casing is the user's.
-		{"ANTHROPIC/claude-sonnet-5", "api.anthropic.com", "ANTHROPIC_API_KEY", "anthropic"},
-		{"Claude-Sonnet-5", "api.anthropic.com", "ANTHROPIC_API_KEY", "anthropic"},
-		{"OpenAI/GPT-4o", "api.openai.com", "OPENAI_API_KEY", "openai"},
-		{"GEMINI/Gemini-2.5-Flash", "generativelanguage.googleapis.com", "GOOGLE_API_KEY", "gemini"},
+		{"ANTHROPIC/claude-sonnet-5", "api.anthropic.com", "ANTHROPIC_API_KEY", []string{"llm", "claude", "anthropic", "provider"}},
+		{"Claude-Sonnet-5", "api.anthropic.com", "ANTHROPIC_API_KEY", []string{"llm", "claude", "anthropic", "provider"}},
+		{"OpenAI/GPT-4o", "api.openai.com", "OPENAI_API_KEY", []string{"llm", "openai", "gpt", "provider"}},
+		{"GEMINI/Gemini-2.5-Flash", "generativelanguage.googleapis.com", "GOOGLE_API_KEY", []string{"llm", "gemini", "google", "provider"}},
 	}
 
 	for _, rt := range runtimeProbes {
@@ -397,7 +416,9 @@ func TestLlmProviderTemplates_BareBig3NameStillProbes(t *testing.T) {
 				content := renderProvider(t, rt.language, b.model, rt.entry)
 				require.Contains(t, content, b.wantAPI)
 				require.Contains(t, content, b.wantKey)
-				require.Contains(t, content, b.wantTagIn)
+				require.Contains(t, content, tagsMarker(rt.language, b.wantTags),
+					"%s must register its family's discovery tags, or a consumer "+
+						"pinning +claude / +gpt / +gemini stops resolving it", b.model)
 				require.NotContains(t, content, "NOT IMPLEMENTED",
 					"an unprefixed big-3 name is probeable and must get the real probe")
 			})
