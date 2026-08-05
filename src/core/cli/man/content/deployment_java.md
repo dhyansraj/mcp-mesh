@@ -274,7 +274,7 @@ Spring Boot agents automatically expose `/actuator/health`. The MCP Mesh starter
 The starter also serves the three mesh endpoints, and Kubernetes probes must not share one:
 
 - `/livez` - `livenessProbe` and `startupProbe`. 200 for as long as the process is serving; consults nothing else.
-- `/ready` - `readinessProbe`. Whether traffic should be routed here; reflects your `@MeshHealthCheck` on top of the mesh runtime state.
+- `/ready` - `readinessProbe`. Whether traffic should be routed here; reflects your `@MeshHealthCheck` on top of the mesh runtime state, except on a route-only (`api`) or A2A agent, where only the runtime state counts.
 - `/health` - no probe. The `/ready` signal plus the `checks` and `errors` your check returned.
 
 Both `/health` and `/ready` answer 503 until the mesh runtime is up, so pointing liveness or startup at either restarts pods that are merely still booting. The Helm chart is already wired this way.
@@ -294,7 +294,7 @@ public MeshHealth healthCheck() {
 
 While the check returns unhealthy the agent stops heartbeating, the registry withdraws it, and consumers resolve to another provider - restored automatically when the check passes, with no restart. Returning `boolean` works too: `true` is healthy, `false` unhealthy. A check that throws is recorded as `degraded` and keeps heartbeating, so a bug in the check cannot take a working agent out of the mesh. `MCP_MESH_HEALTH_CHECK_TTL` overrides `ttlSeconds`.
 
-Route-only (`api`) and A2A agents are the exception: their check feeds the probes but never suppresses the heartbeat. A gateway is a fan-out point, and withdrawing it takes the application down.
+Route-only (`api`) and A2A agents are the exception: their check feeds `/health` only - it never suppresses the heartbeat and never makes `/ready` answer 503. A gateway is a fan-out point, and taking it out of rotation takes the application down.
 
 ### Graceful Shutdown
 
