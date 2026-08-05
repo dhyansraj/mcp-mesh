@@ -127,6 +127,17 @@ impl HeartbeatStateMachine {
         }
     }
 
+    /// Get the configured interval between heartbeats.
+    ///
+    /// Note this is the interval the machine was *built* with (derived from
+    /// `AgentSpec::heartbeat_interval`), not `RuntimeConfig::heartbeat.interval`
+    /// — the two diverge, so callers that need the effective cadence (e.g. the
+    /// health-suppression wait in `AgentRuntime::run`, issue #1472) must read it
+    /// from here.
+    pub fn heartbeat_interval(&self) -> Duration {
+        self.config.interval
+    }
+
     /// Get the heartbeat count.
     pub fn heartbeat_count(&self) -> u64 {
         self.heartbeat_count
@@ -463,6 +474,41 @@ mod tests {
             "expected jittered backoff to vary, got {:?}",
             values
         );
+    }
+
+    /// Issue #1472: the suppressed-wait cadence is read from the state
+    /// machine, not from `RuntimeConfig` — those two diverge (the machine is
+    /// built with the spec's per-agent interval). Guard the accessor so a
+    /// future refactor can't silently reintroduce the 5s default.
+    #[test]
+    fn test_heartbeat_interval_accessor_reports_configured_value() {
+        let config = HeartbeatConfig {
+            interval: Duration::from_secs(17),
+            ..Default::default()
+        };
+        let sm = HeartbeatStateMachine::new(config);
+        assert_eq!(sm.heartbeat_interval(), Duration::from_secs(17));
+    }
+
+    /// Issue #1472: `set_health_status` is what the `UpdateHealth` command
+    /// drives; the value must survive heartbeat outcomes so the run loop's
+    /// gate stays closed until the SDK says otherwise.
+    #[test]
+    fn test_health_status_round_trips() {
+        let mut sm = HeartbeatStateMachine::new(HeartbeatConfig::default());
+        assert_eq!(sm.health_status(), HealthStatus::Healthy);
+
+        sm.set_health_status(HealthStatus::Unhealthy);
+        assert_eq!(sm.health_status(), HealthStatus::Unhealthy);
+
+        // A successful heartbeat maps Unhealthy onto the Degraded *heartbeat*
+        // state but must not rewrite the SDK-reported health status.
+        sm.on_full_heartbeat_success();
+        assert_eq!(sm.health_status(), HealthStatus::Unhealthy);
+        assert_eq!(sm.state(), HeartbeatState::Degraded);
+
+        sm.set_health_status(HealthStatus::Healthy);
+        assert_eq!(sm.health_status(), HealthStatus::Healthy);
     }
 
     #[test]

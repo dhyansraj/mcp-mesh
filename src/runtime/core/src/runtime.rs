@@ -13,7 +13,7 @@ use tokio::sync::{mpsc, watch, RwLock};
 use tokio::time::sleep;
 use tracing::{info, trace, warn};
 
-use crate::events::{LlmProviderInfo, LlmToolInfo, MeshEvent};
+use crate::events::{HealthStatus, LlmProviderInfo, LlmToolInfo, MeshEvent};
 use crate::handle::HandleState;
 use crate::heartbeat::{HeartbeatAction, HeartbeatConfig, HeartbeatStateMachine};
 use crate::registry::{HeartbeatRequest, HeartbeatResponse, RegistryClient};
@@ -42,6 +42,21 @@ pub enum RuntimeCommand {
         agent_type: String,
         surfaces: Option<String>,
     },
+    /// Update the agent's self-reported health status (issue #1472).
+    ///
+    /// SDKs push the verdict of the user-supplied `health_check` here on
+    /// their own cadence (Python: every `health_check_ttl`, default 15s).
+    /// While the status is `Unhealthy` the runtime suppresses ALL registry
+    /// traffic — see [`AgentRuntime::heartbeat_suppressed`] — so the
+    /// registry's staleness sweep withdraws the agent from dependency
+    /// resolution. Pushing `Healthy` (or `Degraded`) resumes heartbeats and
+    /// the registry restores the agent on the next full heartbeat, with no
+    /// process restart.
+    ///
+    /// Carries the full [`HealthStatus`] rather than a `bool` so that giving
+    /// `Degraded` its own behaviour later is a change to the heartbeat loop,
+    /// not to this command API.
+    UpdateHealth(HealthStatus),
 }
 
 /// Internal provider tracking (non-PyO3 to avoid GIL issues in tokio thread).
@@ -235,7 +250,7 @@ impl AgentRuntime {
             }
 
             // Process any pending commands (non-blocking)
-            self.process_pending_commands();
+            self.process_pending_commands().await;
 
             if self.state_machine.is_shutting_down() {
                 // Gracefully unregister from registry before stopping
@@ -243,15 +258,39 @@ impl AgentRuntime {
                 break;
             }
 
+            // Issue #1472: the SDK reported the agent unhealthy — go silent
+            // so the registry's staleness sweep withdraws it from resolution.
+            let suppressed = self.heartbeat_suppressed();
+
             // Check if we need to force a full heartbeat (e.g., after tools update)
-            if self.force_full_heartbeat {
+            // The flag is deliberately NOT cleared while suppressed: the pending
+            // change (tools / port / surfaces) is remembered and pushed on the
+            // first heartbeat after recovery.
+            if self.force_full_heartbeat && !suppressed {
                 self.force_full_heartbeat = false;
                 self.send_full_heartbeat().await;
                 continue;
             }
 
             // Determine next action
-            let action = self.state_machine.next_action();
+            let mut action = self.state_machine.next_action();
+
+            // Issue #1472: while suppressed, swap any registry-bound action for
+            // a plain Wait. Waiting — rather than `continue`-ing — is
+            // load-bearing: the Wait arm's `select!` is what keeps the shutdown
+            // signal, the command channel (including the `UpdateHealth(Healthy)`
+            // that ENDS the suppression) and the independent dependency-reconcile
+            // tick alive. A bare `continue` would spin the loop hot and starve
+            // the reconcile timer, which only ticks inside that `select!`.
+            if suppressed {
+                if let HeartbeatAction::SendFull
+                | HeartbeatAction::SendFast
+                | HeartbeatAction::Retry { .. } = action
+                {
+                    trace!("Health status Unhealthy — suppressing {:?}", action);
+                    action = HeartbeatAction::Wait(self.state_machine.heartbeat_interval());
+                }
+            }
             trace!("Next action: {:?}", action);
 
             match action {
@@ -271,7 +310,7 @@ impl AgentRuntime {
                         }
                         cmd = self.command_rx.recv() => {
                             if let Some(cmd) = cmd {
-                                self.handle_command(cmd);
+                                self.handle_command(cmd).await;
                             }
                         }
                         // Independent wall-clock reconcile tick (issue #1314).
@@ -295,7 +334,7 @@ impl AgentRuntime {
                         }
                         cmd = self.command_rx.recv() => {
                             if let Some(cmd) = cmd {
-                                self.handle_command(cmd);
+                                self.handle_command(cmd).await;
                             }
                         }
                     }
@@ -308,6 +347,14 @@ impl AgentRuntime {
                     // Wait arm doesn't need this: it does no state-mutating
                     // work after its select.
                     if self.state_machine.is_shutting_down() {
+                        continue;
+                    }
+                    // Same shape for the health gate (issue #1472): an
+                    // `UpdateHealth(Unhealthy)` that landed on the command arm
+                    // during the backoff must not be undone by the heartbeat
+                    // this arm would otherwise send. Fall through to the loop
+                    // top, which re-evaluates the gate.
+                    if self.heartbeat_suppressed() {
                         continue;
                     }
                     // After backoff, try full registration
@@ -325,14 +372,14 @@ impl AgentRuntime {
     }
 
     /// Process any pending commands without blocking.
-    fn process_pending_commands(&mut self) {
+    async fn process_pending_commands(&mut self) {
         while let Ok(cmd) = self.command_rx.try_recv() {
-            self.handle_command(cmd);
+            self.handle_command(cmd).await;
         }
     }
 
     /// Handle a runtime command.
-    fn handle_command(&mut self, cmd: RuntimeCommand) {
+    async fn handle_command(&mut self, cmd: RuntimeCommand) {
         match cmd {
             RuntimeCommand::UpdateTools(new_tools) => {
                 self.handle_update_tools(new_tools);
@@ -347,6 +394,47 @@ impl AgentRuntime {
             RuntimeCommand::UpdateSurfaces { agent_type, surfaces } => {
                 self.handle_update_surfaces(agent_type, surfaces);
             }
+            RuntimeCommand::UpdateHealth(status) => {
+                self.handle_update_health(status).await;
+            }
+        }
+    }
+
+    /// Handle a health-status update pushed by the SDK (issue #1472).
+    ///
+    /// Records the status on the heartbeat state machine — which gates registry
+    /// traffic in [`Self::run`] and is reported on the next full heartbeat — and
+    /// mirrors it onto the shared handle state so `handle.get_status()` reflects
+    /// the SDK's verdict instead of a constant `Healthy`.
+    ///
+    /// No-ops when the status is unchanged, so a per-TTL push of the same
+    /// verdict costs one comparison and produces no log noise.
+    async fn handle_update_health(&mut self, status: HealthStatus) {
+        if self.state_machine.health_status() == status {
+            return;
+        }
+        // Logs the transition (see `HeartbeatStateMachine::set_health_status`).
+        self.state_machine.set_health_status(status);
+        self.shared_state.write().await.health_status = status;
+    }
+
+    /// Whether registry traffic is currently suppressed by the SDK-reported
+    /// health status (issue #1472).
+    ///
+    /// The match is exhaustive on purpose: only `Unhealthy` is load-bearing
+    /// today, and keeping every variant spelled out means giving `Degraded`
+    /// its own behaviour later is a change *here*, not to `RuntimeCommand`.
+    fn heartbeat_suppressed(&self) -> bool {
+        match self.state_machine.health_status() {
+            // Fully operational — beat normally.
+            HealthStatus::Healthy => false,
+            // Reduced functionality but still serving traffic; the registry
+            // should keep routing to it, so it beats exactly like Healthy.
+            HealthStatus::Degraded => false,
+            // Not operational — go silent. The registry marks the agent
+            // unhealthy once the heartbeat goes stale, and resolution stops
+            // selecting every capability this agent provides.
+            HealthStatus::Unhealthy => true,
         }
     }
 
@@ -1549,6 +1637,315 @@ mod tests {
             drain_available(&mut event_rx),
             1,
             "a just-emitted edge is not double-emitted by the same-cycle reconcile"
+        );
+    }
+
+    // ---- Issue #1472: SDK-reported health gates registry traffic ----
+
+    /// Build a spec pointing at `registry_url` with a 1s heartbeat cadence.
+    fn health_spec(registry_url: String) -> crate::spec::AgentSpec {
+        crate::spec::AgentSpec::new(
+            "health-agent".to_string(),
+            registry_url,
+            "1.0.0".to_string(),
+            "".to_string(),
+            8080,
+            "localhost".to_string(),
+            "default".to_string(),
+            None,
+            None,
+            None,
+            None,
+            1, // heartbeat_interval (secs)
+            None,
+        )
+    }
+
+    /// Only `Unhealthy` suppresses registry traffic. `Degraded` beats exactly
+    /// like `Healthy` today — the exhaustive match in `heartbeat_suppressed`
+    /// is what makes changing that a loop-local edit.
+    #[tokio::test]
+    async fn test_1472_only_unhealthy_suppresses() {
+        let (event_tx, _event_rx) = mpsc::channel(10);
+        let mut runtime = new_reconcile_runtime(event_tx).await;
+
+        assert!(
+            !runtime.heartbeat_suppressed(),
+            "a fresh runtime starts Healthy and must heartbeat"
+        );
+
+        runtime.handle_update_health(HealthStatus::Degraded).await;
+        assert!(
+            !runtime.heartbeat_suppressed(),
+            "Degraded must keep heartbeating (still serving traffic)"
+        );
+
+        runtime.handle_update_health(HealthStatus::Unhealthy).await;
+        assert!(runtime.heartbeat_suppressed(), "Unhealthy must go silent");
+
+        runtime.handle_update_health(HealthStatus::Healthy).await;
+        assert!(
+            !runtime.heartbeat_suppressed(),
+            "recovery must resume heartbeats"
+        );
+    }
+
+    /// `UpdateHealth` mirrors onto the shared handle state so
+    /// `handle.get_status()` reports the SDK's verdict instead of a constant
+    /// `Healthy` — the only observability left once the agent goes silent.
+    #[tokio::test]
+    async fn test_1472_health_mirrored_to_shared_state() {
+        let (event_tx, _event_rx) = mpsc::channel(10);
+        let (_shutdown_tx, shutdown_rx) = mpsc::channel(1);
+        let (_command_tx, command_rx) = mpsc::channel(10);
+        let shared_state = Arc::new(RwLock::new(HandleState::default()));
+
+        let mut runtime = AgentRuntime::new(
+            reconcile_spec(),
+            RuntimeConfig::default(),
+            event_tx,
+            shared_state.clone(),
+            shutdown_rx,
+            command_rx,
+        )
+        .await
+        .expect("runtime construction should succeed");
+
+        assert_eq!(shared_state.read().await.health_status, HealthStatus::Healthy);
+
+        runtime
+            .handle_command(RuntimeCommand::UpdateHealth(HealthStatus::Unhealthy))
+            .await;
+        assert_eq!(
+            shared_state.read().await.health_status,
+            HealthStatus::Unhealthy
+        );
+
+        runtime
+            .handle_command(RuntimeCommand::UpdateHealth(HealthStatus::Healthy))
+            .await;
+        assert_eq!(shared_state.read().await.health_status, HealthStatus::Healthy);
+    }
+
+    /// Issue #1472 core contract: an agent whose SDK reports `Unhealthy`
+    /// sends NO heartbeat at all — not the full POST, not the fast HEAD. The
+    /// command is queued before the runtime starts, so the very first
+    /// registration is suppressed and the assertion has no timing race.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_1472_unhealthy_stops_heartbeats() {
+        let mut server = mockito::Server::new_async().await;
+        let post = server
+            .mock("POST", "/heartbeat")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"status":"success","message":"ok","agent_id":"health-agent"}"#)
+            .expect(0)
+            .create_async()
+            .await;
+        let head = server
+            .mock("HEAD", mockito::Matcher::Any)
+            .with_status(200)
+            .expect(0)
+            .create_async()
+            .await;
+        // Shutdown still unregisters: withdrawing is always safe to report,
+        // and it is what keeps a stopped-while-unhealthy agent from lingering.
+        let _unregister = server
+            .mock("DELETE", "/agents/health-agent")
+            .with_status(204)
+            .create_async()
+            .await;
+
+        let (event_tx, _event_rx) = mpsc::channel(100);
+        let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
+        let (command_tx, command_rx) = mpsc::channel(10);
+        let shared_state = Arc::new(RwLock::new(HandleState::default()));
+
+        // Queued BEFORE run() — process_pending_commands drains it at the top
+        // of the very first iteration, so nothing is ever sent.
+        command_tx
+            .send(RuntimeCommand::UpdateHealth(HealthStatus::Unhealthy))
+            .await
+            .expect("queue health command");
+
+        let runtime = AgentRuntime::new(
+            health_spec(server.url()),
+            RuntimeConfig::default(),
+            event_tx,
+            shared_state,
+            shutdown_rx,
+            command_rx,
+        )
+        .await
+        .expect("runtime construction should succeed");
+
+        let join = tokio::spawn(runtime.run());
+
+        // Several heartbeat intervals' worth of silence.
+        sleep(Duration::from_millis(1200)).await;
+        shutdown_tx.send(()).await.expect("shutdown signal");
+        tokio::time::timeout(Duration::from_secs(5), join)
+            .await
+            .expect("runtime did not exit after shutdown")
+            .expect("runtime task panicked");
+
+        post.assert_async().await;
+        head.assert_async().await;
+    }
+
+    /// The other half of #1472: pushing `Healthy` again resumes heartbeats
+    /// in-process — no restart, no re-created runtime. This is the property
+    /// the whole design exists for.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_1472_recovery_resumes_heartbeats() {
+        use crate::events::EventType;
+
+        let mut server = mockito::Server::new_async().await;
+        let post = server
+            .mock("POST", "/heartbeat")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"status":"success","message":"ok","agent_id":"health-agent"}"#)
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        let _head = server
+            .mock("HEAD", mockito::Matcher::Any)
+            .with_status(200)
+            .create_async()
+            .await;
+        let _unregister = server
+            .mock("DELETE", "/agents/health-agent")
+            .with_status(204)
+            .create_async()
+            .await;
+
+        let (event_tx, mut event_rx) = mpsc::channel(100);
+        let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
+        let (command_tx, command_rx) = mpsc::channel(10);
+        let shared_state = Arc::new(RwLock::new(HandleState::default()));
+
+        // Start suppressed so we know the eventual POST is the resumption.
+        command_tx
+            .send(RuntimeCommand::UpdateHealth(HealthStatus::Unhealthy))
+            .await
+            .expect("queue unhealthy");
+
+        let runtime = AgentRuntime::new(
+            health_spec(server.url()),
+            RuntimeConfig::default(),
+            event_tx,
+            shared_state,
+            shutdown_rx,
+            command_rx,
+        )
+        .await
+        .expect("runtime construction should succeed");
+
+        let join = tokio::spawn(runtime.run());
+
+        sleep(Duration::from_millis(600)).await;
+        assert!(
+            !post.matched_async().await,
+            "no heartbeat may be sent while suppressed"
+        );
+
+        // Health check passes again — the command arm inside the suppressed
+        // Wait wakes the loop immediately.
+        command_tx
+            .send(RuntimeCommand::UpdateHealth(HealthStatus::Healthy))
+            .await
+            .expect("queue healthy");
+
+        sleep(Duration::from_millis(600)).await;
+        shutdown_tx.send(()).await.expect("shutdown signal");
+        tokio::time::timeout(Duration::from_secs(5), join)
+            .await
+            .expect("runtime did not exit after shutdown")
+            .expect("runtime task panicked");
+
+        post.assert_async().await;
+
+        let mut saw_registered = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if event.event_type == EventType::AgentRegistered {
+                saw_registered = true;
+            }
+        }
+        assert!(
+            saw_registered,
+            "resuming must register with the registry again, in-process"
+        );
+    }
+
+    /// Issue #1472 + #1314: suppression must NOT starve the independent
+    /// dependency-reconcile tick. The reconcile timer only fires inside the
+    /// `Wait` arm's `select!`, so the suppression is implemented as "wait"
+    /// rather than "continue" — if that ever regresses to a bare `continue`
+    /// (or a `sleep` outside the `select!`), this test goes silent.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_1472_reconcile_survives_suppression() {
+        let mut server = mockito::Server::new_async().await;
+        // Would succeed if called — it must not be, and that is precisely why
+        // only the reconcile can be the source of the events below.
+        let post = server
+            .mock("POST", "/heartbeat")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"status":"success","message":"ok","agent_id":"health-agent"}"#)
+            .expect(0)
+            .create_async()
+            .await;
+        let _unregister = server
+            .mock("DELETE", "/agents/health-agent")
+            .with_status(204)
+            .create_async()
+            .await;
+
+        let (event_tx, mut event_rx) = mpsc::channel(100);
+        let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
+        let (command_tx, command_rx) = mpsc::channel(10);
+        let shared_state = Arc::new(RwLock::new(HandleState::default()));
+
+        let mut runtime = AgentRuntime::new(
+            health_spec(server.url()),
+            RuntimeConfig::default(),
+            event_tx,
+            shared_state,
+            shutdown_rx,
+            command_rx,
+        )
+        .await
+        .expect("runtime construction should succeed");
+
+        // Seed a believed-delivered dependency edge, then shrink the reconcile
+        // cadence so the wall-clock tick is observable inside the test window.
+        runtime
+            .process_dependency_changes(&resolved_single("weather", "http://provider:9000"))
+            .await;
+        assert_eq!(drain_available(&mut event_rx), 1, "seed edge emits once");
+        runtime.reconcile_interval = Duration::from_millis(100);
+
+        command_tx
+            .send(RuntimeCommand::UpdateHealth(HealthStatus::Unhealthy))
+            .await
+            .expect("queue unhealthy");
+
+        let join = tokio::spawn(runtime.run());
+
+        // The suppressed Wait is a full heartbeat interval (1s) long; the
+        // reconcile ticks every 100ms inside it.
+        sleep(Duration::from_millis(700)).await;
+        shutdown_tx.send(()).await.expect("shutdown signal");
+        tokio::time::timeout(Duration::from_secs(5), join)
+            .await
+            .expect("runtime did not exit after shutdown")
+            .expect("runtime task panicked");
+
+        post.assert_async().await;
+        assert!(
+            drain_available(&mut event_rx) > 0,
+            "the dependency reconcile must keep ticking while heartbeats are suppressed"
         );
     }
 }

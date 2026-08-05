@@ -204,6 +204,31 @@ impl AgentHandle {
         Ok(self.command_tx.try_send(RuntimeCommand::UpdatePort(port)).is_ok())
     }
 
+    /// Report the agent's health status to the runtime (issue #1472).
+    ///
+    /// Call this from the SDK's periodic health-check loop with the verdict of
+    /// the user-supplied `health_check`. While the status is `Unhealthy` the
+    /// runtime stops heartbeating, so the registry's staleness sweep withdraws
+    /// the agent from dependency resolution; pushing `Healthy` (or `Degraded`)
+    /// resumes heartbeats and the registry restores it — no process restart.
+    ///
+    /// Pushing the same status repeatedly is cheap and idempotent.
+    ///
+    /// Returns True if the update was queued successfully.
+    ///
+    /// # Example (Python)
+    /// ```python
+    /// from mcp_mesh_core import HealthStatus
+    /// handle.update_health(HealthStatus.Unhealthy)
+    /// ```
+    #[pyo3(name = "update_health")]
+    fn update_health_py(&self, status: HealthStatus) -> PyResult<bool> {
+        Ok(self
+            .command_tx
+            .try_send(RuntimeCommand::UpdateHealth(status))
+            .is_ok())
+    }
+
     fn __repr__(&self) -> String {
         let state = self.state.blocking_read();
         format!(
@@ -330,6 +355,27 @@ impl AgentHandle {
             .is_ok()
     }
 
+    /// Report the agent's health status to the runtime (issue #1472).
+    ///
+    /// While the status is `Unhealthy` the runtime suppresses registry traffic
+    /// so the staleness sweep withdraws the agent from resolution; pushing
+    /// `Healthy` / `Degraded` resumes it. Idempotent — SDKs push on every
+    /// health-check tick and the runtime only acts on transitions.
+    pub fn update_health(&self, status: HealthStatus) -> bool {
+        self.command_tx
+            .try_send(RuntimeCommand::UpdateHealth(status))
+            .is_ok()
+    }
+
+    /// Report the agent's health status — async version. Use this when calling
+    /// from an async context (e.g. napi-rs).
+    pub async fn update_health_async(&self, status: HealthStatus) -> bool {
+        self.command_tx
+            .send(RuntimeCommand::UpdateHealth(status))
+            .await
+            .is_ok()
+    }
+
     /// Update the A2A surfaces and agent_type registered with the registry
     /// (issue #938). Uses smart diffing — only triggers a heartbeat if the
     /// payload actually changed. Call this from the SDK after each
@@ -446,6 +492,35 @@ mod tests {
 
         handle.shutdown_async().await;
         assert!(handle.is_shutdown_requested_async().await);
+    }
+
+    /// Issue #1472: `update_health` must reach the runtime as an
+    /// `UpdateHealth` command carrying the reported status — this is the
+    /// whole channel between an SDK's health check and heartbeat suppression.
+    #[tokio::test]
+    async fn test_1472_update_health_enqueues_command() {
+        let (_event_tx, event_rx) = mpsc::channel(10);
+        let (shutdown_tx, _shutdown_rx) = mpsc::channel(1);
+        let (command_tx, mut command_rx) = mpsc::channel(10);
+        let state = Arc::new(RwLock::new(HandleState::default()));
+
+        let handle = AgentHandle::new(event_rx, state, shutdown_tx, command_tx);
+
+        assert!(handle.update_health(HealthStatus::Unhealthy));
+        match command_rx.try_recv() {
+            Ok(RuntimeCommand::UpdateHealth(status)) => {
+                assert_eq!(status, HealthStatus::Unhealthy);
+            }
+            other => panic!("expected UpdateHealth(Unhealthy), got {:?}", other),
+        }
+
+        assert!(handle.update_health_async(HealthStatus::Healthy).await);
+        match command_rx.try_recv() {
+            Ok(RuntimeCommand::UpdateHealth(status)) => {
+                assert_eq!(status, HealthStatus::Healthy);
+            }
+            other => panic!("expected UpdateHealth(Healthy), got {:?}", other),
+        }
     }
 
     /// Issue #1256: the event pull must be cancel-safe across its internal

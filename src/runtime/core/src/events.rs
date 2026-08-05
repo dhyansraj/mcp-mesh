@@ -27,7 +27,15 @@ pub enum EventType {
     DependencyChanged,
     /// LLM tools list was updated
     LlmToolsUpdated,
-    /// Health check is due (SDK should run health checks)
+    /// Health check is due (SDK should run health checks).
+    ///
+    /// INERT: defined but never emitted by the runtime, and every SDK logs it
+    /// as "not implemented yet". It is the inverse of the design that actually
+    /// shipped in issue #1472 — the SDK owns the health-check timer and pushes
+    /// its verdict in via `RuntimeCommand::UpdateHealth`, so the core never
+    /// needs to ask. Retained only because the variant is part of the
+    /// cross-runtime wire enum (Java's `MeshEvent.Type` maps it). Do not build
+    /// on it.
     HealthCheckDue,
     /// Agent health status changed
     HealthStatusChanged,

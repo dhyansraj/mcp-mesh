@@ -5,6 +5,7 @@ This module is implemented in Rust and provides:
 - AgentHandle: Handle to running agent runtime
 - MeshEvent: Events from topology changes
 - EventType: Type-safe event type enum
+- HealthStatus: Agent health status reported via AgentHandle.update_health()
 - start_agent: Start agent runtime
 - Config resolution functions (ENV > param > default)
 - Response parsing (JSON extraction, code fence stripping)
@@ -20,6 +21,7 @@ from .mcp_mesh_core import (
     AgentSpec,
     DependencySpec,
     EventType,
+    HealthStatus,
     JobController,
     JobProxy,
     LlmAgentSpec,
@@ -75,6 +77,7 @@ __all__ = [
     "AgentSpec",
     "DependencySpec",
     "EventType",
+    "HealthStatus",
     "JobController",
     "JobProxy",
     "LlmAgentSpec",
