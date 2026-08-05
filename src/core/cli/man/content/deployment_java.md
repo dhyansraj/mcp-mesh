@@ -275,7 +275,7 @@ The starter also serves the three mesh endpoints, and Kubernetes probes must not
 
 - `/livez` - `livenessProbe` and `startupProbe`. 200 for as long as the process is serving; consults nothing else.
 - `/ready` - `readinessProbe`. Whether traffic should be routed here; reflects your `@MeshHealthCheck` on top of the mesh runtime state, except on a route-only (`api`) or A2A agent, where only the runtime state counts.
-- `/health` - no probe. The `/ready` signal plus the `checks` and `errors` your check returned.
+- `/health` - no probe. The `/ready` signal plus the `checks` and `errors` your check returned - except on a route-only (`api`) or A2A agent, where `/ready` ignores the check but `/health` still reports its verdict.
 
 Both `/health` and `/ready` answer 503 until the mesh runtime is up, so pointing liveness or startup at either restarts pods that are merely still booting. The Helm chart is already wired this way.
 

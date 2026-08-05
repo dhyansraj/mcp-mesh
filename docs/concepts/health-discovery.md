@@ -117,7 +117,7 @@ While the check reports `unhealthy` the agent stops heartbeating. The registry's
 
 Only an explicit unhealthy result does that. A check that raises is recorded as `degraded` and keeps heartbeating, in all three runtimes: a bug in the health check must not be able to remove a working agent from the mesh.
 
-`degraded` splits the two surfaces on Python and Java: the agent keeps heartbeating and stays in dependency resolution, but `/ready` and `/health` answer 503. Readiness is a load-balancer decision about new external traffic; the heartbeat is a statement about whether this is still a valid mesh provider. On TypeScript only the heartbeat side is wired - the verdict drives heartbeating, while `/ready` and `/health` still report runtime state alone (see the endpoint table below).
+`degraded` splits the two surfaces on all three runtimes: the agent keeps heartbeating and stays in dependency resolution, but `/ready` and `/health` answer 503. Readiness is a load-balancer decision about new external traffic; the heartbeat is a statement about whether this is still a valid mesh provider.
 
 Route (`@mesh.route` / `@MeshRoute` / `mesh.route`) and A2A agents are deliberately exempt, on both surfaces: the verdict never suppresses their heartbeat and never makes their `/ready` answer 503. A gateway is a fan-out point that many requests enter through - withdrawing a provider is correct, withdrawing the gateway takes the application down, and a 503 readiness probe drops it from its Service endpoints, which takes it down harder. On Java the verdict still shows on the gateway's `/health`; Python and TypeScript never run the check on a gateway at all.
 
@@ -128,10 +128,10 @@ Every runtime serves three endpoints, and probes must not share one:
 | Endpoint  | Probe                             | Reports                                                                                             |
 | --------- | --------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `/livez`  | `livenessProbe`, `startupProbe`   | 200 for as long as the process is serving. Consults nothing else.                                     |
-| `/ready`  | `readinessProbe`                  | Whether traffic should be routed here. Reflects your health check on Python (`health_check`) and Java (`@MeshHealthCheck`), except on a route or A2A agent, where it reports only that the mesh runtime is running; on TypeScript the `healthCheck` verdict drives the heartbeat, while `/ready` always reports only that the mesh runtime is running. |
-| `/health` | none                              | Runtime-specific. Python and Java return the `/ready` signal plus `checks` and `errors`; TypeScript returns a fixed `healthy` and reflects nothing. |
+| `/ready`  | `readinessProbe`                  | Whether traffic should be routed here. Reflects your health check on all three runtimes (`health_check`, `@MeshHealthCheck`, `healthCheck`) - 200 only while it reports `healthy` - except on a route or A2A agent, where it reports only that the mesh runtime is running. |
+| `/health` | none                              | The `/ready` verdict plus `checks` and `errors`, on all three runtimes. The two part company only on a gateway: a Java gateway's `/health` still carries its check's verdict while `/ready` ignores it, and Python and TypeScript never run a gateway's check at all. |
 
-Never point liveness or startup at `/ready` or `/health`. On Python and Java, where `/ready` reflects your health check, that turns an upstream outage into a pod restart, which cannot fix the outage. On TypeScript, where `/ready` reports only runtime state, it still restarts pods that are merely still booting. The Helm chart is already wired this way.
+Never point liveness or startup at `/ready` or `/health`. Both reflect your health check on all three runtimes, so sharing a URL turns an upstream outage into a pod restart, which cannot fix the outage - and while an agent is still coming up they answer 503 (or are not mounted yet), which restart-loops a slow boot. The Helm chart is already wired this way.
 
 ### Health States
 
