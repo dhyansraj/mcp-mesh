@@ -240,11 +240,15 @@ const agent = mesh(server, {
   httpPort: 9001,
   healthCheckTtl: 30,
   healthCheck: async () => {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      return { status: "unhealthy", errors: ["ANTHROPIC_API_KEY not set"] };
+    }
     const response = await fetch("https://api.anthropic.com/v1/models", {
-      headers: { "x-api-key": process.env.ANTHROPIC_API_KEY!, "anthropic-version": "2023-06-01" },
+      headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
       signal: AbortSignal.timeout(5_000),
     });
-    return response.ok
+    return response.status === 200
       ? { status: "healthy", checks: { vendor_api_reachable: true } }
       : { status: "unhealthy", errors: [`vendor returned ${response.status}`] };
   },

@@ -2045,10 +2045,22 @@ export class MeshAgent {
       ttlSeconds,
       publish: async (status) => {
         // The handle is nulled by shutdown(); a verdict landing after
-        // teardown has nowhere to go and is not an error.
+        // teardown has nowhere to go and is not an error, so it stays
+        // silent — every clean shutdown would otherwise warn.
         const handle = this.handle;
         if (!handle || this.shutdownRequested) return false;
-        return await handle.updateHealth(status);
+        const queued = await handle.updateHealth(status);
+        if (!queued) {
+          // The runtime is up but did not take the verdict. Left silent,
+          // an `unhealthy` agent would keep heartbeating with nothing in
+          // the logs to say why it was never withdrawn.
+          console.warn(
+            `[mesh-health] health status '${status}' for agent ` +
+              `'${this.agentId}' was not queued to the mesh runtime — this ` +
+              `verdict has not taken effect; the next refresh retries`,
+          );
+        }
+        return queued;
       },
     });
   }

@@ -246,7 +246,7 @@ async function healthCheck(): Promise<MeshHealthResult> {
  *       headers: { Authorization: `Bearer ${apiKey}` },
  *       signal: AbortSignal.timeout(5_000),
  *     });
- *     return response.ok
+ *     return response.status === 200
  *       ? { status: "healthy", checks: { vendor_reachable: true } }
  *       : { status: "unhealthy", errors: [`vendor returned ${response.status}`] };
  *   } catch (err) {
@@ -275,7 +275,9 @@ const agent = mesh(server, {
   description: "{{ if .Description }}{{ .Description }}{{ else }}LLM Provider for {{ .Model }}{{ end }}",
   httpPort: {{ .Port }},
   healthCheck,
-  // Also the detection latency in BOTH directions — outage and recovery.
+  // The cadence of the check, not the end-to-end latency: withdrawal also
+  // costs the registry staleness window once heartbeats stop, and recovery
+  // needs a passing check plus the heartbeat resume and re-register round trip.
   healthCheckTtl: 30,
 });
 

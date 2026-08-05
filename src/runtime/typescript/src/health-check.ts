@@ -8,8 +8,10 @@
  * stops selecting it — consumers fail over to a surviving provider.
  * Reporting `healthy` (or `degraded`) again resumes heartbeats and the
  * registry restores the agent through the `410 Gone` re-register path,
- * with no process restart. The TTL is therefore the detection latency in
- * BOTH directions: outage and recovery.
+ * with no process restart. The TTL is the CADENCE of that check, not the
+ * end-to-end latency in either direction: withdrawal costs up to one TTL
+ * plus the registry's staleness window once heartbeats stop, and recovery
+ * costs up to one TTL plus the heartbeat resume and re-register round trip.
  *
  * TypeScript half of the mechanism shipped for Python in #1472/#1473 and
  * for Java in #1474/#1475; the verdict vocabulary, the "a broken check

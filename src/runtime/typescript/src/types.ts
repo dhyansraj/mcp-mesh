@@ -305,15 +305,19 @@ export interface AgentConfig {
    * ```typescript
    * healthCheck: async () => {
    *   const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
-   *   return res.ok ? true : { status: "unhealthy", errors: [`HTTP ${res.status}`] };
+   *   return res.status === 200
+   *     ? true
+   *     : { status: "unhealthy", errors: [`HTTP ${res.status}`] };
    * }
    * ```
    */
   healthCheck?: MeshHealthCheck;
   /**
    * Issue #1476: how often {@link healthCheck} runs, in seconds. This is
-   * also the detection latency in both directions — outage and recovery.
-   * Env: MCP_MESH_HEALTH_CHECK_TTL. Defaults to 15.
+   * the cadence, not the end-to-end latency: withdrawal costs up to one
+   * TTL plus the registry's staleness window once heartbeats stop, and
+   * recovery costs up to one TTL plus the heartbeat resume and re-register
+   * round trip. Env: MCP_MESH_HEALTH_CHECK_TTL. Defaults to 15.
    */
   healthCheckTtl?: number;
 }
