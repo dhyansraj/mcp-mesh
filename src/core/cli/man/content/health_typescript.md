@@ -31,6 +31,49 @@ MCP Mesh uses a dual-heartbeat system for fast failure detection and automatic t
 - Default threshold: 20 seconds (4 missed 5-second heartbeats)
 - Configurable via environment variables
 
+## Declaring Your Own Health Check
+
+Pass a `healthCheck` to `mesh()` to tell the mesh what "able to serve" means for this agent:
+
+```typescript
+const agent = mesh(server, {
+  name: "claude-provider",
+  httpPort: 9001,
+  healthCheckTtl: 30,
+  healthCheck: async () => {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      return {
+        status: "unhealthy",
+        checks: { vendor_api_key_present: false },
+        errors: ["ANTHROPIC_API_KEY not set"],
+      };
+    }
+    const response = await fetch("https://api.anthropic.com/v1/models", {
+      headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+      signal: AbortSignal.timeout(5_000),
+    });
+    return response.status === 200
+      ? { status: "healthy", checks: { vendor_api_reachable: true } }
+      : {
+          status: "unhealthy",
+          checks: { vendor_api_reachable: false },
+          errors: [`vendor returned ${response.status}`],
+        };
+  },
+});
+```
+
+One check per agent. Return `{ status, checks, errors }` for full detail, or a `boolean` for the terse form (`true` healthy, `false` unhealthy). `healthCheckTtl` is how often it re-runs (default 15); `MCP_MESH_HEALTH_CHECK_TTL` overrides it.
+
+### What a Failing Check Does
+
+While the check reports unhealthy the agent **stops heartbeating**. The registry marks it unhealthy after the staleness window, dependency resolution stops selecting it, and consumers move to another provider. When the check passes again the heartbeat resumes and the registry restores the agent through the `410 Gone` re-register path - no restart. The TTL is the cadence, not the end-to-end latency: it only bounds how long until the next check runs. Withdrawal costs that plus the registry's staleness window once heartbeats stop, and recovery costs it plus the heartbeat resume and re-register round trip.
+
+Report `unhealthy` only for conditions the mesh should route around: the upstream this agent needs is genuinely not serving. A check that **throws**, or that could not reach a conclusion, is recorded as `degraded` and keeps heartbeating - a broken probe says nothing about the upstream, and withdrawing a working agent over one is the worse failure.
+
+`mesh.route` and A2A agents ignore `healthCheck`. They are fan-out points, so withdrawing one takes down every path that enters through it - declare the check on the agents behind the gateway instead.
+
 ## Registry Health Monitor
 
 Background process that:

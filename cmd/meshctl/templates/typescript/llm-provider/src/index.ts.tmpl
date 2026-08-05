@@ -7,13 +7,260 @@
  * This agent provides LLM access to other agents via the mesh network.
  */
 
-import { FastMCP, mesh } from "@mcpmesh/sdk";
+import { FastMCP, mesh, type MeshHealthResult } from "@mcpmesh/sdk";
 
 // FastMCP server instance
 const server = new FastMCP({
   name: "{{ toPascalCase .Name }}",
   version: "1.0.0",
 });
+
+// ===== HEALTH CHECK =====
+//
+// Runs every healthCheckTtl seconds. While it returns "unhealthy" the agent
+// stops heartbeating, the registry withdraws it, and consumers fail over to
+// another provider — automatically restored when the check passes again.
+{{ if or (contains .Model "anthropic") (contains .Model "openai") (contains .Model "gemini") }}
+/**
+ * Ceiling for one probe. `AbortSignal.timeout` rejects with a
+ * "TimeoutError", which lands in the same branch as DNS, connect and TLS
+ * failures: the vendor did not answer, which is the outage the mesh has
+ * to route around.
+ *
+ * If you add cancellation of your own — an `AbortController` you abort on
+ * shutdown — handle its "AbortError" separately and report "degraded":
+ * a probe you cut short concluded nothing about the vendor.
+ */
+const HEALTH_PROBE_TIMEOUT_MS = 5_000;
+
+function describeError(err: unknown): string {
+  return err instanceof Error ? err.message || err.name : String(err);
+}
+{{ end }}
+{{- if contains .Model "anthropic" }}
+/**
+ * Health check for {{ .Name }}.
+ *
+ * Validates:
+ * 1. ANTHROPIC_API_KEY environment variable is set
+ * 2. The Anthropic API is reachable
+ *
+ * Uses /v1/models - metadata only, no tokens consumed.
+ */
+async function healthCheck(): Promise<MeshHealthResult> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return {
+      status: "unhealthy",
+      checks: { anthropic_api_key_present: false },
+      errors: ["ANTHROPIC_API_KEY not set"],
+    };
+  }
+
+  const checks: Record<string, boolean> = { anthropic_api_key_present: true };
+  try {
+    const response = await fetch("https://api.anthropic.com/v1/models", {
+      headers: {
+        "anthropic-version": "2023-06-01",
+        "x-api-key": apiKey,
+      },
+      signal: AbortSignal.timeout(HEALTH_PROBE_TIMEOUT_MS),
+    });
+
+    if (response.status === 200) {
+      checks.anthropic_api_reachable = true;
+      checks.anthropic_api_key_valid = true;
+      return { status: "healthy", checks, errors: [] };
+    }
+    if (response.status === 401) {
+      checks.anthropic_api_reachable = true;
+      checks.anthropic_api_key_valid = false;
+      return {
+        status: "unhealthy",
+        checks,
+        errors: ["Anthropic API key is invalid"],
+      };
+    }
+    // The vendor answered and it is not serving. Unhealthy: this is the
+    // outage the mesh has to route around, and "degraded" would keep
+    // heartbeating and keep consumers pointed here.
+    checks.anthropic_api_reachable = false;
+    return {
+      status: "unhealthy",
+      checks,
+      errors: [`Anthropic API returned status: ${response.status}`],
+    };
+  } catch (err) {
+    checks.anthropic_api_reachable = false;
+    // The vendor is not answering at all (DNS, connect, timeout, TLS).
+    return {
+      status: "unhealthy",
+      checks,
+      errors: [`Anthropic API unreachable: ${describeError(err)}`],
+    };
+  }
+}
+{{- else if contains .Model "openai" }}
+/**
+ * Health check for {{ .Name }}.
+ *
+ * Validates:
+ * 1. OPENAI_API_KEY environment variable is set
+ * 2. The OpenAI API is reachable
+ *
+ * Uses /v1/models - metadata only, no tokens consumed.
+ */
+async function healthCheck(): Promise<MeshHealthResult> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return {
+      status: "unhealthy",
+      checks: { openai_api_key_present: false },
+      errors: ["OPENAI_API_KEY not set"],
+    };
+  }
+
+  const checks: Record<string, boolean> = { openai_api_key_present: true };
+  try {
+    const response = await fetch("https://api.openai.com/v1/models", {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(HEALTH_PROBE_TIMEOUT_MS),
+    });
+
+    if (response.status === 200) {
+      checks.openai_api_reachable = true;
+      checks.openai_api_key_valid = true;
+      return { status: "healthy", checks, errors: [] };
+    }
+    if (response.status === 401) {
+      checks.openai_api_reachable = true;
+      checks.openai_api_key_valid = false;
+      return {
+        status: "unhealthy",
+        checks,
+        errors: ["OpenAI API key is invalid"],
+      };
+    }
+    // The vendor answered and it is not serving. Unhealthy: this is the
+    // outage the mesh has to route around, and "degraded" would keep
+    // heartbeating and keep consumers pointed here.
+    checks.openai_api_reachable = false;
+    return {
+      status: "unhealthy",
+      checks,
+      errors: [`OpenAI API returned status: ${response.status}`],
+    };
+  } catch (err) {
+    checks.openai_api_reachable = false;
+    // The vendor is not answering at all (DNS, connect, timeout, TLS).
+    return {
+      status: "unhealthy",
+      checks,
+      errors: [`OpenAI API unreachable: ${describeError(err)}`],
+    };
+  }
+}
+{{- else if contains .Model "gemini" }}
+/**
+ * Health check for {{ .Name }}.
+ *
+ * Validates:
+ * 1. GOOGLE_API_KEY environment variable is set
+ * 2. The Google Gemini API is reachable
+ *
+ * Uses /v1beta/models - metadata only, no tokens consumed.
+ */
+async function healthCheck(): Promise<MeshHealthResult> {
+  const apiKey = process.env.GOOGLE_API_KEY;
+  if (!apiKey) {
+    return {
+      status: "unhealthy",
+      checks: { google_api_key_present: false },
+      errors: ["GOOGLE_API_KEY not set"],
+    };
+  }
+
+  const checks: Record<string, boolean> = { google_api_key_present: true };
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
+      { signal: AbortSignal.timeout(HEALTH_PROBE_TIMEOUT_MS) },
+    );
+
+    if (response.status === 200) {
+      checks.gemini_api_reachable = true;
+      checks.google_api_key_valid = true;
+      return { status: "healthy", checks, errors: [] };
+    }
+    if (response.status === 400 || response.status === 403) {
+      checks.gemini_api_reachable = true;
+      checks.google_api_key_valid = false;
+      return {
+        status: "unhealthy",
+        checks,
+        errors: ["Google API key is invalid"],
+      };
+    }
+    // The vendor answered and it is not serving. Unhealthy: this is the
+    // outage the mesh has to route around, and "degraded" would keep
+    // heartbeating and keep consumers pointed here.
+    checks.gemini_api_reachable = false;
+    return {
+      status: "unhealthy",
+      checks,
+      errors: [`Gemini API returned status: ${response.status}`],
+    };
+  } catch (err) {
+    checks.gemini_api_reachable = false;
+    // The vendor is not answering at all (DNS, connect, timeout, TLS).
+    return {
+      status: "unhealthy",
+      checks,
+      errors: [`Gemini API unreachable: ${describeError(err)}`],
+    };
+  }
+}
+{{- else }}
+/**
+ * Health check for {{ .Name }}.
+ *
+ * NOT IMPLEMENTED — this is a skeleton, and as written it CANNOT DETECT AN
+ * UPSTREAM OUTAGE. It always reports healthy, so if {{ .Model }} goes down
+ * this agent keeps heartbeating and the mesh keeps routing traffic to a
+ * provider that cannot serve it.
+ *
+ * There is no generic reachability probe that works across every vendor, so
+ * you have to write this one. Replace the body with a cheap, metadata-only
+ * call to your provider — a models/list endpoint or equivalent, NOT a
+ * completion — and return { status: "unhealthy", ... } when it fails. That is
+ * what makes the mesh withdraw this agent and fail consumers over.
+ *
+ * A sketch of the shape:
+ *
+ *   const apiKey = process.env.MY_VENDOR_API_KEY;
+ *   if (!apiKey) {
+ *     return { status: "unhealthy", errors: ["MY_VENDOR_API_KEY not set"] };
+ *   }
+ *   try {
+ *     const response = await fetch("https://api.my-vendor.com/v1/models", {
+ *       headers: { Authorization: `Bearer ${apiKey}` },
+ *       signal: AbortSignal.timeout(5_000),
+ *     });
+ *     return response.status === 200
+ *       ? { status: "healthy", checks: { vendor_reachable: true } }
+ *       : { status: "unhealthy", errors: [`vendor returned ${response.status}`] };
+ *   } catch (err) {
+ *     // DNS, connect, timeout and TLS all mean the vendor did not answer:
+ *     // a real outage, so "unhealthy". Report "degraded" only for a probe
+ *     // YOU cut short (your own AbortController) — that concluded nothing.
+ *     return { status: "unhealthy", errors: [`vendor unreachable: ${err}`] };
+ *   }
+ */
+async function healthCheck(): Promise<MeshHealthResult> {
+  return { status: "healthy", checks: { provider_configured: true }, errors: [] };
+}
+{{- end }}
+
 /**
  * LLM Provider agent that exposes {{ .Model }} via mesh.
  *
@@ -27,6 +274,11 @@ const agent = mesh(server, {
   version: "1.0.0",
   description: "{{ if .Description }}{{ .Description }}{{ else }}LLM Provider for {{ .Model }}{{ end }}",
   httpPort: {{ .Port }},
+  healthCheck,
+  // The cadence of the check, not the end-to-end latency: withdrawal also
+  // costs the registry staleness window once heartbeats stop, and recovery
+  // needs a passing check plus the heartbeat resume and re-register round trip.
+  healthCheckTtl: 30,
 });
 
 // ===== LLM PROVIDER =====
