@@ -1,6 +1,8 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.5.0...HEAD)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.5.1...HEAD)
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.5.0...v3.5.1)
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.4.0...v3.5.0)
 
@@ -11,6 +13,22 @@
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.3.0...v3.3.1)
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.2.3...v3.3.0)
+
+## v3.5.1 (2026-08-04)
+
+A one-fix patch. The agent chart pointed liveness, readiness and startup at the same `/health` endpoint, so a dependency outage — an LLM vendor being down, say — restarted the pod instead of taking it out of rotation. Liveness and startup now probe `/livez`, readiness probes `/ready`. No wire-protocol, registry-schema, dependency-resolution or declaration-syntax changes.
+
+> **⚠️ Chart and runtime images must move together on Java and TypeScript.** Chart 3.5.1 probes `/livez`, which a 3.5.0 image of those runtimes does not serve. Python is unaffected either way. See Notes.
+
+### 🩺 Health probes
+
+- **Liveness, readiness and startup probe separate endpoints (#1467).** On Python `/health` consults the user's `health_check`, so a vendor outage failed *liveness* and Kubernetes restarted the pod — which cannot fix the vendor, and erased the state that knew the provider was failing, leaving the consumer flapping between providers for the whole outage. A dependency outage now makes a provider **unready**, never **restarted**. The registry chart keeps both probes on `/health`: its handler is a static response that consults nothing.
+- **Each runtime gained the endpoints it was missing.** Python already served all three, so it has no runtime change; Java adds `/livez` and `/ready`; TypeScript adds `/livez`, and now aborts startup if that route fails to register — without it the kubelet restart-loops the pod anyway, and a clear error beats a probe failure that names nothing.
+
+### ⚠️ Notes
+
+- **⚠️ Upgrade the agent chart and your Java or TypeScript images together.** The chart probes `/livez` for liveness and startup, and a 3.5.0 or older image of either runtime does not serve it — the probe 404s and Kubernetes restarts an agent that is perfectly healthy. This inverts the usual assumption that a chart tolerates older images, and nothing in the chart can detect the image version. Python agents are safe in either order; `/livez` has been served there since well before this release.
+- **Java and TypeScript `/ready` reports only whether the runtime is running.** Neither has a user health-check concept, so their readiness cannot yet reflect a dependency outage in either direction. Python's does.
 
 ## v3.5.0 (2026-08-04)
 
