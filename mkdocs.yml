@@ -124,8 +124,9 @@ markdown_extensions:
   - pymdownx.smartsymbols
   - pymdownx.snippets:
       base_path: [docs, .]
-      auto_append:
-        - includes/abbreviations.md
+      # Fail the build on a missing snippet source instead of silently
+      # rendering an empty page (docs/release-notes.md includes RELEASE_NOTES.md).
+      check_paths: true
   - pymdownx.superfences:
       custom_fences:
         - name: mermaid
@@ -312,6 +313,9 @@ nav:
       - Registration Trust: security/registration-trust.md
       - Agent-to-Agent mTLS: security/agent-to-agent-mtls.md
       - Authorization: security/authorization.md
+
+  # Included verbatim from RELEASE_NOTES.md at the repo root (single source of truth)
+  - Release Notes: release-notes.md
 
   - FAQ: faq.md
 

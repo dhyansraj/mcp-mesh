@@ -224,6 +224,14 @@ TypeScript agents automatically expose health endpoints:
 // Returns: { status: "healthy", agentId: "my-agent-abc123" }
 ```
 
+There are three of them, and Kubernetes probes must not share one:
+
+- `/livez` - `livenessProbe` and `startupProbe`. 200 for as long as the process is serving; consults nothing else.
+- `/ready` - `readinessProbe`. Whether traffic should be routed here. TypeScript has no user health check, so this reports only that the mesh runtime is running.
+- `/health` - no probe. A fixed `{ status: "healthy" }` that reflects nothing.
+
+`/ready` answers 503 until the mesh runtime is up, so pointing liveness or startup at it restarts pods that are merely still booting; `/health` never fails at all. The Helm chart is already wired this way.
+
 ### Graceful Shutdown
 
 TypeScript SDK handles SIGINT/SIGTERM automatically:

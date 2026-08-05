@@ -271,6 +271,14 @@ The Helm chart sets `MCP_MESH_HTTP_PORT=8080` which overrides `@MeshAgent(port =
 
 Spring Boot agents automatically expose `/actuator/health`. The MCP Mesh starter integrates with Spring Boot's health system.
 
+The starter also serves the three mesh endpoints, and Kubernetes probes must not share one:
+
+- `/livez` - `livenessProbe` and `startupProbe`. 200 for as long as the process is serving; consults nothing else.
+- `/ready` - `readinessProbe`. Whether traffic should be routed here. Java has no user health check, so this reports only that the mesh runtime is running.
+- `/health` - no probe. Reports the same runtime state as `/ready`, as a `status` field.
+
+Both `/health` and `/ready` answer 503 until the mesh runtime is up, so pointing liveness or startup at either restarts pods that are merely still booting. The Helm chart is already wired this way.
+
 ### Graceful Shutdown
 
 Spring Boot handles `SIGINT`/`SIGTERM` automatically. Agents deregister from the registry on shutdown.
