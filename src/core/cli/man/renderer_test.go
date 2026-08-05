@@ -200,10 +200,21 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // extra. That bullet is the whole delta — the reworked paragraph swaps spans
 // one-for-one. The two list goldens are unmoved because the new span sits on
 // the bullet's wrapped continuation line, which is not itself a list line.
+// #1467/#1468 follow-up: +12 / +10 / +3, all in `deployment.md`. The probe
+// split landed in the chart with no doc surface saying which probe belongs on
+// which path, so anyone writing their own manifests would repeat what the chart
+// used to do — point everything at `/health` — and reproduce the restart loop.
+// Three bullets under "Health Checks" name the endpoints (`/livez` for liveness
+// and startup, `/ready` for readiness, `/health` for diagnostics only), which is
+// the whole list delta; the two remaining spans are the closing sentence that
+// names the two paths a liveness probe must not use. The `_java` and
+// `_typescript` variants gained the same bullets with a `/ready` clause for
+// runtimes that have no user health check, and are invisible here because these
+// tests sample only the default variant.
 const (
-	wantInlineCodeSpans = 1686
-	wantListCodeSpans   = 506
-	wantMarkupListLines = 442
+	wantInlineCodeSpans = 1698
+	wantListCodeSpans   = 516
+	wantMarkupListLines = 445
 )
 
 // assertCorpusSize replaces the t.Logf these tests used to end on.

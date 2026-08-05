@@ -72,6 +72,18 @@ class MyAgent:
     pass
 ```
 
+### Kubernetes Probes
+
+Every runtime serves three endpoints, and probes must not share one:
+
+| Endpoint  | Probe                             | Reports                                                                                             |
+| --------- | --------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `/livez`  | `livenessProbe`, `startupProbe`   | 200 for as long as the process is serving. Consults nothing else.                                     |
+| `/ready`  | `readinessProbe`                  | Whether traffic should be routed here. Reflects `health_check` on Python; Java and TypeScript have no user health check, so it reports only that the mesh runtime is running. |
+| `/health` | none                              | The diagnostic view: the `/ready` signal plus `checks` and `errors`.                                  |
+
+Pointing liveness or startup at `/health` or `/ready` turns an upstream outage into a pod restart, which cannot fix the outage. The Helm chart is already wired this way.
+
 ### Health States
 
 | State       | Description                 |

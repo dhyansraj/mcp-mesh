@@ -1,18 +1,8 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.5.1...HEAD)
+[Unreleased changes](https://github.com/dhyansraj/mcp-mesh/compare/v3.5.1...HEAD)
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.5.0...v3.5.1)
-
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.4.0...v3.5.0)
-
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.3.2...v3.4.0)
-
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.3.1...v3.3.2)
-
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.3.0...v3.3.1)
-
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.2.3...v3.3.0)
 
 ## v3.5.1 (2026-08-04)
 
@@ -29,6 +19,8 @@ A one-fix patch. The agent chart pointed liveness, readiness and startup at the 
 
 - **⚠️ Upgrade the agent chart and your Java or TypeScript images together.** The chart probes `/livez` for liveness and startup, and a 3.5.0 or older image of either runtime does not serve it — the probe 404s and Kubernetes restarts an agent that is perfectly healthy. This inverts the usual assumption that a chart tolerates older images, and nothing in the chart can detect the image version. Python agents are safe in either order; `/livez` has been served there since well before this release.
 - **Java and TypeScript `/ready` reports only whether the runtime is running.** Neither has a user health-check concept, so their readiness cannot yet reflect a dependency outage in either direction. Python's does.
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.4.0...v3.5.0)
 
 ## v3.5.0 (2026-08-04)
 
@@ -52,6 +44,8 @@ A small release with two breaking changes, both in deployment and packaging rath
 - **Python agents on any vendor other than Anthropic, OpenAI or Gemini need `mcp-mesh[litellm]`** in `requirements.txt`. The extra has been installable since 3.3.2 and layers over an existing install without upgrading the base. The big three need no change.
 - **⚠️ If a chart is already wedged in the dual-type volume state, delete the Deployment and let it be recreated before upgrading.** The rename is a clean remove-and-add only when the applying field manager owns the existing volume; otherwise the rename itself can stick.
 - **No wire-protocol, registry-schema, dependency-resolution or declaration-syntax changes.** The only runtime code change is the Python provider's vendor extraction, which now treats an absent `litellm` as the normal case instead of logging a startup warning.
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.3.2...v3.4.0)
 
 ## v3.4.0 (2026-08-01)
 
@@ -117,6 +111,8 @@ A minor release with breaking changes in two runtimes. Dependency injection is n
 - **Fresh installs resolve differently.** `openai` moves `>=1.60` → `>=2.14,<3`, and `anthropic`, `google-genai` and `litellm` gain `<1`, `<3` and `<2`. A `pip install` today resolves to exactly the same package set — the bounds exist to fail on a future major. Existing environments are unchanged until you reinstall.
 - **No wire-protocol, registry-schema or dependency-resolution changes.** The binding change is internal to the Java and TypeScript runtimes; #1433's registry change is telemetry housekeeping plus two new environment knobs.
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.3.1...v3.3.2)
+
 ## v3.3.2 (2026-07-28)
 
 A patch release, and an important one for Python `@mesh.route` users: **v3.3.1's declared FastAPI range resolves to versions where routes are silently broken.** On current FastAPI, SSE routes degrade to `application/jsonl` instead of `text/event-stream`, and handlers mounted with `include_router()` are never discovered at all, so they serve without mesh dependency injection. Neither failure is loud — startup succeeds, health checks pass, and the logs still claim success. Both are fixed here, alongside a published-manifest reconciliation and the first half of LiteLLM's move to an optional install. No wire, registry, resolution, or declaration-syntax changes.
@@ -160,6 +156,8 @@ A patch release, and an important one for Python `@mesh.route` users: **v3.3.1's
 - **The `[litellm]` extra requires no action.** `litellm` is still installed by default; the extra is additive today and only becomes load-bearing when the base dependency is removed at a future major.
 - **No wire, registry, resolution, or declaration-syntax changes.**
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.3.0...v3.3.1)
+
 ## v3.3.1 (2026-07-23)
 
 A release-infrastructure patch. No runtime, wire, registry, resolution, or declaration-syntax changes — behavior is identical to 3.3.0.
@@ -171,6 +169,8 @@ A release-infrastructure patch. No runtime, wire, registry, resolution, or decla
 ### 📝 Docs
 
 - Refreshed the project cover image.
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.2.3...v3.3.0)
 
 ## v3.3.0 (2026-07-23)
 
@@ -2268,7 +2268,7 @@ All three bugs were regressions introduced in v0.9.7 by PR #585.
 
 **Advanced Dependency Resolution**
 
-- Added +/- operator support in tags: + means preferred, - means exclude
+- Added `+/-` operator support in tags: + means preferred, - means exclude
 
 ### 🐛 Bug Fixes & Stability
 

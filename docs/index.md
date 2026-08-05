@@ -418,6 +418,8 @@ A `kubectl`-style command-line tool that follows you from first agent to product
 - **Languages**: Python 3.11+, TypeScript/Node.js 18+, and Java 17+ (runtime), Go 1.23+ (registry)
 - **Status**: Production-ready, actively developed
 
+What changed in each version — breaking changes, upgrade notes and fixes — is in the [Release Notes](release-notes.md).
+
 ---
 
 ## :pray: Acknowledgments
