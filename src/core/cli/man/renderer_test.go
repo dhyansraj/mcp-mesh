@@ -208,9 +208,12 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // and startup, `/ready` for readiness, `/health` for diagnostics only), which is
 // the whole list delta; the two remaining spans are the closing sentence that
 // names the two paths a liveness probe must not use. The `_java` and
-// `_typescript` variants gained the same bullets with a `/ready` clause for
-// runtimes that have no user health check, and are invisible here because these
-// tests sample only the default variant.
+// `_typescript` variants carry the same three bullets, but their `/ready` and
+// `/health` lines and their closing reason are written to what those runtimes
+// actually return (no user health check; TypeScript's `/health` is a fixed
+// 200). None of that moves these constants: they sample only the default
+// variant, so edits confined to a `_java` / `_typescript` file are invisible
+// here and a review of those files cannot lean on this test.
 const (
 	wantInlineCodeSpans = 1698
 	wantListCodeSpans   = 516
