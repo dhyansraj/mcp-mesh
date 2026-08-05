@@ -1,5 +1,5 @@
 # Dockerfile for claude-provider-ts MCP Mesh LLM provider
-FROM mcpmesh/typescript-runtime:3.5.0
+FROM mcpmesh/typescript-runtime:3.5.1
 
 WORKDIR /app
 
