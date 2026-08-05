@@ -203,6 +203,90 @@ def _parse_health_result(
     return status_type, checks, errors
 
 
+# =============================================================================
+# Health Status → Rust Core (issue #1472)
+# =============================================================================
+
+
+def publish_health_status_to_core(status: str) -> bool:
+    """Push the latest health-check verdict down to the Rust core.
+
+    A failing ``health_check`` used to affect nothing but the ``/health`` and
+    ``/ready`` responses: the heartbeat hardcoded HEALTHY, so the registry kept
+    routing to the agent. The core now suppresses heartbeats while the reported
+    status is ``unhealthy``; the registry's staleness sweep then marks the agent
+    unhealthy and resolution stops selecting it. Reporting ``healthy`` again
+    resumes heartbeats and the registry restores the agent — no restart.
+
+    Called on every refresh tick, so it is idempotent by design: the core only
+    acts on transitions.
+
+    Args:
+        status: The status string from the health-check result
+            (``healthy`` / ``degraded`` / ``unhealthy`` / ``unknown``).
+
+    Returns:
+        True if the status was handed to at least one live core handle.
+        False when there is no handle yet (startup — see below), when the Rust
+        core is unavailable, or when the push failed.
+
+    Startup ordering (deliberate): the seed health check runs during pipeline
+    setup, BEFORE the lifespan task calls ``start_agent()``, so no handle
+    exists and this is a no-op. That is the behaviour we want — the agent
+    registers and becomes visible first, then goes silent if the check is
+    genuinely failing on the next refresh. It also means the known-unreliable
+    seed result (it runs on the framework loop, where loop-affine resources
+    created in the user's lifespan are not yet usable) can never withdraw an
+    agent that is actually fine.
+    """
+    try:
+        import mcp_mesh_core
+    except ImportError:
+        # Pure-Python/test environments without the native core: nothing to
+        # tell. The /health and /ready endpoints still reflect the result.
+        logger.debug("Rust core unavailable — not publishing health status")
+        return False
+
+    from .simple_shutdown import get_active_rust_agent_handles
+
+    handles = get_active_rust_agent_handles()
+    if not handles:
+        logger.debug(
+            "No live Rust core handle yet — health status '%s' not published "
+            "(expected during startup, before the heartbeat task starts)",
+            status,
+        )
+        return False
+
+    # Anything we cannot parse maps to Degraded, NOT Unhealthy: an
+    # unrecognized status is a reporting defect, and withdrawing an agent
+    # from the mesh on one is a far worse failure than keeping it.
+    core_status = {
+        "healthy": mcp_mesh_core.HealthStatus.Healthy,
+        "degraded": mcp_mesh_core.HealthStatus.Degraded,
+        "unhealthy": mcp_mesh_core.HealthStatus.Unhealthy,
+    }.get(str(status).lower())
+    if core_status is None:
+        logger.warning(
+            "Unrecognized health status '%s' — reporting Degraded to the core "
+            "(the agent keeps heartbeating)",
+            status,
+        )
+        core_status = mcp_mesh_core.HealthStatus.Degraded
+
+    published = False
+    for handle in handles:
+        try:
+            if handle.update_health(core_status):
+                published = True
+        except Exception as e:
+            # Never let health reporting break the refresh loop.
+            logger.warning("Failed to publish health status to Rust core: %s", e)
+    if published:
+        logger.debug("Published health status '%s' to Rust core", status)
+    return published
+
+
 def clear_health_cache(agent_id: str | None = None) -> None:
     """Clear health cache for a specific agent or all agents."""
     if agent_id:

@@ -328,8 +328,15 @@ class FastAPIServerSetupStep(PipelineStep):
         health_check_ttl = agent_config.get("health_check_ttl", 15)
 
         # Create a background task to update health check results periodically
-        async def update_health_result():
-            """Update health check result in DecoratorRegistry."""
+        async def update_health_result(publish_to_core: bool = False):
+            """Update health check result in DecoratorRegistry.
+
+            Args:
+                publish_to_core: Also report the verdict to the Rust core so a
+                    failing check withdraws the agent from dependency
+                    resolution (issue #1472). False for the startup seed call —
+                    see the call sites below.
+            """
             if health_check_fn:
                 # Use health check cache if configured
                 from ...engine.decorator_registry import DecoratorRegistry
@@ -363,13 +370,33 @@ class FastAPIServerSetupStep(PipelineStep):
 
             DecoratorRegistry.store_health_check_result(result)
 
+            # Issue #1472: also tell the Rust core, which stops heartbeating
+            # while the status is unhealthy so the registry withdraws this
+            # agent from dependency resolution (and restores it, without a
+            # restart, when the check passes again). Best-effort and
+            # idempotent — the core only acts on transitions.
+            if publish_to_core:
+                from ...shared.health_check_manager import (
+                    publish_health_status_to_core,
+                )
+
+                publish_health_status_to_core(result["status"])
+
         # Run once immediately to populate initial result.
         # We're already in an async context (called from execute()), so just
         # await it. This seed call runs on the framework loop; if the user's
         # health_check_fn touches loop-affine resources created in lifespan
         # (asyncpg.Pool, redis.asyncio, ...) it may return unhealthy here.
         # The periodic refresh below runs on the user loop and recovers.
-        await update_health_result()
+        #
+        # Deliberately does NOT publish to the Rust core (issue #1472): this
+        # runs before the heartbeat task calls start_agent(), so there is no
+        # handle to publish to, AND the seed result is the unreliable one (see
+        # the loop-affinity caveat above). The agent registers first and
+        # becomes visible; the first real refresh, one TTL later, is what can
+        # withdraw it. `publish_to_core=False` states that intent rather than
+        # relying on the absent handle to make it a no-op.
+        await update_health_result(publish_to_core=False)
 
         # Issue #1072: spawn a periodic refresh loop on the user loop so
         # the stored /health result actually reflects the latest
@@ -415,6 +442,12 @@ class FastAPIServerSetupStep(PipelineStep):
                     ``__aenter__`` has returned, so the user's
                     ``health_check_fn`` never observes partially-
                     initialized lifespan state.
+
+                    Since issue #1472 this loop also drives dependency
+                    resolution: each refresh reports its verdict to the
+                    Rust core, which stops heartbeating while the agent
+                    is unhealthy. The TTL is therefore the detection
+                    latency for both directions — outage and recovery.
                     """
                     try:
                         await asyncio.wrap_future(ready_future)
@@ -435,7 +468,7 @@ class FastAPIServerSetupStep(PipelineStep):
                         try:
                             await asyncio.sleep(health_check_ttl)
                             clear_health_cache(agent_name)
-                            await update_health_result()
+                            await update_health_result(publish_to_core=True)
                         except asyncio.CancelledError:
                             raise
                         except Exception as e:

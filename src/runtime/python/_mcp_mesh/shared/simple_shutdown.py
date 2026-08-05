@@ -76,6 +76,23 @@ def register_rust_agent_handle(handle: Any) -> None:
             logger.debug("Registered atexit hook to drain Rust agent handles")
 
 
+def get_active_rust_agent_handles() -> list:
+    """Snapshot of the live Rust ``AgentHandle`` objects in this process.
+
+    This list is the process-wide "handles that are currently running a Rust
+    core" registry — populated by every heartbeat flavour (MCP / API / A2A)
+    right after ``start_agent()``. It exists for the atexit drain above, but
+    it is also the only late-bound route from code that runs *after* startup
+    (e.g. the periodic health-check refresh, issue #1472) back to the handle,
+    which is created inside the lifespan task and never stored in the pipeline
+    context.
+
+    Returns a copy, so callers can iterate without holding the lock.
+    """
+    with _active_handles_lock:
+        return list(_active_handles)
+
+
 def unregister_rust_agent_handle(handle: Any) -> None:
     """Drop a handle from the registry (e.g. normal shutdown already drained it).
 
