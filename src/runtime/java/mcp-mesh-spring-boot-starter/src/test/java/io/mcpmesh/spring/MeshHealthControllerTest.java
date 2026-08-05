@@ -126,4 +126,102 @@ class MeshHealthControllerTest {
         assertEquals(503, new MeshHealthController(runtimeWith(false)).health()
             .getStatusCode().value());
     }
+
+    // ---- @MeshHealthCheck reflection (issue #1474) --------------------------
+
+    private static MeshHealthCheckRegistry withVerdict(io.mcpmesh.MeshHealth health) {
+        MeshHealthCheckRegistry registry = new MeshHealthCheckRegistry();
+        registry.store(health);
+        return registry;
+    }
+
+    @Test
+    void ready_is503_whenTheUserHealthCheckIsUnhealthy() {
+        MeshHealthController controller = new MeshHealthController(runtimeWith(true),
+            withVerdict(io.mcpmesh.MeshHealth.unhealthy("anthropic API unreachable")));
+
+        ResponseEntity<Map<String, Object>> response = controller.ready();
+
+        assertEquals(503, response.getStatusCode().value());
+        assertEquals(Boolean.FALSE, response.getBody().get("ready"));
+        assertEquals("unhealthy", response.getBody().get("status"));
+        assertEquals("service is unhealthy", response.getBody().get("reason"));
+        assertEquals(java.util.List.of("anthropic API unreachable"),
+            response.getBody().get("errors"));
+        assertEquals(503, controller.readyHead().getStatusCode().value());
+    }
+
+    @Test
+    void ready_is503_whenTheUserHealthCheckIsDegraded() {
+        // Python parity: build_ready_response / build_health_response are
+        // `200 if status == "healthy" else 503`. Degraded therefore leaves the
+        // load balancer while STILL heartbeating and staying in dependency
+        // resolution — readiness is about new external traffic, the heartbeat
+        // is about whether this is still a valid mesh provider.
+        MeshHealthController controller = new MeshHealthController(runtimeWith(true),
+            withVerdict(io.mcpmesh.MeshHealth.degraded("elevated latency")));
+
+        ResponseEntity<Map<String, Object>> response = controller.ready();
+
+        assertEquals(503, response.getStatusCode().value());
+        assertEquals(Boolean.FALSE, response.getBody().get("ready"));
+        assertEquals("degraded", response.getBody().get("status"));
+        assertEquals("service is degraded", response.getBody().get("reason"));
+        assertEquals(503, controller.health().getStatusCode().value());
+    }
+
+    @Test
+    void ready_is503_whenTheRuntimeIsDownEvenIfTheCheckSaysHealthy() {
+        // The runtime state is the FLOOR: a vendor probe says nothing about
+        // whether this agent is registered and reachable.
+        MeshHealthController controller = new MeshHealthController(runtimeWith(false),
+            withVerdict(io.mcpmesh.MeshHealth.healthy()));
+
+        ResponseEntity<Map<String, Object>> response = controller.ready();
+
+        assertEquals(503, response.getStatusCode().value());
+        assertEquals("mesh runtime is not running", response.getBody().get("reason"));
+    }
+
+    @Test
+    void health_carriesChecksAndErrors() {
+        MeshHealthController controller = new MeshHealthController(runtimeWith(true),
+            withVerdict(io.mcpmesh.MeshHealth.unhealthy("ANTHROPIC_API_KEY not set")
+                .withCheck("anthropic_api_key_present", false)));
+
+        ResponseEntity<Map<String, Object>> response = controller.health();
+
+        assertEquals(503, response.getStatusCode().value());
+        assertEquals("unhealthy", response.getBody().get("status"));
+        assertEquals(Map.of("anthropic_api_key_present", false),
+            response.getBody().get("checks"));
+        assertEquals(java.util.List.of("ANTHROPIC_API_KEY not set"),
+            response.getBody().get("errors"));
+        assertNotNull(response.getBody().get("timestamp"));
+        assertEquals(503, controller.healthHead().getStatusCode().value());
+    }
+
+    @Test
+    void probes_areUnaffectedBeforeTheFirstCheckRuns() {
+        // Registry present but nothing stored yet (boot). The agent must not be
+        // 503 just because its first health-check tick has not landed.
+        MeshHealthController controller =
+            new MeshHealthController(runtimeWith(true), new MeshHealthCheckRegistry());
+
+        assertEquals(200, controller.ready().getStatusCode().value());
+        assertEquals(200, controller.health().getStatusCode().value());
+        assertFalse(controller.health().getBody().containsKey("checks"));
+    }
+
+    @Test
+    void livez_is200_evenWhenTheUserHealthCheckIsUnhealthy() {
+        // The #1467 invariant, extended: a vendor outage must never restart the
+        // pod — a restart cannot fix the vendor and erases the evidence.
+        MeshHealthController controller = new MeshHealthController(runtimeWith(true),
+            withVerdict(io.mcpmesh.MeshHealth.unhealthy("vendor down")));
+
+        assertEquals(200, controller.livez().getStatusCode().value());
+        assertEquals(200, controller.livezHead().getStatusCode().value());
+        assertEquals(503, controller.ready().getStatusCode().value());
+    }
 }

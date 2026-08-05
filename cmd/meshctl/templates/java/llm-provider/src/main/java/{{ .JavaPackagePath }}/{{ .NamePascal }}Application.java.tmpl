@@ -1,11 +1,22 @@
 package {{ .JavaPackage }};
 
 import io.mcpmesh.MeshAgent;
+import io.mcpmesh.MeshHealth;
+import io.mcpmesh.MeshHealthCheck;
 import io.mcpmesh.MeshLlmProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+{{- $model := default "anthropic/claude-sonnet-5" .Model }}
+{{- if or (contains $model "anthropic") (contains $model "openai") (contains $model "gemini") }}
+
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
+{{- end }}
 
 /**
  * {{ .NamePascal }} - MCP Mesh LLM Provider
@@ -20,11 +31,10 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
     description = "{{ default "LLM provider" .Description }}",
     port = {{ .Port }}
 )
-{{- $model := default "anthropic/claude-sonnet-5" .Model }}
 @MeshLlmProvider(
     model = "{{ $model }}",
     capability = "llm",
-    tags = {{ "{" }}{{ if .Tags }}{{ range $i, $t := .Tags }}{{ if $i }}, {{ end }}"{{ $t }}"{{ end }}{{ else if contains $model "anthropic" }}"llm", "claude", "anthropic", "provider"{{ else if contains $model "openai" }}"llm", "openai", "gpt", "provider"{{ else }}"llm", "provider"{{ end }}{{ "}" }},
+    tags = {{ "{" }}{{ if .Tags }}{{ range $i, $t := .Tags }}{{ if $i }}, {{ end }}"{{ $t }}"{{ end }}{{ else if contains $model "anthropic" }}"llm", "claude", "anthropic", "provider"{{ else if contains $model "openai" }}"llm", "openai", "gpt", "provider"{{ else if contains $model "gemini" }}"llm", "gemini", "google", "provider"{{ else }}"llm", "provider"{{ end }}{{ "}" }},
     version = "1.0.0"
 )
 @SpringBootApplication
@@ -40,4 +50,233 @@ public class {{ .NamePascal }}Application {
 
     // No implementation needed - @MeshLlmProvider handles everything!
     // Resource links (images, PDFs) in tool results are automatically resolved.
+
+    // ===== HEALTH CHECK =====
+    //
+    // Runs every ttlSeconds. While it returns unhealthy the agent stops
+    // heartbeating, the registry withdraws it, and consumers fail over to
+    // another provider — automatically restored when the check passes again.
+{{ if contains $model "anthropic" }}
+    private static final HttpClient HTTP = HttpClient.newBuilder()
+        .connectTimeout(Duration.ofSeconds(5))
+        .build();
+
+    /**
+     * Health check for {{ .Name }}.
+     *
+     * Validates:
+     * 1. ANTHROPIC_API_KEY environment variable is set
+     * 2. The Anthropic API is reachable
+     *
+     * Uses /v1/models - metadata only, no tokens consumed.
+     */
+    @MeshHealthCheck(ttlSeconds = 30)
+    public MeshHealth healthCheck() {
+        String apiKey = System.getenv("ANTHROPIC_API_KEY");
+        if (apiKey == null || apiKey.isBlank()) {
+            return MeshHealth.unhealthy("ANTHROPIC_API_KEY not set")
+                .withCheck("anthropic_api_key_present", false);
+        }
+
+        MeshHealth health = MeshHealth.healthy().withCheck("anthropic_api_key_present", true);
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create("https://api.anthropic.com/v1/models"))
+                .header("anthropic-version", "2023-06-01")
+                .header("x-api-key", apiKey)
+                .timeout(Duration.ofSeconds(5))
+                .GET()
+                .build();
+            int status = HTTP.send(request, HttpResponse.BodyHandlers.discarding()).statusCode();
+
+            if (status == 200) {
+                return health
+                    .withCheck("anthropic_api_reachable", true)
+                    .withCheck("anthropic_api_key_valid", true);
+            }
+            if (status == 401) {
+                return health
+                    .withStatus(io.mcpmesh.MeshHealthStatus.UNHEALTHY)
+                    .withCheck("anthropic_api_reachable", true)
+                    .withCheck("anthropic_api_key_valid", false)
+                    .withError("Anthropic API key is invalid");
+            }
+            // The vendor answered and it is not serving. Unhealthy: this is the
+            // outage the mesh has to route around, and DEGRADED would keep
+            // heartbeating and keep consumers pointed here.
+            return health
+                .withStatus(io.mcpmesh.MeshHealthStatus.UNHEALTHY)
+                .withCheck("anthropic_api_reachable", false)
+                .withError("Anthropic API returned status: " + status);
+        } catch (InterruptedException e) {
+            // Degraded, deliberately: the probe was cut short, which says
+            // nothing about the vendor. Withdrawing on an indeterminate
+            // result would take the agent out on shutdown or thread interrupt.
+            Thread.currentThread().interrupt();
+            return health
+                .withStatus(io.mcpmesh.MeshHealthStatus.DEGRADED)
+                .withCheck("anthropic_api_reachable", false)
+                .withError("Anthropic API probe interrupted");
+        } catch (Exception e) {
+            // The vendor is not answering at all (DNS, connect, timeout, TLS).
+            return health
+                .withStatus(io.mcpmesh.MeshHealthStatus.UNHEALTHY)
+                .withCheck("anthropic_api_reachable", false)
+                .withError("Anthropic API unreachable: " + e);
+        }
+    }
+{{ else if contains $model "openai" }}
+    private static final HttpClient HTTP = HttpClient.newBuilder()
+        .connectTimeout(Duration.ofSeconds(5))
+        .build();
+
+    /**
+     * Health check for {{ .Name }}.
+     *
+     * Validates:
+     * 1. OPENAI_API_KEY environment variable is set
+     * 2. The OpenAI API is reachable
+     */
+    @MeshHealthCheck(ttlSeconds = 30)
+    public MeshHealth healthCheck() {
+        String apiKey = System.getenv("OPENAI_API_KEY");
+        if (apiKey == null || apiKey.isBlank()) {
+            return MeshHealth.unhealthy("OPENAI_API_KEY not set")
+                .withCheck("openai_api_key_present", false);
+        }
+
+        MeshHealth health = MeshHealth.healthy().withCheck("openai_api_key_present", true);
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create("https://api.openai.com/v1/models"))
+                .header("Authorization", "Bearer " + apiKey)
+                .timeout(Duration.ofSeconds(5))
+                .GET()
+                .build();
+            int status = HTTP.send(request, HttpResponse.BodyHandlers.discarding()).statusCode();
+
+            if (status == 200) {
+                return health
+                    .withCheck("openai_api_reachable", true)
+                    .withCheck("openai_api_key_valid", true);
+            }
+            if (status == 401) {
+                return health
+                    .withStatus(io.mcpmesh.MeshHealthStatus.UNHEALTHY)
+                    .withCheck("openai_api_reachable", true)
+                    .withCheck("openai_api_key_valid", false)
+                    .withError("OpenAI API key is invalid");
+            }
+            // The vendor answered and it is not serving. Unhealthy: this is the
+            // outage the mesh has to route around, and DEGRADED would keep
+            // heartbeating and keep consumers pointed here.
+            return health
+                .withStatus(io.mcpmesh.MeshHealthStatus.UNHEALTHY)
+                .withCheck("openai_api_reachable", false)
+                .withError("OpenAI API returned status: " + status);
+        } catch (InterruptedException e) {
+            // Degraded, deliberately: the probe was cut short, which says
+            // nothing about the vendor. Withdrawing on an indeterminate
+            // result would take the agent out on shutdown or thread interrupt.
+            Thread.currentThread().interrupt();
+            return health
+                .withStatus(io.mcpmesh.MeshHealthStatus.DEGRADED)
+                .withCheck("openai_api_reachable", false)
+                .withError("OpenAI API probe interrupted");
+        } catch (Exception e) {
+            // The vendor is not answering at all (DNS, connect, timeout, TLS).
+            return health
+                .withStatus(io.mcpmesh.MeshHealthStatus.UNHEALTHY)
+                .withCheck("openai_api_reachable", false)
+                .withError("OpenAI API unreachable: " + e);
+        }
+    }
+{{ else if contains $model "gemini" }}
+    private static final HttpClient HTTP = HttpClient.newBuilder()
+        .connectTimeout(Duration.ofSeconds(5))
+        .build();
+
+    /**
+     * Health check for {{ .Name }}.
+     *
+     * Validates:
+     * 1. GOOGLE_API_KEY environment variable is set
+     * 2. The Google Gemini API is reachable
+     *
+     * Uses /v1beta/models - metadata only, no tokens consumed.
+     */
+    @MeshHealthCheck(ttlSeconds = 30)
+    public MeshHealth healthCheck() {
+        String apiKey = System.getenv("GOOGLE_API_KEY");
+        if (apiKey == null || apiKey.isBlank()) {
+            return MeshHealth.unhealthy("GOOGLE_API_KEY not set")
+                .withCheck("google_api_key_present", false);
+        }
+
+        MeshHealth health = MeshHealth.healthy().withCheck("google_api_key_present", true);
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(
+                    "https://generativelanguage.googleapis.com/v1beta/models?key=" + apiKey))
+                .timeout(Duration.ofSeconds(5))
+                .GET()
+                .build();
+            int status = HTTP.send(request, HttpResponse.BodyHandlers.discarding()).statusCode();
+
+            if (status == 200) {
+                return health
+                    .withCheck("gemini_api_reachable", true)
+                    .withCheck("google_api_key_valid", true);
+            }
+            if (status == 400 || status == 403) {
+                return health
+                    .withStatus(io.mcpmesh.MeshHealthStatus.UNHEALTHY)
+                    .withCheck("gemini_api_reachable", true)
+                    .withCheck("google_api_key_valid", false)
+                    .withError("Google API key is invalid");
+            }
+            // The vendor answered and it is not serving. Unhealthy: this is the
+            // outage the mesh has to route around, and DEGRADED would keep
+            // heartbeating and keep consumers pointed here.
+            return health
+                .withStatus(io.mcpmesh.MeshHealthStatus.UNHEALTHY)
+                .withCheck("gemini_api_reachable", false)
+                .withError("Gemini API returned status: " + status);
+        } catch (InterruptedException e) {
+            // Degraded, deliberately: the probe was cut short, which says
+            // nothing about the vendor. Withdrawing on an indeterminate
+            // result would take the agent out on shutdown or thread interrupt.
+            Thread.currentThread().interrupt();
+            return health
+                .withStatus(io.mcpmesh.MeshHealthStatus.DEGRADED)
+                .withCheck("gemini_api_reachable", false)
+                .withError("Gemini API probe interrupted");
+        } catch (Exception e) {
+            // The vendor is not answering at all (DNS, connect, timeout, TLS).
+            return health
+                .withStatus(io.mcpmesh.MeshHealthStatus.UNHEALTHY)
+                .withCheck("gemini_api_reachable", false)
+                .withError("Gemini API unreachable: " + e);
+        }
+    }
+{{ else }}
+    /**
+     * Health check for {{ .Name }}.
+     *
+     * NOT IMPLEMENTED — this is a skeleton, and as written it CANNOT DETECT AN
+     * UPSTREAM OUTAGE. It always reports healthy, so if {{ $model }} goes down
+     * this agent keeps heartbeating and the mesh keeps routing traffic to a
+     * provider that cannot serve it.
+     *
+     * There is no generic reachability probe that works across every vendor, so
+     * you have to write this one. Replace the body with a cheap, metadata-only
+     * call to your provider — a models/list endpoint or equivalent, NOT a
+     * completion — and return MeshHealth.unhealthy(...) when it fails. That is
+     * what makes the mesh withdraw this agent and fail consumers over.
+     */
+    @MeshHealthCheck(ttlSeconds = 30)
+    public MeshHealth healthCheck() {
+        return MeshHealth.healthy().withCheck("provider_configured", true);
+    }
+{{ end }}
 }

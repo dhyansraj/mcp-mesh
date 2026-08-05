@@ -89,13 +89,38 @@ public interface MeshCore {
     // ==========================================================================
 
     /**
-     * Report agent health status.
+     * Report agent health status — SHARED-STATE ONLY.
+     *
+     * <p>Does NOT reach the runtime loop, so it does not gate heartbeats: an
+     * agent reporting {@code unhealthy} here keeps beating and keeps being
+     * selected by dependency resolution. Use {@link #mesh_update_health} to
+     * make a verdict actually withdraw the agent.
      *
      * @param handle Agent handle
      * @param status Health status: "healthy", "degraded", or "unhealthy"
      * @return 0 on success, -1 on error
      */
     int mesh_report_health(Pointer handle, String status);
+
+    /**
+     * Report the agent's health verdict to the runtime loop (issue #1472).
+     *
+     * <p>While the status is {@code unhealthy} the runtime stops heartbeating,
+     * so the registry's staleness sweep withdraws the agent from dependency
+     * resolution; pushing {@code healthy} (or {@code degraded}) resumes
+     * heartbeats and the registry restores it — with no process restart.
+     *
+     * <p>Idempotent: the runtime only acts on transitions, so SDKs push on
+     * every health-check tick.
+     *
+     * <p>Rejects any status outside the three known values — callers normalize
+     * before crossing the ABI (see {@link MeshHandle#updateHealth}).
+     *
+     * @param handle Agent handle
+     * @param status Health status: "healthy", "degraded", or "unhealthy"
+     * @return 0 on success, -1 on error
+     */
+    int mesh_update_health(Pointer handle, String status);
 
     /**
      * Update the HTTP port after auto-detection.

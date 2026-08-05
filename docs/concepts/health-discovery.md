@@ -72,6 +72,34 @@ class MyAgent:
     pass
 ```
 
+### Custom Health Function (Java)
+
+```java
+@MeshHealthCheck(ttlSeconds = 30)
+public MeshHealth healthCheck() {
+    if (!db.isConnected()) {
+        return MeshHealth.unhealthy("db disconnected")
+            .withCheck("db_connected", false);
+    }
+    if (memoryUsage() > 90) {
+        return MeshHealth.degraded("high memory");
+    }
+    return MeshHealth.healthy().withCheck("db_connected", true);
+}
+```
+
+One no-argument method per agent, on any Spring bean. Returning `boolean` works too: `true` is healthy, `false` unhealthy. `MCP_MESH_HEALTH_CHECK_TTL` overrides `ttlSeconds`.
+
+### What a Failing Check Does
+
+While the check reports `unhealthy` the agent stops heartbeating. The registry's staleness sweep then marks it unhealthy, dependency resolution stops selecting it, and consumers move to another provider. When the check passes again the heartbeat resumes and the registry restores the agent - no restart, no redeploy. This is what lets a provider whose upstream vendor is down take itself out of rotation.
+
+Only an explicit unhealthy result does that. A check that raises is recorded as `degraded` and keeps heartbeating, on both Python and Java: a bug in the health check must not be able to remove a working agent from the mesh.
+
+`degraded` splits the two surfaces: the agent keeps heartbeating and stays in dependency resolution, but `/ready` and `/health` answer 503. Readiness is a load-balancer decision about new external traffic; the heartbeat is a statement about whether this is still a valid mesh provider.
+
+Route (`@mesh.route` / `@MeshRoute`) and A2A agents are deliberately exempt. A gateway is a fan-out point that many requests enter through - withdrawing a provider is correct, withdrawing the gateway takes the application down.
+
 ### Kubernetes Probes
 
 Every runtime serves three endpoints, and probes must not share one:
@@ -79,10 +107,10 @@ Every runtime serves three endpoints, and probes must not share one:
 | Endpoint  | Probe                             | Reports                                                                                             |
 | --------- | --------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `/livez`  | `livenessProbe`, `startupProbe`   | 200 for as long as the process is serving. Consults nothing else.                                     |
-| `/ready`  | `readinessProbe`                  | Whether traffic should be routed here. Reflects `health_check` on Python; Java and TypeScript have no user health check, so it reports only that the mesh runtime is running. |
-| `/health` | none                              | Runtime-specific. Python returns the `/ready` signal plus `checks` and `errors`; Java reports the same runtime state without them; TypeScript returns a fixed `healthy` and reflects nothing. |
+| `/ready`  | `readinessProbe`                  | Whether traffic should be routed here. Reflects your health check on Python (`health_check`) and Java (`@MeshHealthCheck`); TypeScript has no user health check, so it reports only that the mesh runtime is running. |
+| `/health` | none                              | Runtime-specific. Python and Java return the `/ready` signal plus `checks` and `errors`; TypeScript returns a fixed `healthy` and reflects nothing. |
 
-Never point liveness or startup at `/ready` or `/health`. On Python, where `/ready` reflects your `health_check`, that turns an upstream outage into a pod restart, which cannot fix the outage. On Java and TypeScript, where `/ready` reports only runtime state, it still restarts pods that are merely still booting. The Helm chart is already wired this way.
+Never point liveness or startup at `/ready` or `/health`. On Python and Java, where `/ready` reflects your health check, that turns an upstream outage into a pod restart, which cannot fix the outage. On TypeScript, where `/ready` reports only runtime state, it still restarts pods that are merely still booting. The Helm chart is already wired this way.
 
 ### Health States
 

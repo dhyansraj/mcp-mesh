@@ -703,8 +703,50 @@ public class MeshAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public MeshHealthController meshHealthController(
-            @org.springframework.context.annotation.Lazy MeshRuntime runtime) {
-        return new MeshHealthController(runtime);
+            @org.springframework.context.annotation.Lazy MeshRuntime runtime,
+            MeshHealthCheckRegistry healthCheckRegistry) {
+        return new MeshHealthController(runtime, healthCheckRegistry);
+    }
+
+    /**
+     * Issue #1474: holds the agent's {@code @MeshHealthCheck} and its latest
+     * verdict. A plain holder with no collaborators, so it is safe to inject
+     * eagerly into {@link MeshHealthController} — unlike {@link MeshRuntime},
+     * which that controller must take {@code @Lazy}.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public static MeshHealthCheckRegistry meshHealthCheckRegistry() {
+        return new MeshHealthCheckRegistry();
+    }
+
+    /**
+     * Issue #1474: scans beans for {@code @MeshHealthCheck}. Static factory so
+     * the processor is instantiated before user beans — the same pattern as
+     * {@link #meshToolBeanPostProcessor}.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public static MeshHealthCheckBeanPostProcessor meshHealthCheckBeanPostProcessor(
+            MeshHealthCheckRegistry registry) {
+        return new MeshHealthCheckBeanPostProcessor(registry);
+    }
+
+    /**
+     * Issue #1474: re-runs the health check every {@code ttlSeconds} and
+     * reports the verdict to the mesh runtime, where {@code unhealthy}
+     * suppresses the heartbeat so the registry withdraws this agent from
+     * dependency resolution.
+     *
+     * <p>Registered unconditionally; it starts no thread at all when no
+     * {@code @MeshHealthCheck} was declared, so an agent without one behaves
+     * exactly as it did before.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public MeshHealthCheckScheduler meshHealthCheckScheduler(
+            MeshRuntime runtime, MeshHealthCheckRegistry registry) {
+        return new MeshHealthCheckScheduler(runtime, registry);
     }
 
     /**

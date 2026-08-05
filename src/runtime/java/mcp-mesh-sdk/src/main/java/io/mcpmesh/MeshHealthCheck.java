@@ -1,0 +1,88 @@
+package io.mcpmesh;
+
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
+/**
+ * Marks a method as this agent's health check (issue #1474).
+ *
+ * <p>The starter runs the annotated method on a timer and does two things with
+ * the verdict:
+ *
+ * <ol>
+ *   <li>serves it from {@code /health} (with per-check detail) and {@code /ready};</li>
+ *   <li>reports it to the mesh runtime. While the verdict is
+ *       {@link MeshHealthStatus#UNHEALTHY} the runtime <b>stops heartbeating</b>,
+ *       the registry's staleness sweep withdraws the agent, and dependency
+ *       resolution moves consumers to another provider. When the check passes
+ *       again the heartbeat resumes and the registry restores the agent —
+ *       with no process restart.</li>
+ * </ol>
+ *
+ * <p>This is what lets a provider whose upstream vendor is down take itself out
+ * of rotation instead of accepting calls it cannot serve.
+ *
+ * <h2>Shape</h2>
+ *
+ * <p>Annotate exactly one no-argument method on a Spring bean. The return type
+ * must be either {@link MeshHealth} (full detail) or {@code boolean} (terse:
+ * {@code true} = healthy, {@code false} = unhealthy). Anything else fails the
+ * boot with an actionable message rather than being silently ignored.
+ *
+ * <p>Escaped as {@code &#64;} rather than wrapped in {@code {@code ...}}: an
+ * annotation is the first token on those lines, and Javadoc reads a leading
+ * {@code @} as a block tag even inside a code block — which would silently
+ * truncate this description at the first sample line.
+ *
+ * <pre>
+ * &#64;Component
+ * public class VendorHealth {
+ *
+ *     &#64;MeshHealthCheck(ttlSeconds = 30)
+ *     public MeshHealth check() {
+ *         if (!vendorReachable()) {
+ *             return MeshHealth.unhealthy("anthropic API unreachable")
+ *                 .withCheck("anthropic_api_reachable", false);
+ *         }
+ *         return MeshHealth.healthy().withCheck("anthropic_api_reachable", true);
+ *     }
+ * }
+ * </pre>
+ *
+ * <h2>Only an explicit unhealthy verdict withdraws the agent</h2>
+ *
+ * <p>A check that <b>throws</b> is recorded as {@link MeshHealthStatus#DEGRADED},
+ * not unhealthy, so it keeps heartbeating. A buggy health check must not be able
+ * to remove a working agent from the mesh. Return {@code false} or
+ * {@link MeshHealth#unhealthy} to actually withdraw.
+ *
+ * <h2>Route and A2A agents</h2>
+ *
+ * <p>On an {@code api} (route-only) or {@code a2a} agent the verdict feeds the
+ * probe endpoints but <b>never</b> suppresses the heartbeat. A gateway is a
+ * fan-out point that many requests enter through: withdrawing a provider is
+ * correct, withdrawing the gateway takes the application down. This mirrors
+ * Python, whose API and A2A pipelines have no health-refresh loop at all.
+ *
+ * @see MeshHealth
+ * @see MeshHealthStatus
+ */
+@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface MeshHealthCheck {
+
+    /**
+     * How often the check is re-run, in seconds.
+     *
+     * <p>Mirrors Python's {@code health_check_ttl}, and the same default (15).
+     * This is the detection latency in <b>both</b> directions: an outage takes
+     * up to one TTL to be noticed, and a recovery takes up to one TTL to be
+     * published.
+     *
+     * <p>Override with the {@code MCP_MESH_HEALTH_CHECK_TTL} environment
+     * variable.
+     */
+    int ttlSeconds() default 15;
+}

@@ -243,6 +243,72 @@ public class MeshHandle implements Closeable {
     }
 
     /**
+     * The three statuses {@link #updateHealth(String)} may put on the wire.
+     * Anything else is normalized to {@code degraded} before the FFI call.
+     */
+    private static final java.util.Set<String> KNOWN_HEALTH_STATUSES =
+        java.util.Set.of("healthy", "degraded", "unhealthy");
+
+    /**
+     * Report the agent's health verdict to the mesh runtime (issue #1472/#1474).
+     *
+     * <p>While the reported status is {@code unhealthy} the runtime stops
+     * heartbeating, so the registry's staleness sweep withdraws this agent from
+     * dependency resolution and consumers fail over. Reporting {@code healthy}
+     * (or {@code degraded}) resumes heartbeats and the registry restores the
+     * agent — no process restart.
+     *
+     * <p>Distinct from {@link #reportHealth(String)}, which only mutates shared
+     * state and therefore cannot influence resolution.
+     *
+     * <p>Idempotent by design: the SDK's health-check timer calls this on every
+     * tick and the runtime only acts on transitions.
+     *
+     * <p>An unrecognized status is reported as {@code degraded} with a warning,
+     * NOT {@code unhealthy} — withdrawing an agent because its status string
+     * could not be read is the worse failure. Mirrors Python's
+     * {@code publish_health_status_to_core}.
+     *
+     * @param status "healthy", "degraded", or "unhealthy"
+     * @return true if the update was queued successfully; false if the native
+     *         call rejected it (never throws on a failed publish — health
+     *         reporting runs on a timer and must not take the loop down)
+     * @throws MeshException if the handle has been closed
+     */
+    public boolean updateHealth(String status) {
+        String normalized = status == null ? null : status.trim().toLowerCase(java.util.Locale.ROOT);
+        if (normalized == null || !KNOWN_HEALTH_STATUSES.contains(normalized)) {
+            log.warn("Unrecognized health status '{}' — reporting degraded to the core "
+                + "(the agent keeps heartbeating)", status);
+            normalized = "degraded";
+        }
+
+        // Lock-free fast path: post-close calls fail immediately instead of
+        // queuing behind close()'s write lock. The check under the read lock
+        // below is the authoritative one for the close/accessor race.
+        if (closed.get()) {
+            throw new MeshException("Handle is closed");
+        }
+        lock.readLock().lock();
+        try {
+            if (closed.get()) {
+                throw new MeshException("Handle is closed");
+            }
+
+            int result = core.mesh_update_health(handle, normalized);
+            if (result != 0) {
+                String error = getLastError(core);
+                log.warn("Failed to publish health status '{}': {}", normalized, error);
+                return false;
+            }
+            log.debug("Published health status '{}' to the mesh runtime", normalized);
+            return true;
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    /**
      * Request graceful shutdown of the agent.
      *
      * <p>This is non-blocking. Use {@link #nextEvent(long)} to wait for the

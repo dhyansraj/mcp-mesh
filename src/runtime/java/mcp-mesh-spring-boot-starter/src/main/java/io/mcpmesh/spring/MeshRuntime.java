@@ -154,6 +154,33 @@ public class MeshRuntime implements SmartLifecycle {
     }
 
     /**
+     * Report the agent's health verdict to the mesh runtime (issue #1474).
+     *
+     * <p>While the reported status is {@code unhealthy} the runtime stops
+     * heartbeating, so the registry's staleness sweep withdraws this agent from
+     * dependency resolution and consumers fail over. Reporting {@code healthy}
+     * again resumes heartbeats and the registry restores the agent — no restart.
+     *
+     * <p>Unlike {@link #reportHealth(String)} (shared state only) this reaches
+     * the runtime loop and therefore actually affects routing.
+     *
+     * <p>A no-op before the runtime has started or after it has stopped: there
+     * is nothing to report to. Called on every health-check tick, so it is
+     * idempotent by design.
+     *
+     * @param status "healthy", "degraded", or "unhealthy"
+     * @return true if the verdict was handed to a live handle
+     */
+    public boolean updateHealth(String status) {
+        MeshHandle h = handle;
+        if (h != null && running.get() && h.isRunning()) {
+            return h.updateHealth(status);
+        }
+        log.debug("Runtime not running — health status '{}' not published", status);
+        return false;
+    }
+
+    /**
      * Update the HTTP port after auto-detection.
      *
      * <p>Call this when the actual port is known (e.g., from WebServerInitializedEvent)

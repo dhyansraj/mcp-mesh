@@ -274,10 +274,27 @@ Spring Boot agents automatically expose `/actuator/health`. The MCP Mesh starter
 The starter also serves the three mesh endpoints, and Kubernetes probes must not share one:
 
 - `/livez` - `livenessProbe` and `startupProbe`. 200 for as long as the process is serving; consults nothing else.
-- `/ready` - `readinessProbe`. Whether traffic should be routed here. Java has no user health check, so this reports only that the mesh runtime is running.
-- `/health` - no probe. Reports the same runtime state as `/ready`, as a `status` field.
+- `/ready` - `readinessProbe`. Whether traffic should be routed here; reflects your `@MeshHealthCheck` on top of the mesh runtime state.
+- `/health` - no probe. The `/ready` signal plus the `checks` and `errors` your check returned.
 
 Both `/health` and `/ready` answer 503 until the mesh runtime is up, so pointing liveness or startup at either restarts pods that are merely still booting. The Helm chart is already wired this way.
+
+Annotate one no-argument method with `@MeshHealthCheck` to say what "ready" means for this agent:
+
+```java
+@MeshHealthCheck(ttlSeconds = 30)
+public MeshHealth healthCheck() {
+    if (!vendorReachable()) {
+        return MeshHealth.unhealthy("vendor API unreachable")
+            .withCheck("vendor_api_reachable", false);
+    }
+    return MeshHealth.healthy().withCheck("vendor_api_reachable", true);
+}
+```
+
+While the check returns unhealthy the agent stops heartbeating, the registry withdraws it, and consumers resolve to another provider - restored automatically when the check passes, with no restart. Returning `boolean` works too: `true` is healthy, `false` unhealthy. A check that throws is recorded as `degraded` and keeps heartbeating, so a bug in the check cannot take a working agent out of the mesh. `MCP_MESH_HEALTH_CHECK_TTL` overrides `ttlSeconds`.
+
+Route-only (`api`) and A2A agents are the exception: their check feeds the probes but never suppresses the heartbeat. A gateway is a fan-out point, and withdrawing it takes the application down.
 
 ### Graceful Shutdown
 
