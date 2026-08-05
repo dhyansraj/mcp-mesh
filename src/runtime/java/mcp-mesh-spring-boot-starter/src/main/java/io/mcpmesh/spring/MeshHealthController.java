@@ -1,5 +1,7 @@
 package io.mcpmesh.spring;
 
+import io.mcpmesh.MeshHealth;
+import io.mcpmesh.MeshHealthStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -21,68 +23,141 @@ import java.util.Map;
  * When both probes share a URL, anything that makes an agent unready also makes
  * Kubernetes restart it — a remedy that cannot fix a dependency outage and that
  * erases the evidence the agent was failing. {@code /livez} therefore answers
- * 200 unconditionally, while {@code /ready} reports whether the mesh runtime is
- * up.
+ * 200 unconditionally, while {@code /ready} reports whether the agent should be
+ * receiving traffic.
+ *
+ * <p>Since issue #1474 {@code /ready} also reflects the user's
+ * {@link io.mcpmesh.MeshHealthCheck}, and {@code /health} carries its
+ * {@code checks} and {@code errors} so an operator can see WHICH probe failed.
+ * The runtime state remains the floor: an agent whose mesh runtime is not up is
+ * not ready regardless of what the user's check says.
  */
 @Controller
 public class MeshHealthController {
 
     private final MeshRuntime runtime;
+    private final MeshHealthCheckRegistry healthChecks;
 
     public MeshHealthController(MeshRuntime runtime) {
+        this(runtime, null);
+    }
+
+    public MeshHealthController(MeshRuntime runtime, MeshHealthCheckRegistry healthChecks) {
         this.runtime = runtime;
+        this.healthChecks = healthChecks;
+    }
+
+    /**
+     * The effective verdict: the user's health check, floored by the mesh
+     * runtime state.
+     *
+     * <p>The floor is not redundant with the user's check. A check that probes
+     * a vendor API says nothing about whether this agent is registered and
+     * reachable; a runtime that is down means no traffic should arrive here
+     * whatever the vendor's status is. Taking the worse of the two is the only
+     * answer that is true in both directions.
+     */
+    private MeshHealthStatus effectiveStatus() {
+        boolean running = runtime != null && runtime.isRunning();
+        if (!running) {
+            return MeshHealthStatus.UNHEALTHY;
+        }
+        MeshHealth latest = latestHealth();
+        return latest == null ? MeshHealthStatus.HEALTHY : latest.status();
+    }
+
+    private MeshHealth latestHealth() {
+        if (healthChecks == null) {
+            return null;
+        }
+        MeshHealthCheckRegistry.Result result = healthChecks.latest();
+        return result == null ? null : result.health();
+    }
+
+    /**
+     * Whether the probes answer 200. Only {@link MeshHealthStatus#HEALTHY}
+     * does — exactly Python's {@code build_health_response} /
+     * {@code build_ready_response}, which are {@code 200 if status ==
+     * "healthy" else 503}.
+     *
+     * <p>So {@code degraded} answers 503 here while the agent keeps
+     * heartbeating and stays in dependency resolution. That asymmetry is
+     * Python's and is deliberate on both sides: readiness is a load-balancer
+     * decision about NEW external traffic, while the heartbeat is a statement
+     * about whether this agent is still a valid provider for the mesh. An
+     * impaired agent can honestly answer "stop adding load" without also
+     * withdrawing itself from a mesh that may have no other provider.
+     */
+    private static boolean serving(MeshHealthStatus status) {
+        return status == MeshHealthStatus.HEALTHY;
     }
 
     @GetMapping("/health")
     public ResponseEntity<Map<String, Object>> health() {
-        boolean running = runtime != null && runtime.isRunning();
+        MeshHealthStatus status = effectiveStatus();
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("status", running ? "healthy" : "unhealthy");
+        body.put("status", status.wireValue());
         if (runtime != null && runtime.getAgentSpec() != null) {
             body.put("agent", runtime.getAgentSpec().getName());
         }
-        return ResponseEntity.status(running ? 200 : 503).body(body);
+        MeshHealthCheckRegistry.Result result =
+            healthChecks == null ? null : healthChecks.latest();
+        if (result != null) {
+            body.put("checks", result.health().checks());
+            body.put("errors", result.health().errors());
+            body.put("timestamp", result.timestamp().toString());
+        }
+        return ResponseEntity.status(serving(status) ? 200 : 503).body(body);
     }
 
     @RequestMapping(value = "/health", method = RequestMethod.HEAD)
     public ResponseEntity<Void> healthHead() {
-        boolean running = runtime != null && runtime.isRunning();
-        return ResponseEntity.status(running ? 200 : 503).build();
+        return ResponseEntity.status(serving(effectiveStatus()) ? 200 : 503).build();
     }
 
     /**
      * Kubernetes readiness probe.
      *
-     * <p>The Java runtime has no user-supplied health check (unlike Python), so
-     * the only honest readiness signal available is whether the mesh runtime is
-     * running — the same condition {@code /health} reports. It does NOT reflect
-     * the health of anything the agent depends on.
+     * <p>Reports whether traffic should be routed here: the mesh runtime is up
+     * AND the user's {@link io.mcpmesh.MeshHealthCheck} (if any) is not
+     * reporting unhealthy. It does NOT restart anything — see the class comment
+     * on why this is a separate endpoint from {@code /livez}.
      */
     @GetMapping("/ready")
     public ResponseEntity<Map<String, Object>> ready() {
         boolean running = runtime != null && runtime.isRunning();
+        MeshHealthStatus status = effectiveStatus();
+        boolean ready = serving(status);
+
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("ready", running);
-        if (!running) {
-            body.put("reason", "mesh runtime is not running");
+        body.put("ready", ready);
+        body.put("status", status.wireValue());
+        if (!ready) {
+            body.put("reason", running
+                ? "service is " + status.wireValue()
+                : "mesh runtime is not running");
+            MeshHealth latest = latestHealth();
+            if (latest != null && !latest.errors().isEmpty()) {
+                body.put("errors", latest.errors());
+            }
         }
-        return ResponseEntity.status(running ? 200 : 503).body(body);
+        return ResponseEntity.status(ready ? 200 : 503).body(body);
     }
 
     @RequestMapping(value = "/ready", method = RequestMethod.HEAD)
     public ResponseEntity<Void> readyHead() {
-        boolean running = runtime != null && runtime.isRunning();
-        return ResponseEntity.status(running ? 200 : 503).build();
+        return ResponseEntity.status(serving(effectiveStatus()) ? 200 : 503).build();
     }
 
     /**
      * Kubernetes liveness probe — always 200 while the application is serving.
      *
-     * <p>Deliberately does NOT consult {@link MeshRuntime#isRunning()}: the mesh
-     * runtime starts late in the Spring lifecycle, so a liveness probe gated on
-     * it would restart-loop an agent through a slow boot. Reaching this handler
-     * at all proves the servlet container is alive, which is the only failure a
-     * restart can actually repair.
+     * <p>Deliberately does NOT consult {@link MeshRuntime#isRunning()} or the
+     * user's health check: the mesh runtime starts late in the Spring
+     * lifecycle, so a liveness probe gated on it would restart-loop an agent
+     * through a slow boot, and a restart cannot fix a vendor outage — it only
+     * erases the evidence. Reaching this handler at all proves the servlet
+     * container is alive, which is the only failure a restart can repair.
      */
     @GetMapping("/livez")
     public ResponseEntity<Map<String, Object>> livez() {

@@ -31,6 +31,43 @@ MCP Mesh uses a dual-heartbeat system for fast failure detection and automatic t
 - Default threshold: 20 seconds (4 missed 5-second heartbeats)
 - Configurable via environment variables
 
+## Declaring Your Own Health Check
+
+Annotate one no-argument method with `@MeshHealthCheck` to tell the mesh what "able to serve" means for this agent:
+
+```java
+@Component
+public class VendorHealth {
+
+    @MeshHealthCheck(ttlSeconds = 30)
+    public MeshHealth healthCheck() {
+        if (!vendorReachable()) {
+            return MeshHealth.unhealthy("vendor API unreachable")
+                .withCheck("vendor_api_reachable", false);
+        }
+        return MeshHealth.healthy().withCheck("vendor_api_reachable", true);
+    }
+}
+```
+
+One check per agent, on any Spring bean. Return `MeshHealth` for full detail, or `boolean` for the terse form (`true` healthy, `false` unhealthy). `ttlSeconds` is how often it re-runs (default 15); `MCP_MESH_HEALTH_CHECK_TTL` overrides it.
+
+### What a Failing Check Does
+
+While the check reports unhealthy the agent **stops heartbeating**. The registry marks it unhealthy after the staleness window, dependency resolution stops selecting it, and consumers move to another provider. When the check passes again the heartbeat resumes and the registry restores the agent - no restart. The TTL is the detection latency in both directions.
+
+The verdict also drives the probe endpoints: `/ready` answers 503 while unhealthy, and `/health` carries the `checks` and `errors` the method returned. `/livez` never consults it - a restart cannot fix a vendor outage.
+
+### Only an Explicit Unhealthy Withdraws the Agent
+
+A check that **throws** is recorded as `degraded`, not unhealthy, and keeps heartbeating. A bug in a health check must not be able to remove a working agent from the mesh. Return `false` or `MeshHealth.unhealthy(...)` to actually withdraw.
+
+`degraded` splits the two surfaces on purpose, the same way it does on Python: the agent keeps heartbeating and stays in dependency resolution, but `/ready` and `/health` answer 503. Readiness is a load-balancer decision about new external traffic; the heartbeat is a statement about whether this is still a valid mesh provider.
+
+### Route and A2A Agents
+
+On a route-only (`api`) or A2A agent the check feeds `/health` and `/ready` but **never** suppresses the heartbeat. A gateway is a fan-out point that many requests enter through: withdrawing a provider is correct, withdrawing the gateway takes the application down. This matches Python, whose API and A2A pipelines have no health-refresh loop at all.
+
 ## Checking Dependency Health
 
 Use `isAvailable()` on `McpMeshTool` to check if a dependency is reachable:

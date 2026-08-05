@@ -167,7 +167,15 @@ char *mesh_next_event(const struct MeshAgentHandle *handle, int64_t timeout_ms);
 // * `handle` must be a valid handle from `mesh_start_agent`
 int32_t mesh_is_running(const struct MeshAgentHandle *handle);
 
-// Report agent health status.
+// Report agent health status — SHARED-STATE ONLY.
+//
+// Writes the status onto the handle's shared state so `mesh_*` readers see
+// it. It does NOT reach the runtime loop, so it does not gate heartbeats:
+// an agent reporting `unhealthy` through this entry point keeps beating and
+// keeps being selected by dependency resolution.
+//
+// Use [`mesh_update_health`] to make a health verdict actually withdraw the
+// agent from resolution (issue #1472).
 //
 // # Arguments
 // * `handle` - Agent handle
@@ -180,6 +188,34 @@ int32_t mesh_is_running(const struct MeshAgentHandle *handle);
 // * `handle` must be a valid handle from `mesh_start_agent`
 // * `status` must be a valid null-terminated C string
 int32_t mesh_report_health(const struct MeshAgentHandle *handle, const char *status);
+
+// Report the agent's health verdict to the runtime loop (issue #1472).
+//
+// The C-ABI counterpart of `AgentHandle::update_health` (pyo3:
+// `handle.update_health`). Call this from the SDK's periodic health-check
+// loop with the verdict of the user-supplied health check. While the status
+// is `unhealthy` the runtime stops heartbeating, so the registry's staleness
+// sweep withdraws the agent from dependency resolution; pushing `healthy`
+// (or `degraded`) resumes heartbeats and the registry restores it — with no
+// process restart.
+//
+// Distinct from [`mesh_report_health`], which only mutates shared state and
+// therefore cannot influence resolution.
+//
+// Pushing the same status repeatedly is cheap and idempotent — the runtime
+// only acts on transitions — so SDKs push on every health-check tick.
+//
+// # Arguments
+// * `handle` - Agent handle
+// * `status` - Health status: "healthy", "degraded", or "unhealthy"
+//
+// # Returns
+// 0 on success, -1 on error
+//
+// # Safety
+// * `handle` must be a valid handle from `mesh_start_agent`
+// * `status` must be a valid null-terminated C string
+int32_t mesh_update_health(const struct MeshAgentHandle *handle, const char *status);
 
 // Update the HTTP port after auto-detection.
 //

@@ -195,6 +195,17 @@ async def health_check() -> dict:
     """
     Health check for {{ .Name }}.
 
+    NOT IMPLEMENTED - this is a skeleton, and as written it CANNOT DETECT AN
+    UPSTREAM OUTAGE. It always reports healthy, so if {{ .Model }} goes down
+    this agent keeps heartbeating and the mesh keeps routing traffic to a
+    provider that cannot serve it.
+
+    There is no generic reachability probe that works across every vendor, so
+    you have to write this one. Replace the body with a cheap, metadata-only
+    call to your provider - a models/list endpoint or equivalent, NOT a
+    completion - and return {"status": "unhealthy", ...} when it fails. That is
+    what makes the mesh withdraw this agent and fail consumers over.
+
     Returns:
         dict: Health status
     """

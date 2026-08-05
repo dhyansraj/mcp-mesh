@@ -38,7 +38,7 @@ class MeshHandleTest {
     /** Native FFI entry points that dereference the agent handle. */
     private static final Set<String> HANDLE_TAKING = Set.of(
         "mesh_is_running", "mesh_next_event", "mesh_report_health",
-        "mesh_update_port", "mesh_shutdown", "mesh_free_handle");
+        "mesh_update_port", "mesh_update_health", "mesh_shutdown", "mesh_free_handle");
 
     /**
      * Fake MeshCore that mimics the Rust FFI contract relevant to #1179:
@@ -65,6 +65,11 @@ class MeshHandleTest {
         /** When true, mesh_free_handle blocks until {@link #freeRelease} —
          *  simulates the real free taking seconds (Rust shutdown + span drain). */
         volatile boolean blockFree = false;
+        /** Health statuses observed at the FFI boundary, in call order (#1474). */
+        final List<String> healthStatuses =
+            java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        /** When non-zero, mesh_update_health fails with this return code. */
+        volatile int updateHealthReturn = 0;
         final CountDownLatch freeStarted = new CountDownLatch(1);
         final CountDownLatch freeRelease = new CountDownLatch(1);
 
@@ -86,6 +91,9 @@ class MeshHandleTest {
                 case "mesh_report_health":
                 case "mesh_update_port":
                     return 0;
+                case "mesh_update_health":
+                    healthStatuses.add((String) args[1]);
+                    return updateHealthReturn;
                 case "mesh_shutdown":
                     shutdownSignalled.set(true);
                     if (shutdownWakesNextEvent) {
@@ -362,6 +370,64 @@ class MeshHandleTest {
         fake.wake.countDown();
         parked.join(TimeUnit.SECONDS.toMillis(5));
         assertFalse(parked.isAlive());
+    }
+
+    // ---- updateHealth (issue #1474) ----------------------------------------
+
+    @Test
+    @Timeout(30)
+    void updateHealthPassesTheThreeKnownStatusesThrough() {
+        FakeCore fake = new FakeCore();
+        MeshHandle handle = newHandle(fake);
+
+        assertTrue(handle.updateHealth("unhealthy"));
+        assertTrue(handle.updateHealth("healthy"));
+        assertTrue(handle.updateHealth("degraded"));
+        // Case and surrounding whitespace are the author's, not the contract's.
+        assertTrue(handle.updateHealth("  UNHEALTHY "));
+
+        assertEquals(List.of("unhealthy", "healthy", "degraded", "unhealthy"),
+            fake.healthStatuses);
+    }
+
+    @Test
+    @Timeout(30)
+    void updateHealthReportsAnUnknownStatusAsDegradedNotUnhealthy() {
+        // Withdrawing an agent from the mesh because its status string could
+        // not be read is a worse failure than keeping it — mirrors Python's
+        // publish_health_status_to_core.
+        FakeCore fake = new FakeCore();
+        MeshHandle handle = newHandle(fake);
+
+        assertTrue(handle.updateHealth("mostly fine"));
+        assertTrue(handle.updateHealth(null));
+        assertTrue(handle.updateHealth(""));
+
+        assertEquals(List.of("degraded", "degraded", "degraded"), fake.healthStatuses);
+    }
+
+    @Test
+    @Timeout(30)
+    void updateHealthReturnsFalseWhenTheNativeCallFails() {
+        FakeCore fake = new FakeCore();
+        fake.updateHealthReturn = -1;
+        MeshHandle handle = newHandle(fake);
+
+        // A failed publish must not throw — health reporting runs on a timer
+        // and must never take the refresh loop down with it.
+        assertFalse(handle.updateHealth("unhealthy"));
+    }
+
+    @Test
+    @Timeout(30)
+    void updateHealthIsRejectedAfterCloseWithoutTouchingNative() {
+        FakeCore fake = new FakeCore();
+        MeshHandle handle = newHandle(fake);
+        handle.close();
+
+        assertThrows(MeshException.class, () -> handle.updateHealth("unhealthy"));
+        assertTrue(fake.healthStatuses.isEmpty());
+        assertFalse(fake.calledAfterFree.get());
     }
 
     @Test

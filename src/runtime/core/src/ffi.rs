@@ -479,7 +479,15 @@ pub unsafe extern "C" fn mesh_is_running(handle: *const MeshAgentHandle) -> i32 
 // Health Reporting
 // =============================================================================
 
-/// Report agent health status.
+/// Report agent health status — SHARED-STATE ONLY.
+///
+/// Writes the status onto the handle's shared state so `mesh_*` readers see
+/// it. It does NOT reach the runtime loop, so it does not gate heartbeats:
+/// an agent reporting `unhealthy` through this entry point keeps beating and
+/// keeps being selected by dependency resolution.
+///
+/// Use [`mesh_update_health`] to make a health verdict actually withdraw the
+/// agent from resolution (issue #1472).
 ///
 /// # Arguments
 /// * `handle` - Agent handle
@@ -537,6 +545,88 @@ pub unsafe extern "C" fn mesh_report_health(
     info!("FFI: Health status updated to: {}", status_str);
 
     0
+}
+
+/// Report the agent's health verdict to the runtime loop (issue #1472).
+///
+/// The C-ABI counterpart of `AgentHandle::update_health` (pyo3:
+/// `handle.update_health`). Call this from the SDK's periodic health-check
+/// loop with the verdict of the user-supplied health check. While the status
+/// is `unhealthy` the runtime stops heartbeating, so the registry's staleness
+/// sweep withdraws the agent from dependency resolution; pushing `healthy`
+/// (or `degraded`) resumes heartbeats and the registry restores it — with no
+/// process restart.
+///
+/// Distinct from [`mesh_report_health`], which only mutates shared state and
+/// therefore cannot influence resolution.
+///
+/// Pushing the same status repeatedly is cheap and idempotent — the runtime
+/// only acts on transitions — so SDKs push on every health-check tick.
+///
+/// # Arguments
+/// * `handle` - Agent handle
+/// * `status` - Health status: "healthy", "degraded", or "unhealthy"
+///
+/// # Returns
+/// 0 on success, -1 on error
+///
+/// # Safety
+/// * `handle` must be a valid handle from `mesh_start_agent`
+/// * `status` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_update_health(
+    handle: *const MeshAgentHandle,
+    status: *const c_char,
+) -> i32 {
+    if handle.is_null() {
+        set_last_error("handle is null");
+        return -1;
+    }
+
+    if status.is_null() {
+        set_last_error("status is null");
+        return -1;
+    }
+
+    let status_str = match CStr::from_ptr(status).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in status: {}", e));
+            return -1;
+        }
+    };
+
+    // Strict parse, deliberately. Callers normalize an unrecognized status to
+    // "degraded" BEFORE crossing the ABI (a reporting defect must never
+    // withdraw an agent); accepting junk here too would hide that they stopped.
+    let health_status = match status_str {
+        "healthy" => crate::events::HealthStatus::Healthy,
+        "degraded" => crate::events::HealthStatus::Degraded,
+        "unhealthy" => crate::events::HealthStatus::Unhealthy,
+        _ => {
+            set_last_error(format!(
+                "Invalid health status '{}', expected: healthy, degraded, or unhealthy",
+                status_str
+            ));
+            return -1;
+        }
+    };
+
+    let handle = handle_guard(handle);
+
+    match handle
+        .command_tx
+        .try_send(crate::runtime::RuntimeCommand::UpdateHealth(health_status))
+    {
+        Ok(_) => {
+            debug!("FFI: Health status pushed to runtime: {}", status_str);
+            0
+        }
+        Err(e) => {
+            set_last_error(format!("Failed to send health update: {}", e));
+            -1
+        }
+    }
 }
 
 /// Update the HTTP port after auto-detection.
@@ -2669,6 +2759,100 @@ mod tests {
         drop(event_tx);
         let got_null = parked.join().expect("parked mesh_next_event must not crash");
         assert!(got_null, "parked caller must observe channel close as NULL");
+    }
+
+    // ---- mesh_update_health (issue #1474: the Java entry point) -------------
+
+    /// Build a handle whose command channel the test owns, so the
+    /// `RuntimeCommand` the FFI enqueues can be read back.
+    fn health_test_handle(
+    ) -> (*mut MeshAgentHandle, mpsc::Receiver<crate::runtime::RuntimeCommand>) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (_event_tx, event_rx) = mpsc::channel::<MeshEvent>(4);
+        let (shutdown_tx, _shutdown_rx) = mpsc::channel(1);
+        let (command_tx, command_rx) = mpsc::channel(8);
+        let handle = Arc::new(MeshAgentHandle {
+            event_rx: Mutex::new(event_rx),
+            shutdown_tx,
+            command_tx,
+            runtime,
+            is_running: AtomicBool::new(true),
+            agent_id: None,
+            shared_state: Arc::new(tokio::sync::RwLock::new(HandleState::default())),
+        });
+        (Arc::into_raw(handle) as *mut MeshAgentHandle, command_rx)
+    }
+
+    #[test]
+    fn test_update_health_enqueues_command() {
+        let (ptr, mut command_rx) = health_test_handle();
+
+        for (input, expected) in [
+            ("unhealthy", crate::events::HealthStatus::Unhealthy),
+            ("healthy", crate::events::HealthStatus::Healthy),
+            ("degraded", crate::events::HealthStatus::Degraded),
+        ] {
+            let status = CString::new(input).unwrap();
+            let rc = unsafe { mesh_update_health(ptr, status.as_ptr()) };
+            assert_eq!(rc, 0, "mesh_update_health({input}) must succeed");
+            match command_rx.try_recv() {
+                Ok(crate::runtime::RuntimeCommand::UpdateHealth(got)) => {
+                    assert_eq!(got, expected, "wrong status for {input}");
+                }
+                other => panic!("expected UpdateHealth({expected:?}), got {other:?}"),
+            }
+        }
+
+        unsafe { mesh_free_handle(ptr) };
+    }
+
+    /// The whole point of the new entry point: `mesh_report_health` writes
+    /// shared state and never reaches the runtime loop, so it cannot gate the
+    /// heartbeat. Anyone "fixing" a health check by calling it would ship an
+    /// agent that reports unhealthy and keeps serving traffic.
+    #[test]
+    fn test_report_health_does_not_enqueue_command() {
+        let (ptr, mut command_rx) = health_test_handle();
+
+        let status = CString::new("unhealthy").unwrap();
+        assert_eq!(unsafe { mesh_report_health(ptr, status.as_ptr()) }, 0);
+        assert!(
+            command_rx.try_recv().is_err(),
+            "mesh_report_health must not reach the runtime loop"
+        );
+
+        unsafe { mesh_free_handle(ptr) };
+    }
+
+    #[test]
+    fn test_update_health_null_handle() {
+        unsafe {
+            let status = CString::new("unhealthy").unwrap();
+            assert_eq!(mesh_update_health(ptr::null_mut(), status.as_ptr()), -1);
+            let err = mesh_last_error();
+            assert!(!err.is_null());
+            mesh_free_string(err);
+        }
+    }
+
+    #[test]
+    fn test_update_health_rejects_unknown_status() {
+        let (ptr, mut command_rx) = health_test_handle();
+
+        // Callers normalize before the ABI; junk arriving here means they
+        // stopped, and the loud failure is the point.
+        let status = CString::new("mostly fine").unwrap();
+        assert_eq!(unsafe { mesh_update_health(ptr, status.as_ptr()) }, -1);
+        assert!(command_rx.try_recv().is_err(), "no command on a rejected status");
+        unsafe {
+            let err = mesh_last_error();
+            assert!(!err.is_null());
+            mesh_free_string(err);
+        }
+
+        assert_eq!(unsafe { mesh_update_health(ptr, ptr::null()) }, -1);
+
+        unsafe { mesh_free_handle(ptr) };
     }
 
     #[test]
