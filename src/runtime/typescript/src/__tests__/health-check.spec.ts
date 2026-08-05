@@ -244,6 +244,18 @@ describe("resolveHealthCheckTtl", () => {
     expect(resolveHealthCheckTtl(0, "0")).toBe(15);
   });
 
+  // A warning has to name the TTL the agent actually runs with. Warning
+  // "using 15s" while a valid env override goes on to win prints a number
+  // that appears nowhere in the agent's behaviour.
+  it("warns with the value that WINS, not the one it fell back to", () => {
+    expect(resolveHealthCheckTtl(0, "7")).toBe(7);
+    expect(warnSpy).toHaveBeenCalledOnce();
+    const message = String(warnSpy.mock.calls[0][0]);
+    expect(message).toContain("healthCheckTtl=0");
+    expect(message).toContain("using 7s");
+    expect(message).not.toContain("using 15s");
+  });
+
   it("reads the environment via resolveHealthCheckTtlFromEnv", () => {
     const previous = process.env[HEALTH_CHECK_TTL_ENV];
     try {
@@ -387,6 +399,82 @@ describe("startHealthCheckLoop", () => {
     await loop.seeded();
     await vi.advanceTimersByTimeAsync(2_000);
     expect(publishCalls).toBe(2);
+
+    loop.stop();
+  });
+
+  // The failure a `finally`-based reschedule cannot catch: a promise that
+  // never settles never reaches the `finally` at all. `await fetch(url)`
+  // with no AbortSignal against a black-holed host is exactly this, and it
+  // would leave the agent running with a health check that never runs
+  // again — silently, since nothing more is ever logged.
+  it("abandons a check that never settles and keeps ticking", async () => {
+    const published: MeshHealthStatus[] = [];
+    let started = 0;
+    const loop = startHealthCheckLoop({
+      agentName: "provider",
+      healthCheck: () => {
+        started += 1;
+        return new Promise<boolean>(() => {
+          /* never settles, like a connect to a black hole */
+        });
+      },
+      ttlSeconds: 1,
+      publish: (status) => {
+        published.push(status);
+        return true;
+      },
+    });
+
+    // Nothing has been abandoned yet: the deadline is generous on purpose.
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(started).toBe(1);
+    expect(loop.latest()).toBeNull();
+
+    // 30s deadline (the floor, since one TTL is shorter) elapses: the run
+    // is abandoned, degraded so the agent keeps heartbeating, and the loop
+    // is rescheduled.
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(loop.latest()?.status).toBe("degraded");
+    expect(loop.latest()?.checks).toEqual({ health_check_completed: false });
+    expect(started).toBe(2);
+    expect(String(warnSpy.mock.calls[0][0])).toContain("did not finish");
+
+    // ...and the tick after that publishes, proving the loop is alive.
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(published).toEqual(["degraded"]);
+    expect(started).toBe(3);
+
+    loop.stop();
+  });
+
+  // `updateHealth` sends on a bounded command channel: a runtime that has
+  // stopped draining it makes the send wait, not fail.
+  it("abandons a publish that never settles and keeps ticking", async () => {
+    let publishCalls = 0;
+    let checkCalls = 0;
+    const loop = startHealthCheckLoop({
+      agentName: "provider",
+      healthCheck: () => {
+        checkCalls += 1;
+        return true;
+      },
+      ttlSeconds: 1,
+      publish: () => {
+        publishCalls += 1;
+        return new Promise<boolean>(() => {
+          /* never settles, like a full command channel */
+        });
+      },
+    });
+
+    await loop.seeded();
+    // 1s to the first publishing tick, then a 10s publish deadline, then
+    // 1s to the next tick: three publishes inside ~35s.
+    await vi.advanceTimersByTimeAsync(35_000);
+    expect(publishCalls).toBeGreaterThanOrEqual(3);
+    expect(checkCalls).toBeGreaterThanOrEqual(4);
+    expect(String(warnSpy.mock.calls[0][0])).toContain("did not complete");
 
     loop.stop();
   });

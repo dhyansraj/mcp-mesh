@@ -117,7 +117,7 @@ While the check reports `unhealthy` the agent stops heartbeating. The registry's
 
 Only an explicit unhealthy result does that. A check that raises is recorded as `degraded` and keeps heartbeating, in all three runtimes: a bug in the health check must not be able to remove a working agent from the mesh.
 
-`degraded` splits the two surfaces: the agent keeps heartbeating and stays in dependency resolution, but `/ready` and `/health` answer 503. Readiness is a load-balancer decision about new external traffic; the heartbeat is a statement about whether this is still a valid mesh provider.
+`degraded` splits the two surfaces on Python and Java: the agent keeps heartbeating and stays in dependency resolution, but `/ready` and `/health` answer 503. Readiness is a load-balancer decision about new external traffic; the heartbeat is a statement about whether this is still a valid mesh provider. On TypeScript only the heartbeat side is wired - the verdict drives heartbeating, while `/ready` and `/health` still report runtime state alone (see the endpoint table below).
 
 Route (`@mesh.route` / `@MeshRoute` / `mesh.route`) and A2A agents are deliberately exempt. A gateway is a fan-out point that many requests enter through - withdrawing a provider is correct, withdrawing the gateway takes the application down.
 

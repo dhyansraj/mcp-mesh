@@ -21,24 +21,17 @@ const server = new FastMCP({
 // stops heartbeating, the registry withdraws it, and consumers fail over to
 // another provider — automatically restored when the check passes again.
 {{ if or (contains .Model "anthropic") (contains .Model "openai") (contains .Model "gemini") }}
-const HEALTH_PROBE_TIMEOUT_MS = 5_000;
-
 /**
- * True when the probe was CANCELLED rather than failing.
+ * Ceiling for one probe. `AbortSignal.timeout` rejects with a
+ * "TimeoutError", which lands in the same branch as DNS, connect and TLS
+ * failures: the vendor did not answer, which is the outage the mesh has
+ * to route around.
  *
- * A cancelled probe reached no conclusion about the vendor, so it is
- * reported "degraded" and the agent keeps heartbeating. A probe that
- * TIMED OUT is a different thing — `AbortSignal.timeout` rejects with a
- * "TimeoutError", which falls through to the unhealthy branch along with
- * DNS, connect and TLS failures.
+ * If you add cancellation of your own — an `AbortController` you abort on
+ * shutdown — handle its "AbortError" separately and report "degraded":
+ * a probe you cut short concluded nothing about the vendor.
  */
-function isProbeCancelled(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    (err as { name?: unknown }).name === "AbortError"
-  );
-}
+const HEALTH_PROBE_TIMEOUT_MS = 5_000;
 
 function describeError(err: unknown): string {
   return err instanceof Error ? err.message || err.name : String(err);
@@ -99,16 +92,6 @@ async function healthCheck(): Promise<MeshHealthResult> {
     };
   } catch (err) {
     checks.anthropic_api_reachable = false;
-    if (isProbeCancelled(err)) {
-      // Degraded, deliberately: the probe was cut short, which says
-      // nothing about the vendor. Withdrawing on an indeterminate result
-      // would take the agent out of the mesh on shutdown.
-      return {
-        status: "degraded",
-        checks,
-        errors: ["Anthropic API probe was cancelled"],
-      };
-    }
     // The vendor is not answering at all (DNS, connect, timeout, TLS).
     return {
       status: "unhealthy",
@@ -169,16 +152,6 @@ async function healthCheck(): Promise<MeshHealthResult> {
     };
   } catch (err) {
     checks.openai_api_reachable = false;
-    if (isProbeCancelled(err)) {
-      // Degraded, deliberately: the probe was cut short, which says
-      // nothing about the vendor. Withdrawing on an indeterminate result
-      // would take the agent out of the mesh on shutdown.
-      return {
-        status: "degraded",
-        checks,
-        errors: ["OpenAI API probe was cancelled"],
-      };
-    }
     // The vendor is not answering at all (DNS, connect, timeout, TLS).
     return {
       status: "unhealthy",
@@ -239,16 +212,6 @@ async function healthCheck(): Promise<MeshHealthResult> {
     };
   } catch (err) {
     checks.gemini_api_reachable = false;
-    if (isProbeCancelled(err)) {
-      // Degraded, deliberately: the probe was cut short, which says
-      // nothing about the vendor. Withdrawing on an indeterminate result
-      // would take the agent out of the mesh on shutdown.
-      return {
-        status: "degraded",
-        checks,
-        errors: ["Gemini API probe was cancelled"],
-      };
-    }
     // The vendor is not answering at all (DNS, connect, timeout, TLS).
     return {
       status: "unhealthy",
@@ -287,8 +250,9 @@ async function healthCheck(): Promise<MeshHealthResult> {
  *       ? { status: "healthy", checks: { vendor_reachable: true } }
  *       : { status: "unhealthy", errors: [`vendor returned ${response.status}`] };
  *   } catch (err) {
- *     // A cancelled probe is "degraded" — it concluded nothing. Everything
- *     // else (DNS, connect, timeout, TLS) is a real outage: "unhealthy".
+ *     // DNS, connect, timeout and TLS all mean the vendor did not answer:
+ *     // a real outage, so "unhealthy". Report "degraded" only for a probe
+ *     // YOU cut short (your own AbortController) — that concluded nothing.
  *     return { status: "unhealthy", errors: [`vendor unreachable: ${err}`] };
  *   }
  */

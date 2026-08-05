@@ -4,7 +4,7 @@
  * Tests configuration resolution utilities for MCP Mesh TypeScript SDK.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { generateAgentIdSuffix, resolveConfig } from "../config.js";
 import type { AgentConfig } from "../types.js";
 
@@ -199,6 +199,24 @@ describe("Issue #969: agent description plumbing", () => {
 // resolveConfig — the loop that can withdraw this agent from resolution
 // reads them off ResolvedAgentConfig and nowhere else.
 describe("Issue #1476: health check plumbing", () => {
+  // resolveConfig reads MCP_MESH_HEALTH_CHECK_TTL from the ambient
+  // environment, so a developer who exports it would otherwise flip the
+  // default and configured-value cases below.
+  let previousTtlEnv: string | undefined;
+
+  beforeEach(() => {
+    previousTtlEnv = process.env.MCP_MESH_HEALTH_CHECK_TTL;
+    delete process.env.MCP_MESH_HEALTH_CHECK_TTL;
+  });
+
+  afterEach(() => {
+    if (previousTtlEnv === undefined) {
+      delete process.env.MCP_MESH_HEALTH_CHECK_TTL;
+    } else {
+      process.env.MCP_MESH_HEALTH_CHECK_TTL = previousTtlEnv;
+    }
+  });
+
   it("passes the health check function through untouched", () => {
     const healthCheck = async () => true;
     const resolved = resolveConfig({
@@ -226,18 +244,12 @@ describe("Issue #1476: health check plumbing", () => {
   });
 
   it("MCP_MESH_HEALTH_CHECK_TTL overrides the configured TTL", () => {
-    const previous = process.env.MCP_MESH_HEALTH_CHECK_TTL;
-    try {
-      process.env.MCP_MESH_HEALTH_CHECK_TTL = "4";
-      const resolved = resolveConfig({
-        name: "provider",
-        httpPort: 9001,
-        healthCheckTtl: 30,
-      });
-      expect(resolved.healthCheckTtl).toBe(4);
-    } finally {
-      if (previous === undefined) delete process.env.MCP_MESH_HEALTH_CHECK_TTL;
-      else process.env.MCP_MESH_HEALTH_CHECK_TTL = previous;
-    }
+    process.env.MCP_MESH_HEALTH_CHECK_TTL = "4";
+    const resolved = resolveConfig({
+      name: "provider",
+      httpPort: 9001,
+      healthCheckTtl: 30,
+    });
+    expect(resolved.healthCheckTtl).toBe(4);
   });
 });

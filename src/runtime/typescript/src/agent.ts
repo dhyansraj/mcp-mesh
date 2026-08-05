@@ -2009,7 +2009,7 @@ export class MeshAgent {
     // heartbeat, deliberately — the agent registers and becomes visible
     // first, and only the refreshes that follow can withdraw it. Returns
     // immediately; the seed run is scheduled, never awaited.
-    this.startHealthCheckLoop();
+    this.startHealthRefresh();
 
     // 4. Install signal handlers for graceful shutdown
     this.installSignalHandlers();
@@ -2024,8 +2024,11 @@ export class MeshAgent {
    * agent invisible to resolution, not dead. When the check passes again
    * heartbeats resume and the registry restores the agent through its
    * `410 Gone` re-register path.
+   *
+   * Named `startHealthRefresh` rather than `startHealthCheckLoop` so it
+   * does not shadow the imported {@link startHealthCheckLoop} it calls.
    */
-  private startHealthCheckLoop(): void {
+  private startHealthRefresh(): void {
     const healthCheck = this.config.healthCheck;
     if (!healthCheck || this.healthLoop) return;
 

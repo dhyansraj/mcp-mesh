@@ -203,14 +203,19 @@ export function resolveHealthCheckTtl(
   override?: string | null,
 ): number {
   let ttl = DEFAULT_HEALTH_CHECK_TTL_SECONDS;
+  // Collected, not logged inline: a warning names the value that is
+  // actually used, and that is not known until every source has been
+  // considered. Warning "using 15s" while a valid env override goes on to
+  // win would print a number the agent never runs with.
+  const rejected: string[] = [];
 
   if (configured !== undefined && configured !== null) {
     if (Number.isInteger(configured) && configured >= 1) {
       ttl = configured;
     } else {
-      console.warn(
-        `[mesh-health] healthCheckTtl=${describeThrown(configured)} is not a ` +
-          `whole number of seconds >= 1 — using ${ttl}s`,
+      rejected.push(
+        `healthCheckTtl=${describeThrown(configured)} is not a whole number ` +
+          `of seconds >= 1`,
       );
     }
   }
@@ -219,15 +224,19 @@ export function resolveHealthCheckTtl(
     const text = override.trim();
     const parsed = INTEGER_RE.test(text) ? Number(text) : Number.NaN;
     if (Number.isInteger(parsed) && parsed >= 1) {
-      return parsed;
+      ttl = parsed;
+    } else {
+      rejected.push(
+        Number.isInteger(parsed)
+          ? `${HEALTH_CHECK_TTL_ENV}=${override} is below the 1s minimum`
+          : `${HEALTH_CHECK_TTL_ENV}=${override} is not an integer number of ` +
+              `seconds`,
+      );
     }
-    console.warn(
-      Number.isInteger(parsed)
-        ? `[mesh-health] ${HEALTH_CHECK_TTL_ENV}=${override} is below the 1s ` +
-            `minimum — using ${ttl}s`
-        : `[mesh-health] ${HEALTH_CHECK_TTL_ENV}=${override} is not an ` +
-            `integer number of seconds — using ${ttl}s`,
-    );
+  }
+
+  for (const reason of rejected) {
+    console.warn(`[mesh-health] ${reason} — using ${ttl}s`);
   }
 
   return ttl;
@@ -236,6 +245,52 @@ export function resolveHealthCheckTtl(
 /** Read {@link HEALTH_CHECK_TTL_ENV} and resolve against it. */
 export function resolveHealthCheckTtlFromEnv(configured?: number | null): number {
   return resolveHealthCheckTtl(configured, process.env[HEALTH_CHECK_TTL_ENV]);
+}
+
+/**
+ * Floor for the deadline a single health check gets. The deadline is the
+ * larger of this and one TTL period, so a slow-but-working probe under a
+ * short TTL is not abandoned while it is still making progress.
+ */
+export const HEALTH_CHECK_TIMEOUT_FLOOR_MS = 30_000;
+
+/**
+ * Deadline for one publish to the mesh runtime.
+ *
+ * `updateHealth` sends on a bounded command channel; a runtime that has
+ * stopped draining it makes the send wait rather than fail, and without a
+ * deadline that wait would be permanent.
+ */
+export const HEALTH_PUBLISH_TIMEOUT_MS = 10_000;
+
+/** Race result marker — deliberately not a value any caller can produce. */
+const TIMED_OUT = Symbol("mesh-health-timed-out");
+
+/**
+ * Await `work`, giving up after `ms`.
+ *
+ * Abandoning is not cancelling: `work` keeps running, and if it settles
+ * later the result is dropped. `Promise.race` has already subscribed to
+ * it, so a late rejection is handled and cannot surface as an unhandled
+ * rejection.
+ */
+async function withDeadline<T>(
+  work: Promise<T>,
+  ms: number,
+): Promise<T | typeof TIMED_OUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<typeof TIMED_OUT>((resolve) => {
+        timer = setTimeout(() => resolve(TIMED_OUT), ms);
+        // A pending deadline must not hold a finished process open.
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 export interface HealthCheckLoopOptions {
@@ -291,6 +346,17 @@ export interface HealthCheckLoop {
  * be withdrawn, and nothing after the first error would appear in the
  * logs.
  *
+ * A promise that never settles would be the same silent death by another
+ * route, and it is easy to reach: `await fetch(url)` with no
+ * `AbortSignal` against a black-holed host hangs forever (Node applies no
+ * connect timeout of its own), and a publish waits on a bounded command
+ * channel the runtime may have stopped draining. Both are therefore
+ * bounded — see {@link HEALTH_CHECK_TIMEOUT_FLOOR_MS} and
+ * {@link HEALTH_PUBLISH_TIMEOUT_MS}. Passing the deadline logs and
+ * reschedules; an abandoned check reports `degraded`, because a probe
+ * that never answered concluded nothing about the upstream and must not
+ * withdraw the agent.
+ *
  * The timer is `unref`'d: a pending health refresh must not be the reason
  * a finished Node process stays alive.
  */
@@ -299,6 +365,7 @@ export function startHealthCheckLoop(
 ): HealthCheckLoop {
   const { agentName, healthCheck, ttlSeconds, publish, onVerdict } = options;
   const periodMs = ttlSeconds * 1000;
+  const checkTimeoutMs = Math.max(periodMs, HEALTH_CHECK_TIMEOUT_FLOOR_MS);
 
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -315,7 +382,30 @@ export function startHealthCheckLoop(
   };
 
   const tick = async (publishVerdict: boolean): Promise<void> => {
-    const verdict = await runHealthCheck(healthCheck, agentName);
+    const outcome = await withDeadline(
+      runHealthCheck(healthCheck, agentName),
+      checkTimeoutMs,
+    );
+
+    let verdict: HealthVerdict;
+    if (outcome === TIMED_OUT) {
+      console.warn(
+        `[mesh-health] health check for agent '${agentName}' did not finish ` +
+          `within ${Math.round(checkTimeoutMs / 1000)}s — abandoning this run ` +
+          `and reporting degraded (the agent keeps heartbeating); the next ` +
+          `refresh is scheduled as usual`,
+      );
+      verdict = {
+        status: "degraded",
+        checks: { health_check_completed: false },
+        errors: [
+          `Health check did not complete within ` +
+            `${Math.round(checkTimeoutMs / 1000)}s`,
+        ],
+      };
+    } else {
+      verdict = outcome;
+    }
     latest = verdict;
 
     if (onVerdict) {
@@ -339,7 +429,20 @@ export function startHealthCheckLoop(
     if (!publishVerdict || stopped) return;
 
     try {
-      await publish(verdict.status);
+      // The arrow turns a publish that throws synchronously into a
+      // rejection, so both failure modes land in the same catch.
+      const reported = await withDeadline(
+        (async () => publish(verdict.status))(),
+        HEALTH_PUBLISH_TIMEOUT_MS,
+      );
+      if (reported === TIMED_OUT) {
+        console.warn(
+          `[mesh-health] reporting health status '${verdict.status}' for agent ` +
+            `'${agentName}' to the mesh runtime did not complete within ` +
+            `${Math.round(HEALTH_PUBLISH_TIMEOUT_MS / 1000)}s — abandoning ` +
+            `this report; the next refresh is scheduled as usual`,
+        );
+      }
     } catch (err) {
       console.warn(
         `[mesh-health] failed to report health status '${verdict.status}' for ` +
