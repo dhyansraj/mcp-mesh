@@ -1,0 +1,20 @@
+# uc41 provider whose health check withdraws it from resolution (issue #1480)
+
+spring:
+  application:
+    name: java-hc-provider-a
+
+server:
+  port: ${MCP_MESH_HTTP_PORT:3431}
+
+mesh:
+  registry:
+    url: ${MCP_MESH_REGISTRY_URL:http://localhost:8000}
+  agent:
+    name: ${MCP_MESH_AGENT_NAME:hc-provider-a-java}
+    namespace: ${MCP_MESH_NAMESPACE:default}
+
+logging:
+  level:
+    io.mcpmesh: DEBUG
+    com.example: DEBUG

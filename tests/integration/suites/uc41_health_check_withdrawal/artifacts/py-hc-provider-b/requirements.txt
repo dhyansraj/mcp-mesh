@@ -1,0 +1,2 @@
+# py-hc-provider-b dependencies
+# mcp-mesh + fastmcp are baked into the tsuite-mesh image; nothing to install.

@@ -1,0 +1,412 @@
+# tc03 — TypeScript: health-check withdrawal, consumer failover, and recovery
+# without a restart (issue #1480; feature landed in #1476/#1481).
+#
+# FAILURE MODE THIS CATCHES
+#
+# TypeScript shipped the withdrawal mechanism with no integration coverage at
+# all. What existed was `health-check.spec.ts`, which stubs `publish`, and a
+# Rust unit test asserting a command was ENQUEUED. Neither can see the chain
+# the feature exists for, and every link in it is TypeScript-specific code
+# that Python's passing tests say nothing about:
+#
+#   healthCheck -> napi updateHealth -> Rust heartbeat suppression
+#   -> registry staleness sweep -> resolution excludes A
+#   -> consumer re-resolves to B
+#   -> (flag cleared) heartbeat resumes -> HEAD 410 Gone -> POST re-register
+#   -> resolution includes A again -> consumer re-resolves back to A
+#
+# The napi binding was written for this release; a stubbed publish would keep
+# passing if it were wired to nothing.
+#
+# It also fails if withdrawal is implemented as anything OTHER than going
+# quiet: `/livez` is polled every second across the whole outage and any gap
+# fails the run. Withdrawn-not-dead is the entire point — a "fix" that exits
+# the process or tears down the server would satisfy the failover assertions
+# and be caught here and by the pid.
+#
+# WHY THE VERDICT IS READ FROM THE LOG AND NOT FROM /health
+#
+# Unlike Python and Java, TypeScript's `/health` and `/ready` are FastMCP's
+# built-ins and do NOT reflect the user health check's verdict — that is
+# #1478, known and deliberately out of scope for #1481. So the TS tests read
+# the verdict from the runtime's own `[mesh-health]` log line instead. If
+# #1478 lands, this is the assertion to move onto /health.
+#
+# The rest of the design (file-toggled flag, poll-for-the-condition rather
+# than fixed waits, provider B as the control) is documented in tc01.
+
+name: "TypeScript: health-check withdrawal, failover and recovery"
+description: "A failing TypeScript health check withdraws the provider, the consumer fails over, and clearing the fault restores it in the same process (issue #1480)"
+tags:
+  - health-check
+  - withdrawal
+  - failover
+  - recovery
+  - lifecycle
+  - typescript
+  - integration
+timeout: 420
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/ts-hc-provider-a /workspace/
+      cp -rL /uc-artifacts/ts-hc-provider-b /workspace/
+      cp -rL /uc-artifacts/ts-hc-consumer /workspace/
+      echo ok > /workspace/health-flag
+      : > /workspace/hc-invocations.log
+      echo "seeded health-flag=$(cat /workspace/health-flag)"
+
+  - name: "Install provider A deps"
+    handler: npm-install
+    path: /workspace/ts-hc-provider-a
+
+  - name: "Install provider B deps"
+    handler: npm-install
+    path: /workspace/ts-hc-provider-b
+
+  - name: "Install consumer deps"
+    handler: npm-install
+    path: /workspace/ts-hc-consumer
+
+  - routine: start_registry_fast_sweep
+
+  # MCP_MESH_HEALTH_INTERVAL=2 on every agent: the registry's staleness
+  # threshold is 5s, so a 5s default heartbeat would leave a HEALTHY agent one
+  # scheduling hiccup away from being swept.
+  - name: "Start provider A (port 3421, health-check driven)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start ts-hc-provider-a/src/index.ts --env MCP_MESH_HTTP_PORT=3421 --env MCP_MESH_HEALTH_INTERVAL=2 -d
+    capture: start_provider_a
+
+  # ORDERING GATE — provider A must be registered and healthy BEFORE provider
+  # B is started, and both before the consumer.
+  #
+  # The resolver's last tiebreak is agent ID ASC, so hc-provider-a-* beats
+  # hc-provider-b-* — but only among candidates that EXIST when the consumer
+  # first resolves. Nothing later makes it move: the rewire is diff-gated, so
+  # a consumer that settled on B because A had not registered yet stays on B
+  # for the rest of the run, and the test loses the property it is built on
+  # ("an answer naming B means a re-resolution happened"). Observed flaking
+  # exactly this way under parallel load; a fixed sleep here would only make
+  # the flake rarer, so the gate polls the registry for the real condition.
+  - name: "Gate: provider A must be healthy before provider B starts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 120); do
+        S=$(curl -s --max-time 3 http://localhost:8000/agents | jq -r '.agents[]? | select(.name=="hc-provider-a-ts") | .status')
+        echo "t=${i}s hc-provider-a-ts=$S"
+        if [ "$S" = "healthy" ]; then echo "GATE_A: OK after ~${i}s"; exit 0; fi
+        sleep 1
+      done
+      echo "GATE_A: TIMEOUT"
+      exit 1
+    capture: gate_a
+    timeout: 150
+
+  - name: "Start provider B (port 3422, survivor)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start ts-hc-provider-b/src/index.ts --env MCP_MESH_HTTP_PORT=3422 --env MCP_MESH_HEALTH_INTERVAL=2 -d
+    capture: start_provider_b
+
+  - name: "Gate: provider B must be healthy before the consumer starts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 120); do
+        S=$(curl -s --max-time 3 http://localhost:8000/agents | jq -r '.agents[]? | select(.name=="hc-provider-b-ts") | .status')
+        echo "t=${i}s hc-provider-b-ts=$S"
+        if [ "$S" = "healthy" ]; then echo "GATE_B: OK after ~${i}s"; exit 0; fi
+        sleep 1
+      done
+      echo "GATE_B: TIMEOUT"
+      exit 1
+    capture: gate_b
+    timeout: 150
+
+  - name: "Start consumer (port 3423, started once and never restarted)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start ts-hc-consumer/src/index.ts --env MCP_MESH_HTTP_PORT=3423 --env MCP_MESH_HEALTH_INTERVAL=2 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+    capture: start_consumer
+
+  - name: "Wait for all three agents to be healthy in the registry"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 120); do
+        BODY=$(curl -s --max-time 3 http://localhost:8000/agents || echo '{}')
+        A=$(echo "$BODY" | jq -r '.agents[]? | select(.name=="hc-provider-a-ts") | .status')
+        B=$(echo "$BODY" | jq -r '.agents[]? | select(.name=="hc-provider-b-ts") | .status')
+        C=$(echo "$BODY" | jq -r '.agents[]? | select(.name=="hc-consumer-ts") | .status')
+        echo "t=${i}s A=$A B=$B C=$C"
+        if [ "$A" = "healthy" ] && [ "$B" = "healthy" ] && [ "$C" = "healthy" ]; then
+          echo "FLEET: OK after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "FLEET: TIMEOUT"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: fleet_ready
+    timeout: 150
+
+  # ===== Phase A: baseline — the consumer starts on provider A =====
+  - name: "Phase A: poll until the consumer answers, and record which provider"
+    handler: shell
+    workdir: /workspace
+    command: |
+      # ELAPSED-TIME DEADLINE, NOT AN ITERATION COUNT. Each iteration costs a
+      # `meshctl call` plus a 1s sleep, so a fixed 60 iterations can run well
+      # past the 90s step timeout — and a step killed by the harness never
+      # prints `BASELINE: TIMEOUT`, losing the diagnostic exactly when the poll
+      # failed. The 70s budget leaves ~20s of headroom for an in-flight call
+      # and the verdict line. Same shape in the failover and failback loops.
+      DEADLINE=$(( $(date +%s) + 70 ))
+      START=$(date +%s)
+      while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+        R=$(meshctl call hc-consumer-ts:who_served '{}' 2>&1 || true)
+        T=$(( $(date +%s) - START ))
+        echo "t=${T}s -> $R"
+        case "$R" in
+          *hc-provider-a-ts*)
+            # Escape-tolerant on purpose: meshctl renders the Java/Python answer
+            # with an unescaped `structuredContent` block ("pid": 643) but the
+            # TypeScript answer only as the escaped text payload (\"pid\":278).
+            # A pattern anchored on the literal `"pid":` silently extracts
+            # NOTHING for TS, and an empty baseline would make the same-pid
+            # check below vacuously compare "" with "" — which is exactly what
+            # the BASELINE_PID assertion guards against.
+            printf '%s' "$R" | grep -o 'pid[^0-9]*[0-9][0-9]*' | grep -o '[0-9][0-9]*' | head -1 > /workspace/pid-a-baseline
+            echo "BASELINE: OK after ~${T}s served_by=hc-provider-a-ts pid=$(cat /workspace/pid-a-baseline)"
+            exit 0
+            ;;
+          *hc-provider-b-ts*)
+            echo "BASELINE: WRONG_PROVIDER (resolved to B before any fault)"
+            exit 0
+            ;;
+        esac
+        sleep 1
+      done
+      echo "BASELINE: TIMEOUT"
+    capture: baseline
+    timeout: 90
+
+  # ===== Phase B: inject the fault =====
+  - name: "Phase B: flip the health flag to fail"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo fail > /workspace/health-flag
+      echo "health-flag=$(cat /workspace/health-flag) at $(date -u +%H:%M:%S)"
+    capture: fault_injected
+
+  - name: "Phase B: poll until the registry withdraws A, sampling /livez every second"
+    handler: shell
+    workdir: /workspace
+    command: |
+      LIVEZ_FAIL=0
+      for i in $(seq 1 60); do
+        curl -sf --max-time 2 http://localhost:3421/livez > /dev/null 2>&1 || LIVEZ_FAIL=$((LIVEZ_FAIL + 1))
+        BODY=$(curl -s --max-time 3 http://localhost:8000/agents || echo '{}')
+        A=$(echo "$BODY" | jq -r '.agents[]? | select(.name=="hc-provider-a-ts") | .status')
+        B=$(echo "$BODY" | jq -r '.agents[]? | select(.name=="hc-provider-b-ts") | .status')
+        echo "t=${i}s A=$A B=$B livez_failures=$LIVEZ_FAIL"
+        if [ "$A" = "unhealthy" ] && [ "$B" = "healthy" ]; then
+          curl -sf --max-time 2 http://localhost:3421/livez > /dev/null 2>&1 || LIVEZ_FAIL=$((LIVEZ_FAIL + 1))
+          echo "WITHDRAWAL: OK after ~${i}s"
+          echo "LIVEZ_FAILURES: $LIVEZ_FAIL"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "WITHDRAWAL: TIMEOUT"
+      echo "LIVEZ_FAILURES: $LIVEZ_FAIL"
+    capture: withdrawal
+    timeout: 120
+
+  # The verdict, read from the runtime's own log rather than /health — see the
+  # #1478 note in the header.
+  #
+  # Every log is grepped rather than `meshctl logs <agent>`, because meshctl
+  # names the log file from its own static analysis of the entrypoint and for
+  # this TS agent that comes out as `probe_a.log` (the first tool's name), not
+  # the registered agent name. Grepping all of them is name-proof AND still
+  # specific: provider A is the only agent here with a health check, so a
+  # `[mesh-health]` line can only be its output.
+  - name: "Phase B: the runtime must have logged the UNHEALTHY verdict"
+    handler: shell
+    workdir: /workspace
+    command: |
+      LOG=$(cat ~/.mcp-mesh/logs/*.log 2>/dev/null || true)
+      N=$(printf '%s' "$LOG" | grep -c "reports UNHEALTHY" || true)
+      echo "UNHEALTHY_LOG_LINES: $N"
+      printf '%s' "$LOG" | grep 'mesh-health' | tail -10 || echo 'NO_MESH_HEALTH_LINES'
+    capture: verdict_log
+    ignore_errors: true
+
+  - name: "Phase B: poll until the consumer fails over to provider B"
+    handler: shell
+    workdir: /workspace
+    command: |
+      # Elapsed-time deadline — see the note on the Phase A baseline poll.
+      DEADLINE=$(( $(date +%s) + 70 ))
+      START=$(date +%s)
+      while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+        R=$(meshctl call hc-consumer-ts:who_served '{}' 2>&1 || true)
+        T=$(( $(date +%s) - START ))
+        echo "t=${T}s -> $R"
+        case "$R" in
+          *hc-provider-b-ts*) echo "FAILOVER: OK after ~${T}s"; exit 0 ;;
+        esac
+        sleep 1
+      done
+      echo "FAILOVER: TIMEOUT"
+    capture: failover
+    timeout: 90
+
+  - name: "Phase B: the health check must actually have seen the fault"
+    handler: shell
+    workdir: /workspace
+    command: |
+      # `grep -c` prints 0 AND exits 1 when the file exists with no matches, so
+      # a `|| echo 0` fallback would append a SECOND 0 and emit "FAIL_TICKS: 0 0".
+      # `|| true` adds no output; the ${:-0} default covers the missing-file case,
+      # where grep prints nothing at all.
+      FAIL_TICKS=$(grep -c 'flag=fail' /workspace/hc-invocations.log 2>/dev/null || true)
+      echo "FAIL_TICKS: ${FAIL_TICKS:-0}"
+      tail -12 /workspace/hc-invocations.log 2>/dev/null || echo 'NO_TRACE'
+    capture: fault_trace
+
+  # ===== Phase C: clear the fault =====
+  - name: "Phase C: flip the health flag back to ok"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo ok > /workspace/health-flag
+      echo "health-flag=$(cat /workspace/health-flag) at $(date -u +%H:%M:%S)"
+    capture: fault_cleared
+
+  # Per #955 a HEAD heartbeat from an agent whose row is `unhealthy` is
+  # answered 410 Gone precisely so a bare ping cannot revive it. The only
+  # route back to healthy is a full POST re-register, so this poll turning
+  # green IS the 410 path.
+  - name: "Phase C: poll until the registry restores A (410 Gone -> POST re-register)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        BODY=$(curl -s --max-time 3 http://localhost:8000/agents || echo '{}')
+        A=$(echo "$BODY" | jq -r '.agents[]? | select(.name=="hc-provider-a-ts") | .status')
+        B=$(echo "$BODY" | jq -r '.agents[]? | select(.name=="hc-provider-b-ts") | .status')
+        echo "t=${i}s A=$A B=$B"
+        if [ "$A" = "healthy" ]; then echo "RECOVERY_REGISTRY: OK after ~${i}s"; exit 0; fi
+        sleep 1
+      done
+      echo "RECOVERY_REGISTRY: TIMEOUT"
+    capture: recovery_registry
+    timeout: 90
+
+  - name: "Phase C: poll until the consumer is routed back to A, and compare pids"
+    handler: shell
+    workdir: /workspace
+    command: |
+      BASE=$(cat /workspace/pid-a-baseline 2>/dev/null || echo '')
+      echo "BASELINE_PID: ${BASE:-NONE}"
+      # Elapsed-time deadline — see the note on the Phase A baseline poll. The
+      # TIMEOUT branch here also has to print PID_VERDICT: UNKNOWN, so being
+      # killed by the step timeout would leave the pid verdict entirely absent.
+      DEADLINE=$(( $(date +%s) + 70 ))
+      START=$(date +%s)
+      while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+        R=$(meshctl call hc-consumer-ts:who_served '{}' 2>&1 || true)
+        T=$(( $(date +%s) - START ))
+        echo "t=${T}s -> $R"
+        case "$R" in
+          *hc-provider-a-ts*)
+            NOW=$(printf '%s' "$R" | grep -o 'pid[^0-9]*[0-9][0-9]*' | grep -o '[0-9][0-9]*' | head -1)
+            echo "FAILBACK: OK after ~${T}s"
+            echo "RECOVERED_PID: ${NOW:-NONE}"
+            if [ -n "$BASE" ] && [ "$BASE" = "$NOW" ]; then
+              echo "PID_VERDICT: SAME ($BASE)"
+            else
+              echo "PID_VERDICT: CHANGED (baseline=${BASE:-NONE} recovered=${NOW:-NONE})"
+            fi
+            exit 0
+            ;;
+        esac
+        sleep 1
+      done
+      echo "FAILBACK: TIMEOUT"
+      echo "PID_VERDICT: UNKNOWN"
+    capture: failback
+    timeout: 90
+
+  - name: "Diagnostic: provider A log"
+    handler: shell
+    workdir: /workspace
+    command: |
+      # Not `meshctl logs <agent>`: meshctl names the log file from its own
+      # static analysis of the entrypoint, which does not always match the
+      # registered agent name (py-hc-provider-a.log, probe_a.log ...).
+      tail -n 60 ~/.mcp-mesh/logs/*.log 2>/dev/null || echo 'NO_LOGS'
+    capture: provider_a_logs
+    ignore_errors: true
+
+  - name: "Diagnostic: registry view of all agents"
+    handler: shell
+    workdir: /workspace
+    command: curl -s --max-time 5 http://localhost:8000/agents | jq -c '.agents[]? | {name, status, endpoint}' || echo 'NO_AGENTS'
+    capture: agents_final
+    ignore_errors: true
+
+assertions:
+  - expr: "${captured.fleet_ready} contains 'FLEET: OK'"
+    message: "SETUP: both providers and the consumer must be healthy in the registry before the fault is injected"
+
+  - expr: "${captured.baseline} contains 'BASELINE: OK'"
+    message: "BASELINE: the consumer must resolve hc_probe_ts and answer before any fault is injected"
+  - expr: "${captured.baseline} contains 'served_by=hc-provider-a-ts'"
+    message: "BASELINE: the consumer must start on provider A (agent-ID tiebreak) — otherwise the later flip to B proves nothing"
+  - expr: "${captured.baseline} not contains 'BASELINE: WRONG_PROVIDER'"
+    message: "BASELINE: resolving to provider B before any fault means the tiebreak assumption no longer holds and this test cannot discriminate"
+
+  # THE assertion. Fails if the verdict never crosses the napi boundary, if the
+  # core keeps heartbeating while Unhealthy, or if the registry never sweeps.
+  - expr: "${captured.withdrawal} contains 'WITHDRAWAL: OK'"
+    message: "WITHDRAWAL: a healthCheck reporting unhealthy must stop the heartbeat so the registry marks provider A unhealthy"
+  - expr: "${captured.withdrawal} contains 'LIVEZ_FAILURES: 0'"
+    message: "WITHDRAWAL: provider A's process must stay alive and serving /livez for the ENTIRE outage — withdrawn is not dead"
+
+  - expr: "${captured.verdict_log} not contains 'UNHEALTHY_LOG_LINES: 0'"
+    message: "WITHDRAWAL: the runtime must log the UNHEALTHY verdict, proving the withdrawal came from the user's healthCheck (TS /health cannot be used — see #1478)"
+
+  - expr: "${captured.fault_trace} not contains 'FAIL_TICKS: 0'"
+    message: "WITHDRAWAL: the health check must have been invoked at least once while the flag said fail"
+
+  - expr: "${captured.failover} contains 'FAILOVER: OK'"
+    message: "FAILOVER: with provider A withdrawn, the never-restarted consumer must re-resolve hc_probe_ts to provider B"
+
+  - expr: "${captured.recovery_registry} contains 'RECOVERY_REGISTRY: OK'"
+    message: "RECOVERY: clearing the fault must resume the heartbeat and restore provider A to healthy via the 410 Gone re-register path (#955)"
+  - expr: "${captured.failback} contains 'FAILBACK: OK'"
+    message: "RECOVERY: the consumer must be routed back to the restored provider A"
+  - expr: "${captured.failback} contains 'PID_VERDICT: SAME'"
+    message: "RECOVERY: provider A must recover in the SAME process — a changed pid means it was restarted, not restored"
+  - expr: "${captured.failback} not contains 'BASELINE_PID: NONE'"
+    message: "RECOVERY: the baseline pid must have been captured, otherwise the same-pid check is vacuous"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace
