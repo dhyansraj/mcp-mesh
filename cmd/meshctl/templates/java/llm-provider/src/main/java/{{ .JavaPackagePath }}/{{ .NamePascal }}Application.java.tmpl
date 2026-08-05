@@ -9,7 +9,13 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 {{- $model := default "anthropic/claude-sonnet-5" .Model }}
-{{- if or (contains $model "anthropic") (contains $model "openai") (contains $model "gemini") }}
+{{- /* Which vendor API this model can actually be probed against, if any.
+     Resolved from $model rather than read off .ProbeVendor because $model
+     carries the default above. A substring test would send
+     bedrock/anthropic.* and vertex_ai/gemini-* into a probe of credentials
+     those deployments never have (issue #1479). */}}
+{{- $probeVendor := probeVendor $model }}
+{{- if $probeVendor }}
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -34,7 +40,7 @@ import java.time.Duration;
 @MeshLlmProvider(
     model = "{{ $model }}",
     capability = "llm",
-    tags = {{ "{" }}{{ if .Tags }}{{ range $i, $t := .Tags }}{{ if $i }}, {{ end }}"{{ $t }}"{{ end }}{{ else if contains $model "anthropic" }}"llm", "claude", "anthropic", "provider"{{ else if contains $model "openai" }}"llm", "openai", "gpt", "provider"{{ else if contains $model "gemini" }}"llm", "gemini", "google", "provider"{{ else }}"llm", "provider"{{ end }}{{ "}" }},
+    tags = {{ "{" }}{{ if .Tags }}{{ range $i, $t := .Tags }}{{ if $i }}, {{ end }}"{{ $t }}"{{ end }}{{ else if eq $probeVendor "anthropic" }}"llm", "claude", "anthropic", "provider"{{ else if eq $probeVendor "openai" }}"llm", "openai", "gpt", "provider"{{ else if eq $probeVendor "gemini" }}"llm", "gemini", "google", "provider"{{ else }}"llm", "provider"{{ end }}{{ "}" }},
     version = "1.0.0"
 )
 @SpringBootApplication
@@ -56,7 +62,7 @@ public class {{ .NamePascal }}Application {
     // Runs every ttlSeconds. While it returns unhealthy the agent stops
     // heartbeating, the registry withdraws it, and consumers fail over to
     // another provider — automatically restored when the check passes again.
-{{ if contains $model "anthropic" }}
+{{ if eq $probeVendor "anthropic" }}
     private static final HttpClient HTTP = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(5))
         .build();
@@ -125,7 +131,7 @@ public class {{ .NamePascal }}Application {
                 .withError("Anthropic API unreachable: " + e);
         }
     }
-{{ else if contains $model "openai" }}
+{{ else if eq $probeVendor "openai" }}
     private static final HttpClient HTTP = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(5))
         .build();
@@ -191,7 +197,7 @@ public class {{ .NamePascal }}Application {
                 .withError("OpenAI API unreachable: " + e);
         }
     }
-{{ else if contains $model "gemini" }}
+{{ else if eq $probeVendor "gemini" }}
     private static final HttpClient HTTP = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(5))
         .build();
@@ -273,6 +279,16 @@ public class {{ .NamePascal }}Application {
      * call to your provider — a models/list endpoint or equivalent, NOT a
      * completion — and return MeshHealth.unhealthy(...) when it fails. That is
      * what makes the mesh withdraw this agent and fail consumers over.
+     *
+     * Probe the gateway you actually authenticate against. For a
+     * gateway-prefixed model (bedrock/..., vertex_ai/..., databricks/..., an
+     * OpenAI-compatible proxy) that is the gateway's own endpoint and the
+     * gateway's own credentials — AWS SigV4, ADC / Workload Identity, your
+     * proxy's token. It is NOT the underlying model vendor's public API: that
+     * endpoint can be perfectly healthy while your gateway is down, and the
+     * vendor API key it wants is one your deployment never sets, so a check
+     * gated on it would report unhealthy forever and withdraw this agent
+     * permanently.
      */
     @MeshHealthCheck(ttlSeconds = 30)
     public MeshHealth healthCheck() {

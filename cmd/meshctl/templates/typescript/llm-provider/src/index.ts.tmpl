@@ -20,7 +20,7 @@ const server = new FastMCP({
 // Runs every healthCheckTtl seconds. While it returns "unhealthy" the agent
 // stops heartbeating, the registry withdraws it, and consumers fail over to
 // another provider — automatically restored when the check passes again.
-{{ if or (contains .Model "anthropic") (contains .Model "openai") (contains .Model "gemini") }}
+{{ if .ProbeVendor }}
 /**
  * Ceiling for one probe. `AbortSignal.timeout` rejects with a
  * "TimeoutError", which lands in the same branch as DNS, connect and TLS
@@ -37,7 +37,7 @@ function describeError(err: unknown): string {
   return err instanceof Error ? err.message || err.name : String(err);
 }
 {{ end }}
-{{- if contains .Model "anthropic" }}
+{{- if eq .ProbeVendor "anthropic" }}
 /**
  * Health check for {{ .Name }}.
  *
@@ -100,7 +100,7 @@ async function healthCheck(): Promise<MeshHealthResult> {
     };
   }
 }
-{{- else if contains .Model "openai" }}
+{{- else if eq .ProbeVendor "openai" }}
 /**
  * Health check for {{ .Name }}.
  *
@@ -160,7 +160,7 @@ async function healthCheck(): Promise<MeshHealthResult> {
     };
   }
 }
-{{- else if contains .Model "gemini" }}
+{{- else if eq .ProbeVendor "gemini" }}
 /**
  * Health check for {{ .Name }}.
  *
@@ -255,6 +255,15 @@ async function healthCheck(): Promise<MeshHealthResult> {
  *     // YOU cut short (your own AbortController) — that concluded nothing.
  *     return { status: "unhealthy", errors: [`vendor unreachable: ${err}`] };
  *   }
+ *
+ * Probe the gateway you actually authenticate against. For a gateway-prefixed
+ * model (bedrock/..., vertex_ai/..., databricks/..., an OpenAI-compatible
+ * proxy) that is the gateway's own endpoint and the gateway's own credentials
+ * - AWS SigV4, ADC / Workload Identity, your proxy's token. It is NOT the
+ * underlying model vendor's public API: that endpoint can be perfectly healthy
+ * while your gateway is down, and the vendor API key it wants is one your
+ * deployment never sets, so a check gated on it would report unhealthy forever
+ * and withdraw this agent permanently.
  */
 async function healthCheck(): Promise<MeshHealthResult> {
   return { status: "healthy", checks: { provider_configured: true }, errors: [] };
@@ -298,7 +307,7 @@ const agent = mesh(server, {
 agent.addLlmProvider({
   model: "{{ .Model }}",
   capability: "llm",
-  tags: {{ if .Tags }}{{ toJSON .Tags }}{{ else if contains .Model "anthropic" }}["llm", "claude", "anthropic", "provider"]{{ else if contains .Model "openai" }}["llm", "openai", "gpt", "provider"]{{ else if contains .Model "gemini" }}["llm", "gemini", "google", "provider"]{{ else }}["llm", "provider"]{{ end }},
+  tags: {{ if .Tags }}{{ toJSON .Tags }}{{ else if eq .ProbeVendor "anthropic" }}["llm", "claude", "anthropic", "provider"]{{ else if eq .ProbeVendor "openai" }}["llm", "openai", "gpt", "provider"]{{ else if eq .ProbeVendor "gemini" }}["llm", "gemini", "google", "provider"]{{ else }}["llm", "provider"]{{ end }},
   version: "1.0.0",
   description: "{{ if .Description }}{{ .Description }}{{ else }}LLM provider via {{ .Model }}{{ end }}",
   maxOutputTokens: 4096,

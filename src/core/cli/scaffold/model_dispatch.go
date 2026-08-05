@@ -103,3 +103,52 @@ func IsNativeDispatchModel(model string) bool {
 func RequiresLiteLLM(model string) bool {
 	return !IsNativeDispatchModel(model)
 }
+
+// directProbeVendorPrefixes are the `vendor/` prefixes a scaffolded health
+// check can probe by calling the vendor's own public API with the vendor's own
+// API key.
+//
+// This is deliberately NOT nativeVendorPrefixes, and the difference is the
+// whole point of issue #1479: "which native adapter dispatches this model" and
+// "which direct API can a health check probe for it" are different questions.
+//
+// `vertex_ai` is native dispatch — it routes through the bundled google-genai
+// SDK exactly like `gemini/*` — but it authenticates with ADC / Workload
+// Identity against a Google Cloud project endpoint, not with an AI Studio
+// GOOGLE_API_KEY against generativelanguage.googleapis.com. Probing the AI
+// Studio endpoint for a Vertex deployment tests an API the agent does not use,
+// with a key it does not have, so it is omitted here and falls through to the
+// generic skeleton.
+var directProbeVendorPrefixes = map[string]string{
+	"anthropic": "anthropic",
+	"openai":    "openai",
+	"gemini":    "gemini",
+}
+
+// DirectProbeVendor resolves model to the vendor whose direct public API a
+// scaffolded health check may probe: "anthropic", "openai", "gemini", or "" if
+// no direct probe is valid.
+//
+// "" means the scaffolder must emit the generic skeleton rather than guess.
+// That covers gateway-prefixed models (`bedrock/*`, `vertex_ai/*`,
+// `databricks/*`, ...), which reach the model through a gateway that
+// authenticates with its own credentials, every other long-tail vendor, any
+// unrecognized bare name, and the empty model.
+//
+// The matching is prefix-based and case-insensitive, NOT a substring test.
+// `bedrock/anthropic.claude-3-5-sonnet-...` contains "anthropic" but is served
+// by AWS: api.anthropic.com being reachable says nothing about that agent's
+// health, and ANTHROPIC_API_KEY is never set for it. A health check gated on
+// that key returns unhealthy on the first tick, which suppresses the heartbeat
+// and makes the registry withdraw a provider that is working fine — and since
+// the key never appears, it never comes back (issue #1479).
+func DirectProbeVendor(model string) string {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if m == "" {
+		return ""
+	}
+	if idx := strings.Index(m, "/"); idx >= 0 {
+		return directProbeVendorPrefixes[m[:idx]]
+	}
+	return inferBig3VendorFromBareName(m)
+}

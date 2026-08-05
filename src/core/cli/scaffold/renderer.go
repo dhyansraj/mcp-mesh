@@ -42,6 +42,11 @@ func NewTemplateRenderer() *TemplateRenderer {
 			"join":             strings.Join,
 			"split":            strings.Split,
 			"toJSON":           toJSON,
+			// Same resolver as the .ProbeVendor data field, exposed as a
+			// function for templates that compute their own model string
+			// (the Java llm-provider defaults $model when .Model is empty and
+			// must gate on that value, not on the raw context).
+			"probeVendor": DirectProbeVendor,
 		},
 	}
 }
@@ -282,6 +287,17 @@ func TemplateDataFromContext(ctx *ScaffoldContext) map[string]interface{} {
 		// rather than a bundled native SDK adapter, i.e. when the generated
 		// requirements.txt must pin mcp-mesh[litellm] (issue #1383).
 		"RequiresLiteLLM": RequiresLiteLLM(ctx.Model),
+
+		// "anthropic" / "openai" / "gemini" when a scaffolded health check may
+		// probe that vendor's own API for this model, "" when it may not and
+		// the generic skeleton must be emitted instead (issue #1479).
+		//
+		// Templates MUST gate the health probe (and the vendor-specific tags,
+		// env vars and README text that go with it) on this, never on
+		// `contains .Model "<vendor>"` — a substring test routes
+		// bedrock/anthropic.* and vertex_ai/gemini-* into a probe of
+		// credentials those deployments do not have.
+		"ProbeVendor": DirectProbeVendor(ctx.Model),
 
 		// Tool fields
 		"ToolName":        ctx.ToolName,

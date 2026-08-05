@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Issue #1383: the generated requirements.txt pins mcp-mesh[litellm] only for
@@ -87,6 +88,103 @@ func TestInferBig3VendorFromBareName(t *testing.T) {
 	assert.Equal(t, "", inferBig3VendorFromBareName(""))
 }
 
+// Issue #1479: the llm-provider templates pick a health-check probe from the
+// model string. Picking the wrong one is not cosmetic — the probe reports
+// unhealthy on the first tick, the heartbeat stops, the registry withdraws the
+// agent, and because the credential it asks for is one that deployment never
+// sets, the verdict never flips back. A working provider disappears for good.
+//
+// So this is deliberately NOT IsNativeDispatchModel. `vertex_ai/*` IS native
+// dispatch (bundled google-genai SDK) but authenticates with ADC / Workload
+// Identity, so the AI Studio probe is wrong for it.
+func TestDirectProbeVendor(t *testing.T) {
+	tests := []struct {
+		name     string
+		model    string
+		expected string
+	}{
+		// --- big-3, explicit vendor/ prefix ------------------------------
+		{"anthropic prefixed", "anthropic/claude-sonnet-5", "anthropic"},
+		{"openai prefixed", "openai/gpt-4o", "openai"},
+		{"gemini prefixed", "gemini/gemini-2.5-flash", "gemini"},
+
+		// --- big-3, bare names -------------------------------------------
+		{"bare claude", "claude-sonnet-5", "anthropic"},
+		{"bare gpt", "gpt-4o", "openai"},
+		{"bare chatgpt", "chatgpt-4o-latest", "openai"},
+		{"bare o1", "o1", "openai"},
+		{"bare o3-mini", "o3-mini", "openai"},
+		{"bare o4-mini", "o4-mini", "openai"},
+		{"bare gemini", "gemini-3-pro-preview", "gemini"},
+		{"o3-lookalike", "o3xyz", ""},
+		{"bare llama", "llama-3-70b", ""},
+
+		// --- native dispatch, but NOT directly probeable ------------------
+		// vertex_ai routes through the same google-genai SDK as gemini/*,
+		// so IsNativeDispatchModel says true — but it authenticates with
+		// ADC / Workload Identity against a Google Cloud project endpoint.
+		// Probing AI Studio with a GOOGLE_API_KEY tests an API this agent
+		// never calls, with a key it does not have.
+		{"vertex_ai prefixed", "vertex_ai/gemini-2.5-flash", ""},
+
+		// --- gateways whose model id embeds a big-3 vendor name -----------
+		// The exact strings that made the old substring gate misfire.
+		{"bedrock claude", "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0", ""},
+		{"databricks claude", "databricks/anthropic.claude-3-7-sonnet", ""},
+		{"azure openai", "azure/gpt-4o", ""},
+		{"openrouter openai", "openrouter/openai/gpt-4o", ""},
+
+		// --- long-tail vendors -------------------------------------------
+		{"cohere", "cohere/command-r-plus", ""},
+		{"ollama", "ollama/llama3", ""},
+		{"unknown vendor", "acme-llm/frobnicator-9", ""},
+
+		// --- empty / unset ------------------------------------------------
+		// Nothing is known about the model; emit the skeleton, never a probe
+		// chosen on a guess.
+		{"empty", "", ""},
+		{"whitespace only", "   ", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, DirectProbeVendor(tt.model),
+				"DirectProbeVendor(%q)", tt.model)
+		})
+	}
+}
+
+// --model is free-form, so casing is the user's, not ours.
+func TestDirectProbeVendorIsCaseInsensitive(t *testing.T) {
+	assert.Equal(t, "anthropic", DirectProbeVendor("Anthropic/Claude-Sonnet-5"))
+	assert.Equal(t, "openai", DirectProbeVendor("OpenAI/GPT-4o"))
+	assert.Equal(t, "gemini", DirectProbeVendor("GEMINI/gemini-2.5-flash"))
+	assert.Equal(t, "anthropic", DirectProbeVendor("Claude-Opus-4-8"))
+	assert.Equal(t, "", DirectProbeVendor("VERTEX_AI/gemini-2.5-flash"))
+	assert.Equal(t, "", DirectProbeVendor("Bedrock/Anthropic.Claude-3"))
+}
+
+func TestDirectProbeVendorTrimsWhitespace(t *testing.T) {
+	assert.Equal(t, "anthropic", DirectProbeVendor("  anthropic/claude-sonnet-5  "))
+	assert.Equal(t, "openai", DirectProbeVendor("\tgpt-4o\n"))
+	assert.Equal(t, "", DirectProbeVendor("  bedrock/anthropic.claude-3  "))
+}
+
+// A probeable model is always native dispatch; the converse does not hold, and
+// vertex_ai is the whole reason the two questions need separate answers.
+func TestDirectProbeVendorIsNarrowerThanNativeDispatch(t *testing.T) {
+	for _, model := range []string{
+		"anthropic/claude-sonnet-5", "openai/gpt-4o", "gemini/gemini-2.5-flash",
+		"claude-sonnet-5", "gpt-4o", "gemini-2.5-flash",
+	} {
+		assert.NotEmpty(t, DirectProbeVendor(model), "probeable: %q", model)
+		assert.True(t, IsNativeDispatchModel(model), "native: %q", model)
+	}
+
+	assert.True(t, IsNativeDispatchModel("vertex_ai/gemini-2.5-flash"))
+	assert.Empty(t, DirectProbeVendor("vertex_ai/gemini-2.5-flash"))
+}
+
 // The template data map is what the requirements.txt template branches on.
 func TestTemplateDataCarriesRequiresLiteLLM(t *testing.T) {
 	native := TemplateDataFromContext(&ScaffoldContext{
@@ -103,4 +201,46 @@ func TestTemplateDataCarriesRequiresLiteLLM(t *testing.T) {
 
 	none := TemplateDataFromContext(&ScaffoldContext{Name: "basic-agent"})
 	assert.Equal(t, false, none["RequiresLiteLLM"])
+}
+
+// The llm-provider templates gate the health-check probe on this key, so it
+// has to reach them (issue #1479).
+func TestTemplateDataCarriesProbeVendor(t *testing.T) {
+	probeable := TemplateDataFromContext(&ScaffoldContext{
+		Name:  "claude-provider",
+		Model: "anthropic/claude-sonnet-5",
+	})
+	assert.Equal(t, "anthropic", probeable["ProbeVendor"])
+
+	gateway := TemplateDataFromContext(&ScaffoldContext{
+		Name:  "bedrock-provider",
+		Model: "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+	})
+	assert.Equal(t, "", gateway["ProbeVendor"],
+		"a Bedrock deployment has AWS credentials, not ANTHROPIC_API_KEY")
+
+	vertex := TemplateDataFromContext(&ScaffoldContext{
+		Name:  "vertex-provider",
+		Model: "vertex_ai/gemini-2.5-flash",
+	})
+	assert.Equal(t, "", vertex["ProbeVendor"],
+		"Vertex authenticates with ADC / Workload Identity, not an AI Studio key")
+
+	none := TemplateDataFromContext(&ScaffoldContext{Name: "basic-agent"})
+	assert.Equal(t, "", none["ProbeVendor"])
+}
+
+// Java's llm-provider computes its own $model (it defaults an empty .Model),
+// so it resolves the vendor through this function rather than the data key.
+func TestProbeVendorTemplateFunc(t *testing.T) {
+	r := NewTemplateRenderer()
+	render := func(tmpl string) string {
+		out, err := r.RenderString(tmpl, map[string]interface{}{})
+		require.NoError(t, err)
+		return out
+	}
+
+	assert.Equal(t, "anthropic", render(`{{ probeVendor "anthropic/claude-sonnet-5" }}`))
+	assert.Equal(t, "", render(`{{ probeVendor "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0" }}`))
+	assert.Equal(t, "", render(`{{ probeVendor "vertex_ai/gemini-2.5-flash" }}`))
 }
