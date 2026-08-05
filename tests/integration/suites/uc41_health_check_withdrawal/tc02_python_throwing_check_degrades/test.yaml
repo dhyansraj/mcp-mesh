@@ -1,0 +1,320 @@
+# tc02 — Python: a health check that THROWS must degrade, never withdraw
+# (issue #1480; rule established in #1472 and mirrored into #1474/#1476).
+#
+# FAILURE MODE THIS CATCHES
+#
+# The withdraw / don't-withdraw split has to be real. If any non-healthy
+# verdict suppressed the heartbeat, then a NullPointerException, a typo in a
+# probe, or a transient exception inside the user's own health check would
+# silently take a perfectly good provider out of the mesh — the exact
+# outage-amplifying behaviour this feature exists to prevent. tc01 proves
+# `unhealthy` withdraws; this proves a THROW does not. Only both together
+# say the split exists rather than "anything that isn't healthy withdraws".
+#
+# WHY THIS TEST IS NOT VACUOUS
+#
+# "The agent was not withdrawn" is trivially true of a runtime whose health
+# loop died, never started, or never observed the fault — so three separate
+# things are asserted, and the negative alone is never enough:
+#
+#   1. the invocation trace shows the check ran REPEATEDLY while the flag
+#      said `throw` (the loop is alive and seeing the fault);
+#   2. /health reports `degraded` carrying the thrown exception's own message
+#      (the runtime observed the throw and classified it);
+#   3. only then: the registry never moves A off `healthy`, and the consumer
+#      is still routed to A.
+#
+# WHY THE WATCH IS 30s AND WHY IT IS NOT A SLEEP
+#
+# The watch loop polls the registry every second and FAILS THE INSTANT A
+# leaves `healthy` — it is an invariant watch with early exit, not a fixed
+# wait that hopes. Its length is calibrated against tc01: withdrawal there
+# converges in ~7s at this registry's 5s/2s timing, so 30s is over four times
+# the latency a real withdrawal needs. Provider B is watched alongside A so a
+# container-wide stall cannot masquerade as a held invariant.
+
+name: "Python: a throwing health check degrades and keeps serving"
+description: "A Python health check that raises must map to degraded, keep heartbeating and stay resolvable (issue #1480)"
+tags:
+  - health-check
+  - withdrawal
+  - degraded
+  - lifecycle
+  - python
+  - integration
+timeout: 420
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/py-hc-provider-a /workspace/
+      cp -rL /uc-artifacts/py-hc-provider-b /workspace/
+      cp -rL /uc-artifacts/py-hc-consumer /workspace/
+      echo ok > /workspace/health-flag
+      : > /workspace/hc-invocations.log
+      echo "seeded health-flag=$(cat /workspace/health-flag)"
+
+  - name: "Install provider A deps"
+    handler: pip-install
+    path: /workspace/py-hc-provider-a
+
+  - name: "Install provider B deps"
+    handler: pip-install
+    path: /workspace/py-hc-provider-b
+
+  - name: "Install consumer deps"
+    handler: pip-install
+    path: /workspace/py-hc-consumer
+
+  - routine: start_registry_fast_sweep
+
+  - name: "Start provider A (port 3411, health-check driven)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start py-hc-provider-a/main.py --env MCP_MESH_HTTP_PORT=3411 --env MCP_MESH_HEALTH_INTERVAL=2 -d
+    capture: start_provider_a
+
+  # ORDERING GATE — provider A must be registered and healthy BEFORE provider
+  # B is started, and both before the consumer.
+  #
+  # The resolver's last tiebreak is agent ID ASC, so hc-provider-a-* beats
+  # hc-provider-b-* — but only among candidates that EXIST when the consumer
+  # first resolves. Nothing later makes it move: the rewire is diff-gated, so
+  # a consumer that settled on B because A had not registered yet stays on B
+  # for the rest of the run — and then "the consumer is still routed to A"
+  # can never be true, whatever the runtime does with the throwing check.
+  # Observed flaking exactly this way under parallel load; a fixed sleep here
+  # would only make the flake rarer, so the gate polls for the real condition.
+  - name: "Gate: provider A must be healthy before provider B starts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 90); do
+        S=$(curl -s --max-time 3 http://localhost:8000/agents | jq -r '.agents[]? | select(.name=="hc-provider-a-py") | .status')
+        echo "t=${i}s hc-provider-a-py=$S"
+        if [ "$S" = "healthy" ]; then echo "GATE_A: OK after ~${i}s"; exit 0; fi
+        sleep 1
+      done
+      echo "GATE_A: TIMEOUT"
+      exit 1
+    capture: gate_a
+    timeout: 120
+
+  - name: "Start provider B (port 3412, survivor)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start py-hc-provider-b/main.py --env MCP_MESH_HTTP_PORT=3412 --env MCP_MESH_HEALTH_INTERVAL=2 -d
+    capture: start_provider_b
+
+  - name: "Gate: provider B must be healthy before the consumer starts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 90); do
+        S=$(curl -s --max-time 3 http://localhost:8000/agents | jq -r '.agents[]? | select(.name=="hc-provider-b-py") | .status')
+        echo "t=${i}s hc-provider-b-py=$S"
+        if [ "$S" = "healthy" ]; then echo "GATE_B: OK after ~${i}s"; exit 0; fi
+        sleep 1
+      done
+      echo "GATE_B: TIMEOUT"
+      exit 1
+    capture: gate_b
+    timeout: 120
+
+  - name: "Start consumer (port 3413)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start py-hc-consumer/main.py --env MCP_MESH_HTTP_PORT=3413 --env MCP_MESH_HEALTH_INTERVAL=2 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+    capture: start_consumer
+
+  - name: "Wait for all three agents to be healthy in the registry"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 90); do
+        BODY=$(curl -s --max-time 3 http://localhost:8000/agents || echo '{}')
+        A=$(echo "$BODY" | jq -r '.agents[]? | select(.name=="hc-provider-a-py") | .status')
+        B=$(echo "$BODY" | jq -r '.agents[]? | select(.name=="hc-provider-b-py") | .status')
+        C=$(echo "$BODY" | jq -r '.agents[]? | select(.name=="hc-consumer-py") | .status')
+        echo "t=${i}s A=$A B=$B C=$C"
+        if [ "$A" = "healthy" ] && [ "$B" = "healthy" ] && [ "$C" = "healthy" ]; then
+          echo "FLEET: OK after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "FLEET: TIMEOUT"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: fleet_ready
+    timeout: 120
+
+  - name: "Baseline: the consumer starts on provider A"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        R=$(meshctl call hc-consumer-py:who_served '{}' 2>&1 || true)
+        echo "t=${i}s -> $R"
+        case "$R" in
+          *hc-provider-a-py*) echo "BASELINE: OK after ~${i}s served_by=hc-provider-a-py"; exit 0 ;;
+          *hc-provider-b-py*) echo "BASELINE: WRONG_PROVIDER (resolved to B before any fault)"; exit 0 ;;
+        esac
+        sleep 1
+      done
+      echo "BASELINE: TIMEOUT"
+    capture: baseline
+    timeout: 90
+
+  - name: "Break the health check: make it raise on every invocation"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo throw > /workspace/health-flag
+      echo "health-flag=$(cat /workspace/health-flag) at $(date -u +%H:%M:%S)"
+    capture: fault_injected
+
+  # Invariant watch: fails the INSTANT A leaves healthy, rather than sleeping
+  # and hoping. 30s is >4x the ~7s a real withdrawal takes at this registry's
+  # 5s/2s timing (see tc01).
+  - name: "Watch for 30s: A must never leave healthy while its check keeps throwing"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 30); do
+        BODY=$(curl -s --max-time 3 http://localhost:8000/agents || echo '{}')
+        A=$(echo "$BODY" | jq -r '.agents[]? | select(.name=="hc-provider-a-py") | .status')
+        B=$(echo "$BODY" | jq -r '.agents[]? | select(.name=="hc-provider-b-py") | .status')
+        echo "t=${i}s A=$A B=$B"
+        if [ "$A" != "healthy" ]; then
+          echo "DEGRADE_WATCH: WITHDRAWN at ~${i}s (status=$A) — a throwing check must not withdraw the agent"
+          exit 0
+        fi
+        if [ "$B" != "healthy" ]; then
+          echo "DEGRADE_WATCH: CONTROL_LOST at ~${i}s (provider B status=$B) — container-wide stall, verdict unusable"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "DEGRADE_WATCH: HELD for 30s"
+    capture: degrade_watch
+    timeout: 90
+
+  # Non-vacuity, part 1: the loop kept running and kept seeing the fault.
+  - name: "The health check must have been invoked repeatedly while throwing"
+    handler: shell
+    workdir: /workspace
+    command: |
+      # `grep -c` prints 0 AND exits 1 when the file exists with no matches, so
+      # a `|| echo 0` fallback would append a SECOND 0, make N="0 0" and turn the
+      # `-ge 3` test below into a bash "integer expression expected" error —
+      # exactly in the failure path where a clean verdict matters most.
+      # `|| true` adds no output; the ${:-0} default covers the missing-file case,
+      # where grep prints nothing at all.
+      N=$(grep -c 'flag=throw' /workspace/hc-invocations.log 2>/dev/null || true)
+      N=${N:-0}
+      echo "THROW_TICKS: $N"
+      if [ "$N" -ge 3 ]; then echo "THROW_TICKS_VERDICT: SUFFICIENT"; else echo "THROW_TICKS_VERDICT: TOO_FEW"; fi
+      tail -12 /workspace/hc-invocations.log 2>/dev/null || echo 'NO_TRACE'
+    capture: throw_trace
+
+  # Non-vacuity, part 2: the runtime saw the throw and classified it.
+  - name: "A's /health must report degraded, carrying the thrown message"
+    handler: shell
+    workdir: /workspace
+    command: curl -s --max-time 5 http://localhost:3411/health || echo 'HEALTH_UNREACHABLE'
+    capture: provider_a_health
+
+  # Poll, don't assume — the same principle every other phase in this UC is
+  # built on. A single call turns one transient dispatch error into a bare
+  # CALL_FAILED that is indistinguishable from a real failover. Retrying does
+  # NOT weaken the claim: an answer naming provider B is a verdict on the
+  # spot, and a window that expires with no answer naming A is a failure too,
+  # so neither outcome can hide behind a retry.
+  - name: "Poll: the consumer must still be routed to provider A"
+    handler: shell
+    workdir: /workspace
+    command: |
+      DEADLINE=$(( $(date +%s) + 40 ))
+      START=$(date +%s)
+      while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+        R=$(meshctl call hc-consumer-py:who_served '{}' 2>&1 || true)
+        T=$(( $(date +%s) - START ))
+        case "$R" in
+          *hc-provider-a-py*)
+            echo "t=${T}s -> $R"
+            echo "STILL_ON_A: OK after ~${T}s"
+            exit 0
+            ;;
+          *hc-provider-b-py*)
+            echo "t=${T}s -> $R"
+            echo "STILL_ON_A: FAILED_OVER (answer named provider B — the throwing check withdrew A)"
+            exit 0
+            ;;
+        esac
+        # Safe to echo verbatim: the cases above have already claimed every
+        # response that names either provider, so this can only be an error.
+        echo "t=${T}s (no provider named, retrying) -> $R"
+        sleep 2
+      done
+      echo "STILL_ON_A: FAILED_OVER (no answer named provider A within the poll window)"
+    capture: still_on_a
+    timeout: 60
+
+  - name: "Diagnostic: provider A log"
+    handler: shell
+    workdir: /workspace
+    command: |
+      # Not `meshctl logs <agent>`: meshctl names the log file from its own
+      # static analysis of the entrypoint, which does not always match the
+      # registered agent name (py-hc-provider-a.log, probe_a.log ...).
+      tail -n 40 ~/.mcp-mesh/logs/*.log 2>/dev/null || echo 'NO_LOGS'
+    capture: provider_a_logs
+    ignore_errors: true
+
+assertions:
+  - expr: "${captured.fleet_ready} contains 'FLEET: OK'"
+    message: "SETUP: both providers and the consumer must be healthy before the check is broken"
+  - expr: "${captured.baseline} contains 'BASELINE: OK'"
+    message: "BASELINE: the consumer must resolve hc_probe_py and answer before the check is broken"
+  - expr: "${captured.baseline} contains 'served_by=hc-provider-a-py'"
+    message: "BASELINE: the consumer must start on provider A, so 'still on A' later is a meaningful statement"
+
+  # ---- non-vacuity FIRST: without these the negative below proves nothing ----
+  - expr: "${captured.throw_trace} contains 'THROW_TICKS_VERDICT: SUFFICIENT'"
+    message: "NON-VACUITY: the health check must have been invoked at least 3 times while raising — otherwise 'not withdrawn' just means the refresh loop died"
+  - expr: "${captured.provider_a_health} contains 'degraded'"
+    message: "CLASSIFICATION: a health check that raises must be recorded as DEGRADED, not healthy and not unhealthy"
+  - expr: "${captured.provider_a_health} contains 'simulated broken health check'"
+    message: "CLASSIFICATION: /health must carry the thrown exception's own message, proving the runtime caught THIS throw"
+  - expr: "${captured.provider_a_health} not contains 'HEALTH_UNREACHABLE'"
+    message: "CLASSIFICATION: provider A's HTTP server must still answer /health"
+
+  # ---- the negative ----
+  - expr: "${captured.degrade_watch} contains 'DEGRADE_WATCH: HELD'"
+    message: "DEGRADED MUST NOT WITHDRAW: a throwing health check must keep heartbeating — a buggy check must never be able to remove a working provider from the mesh"
+  - expr: "${captured.degrade_watch} not contains 'CONTROL_LOST'"
+    message: "CONTROL: provider B must stay healthy throughout, otherwise the watch verdict reflects a container-wide stall rather than the feature"
+
+  # Explicit verdict markers, not a bare substring: the poll only prints
+  # STILL_ON_A: OK when an answer actually named provider A, and prints
+  # STILL_ON_A: FAILED_OVER for both ways this can go wrong (an answer naming
+  # B, or a window that expired with no answer at all).
+  - expr: "${captured.still_on_a} contains 'STILL_ON_A: OK'"
+    message: "RESOLVABLE: a degraded provider must remain selectable — the consumer must still be routed to A"
+  - expr: "${captured.still_on_a} not contains 'STILL_ON_A: FAILED_OVER'"
+    message: "RESOLVABLE: the consumer must NOT have failed over to B, and must have answered at all — either would mean the throwing check withdrew A"
+  - expr: "${captured.still_on_a} not contains 'hc-provider-b-py'"
+    message: "RESOLVABLE: provider B must not appear anywhere in the answer — the consumer must never have been re-routed to it"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

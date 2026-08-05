@@ -1,0 +1,115 @@
+# UC-level routines for uc41_health_check_withdrawal (issue #1480).
+#
+# ============================================================================
+# SCENARIO COVERAGE
+# ============================================================================
+#
+#                          | Python | TypeScript | Java
+#   -----------------------+--------+------------+------
+#   1. withdrawal          |  tc01  |    tc03    | tc05
+#   2. recovery, same pid  |  tc01  |    tc03    | tc05
+#   3. a throw does NOT    |  tc02  |    tc04    | tc06
+#      withdraw (degraded) |        |            |
+#
+# Scenarios 1 and 2 share a test file per runtime because they are one
+# continuous timeline, not two: recovery is only meaningful for the process
+# that was withdrawn, and the load-bearing claim — the SAME pid across the
+# outage AND the restore — cannot be made by a test that re-does the
+# withdrawal from scratch. They are separate, separately-asserted phases
+# inside the file (Phase A baseline / Phase B withdrawal+failover / Phase C
+# recovery), the way uc25/tc03 splits Phase A and Phase B. Splitting them
+# into separate test cases would pay the fleet-startup cost twice — three
+# JVMs, in the Java case — for a strictly weaker assertion.
+#
+# Topology is identical in all six: two providers of the same capability plus
+# one consumer. Provider A carries the health check the test drives; provider
+# B has none and is the control (it must stay healthy throughout, so a
+# container-wide stall cannot be mistaken for a withdrawal) and the failover
+# target. Artifacts are per-runtime: py-hc-*, ts-hc-*, java-hc-*.
+#
+# NOT COVERED HERE: the scaffold's emitted vendor probe. Exercising it needs
+# a base-URL override that does not exist yet — see #1483.
+#
+# ============================================================================
+#
+# Every test in this UC turns on how fast the registry notices that an agent
+# stopped heartbeating, so the timing knobs live here rather than being
+# copy-pasted into nine phases.
+#
+# Default timing would make each test cost ~30s of pure waiting per
+# transition: DEFAULT_TIMEOUT_THRESHOLD=20s before a silent agent is marked
+# unhealthy, checked by a sweep that ticks every HEALTH_CHECK_INTERVAL=10s.
+# At 5s/2s the same transition converges in ~5-7s.
+#
+# The agents' own knobs have to move with it, and are set per-test rather
+# than here because they are per-process:
+#   - MCP_MESH_HEALTH_INTERVAL=2   heartbeat cadence, must stay well under the
+#                                  5s threshold or a HEALTHY agent flaps
+#   - health-check TTL = 2s        declared in each provider-a artifact
+#
+# MCP_MESH_RETENTION / MCP_MESH_SWEEP_INTERVAL are deliberately LEFT AT
+# THEIR DEFAULTS. The recovery half of these tests needs the registry row to
+# still exist and be marked `unhealthy` when heartbeats resume, because that
+# is what makes HEAD /heartbeat answer 410 Gone and forces the POST
+# re-register (#955). A short retention would purge the row instead and the
+# agent would take a different path back.
+
+routines:
+  # Fast-sweep registry. Fails loudly if the tuning did not take effect: a
+  # silently-inert env var would turn every withdrawal poll in this UC into a
+  # 60s timeout with a confusing "never withdrawn" message.
+  start_registry_fast_sweep:
+    description: "Start the registry with a 5s staleness threshold and a 2s sweep"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: |
+          MCP_MESH_HEALTH_CHECK_INTERVAL=2 \
+          DEFAULT_TIMEOUT_THRESHOLD=5 \
+            meshctl start --registry-only -d
+          # BOTH conditions are retried inside the SAME loop. /health can start
+          # answering before the health monitor's startup line is flushed, so a
+          # gate that made its verdict on the first successful curl would fail
+          # on that ordering race rather than on a real fault.
+          READY=""
+          for i in $(seq 1 30); do
+            if [ -z "$READY" ] && curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              READY="yes"
+              echo "registry ready after ${i}s"
+            fi
+            # The health monitor stamps its effective timing on startup:
+            #   "Starting agent health monitor (timeout: 5s, interval: 2s)"
+            # Assert it rather than trusting the env var, so a rename or a
+            # dropped passthrough fails HERE instead of as a slow timeout.
+            if [ -n "$READY" ] && tail -n 200 ~/.mcp-mesh/logs/registry.log 2>/dev/null \
+                 | grep -qE 'health monitor \(timeout: 5s, interval: 2s\)'; then
+              echo "[setup] confirmed fast-sweep timing active"
+              exit 0
+            fi
+            sleep 1
+          done
+          # Loop expired. Distinguish "never came up" from "came up with the
+          # wrong timing" — the second is the deliberate loud failure: a
+          # silently-inert env var would turn every withdrawal poll in this UC
+          # into a confusing timeout instead of failing here.
+          if [ -n "$READY" ]; then
+            echo "FAIL: registry did not adopt the 5s/2s health-monitor timing"
+            grep -iE 'health monitor' ~/.mcp-mesh/logs/registry.log 2>/dev/null | tail -5
+          else
+            echo "ERROR: registry did not become ready in 30s"
+            tail -50 ~/.mcp-mesh/logs/registry.log 2>/dev/null || true
+          fi
+          exit 1
+        capture: registry_start
+        timeout: 60
+
+  # Stop everything this test started (agents + registry). `meshctl stop` is
+  # global, which is correct here and only here: the test owns the whole
+  # container.
+  stop_all:
+    description: "Stop all mesh processes started by this test"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: meshctl stop 2>/dev/null || true
+        ignore_errors: true
