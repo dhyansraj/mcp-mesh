@@ -42,6 +42,22 @@ func NewTemplateRenderer() *TemplateRenderer {
 			"join":             strings.Join,
 			"split":            strings.Split,
 			"toJSON":           toJSON,
+			// Same resolvers as the .ProbeVendor / .ModelFamily data fields,
+			// exposed as functions for templates that compute their own model
+			// string (the Java llm-provider defaults $model when .Model is
+			// empty and must gate on that value, not on the raw context).
+			"probeVendor": DirectProbeVendor,
+			"modelFamily": ModelFamily,
+			// The discovery tags an llm-provider registers for a model, so the
+			// three language templates render one Go-side list instead of
+			// hand-writing four family arms each. Each template still supplies
+			// its own literal syntax (`[...]` vs `{...}`) around the range;
+			// only the tag CONTENT comes from here.
+			//
+			// The templates used to duplicate these lists, which is exactly the
+			// copy-divergence shape that let the inverted health-check verdict
+			// propagate from Python to Java unnoticed (issues #1476/#1479).
+			"providerTags": ProviderTagsForModel,
 		},
 	}
 }
@@ -282,6 +298,30 @@ func TemplateDataFromContext(ctx *ScaffoldContext) map[string]interface{} {
 		// rather than a bundled native SDK adapter, i.e. when the generated
 		// requirements.txt must pin mcp-mesh[litellm] (issue #1383).
 		"RequiresLiteLLM": RequiresLiteLLM(ctx.Model),
+
+		// "anthropic" / "openai" / "gemini" when a scaffolded health check may
+		// probe that vendor's own API for this model, "" when it may not and
+		// the generic skeleton must be emitted instead (issue #1479).
+		//
+		// Templates MUST gate the health probe (and the env vars and README
+		// credential text that go with it) on this, never on
+		// `contains .Model "<vendor>"` — a substring test routes
+		// bedrock/anthropic.* and vertex_ai/gemini-* into a probe of
+		// credentials those deployments do not have.
+		//
+		// Discovery TAGS are not part of that set: they follow ModelFamily
+		// below, because "who serves it" and "who built it" are different
+		// questions and a gateway model still belongs to its family.
+		"ProbeVendor": DirectProbeVendor(ctx.Model),
+
+		// "anthropic" / "openai" / "gemini" when the model belongs to that
+		// big-3 family, "" otherwise — a different question from ProbeVendor,
+		// and the two answers diverge on gateway models. Templates gate the
+		// DISCOVERY TAGS on this: `bedrock/anthropic.claude-*` is genuinely a
+		// Claude model and must keep advertising the claude/anthropic tags a
+		// `--vendor claude` consumer pins with `+claude`, even though it has no
+		// probeable direct vendor API (issue #1479).
+		"ModelFamily": ModelFamily(ctx.Model),
 
 		// Tool fields
 		"ToolName":        ctx.ToolName,

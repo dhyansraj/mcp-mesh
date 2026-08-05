@@ -16,10 +16,13 @@ This is a zero-code LLM provider agent that exposes {{ .Model }} to the mesh net
 
 ### Configuration
 
-Set your API key:
+Set the credentials for your model:
 
 ```bash
-{{ if contains .Model "anthropic" }}export ANTHROPIC_API_KEY=your-key-here{{ else if contains .Model "openai" }}export OPENAI_API_KEY=your-key-here{{ else }}# Set the appropriate API key for your model{{ end }}
+{{ if eq .ProbeVendor "anthropic" }}export ANTHROPIC_API_KEY=your-key-here{{ else if eq .ProbeVendor "openai" }}export OPENAI_API_KEY=your-key-here{{ else if eq .ProbeVendor "gemini" }}export GOOGLE_API_KEY=your-key-here{{ else }}# Set the credentials {{ .Model }} authenticates with. For a gateway-prefixed
+# model (bedrock/..., vertex_ai/..., databricks/...) those are the gateway's own
+# credentials — AWS credentials, ADC / Workload Identity, a workspace token —
+# not the underlying model vendor's API key.{{ end }}
 ```
 
 ### Running the Provider

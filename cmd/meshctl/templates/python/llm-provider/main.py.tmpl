@@ -17,7 +17,7 @@ app = FastMCP("{{ toPascalCase .Name }}")
 
 
 # ===== HEALTH CHECK =====
-{{ if contains .Model "anthropic" }}
+{{ if eq .ProbeVendor "anthropic" }}
 async def health_check() -> dict:
     """
     Health check for {{ .Name }}.
@@ -82,7 +82,7 @@ async def health_check() -> dict:
         "checks": checks,
         "errors": errors,
     }
-{{ else if contains .Model "openai" }}
+{{ else if eq .ProbeVendor "openai" }}
 async def health_check() -> dict:
     """
     Health check for {{ .Name }}.
@@ -144,7 +144,7 @@ async def health_check() -> dict:
         "checks": checks,
         "errors": errors,
     }
-{{ else if contains .Model "gemini" }}
+{{ else if eq .ProbeVendor "gemini" }}
 async def health_check() -> dict:
     """
     Health check for {{ .Name }}.
@@ -221,6 +221,16 @@ async def health_check() -> dict:
     completion - and return {"status": "unhealthy", ...} when it fails. That is
     what makes the mesh withdraw this agent and fail consumers over.
 
+    Probe the gateway you actually authenticate against. For a
+    gateway-prefixed model (bedrock/..., vertex_ai/..., databricks/..., an
+    OpenAI-compatible proxy) that is the gateway's own endpoint and the
+    gateway's own credentials - AWS SigV4, ADC / Workload Identity, your
+    proxy's token. It is NOT the underlying model vendor's public API: that
+    endpoint can be perfectly healthy while your gateway is down, and the
+    vendor API key it wants is one your deployment never sets, so a check
+    gated on it would report unhealthy forever and withdraw this agent
+    permanently.
+
     Returns:
         dict: Health status
     """
@@ -237,7 +247,11 @@ async def health_check() -> dict:
 @mesh.llm_provider(
     model="{{ .Model }}",
     capability="llm",
-    tags={{ if .Tags }}{{ toJSON .Tags }}{{ else if contains .Model "anthropic" }}["llm", "claude", "anthropic", "provider"]{{ else if contains .Model "openai" }}["llm", "openai", "gpt", "provider"]{{ else if contains .Model "gemini" }}["llm", "gemini", "google", "provider"]{{ else }}["llm", "provider"]{{ end }},
+    {{/* Tags follow the model FAMILY, not the probeable vendor: a
+         bedrock/anthropic.claude-* provider is still Claude and must stay
+         discoverable by a consumer pinning +claude, even though it has no
+         probeable direct vendor API (issue #1479). */ -}}
+    tags={{ if .Tags }}{{ toJSON .Tags }}{{ else }}[{{ range $i, $t := providerTags .Model }}{{ if $i }}, {{ end }}"{{ $t }}"{{ end }}]{{ end }},
     version="1.0.0",
 )
 def {{ toSnakeCase .Name }}():

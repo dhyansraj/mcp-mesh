@@ -224,3 +224,204 @@ func TestLlmProviderTemplates_UnknownVendorSkeletonWarns(t *testing.T) {
 		})
 	}
 }
+
+// Issue #1479. A gateway-prefixed model reaches a big-3 model through someone
+// else's endpoint, with someone else's credentials: `bedrock/anthropic.claude-*`
+// is served by AWS, `vertex_ai/gemini-*` by a Google Cloud project under ADC /
+// Workload Identity. The templates used to select the probe with a
+// case-sensitive substring test, so both strings selected a direct vendor probe
+// gated on an API key those deployments never set.
+//
+// That is not cosmetic. The probe reports unhealthy on its first tick, which
+// suppresses the heartbeat, and the registry withdraws an agent that is serving
+// fine — permanently, because the missing key never appears. Falling through to
+// the skeleton leaves the operator with a TODO; guessing a probe takes their
+// working provider off the mesh.
+//
+// The probe is only half of it. A gateway model still HAS a family — Bedrock
+// Claude is Claude — so the discovery tags must keep naming it, or a consumer
+// scaffolded with `--vendor claude` (which pins `+claude`) stops resolving this
+// provider. wantTags below is the independent half: skeleton probe, real tags.
+var gatewayModels = []struct {
+	name string
+	// The probe that must NOT be selected, and the credential that proves it.
+	model     string
+	bannedAPI string
+	bannedKey string
+	// The discovery tags the model's FAMILY earns, despite the skeleton probe.
+	wantTags []string
+}{
+	{
+		name:      "bedrock claude",
+		model:     "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+		bannedAPI: "api.anthropic.com",
+		bannedKey: "ANTHROPIC_API_KEY",
+		wantTags:  []string{"llm", "claude", "anthropic", "provider"},
+	},
+	{
+		// A cross-region inference profile: the family sits behind a region
+		// segment, so a resolver that only looks at the first dot segment
+		// ("us") drops the claude tags.
+		name:      "bedrock claude cross-region profile",
+		model:     "bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+		bannedAPI: "api.anthropic.com",
+		bannedKey: "ANTHROPIC_API_KEY",
+		wantTags:  []string{"llm", "claude", "anthropic", "provider"},
+	},
+	{
+		name:      "vertex gemini",
+		model:     "vertex_ai/gemini-2.5-flash",
+		bannedAPI: "generativelanguage.googleapis.com",
+		bannedKey: "GOOGLE_API_KEY",
+		wantTags:  []string{"llm", "gemini", "google", "provider"},
+	},
+	{
+		name:      "databricks claude",
+		model:     "databricks/anthropic.claude-3-7-sonnet",
+		bannedAPI: "api.anthropic.com",
+		bannedKey: "ANTHROPIC_API_KEY",
+		wantTags:  []string{"llm", "claude", "anthropic", "provider"},
+	},
+	{
+		// A gateway model with no big-3 family at all: no probe AND no vendor
+		// tags. Without this row every gateway case expects vendor tags, and a
+		// family resolver that simply always answered "anthropic" would pass.
+		name:      "bedrock llama",
+		model:     "bedrock/meta.llama3-70b-instruct-v1:0",
+		bannedAPI: "api.anthropic.com",
+		bannedKey: "ANTHROPIC_API_KEY",
+		wantTags:  []string{"llm", "provider"},
+	},
+}
+
+// tagsMarker renders a tag list in one runtime's literal syntax, so the matrix
+// can assert on tags without hand-writing three copies per case.
+func tagsMarker(language string, tags []string) string {
+	quoted := make([]string, len(tags))
+	for i, tag := range tags {
+		quoted[i] = `"` + tag + `"`
+	}
+	joined := strings.Join(quoted, ", ")
+
+	switch language {
+	case "python":
+		return "tags=[" + joined + "]"
+	case "typescript":
+		return "tags: [" + joined + "]"
+	default:
+		return "tags = {" + joined + "}"
+	}
+}
+
+func TestLlmProviderTemplates_GatewayModelGetsSkeletonNotVendorProbe(t *testing.T) {
+	for _, rt := range runtimeProbes {
+		for _, gw := range gatewayModels {
+			t.Run(rt.language+" "+gw.name, func(t *testing.T) {
+				content := renderProvider(t, rt.language, gw.model, rt.entry)
+
+				require.Contains(t, content, "NOT IMPLEMENTED",
+					"a gateway-prefixed model has no probeable direct vendor API, so "+
+						"the skeleton is the only honest rendering")
+				require.Contains(t, content, "CANNOT DETECT AN")
+
+				require.NotContains(t, content, gw.bannedAPI,
+					"%s is served by its gateway, not by %s — probing that endpoint "+
+						"reports on an API this agent never calls", gw.model, gw.bannedAPI)
+				require.NotContains(t, content, gw.bannedKey,
+					"%s never sets %s, so a check gated on it returns unhealthy "+
+						"forever and the registry withdraws a working provider",
+					gw.model, gw.bannedKey)
+			})
+		}
+	}
+}
+
+// The README env-var instructions follow the PROBE: a gateway authenticates
+// with its own credentials, so the README must not tell the operator to export
+// the underlying vendor's API key.
+//
+// The tags follow the FAMILY instead, and asserting both here is the point —
+// they are answers to different questions and a template that wires one arm to
+// the other resolver breaks exactly one of these two assertions.
+func TestLlmProviderTemplates_GatewayModelKeepsFamilyTagsButNotVendorCredentials(t *testing.T) {
+	for _, rt := range runtimeProbes {
+		for _, gw := range gatewayModels {
+			t.Run(rt.language+" "+gw.name, func(t *testing.T) {
+				content := renderProvider(t, rt.language, gw.model, rt.entry)
+				require.Contains(t, content, tagsMarker(rt.language, gw.wantTags),
+					"%s is served by a gateway but it is still a %s model: wiring the "+
+						"tags to the probe resolver de-registers the vendor tags and a "+
+						"consumer pinning +claude / +gemini stops resolving it",
+					gw.model, gw.wantTags)
+
+				readme := renderProvider(t, rt.language, gw.model, "README.md")
+				require.NotContains(t, readme, "export "+gw.bannedKey,
+					"the README tells the operator to export a key the gateway "+
+						"does not use")
+
+				// Not just the vendor's key: a generic `API_KEY` / `api-key`
+				// fallback is no better. The TypeScript README's Docker and
+				// kubectl blocks ended their vendor chain with one, so a Bedrock
+				// scaffold told the operator to pass `API_KEY=$API_KEY` and
+				// create a secret keyed `api-key` — names neither gateway reads,
+				// in the same file whose prose says to use the gateway's own
+				// credentials.
+				require.NotContains(t, readme, "API_KEY",
+					"%s authenticates with its gateway's credentials: naming any "+
+						"API key here, vendor-specific or generic, sends the "+
+						"operator to configure something nothing reads", gw.model)
+				require.NotContains(t, readme, "api-key",
+					"%s authenticates with its gateway's credentials, so no "+
+						"api-key secret name applies", gw.model)
+			})
+		}
+	}
+}
+
+// The big-3 matrix is the other half: narrowing the gate must not have taken
+// the real probes with it.
+//
+// The uppercase rows are what pin case-insensitivity, and they sit HERE rather
+// than in the gateway matrix because this is the direction that can actually
+// regress. `VERTEX_AI/...` in the gateway matrix proves nothing: a resolver
+// that stopped lowercasing would miss the map, return "", emit the skeleton and
+// pass. `ANTHROPIC/claude-sonnet-5` fails loudly instead — the miss silently
+// degrades a real probe into the skeleton, which is the case that takes a
+// working health check away.
+func TestLlmProviderTemplates_BareBig3NameStillProbes(t *testing.T) {
+	// wantTags is the whole rendered tag literal, matched via tagsMarker, not a
+	// bare family word: "anthropic" appears in the API host, the import path and
+	// the comments of every Anthropic render, so `Contains(content, "anthropic")`
+	// holds even with the tag list absent or carrying another family's tags.
+	bare := []struct {
+		model    string
+		wantAPI  string
+		wantKey  string
+		wantTags []string
+	}{
+		{"claude-sonnet-5", "api.anthropic.com", "ANTHROPIC_API_KEY", []string{"llm", "claude", "anthropic", "provider"}},
+		{"gpt-4o", "api.openai.com", "OPENAI_API_KEY", []string{"llm", "openai", "gpt", "provider"}},
+		{"gemini-2.5-flash", "generativelanguage.googleapis.com", "GOOGLE_API_KEY", []string{"llm", "gemini", "google", "provider"}},
+
+		// --model is free-form, so the casing is the user's.
+		{"ANTHROPIC/claude-sonnet-5", "api.anthropic.com", "ANTHROPIC_API_KEY", []string{"llm", "claude", "anthropic", "provider"}},
+		{"Claude-Sonnet-5", "api.anthropic.com", "ANTHROPIC_API_KEY", []string{"llm", "claude", "anthropic", "provider"}},
+		{"OpenAI/GPT-4o", "api.openai.com", "OPENAI_API_KEY", []string{"llm", "openai", "gpt", "provider"}},
+		{"GEMINI/Gemini-2.5-Flash", "generativelanguage.googleapis.com", "GOOGLE_API_KEY", []string{"llm", "gemini", "google", "provider"}},
+	}
+
+	for _, rt := range runtimeProbes {
+		for _, b := range bare {
+			t.Run(rt.language+" "+b.model, func(t *testing.T) {
+				content := renderProvider(t, rt.language, b.model, rt.entry)
+				require.Contains(t, content, b.wantAPI)
+				require.Contains(t, content, b.wantKey)
+				require.Contains(t, content, tagsMarker(rt.language, b.wantTags),
+					"%s must register its family's discovery tags, or a consumer "+
+						"pinning +claude / +gpt / +gemini stops resolving it", b.model)
+				require.NotContains(t, content, "NOT IMPLEMENTED",
+					"an unprefixed big-3 name is probeable and must get the real probe")
+			})
+		}
+	}
+}
