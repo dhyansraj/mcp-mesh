@@ -234,6 +234,81 @@ async def test_health_check_different_agents_independent_cache(agent_config):
     assert call_count_agent2 == 1
 
 
+class TestMalformedReturnDegrades:
+    """Issue #1477: a wrong return TYPE degrades, it does not withdraw.
+
+    A wrong return type is deterministic — it recurs identically on every
+    refresh, so mapping it to UNHEALTHY withdraws the agent permanently on a
+    coding defect in the check, from an agent whose upstream is very likely
+    fine. Java (#1475) and TypeScript (#1481) both degrade here.
+
+    Only ``unhealthy`` suppresses the heartbeat, so DEGRADED vs UNHEALTHY is a
+    behavioural difference, not a reporting one.
+    """
+
+    @pytest.mark.parametrize(
+        "bad_result",
+        [42, "healthy", None, ["healthy"], 1.5],
+        ids=["int", "str", "none", "list", "float"],
+    )
+    @pytest.mark.asyncio
+    async def test_unexpected_type_degrades(self, agent_config, bad_result):
+        async def bad_health_check() -> Any:
+            return bad_result
+
+        result = await get_health_status_with_cache(
+            agent_id=f"malformed-{type(bad_result).__name__}",
+            health_check_fn=bad_health_check,
+            agent_config=agent_config,
+            startup_context={},
+            ttl=15,
+        )
+
+        # The assertion that fails if the mapping is reverted to UNHEALTHY.
+        assert result.status == HealthStatusType.DEGRADED
+        assert result.status != HealthStatusType.UNHEALTHY
+
+        # A degraded verdict that says nothing is worse than an unhealthy one
+        # that does: the payload must still name the offending type.
+        assert result.checks["health_check_return_type"] is False
+        assert type(bad_result).__name__ in result.errors[0]
+
+    @pytest.mark.asyncio
+    async def test_false_still_withdraws(self, agent_config):
+        """Returning False is an explicit verdict and must keep withdrawing."""
+
+        async def unhealthy_check() -> bool:
+            return False
+
+        result = await get_health_status_with_cache(
+            agent_id="explicit-false",
+            health_check_fn=unhealthy_check,
+            agent_config=agent_config,
+            startup_context={},
+            ttl=15,
+        )
+
+        assert result.status == HealthStatusType.UNHEALTHY
+
+    @pytest.mark.asyncio
+    async def test_dict_unhealthy_still_withdraws(self, agent_config):
+        """An explicit ``{"status": "unhealthy"}`` must keep withdrawing."""
+
+        async def unhealthy_check() -> dict:
+            return {"status": "unhealthy", "errors": ["upstream down"]}
+
+        result = await get_health_status_with_cache(
+            agent_id="explicit-dict-unhealthy",
+            health_check_fn=unhealthy_check,
+            agent_config=agent_config,
+            startup_context={},
+            ttl=15,
+        )
+
+        assert result.status == HealthStatusType.UNHEALTHY
+        assert result.errors == ["upstream down"]
+
+
 def test_clear_health_cache_single_agent(agent_config):
     """Test clearing cache for a single agent."""
     clear_health_cache()

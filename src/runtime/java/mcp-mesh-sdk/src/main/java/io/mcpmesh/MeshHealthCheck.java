@@ -77,9 +77,10 @@ public @interface MeshHealthCheck {
      * How often the check is re-run, in seconds.
      *
      * <p>Mirrors Python's {@code health_check_ttl}, and the same default (15).
-     * This is the detection latency in <b>both</b> directions: an outage takes
-     * up to one TTL to be noticed, and a recovery takes up to one TTL to be
-     * published.
+     * This is the <b>cadence</b>, not the end-to-end latency: withdrawal costs
+     * up to one TTL plus the registry's staleness window once heartbeats stop,
+     * and recovery costs up to one TTL plus the heartbeat resume and
+     * re-register round trip.
      *
      * <p>Override with the {@code MCP_MESH_HEALTH_CHECK_TTL} environment
      * variable.

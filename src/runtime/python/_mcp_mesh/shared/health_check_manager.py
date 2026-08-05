@@ -195,10 +195,25 @@ def _parse_health_result(
         errors = user_result.errors
 
     else:
-        logger.warning(f"Unexpected health check result type: {type(user_result)}")
-        status_type = HealthStatusType.UNHEALTHY
+        # Issue #1477: a wrong return TYPE degrades, it does not withdraw. It
+        # is deterministic — it recurs identically on every refresh — so
+        # UNHEALTHY would withdraw the agent permanently on a coding defect in
+        # the check, from an agent whose upstream is very likely fine. Java
+        # (#1475) and TypeScript (#1481) make the same call. Returning False,
+        # or a dict with "status": "unhealthy", still withdraws.
+        type_name = type(user_result).__name__
+        logger.warning(
+            "Unexpected health check return type '%s' — reporting degraded "
+            "(the agent keeps heartbeating). Return a bool, a "
+            "{status, checks, errors} dict, or a HealthStatus.",
+            type_name,
+        )
+        status_type = HealthStatusType.DEGRADED
         checks = {"health_check_return_type": False}
-        errors = [f"Invalid return type: {type(user_result)}"]
+        errors = [
+            f"Invalid return type: {type_name}. A health check returns a bool, "
+            f"a {{status, checks, errors}} dict, or a HealthStatus."
+        ]
 
     return status_type, checks, errors
 
