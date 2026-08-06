@@ -59,6 +59,11 @@ import {
   MAX_CONSECUTIVE_NEXT_EVENT_FAILURES,
   NEXT_EVENT_BACKOFF_CAP_MS,
 } from "./config.js";
+import {
+  buildStartupBody,
+  runStartupCheck,
+  startupStatusCodeFor,
+} from "./startup-check.js";
 import { createProxy } from "./proxy.js";
 import { RouteRegistry, type RouteMetadata } from "./route.js";
 import { initTracing, type AgentMetadata } from "./tracing.js";
@@ -235,6 +240,35 @@ export class MeshExpress {
         serviceId: this.serviceId,
         timestamp: new Date().toISOString(),
       });
+    });
+
+    // Startup endpoint (RFC #1502) — reports the user's `startupCheck`.
+    //
+    // Unlike `healthCheck` (warned about and ignored above), this hook IS
+    // honoured on a gateway. It never withdraws a running fan-out point; it
+    // only stops a misconfigured one from coming up, and a gateway with a
+    // broken config should never come up.
+    //
+    // Registered as GET only, like the three above: Express routes HEAD to a
+    // GET handler when no HEAD route exists, so HEAD answers with the same
+    // status. The check runs per hit — startupProbe stops polling on first
+    // success, so there is nothing to cache.
+    this.app.get("/startupz", (_req: Request, res: Response) => {
+      // `void` rather than an async handler: Express 4 does not handle a
+      // rejected promise from a route handler, and runStartupCheck is
+      // documented never to reject, so nothing is lost and the signature
+      // stays the same under both Express majors.
+      void runStartupCheck(this.config.startupCheck, this.config.name).then(
+        (verdict) => {
+          res
+            .status(startupStatusCodeFor(verdict))
+            .json(
+              buildStartupBody(this.config.name, verdict, {
+                serviceId: this.serviceId,
+              }),
+            );
+        },
+      );
     });
   }
 

@@ -212,6 +212,16 @@ export {
   type HealthVerdict,
 } from "./health-check.js";
 
+// Startup check (RFC #1502) — reported by `/startupz`, which the chart's
+// startupProbe polls. A failing check means the pod never comes up.
+export {
+  runStartupCheck,
+  buildStartupBody,
+  startupStatusCodeFor,
+  type MeshStartupCheck,
+  type StartupVerdict,
+} from "./startup-check.js";
+
 // Service views (RFC #1280) — consumer view factory + facade types.
 export {
   serviceView,

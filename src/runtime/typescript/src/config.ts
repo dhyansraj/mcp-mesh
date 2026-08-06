@@ -221,6 +221,10 @@ export function resolveConfig(config: AgentConfig): ResolvedAgentConfig {
     // SDK-side timer, not part of the registration envelope — the same
     // reason Java resolves MCP_MESH_HEALTH_CHECK_TTL in its own registry.
     healthCheckTtl: resolveHealthCheckTtlFromEnv(config.healthCheckTtl),
+    // RFC #1502: passed through unchanged. There is no env override and no
+    // TTL — startupProbe stops polling on first success, so the check runs a
+    // handful of times at most and there is nothing to cache or tune.
+    startupCheck: config.startupCheck,
   };
 }
 

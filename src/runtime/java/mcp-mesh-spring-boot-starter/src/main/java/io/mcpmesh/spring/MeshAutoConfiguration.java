@@ -704,8 +704,9 @@ public class MeshAutoConfiguration {
     @ConditionalOnMissingBean
     public MeshHealthController meshHealthController(
             @org.springframework.context.annotation.Lazy MeshRuntime runtime,
-            MeshHealthCheckRegistry healthCheckRegistry) {
-        return new MeshHealthController(runtime, healthCheckRegistry);
+            MeshHealthCheckRegistry healthCheckRegistry,
+            MeshStartupCheckRegistry startupCheckRegistry) {
+        return new MeshHealthController(runtime, healthCheckRegistry, startupCheckRegistry);
     }
 
     /**
@@ -730,6 +731,29 @@ public class MeshAutoConfiguration {
     public static MeshHealthCheckBeanPostProcessor meshHealthCheckBeanPostProcessor(
             MeshHealthCheckRegistry registry) {
         return new MeshHealthCheckBeanPostProcessor(registry);
+    }
+
+    /**
+     * RFC #1502: holds the agent's {@code @MeshStartupCheck}. A plain holder
+     * with no collaborators and no scheduler — {@code startupProbe} stops
+     * polling after its first success, so the check runs on demand from
+     * {@code /startupz} and there is nothing to refresh or cache.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public static MeshStartupCheckRegistry meshStartupCheckRegistry() {
+        return new MeshStartupCheckRegistry();
+    }
+
+    /**
+     * RFC #1502: scans beans for {@code @MeshStartupCheck}. Static factory so
+     * the processor is instantiated before user beans.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public static MeshStartupCheckBeanPostProcessor meshStartupCheckBeanPostProcessor(
+            MeshStartupCheckRegistry registry) {
+        return new MeshStartupCheckBeanPostProcessor(registry);
     }
 
     /**

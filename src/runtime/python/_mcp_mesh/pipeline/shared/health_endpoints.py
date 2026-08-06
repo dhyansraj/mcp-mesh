@@ -15,6 +15,12 @@ Semantics (matching TypeScript's ``express.ts`` ``setupHealthEndpoints``):
     must not share a verdict with readiness, or a dependency outage that
     should only make the service unready restarts the pod instead.
 
+``/startupz``
+    The user's ``startup_check`` (RFC #1502). Unlike ``health_check`` this one
+    IS honoured on a gateway: it does not withdraw anything at runtime, it
+    decides whether a misconfigured gateway is allowed to come up at all, and
+    a gateway with a broken config should never come up.
+
 ``/ready``
     Whether the **mesh runtime** is up — a live Rust core handle exists and
     shutdown has not been requested — and nothing else.
@@ -30,7 +36,7 @@ For the same reason there is no health-refresh loop on these pipelines.
 
 The app is the user's, so each path is registered only if the application has
 not already defined it (``examples/python/mesh-api/main.py`` hand-rolls
-``/health`` precisely because mesh never did). The three are registered
+``/health`` precisely because mesh never did). Each is registered
 independently: an app that defines only ``/health`` still gets ``/livez`` and
 ``/ready``. The check is an explicit route walk rather than a reliance on
 Starlette's first-match-wins ordering — behaviour that depends on registration
@@ -51,6 +57,7 @@ logger = logging.getLogger(__name__)
 LIVEZ_PATH = "/livez"
 READY_PATH = "/ready"
 HEALTH_PATH = "/health"
+STARTUPZ_PATH = "/startupz"
 
 # Stamped on the handlers mesh registers so a second pipeline pass (or a
 # second discovered app object that shares a router) can tell its own
@@ -133,7 +140,7 @@ def register_health_endpoints(
     service_type: str,
     standalone: bool = False,
 ) -> dict[str, str]:
-    """Register ``/livez``, ``/ready`` and ``/health`` on a user-owned app.
+    """Register ``/livez``, ``/startupz``, ``/ready`` and ``/health`` on a user-owned app.
 
     Args:
         app: the user's FastAPI application
@@ -141,7 +148,7 @@ def register_health_endpoints(
         standalone: MCP_MESH_STANDALONE — no registry, hence no Rust handle
 
     Returns:
-        ``{path: outcome}`` for all three paths, where outcome is one of
+        ``{path: outcome}`` for every path, where outcome is one of
         ``registered`` / ``user_defined`` / ``already_registered``.
 
     Raises:
@@ -159,6 +166,18 @@ def register_health_endpoints(
             status_code=200,
             content=build_livez_response(agent_name=_agent_name()),
         )
+
+    async def startupz():
+        # RFC #1502. The one hook a gateway DOES honour: it never withdraws a
+        # running fan-out point, it only stops a misconfigured one from coming
+        # up. Runs per hit — startupProbe stops polling on first success.
+        from ...shared.startup_check_manager import build_startupz_response
+
+        body, status_code = await build_startupz_response(
+            agent_name=_agent_name(),
+            service_type=service_type,
+        )
+        return JSONResponse(status_code=status_code, content=body)
 
     async def ready():
         is_ready, state = runtime_state(standalone)
@@ -190,7 +209,12 @@ def register_health_endpoints(
             },
         )
 
-    handlers = ((LIVEZ_PATH, livez), (READY_PATH, ready), (HEALTH_PATH, health))
+    handlers = (
+        (LIVEZ_PATH, livez),
+        (STARTUPZ_PATH, startupz),
+        (READY_PATH, ready),
+        (HEALTH_PATH, health),
+    )
 
     outcomes: dict[str, str] = {}
     for path, handler in handlers:
@@ -221,7 +245,8 @@ class HealthEndpointsStep(PipelineStep):
 
     Shared by the api (``@mesh.route``) and a2a (``@mesh.a2a``) pipelines —
     both hand mesh an app they do not own, and both are deployed with the
-    agent Helm chart that probes ``/livez`` and ``/ready``.
+    agent Helm chart that probes ``/livez`` and ``/ready`` (and, once the
+    chart is repointed, ``/startupz``).
 
     Optional (``required=False``): a failure here must not stop the gateway
     from starting. It is loud instead — the alternative, aborting startup,
@@ -232,7 +257,7 @@ class HealthEndpointsStep(PipelineStep):
         super().__init__(
             name="health-endpoints",
             required=False,
-            description="Register /livez, /ready and /health on the user's FastAPI app",
+            description="Register /livez, /startupz, /ready and /health on the user's FastAPI app",
         )
         self.service_type = service_type
 
