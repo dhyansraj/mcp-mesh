@@ -8,9 +8,16 @@
  * going to fix itself, and today it looks exactly like a vendor outage: the
  * agent sits unregistered, the pod runs, and nothing is loud.
  *
- * `startupCheck` is reported by `/startupz`, which the agent chart's
- * `startupProbe` polls. A pod whose startup check never passes never becomes
- * ready, never registers, and ends up in `CrashLoopBackOff` — visible.
+ * **What ships today (RFC #1502 step 1).** `startupCheck` is reported by
+ * `GET|HEAD /startupz`, and that is the whole effect: a failing check answers
+ * 503 there. Nothing else changes — the agent is not withdrawn, the heartbeat
+ * is untouched, `/livez` and `/ready` answer exactly as they did.
+ *
+ * The agent chart's `startupProbe` still points at `/livez`, so nothing acts on
+ * the verdict yet. Repointing it at `/startupz` is step 2, and it is what the
+ * hook exists for: a pod whose startup check never passes then never becomes
+ * ready, never registers, and ends up in `CrashLoopBackOff` — visible. Until
+ * then, `/startupz` is a surface to build against and to scrape.
  *
  * Three properties are deliberate, and each is the OPPOSITE of the
  * corresponding `healthCheck` rule:
@@ -25,7 +32,7 @@
  * - **Anything short of a clean pass fails.** `degraded`, an unrecognized
  *   return, `undefined` — all fail. There is no partial credit for "am I
  *   configured".
- * - **There is no cache.** `startupProbe` stops polling after its first
+ * - **There is no cache.** A `startupProbe` stops polling after its first
  *   success, so the check runs a handful of times at most. A TTL cache would
  *   only add a way for the endpoint to answer with a verdict older than the
  *   probe that asked for it.
@@ -124,9 +131,13 @@ export async function runStartupCheck(
     return { passed: true, checks: {}, errors: [] };
   }
 
-  let raw: unknown;
   try {
-    raw = await check();
+    // `parse` is INSIDE the guard, not after it. Reducing the return value
+    // reads user-controlled properties — a getter, a Proxy, a lazily-computed
+    // `status` — and a throw there is exactly as indeterminate as a throw from
+    // the check itself. Parsing outside would leave the one path this hook
+    // exists for able to reject out of a function documented never to.
+    return parse(await check());
   } catch (err) {
     const reason = describe(err);
     console.warn(
@@ -139,7 +150,6 @@ export async function runStartupCheck(
       errors: [`Startup check failed: ${reason}`],
     };
   }
-  return parse(raw);
 }
 
 /**

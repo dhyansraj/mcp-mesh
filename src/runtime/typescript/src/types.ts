@@ -325,11 +325,16 @@ export interface AgentConfig {
    * RFC #1502: a check that answers "is this agent configured such that it can
    * EVER serve?", as opposed to {@link healthCheck}'s "can I serve right now".
    *
-   * Reported by `GET|HEAD /startupz`, which the agent chart's `startupProbe`
-   * polls. A pod whose startup check never passes never becomes ready, never
-   * registers, and ends up in `CrashLoopBackOff` — which is the point: a
-   * missing API key is not going to fix itself, and without this it looks
-   * exactly like a vendor outage.
+   * Today (RFC #1502 step 1) the verdict is reported by `GET|HEAD /startupz`
+   * and nothing else: a failing check answers 503 there, and the agent is not
+   * withdrawn, the heartbeat is untouched, `/livez` and `/ready` are unchanged.
+   * The agent chart's `startupProbe` still points at `/livez`.
+   *
+   * Repointing that probe at `/startupz` is step 2, and it is what the hook
+   * exists for: a pod whose startup check never passes then never becomes
+   * ready, never registers, and ends up in `CrashLoopBackOff` — a missing API
+   * key is not going to fix itself, and without this it looks exactly like a
+   * vendor outage.
    *
    * The verdict rules are the OPPOSITE of {@link healthCheck}'s: a check that
    * THROWS fails the probe (it does not degrade), and anything short of a
@@ -342,8 +347,8 @@ export interface AgentConfig {
    * withdraws a running fan-out point, it only stops a misconfigured one from
    * coming up. Omitting it passes, so this is purely additive.
    *
-   * Runs once per probe hit — `startupProbe` stops polling on first success,
-   * so there is nothing to cache. Keep it fast: the chart's probe
+   * Runs once per request — a startup probe stops polling on first success, so
+   * there is nothing to cache. Keep it fast: the chart's probe
    * `timeoutSeconds` is 5.
    *
    * @example

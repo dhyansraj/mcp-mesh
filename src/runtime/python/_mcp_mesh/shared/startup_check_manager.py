@@ -7,9 +7,16 @@ configured such that it can *ever* serve?" A missing API key is not going to fix
 itself, and today it looks exactly like a vendor outage — the agent sits
 unregistered, the pod runs, and nothing is loud.
 
-``startup_check`` is reported by ``/startupz``, which the agent chart's
-``startupProbe`` polls. A pod whose startup check never passes never becomes
-ready, never registers, and ends up in ``CrashLoopBackOff`` — visible.
+**What ships today (RFC #1502 step 1).** ``startup_check`` is reported by
+``GET``/``HEAD`` ``/startupz``, and that is the whole effect: a failing check
+answers 503 there. Nothing else changes — the agent is not withdrawn, the
+heartbeat is untouched, ``/livez`` and ``/ready`` answer exactly as they did.
+
+The agent chart's ``startupProbe`` still points at ``/livez``, so nothing acts
+on the verdict yet. Repointing it at ``/startupz`` is step 2, and it is what
+the hook exists for: a pod whose startup check never passes then never becomes
+ready, never registers, and ends up in ``CrashLoopBackOff`` — visible. Until
+then, ``/startupz`` is a surface to build against and to scrape.
 
 Three properties are deliberate, and each is the OPPOSITE of the corresponding
 ``health_check`` rule:
@@ -27,8 +34,8 @@ Three properties are deliberate, and each is the OPPOSITE of the corresponding
     partial credit for "am I configured".
 
 ``There is no cache.``
-    ``startupProbe`` stops polling after its first success, so the check runs a
-    handful of times at most. A TTL cache would only add a way for the endpoint
+    A ``startupProbe`` stops polling after its first success, so the check runs
+    a handful of times at most. A TTL cache would only add a way for the endpoint
     to answer with a verdict older than the probe that asked for it.
 
 An agent that declares no ``startup_check`` passes. Default-true is what makes
@@ -41,6 +48,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from .health_check_manager import _for_warning
 from .support_types import HealthStatus, HealthStatusType
 
 logger = logging.getLogger(__name__)
@@ -82,21 +90,29 @@ def _parse_startup_result(raw: Any) -> tuple[bool, dict, list]:
     ``healthy``/``True`` passes (see the module docstring).
     """
     if isinstance(raw, bool):
-        return raw, {"startup_check": raw}, [] if raw else ["Startup check returned False"]
+        return (
+            raw,
+            {"startup_check": raw},
+            [] if raw else ["Startup check returned False"],
+        )
 
     if isinstance(raw, dict):
         status = str(raw.get("status", "healthy")).lower()
         passed = status == "healthy"
         errors = list(raw.get("errors", []))
         if not passed and not errors:
-            errors = [f"Startup check reported '{status}'"]
+            errors = [f"Startup check reported '{_for_warning(status)}'"]
         return passed, dict(raw.get("checks", {})), errors
 
     if isinstance(raw, HealthStatus):
         passed = raw.status == HealthStatusType.HEALTHY
         errors = list(raw.errors)
         if not passed and not errors:
-            errors = [f"Startup check reported '{raw.status.value}'"]
+            # Not ``raw.status.value``: ``model_construct`` skips validation, so
+            # ``status`` need not be the enum, and interpolating a user value is
+            # the hazard ``_for_warning`` exists for (see health_check_manager).
+            status = getattr(raw.status, "value", raw.status)
+            errors = [f"Startup check reported '{_for_warning(status)}'"]
         return passed, dict(raw.checks), errors
 
     type_name = type(raw).__name__
@@ -132,6 +148,12 @@ async def run_startup_check(
         result = check()
         if inspect.isawaitable(result):
             result = await result
+        # Parsed INSIDE the guard, not after it. Reducing the return value
+        # touches user-controlled attributes — a lazily-computed ``status``, a
+        # dict-like config object — and a raise there is exactly as
+        # indeterminate as a raise from the check itself. Parsing outside would
+        # leave the one path this hook exists for able to 500 the endpoint.
+        return _parse_startup_result(result)
     except Exception as e:
         # Broad on purpose. A throwing check must not take the endpoint down
         # with it, and unlike health_check (where a throw degrades and the
@@ -139,8 +161,6 @@ async def run_startup_check(
         # docstring on why an indeterminate boot-time answer fails.
         logger.warning("startup_check raised — failing the startup probe: %s", e)
         return False, {"startup_check_execution": False}, [f"Startup check failed: {e}"]
-
-    return _parse_startup_result(result)
 
 
 async def build_startupz_response(

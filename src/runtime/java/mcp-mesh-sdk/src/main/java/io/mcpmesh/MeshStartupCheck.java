@@ -16,10 +16,22 @@ import java.lang.annotation.Target;
  * exactly like a vendor outage — the agent sits unregistered, the pod runs, and
  * nothing is loud.
  *
- * <p>The verdict is served from {@code GET}/{@code HEAD} {@code /startupz}, which
- * the agent Helm chart's {@code startupProbe} polls. A pod whose startup check
- * never passes never becomes ready, never registers, and ends up in
+ * <h2>What ships today (RFC #1502 step 1)</h2>
+ *
+ * <p>The verdict is served from {@code GET}/{@code HEAD} {@code /startupz}, and
+ * that is the whole effect: a failing check answers 503 there. Nothing else
+ * changes — the agent is not withdrawn, the heartbeat is untouched, and
+ * {@code /livez} and {@code /ready} answer exactly as they did.
+ *
+ * <p>The agent Helm chart's {@code startupProbe} still points at {@code /livez},
+ * so nothing acts on the verdict yet. Repointing it at {@code /startupz} is
+ * step 2, and it is what this hook exists for: a pod whose startup check never
+ * passes then never becomes ready, never registers, and ends up in
  * {@code CrashLoopBackOff} — which is the point.
+ *
+ * <p>The message on a failing verdict is served to any caller who can reach the
+ * pod, so name the setting that is missing without including its value:
+ * {@code "ANTHROPIC_API_KEY is not set"}, never the key itself.
  *
  * <h2>Shape</h2>
  *
@@ -65,7 +77,7 @@ import java.lang.annotation.Target;
  * point; it only stops a misconfigured one from coming up, and a gateway with a
  * broken config should never come up.
  *
- * <p>The check runs once per probe hit. {@code startupProbe} stops polling after
+ * <p>The check runs once per request. A {@code startupProbe} stops polling after
  * its first success, so it runs a handful of times at most and there is nothing
  * to cache — hence no {@code ttlSeconds} here. Keep it fast: the chart's probe
  * {@code timeoutSeconds} is 5.

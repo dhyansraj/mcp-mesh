@@ -144,6 +144,25 @@ describe("runStartupCheck — the verdict rules", () => {
     expect((await runStartupCheck((() => null) as any, "a")).passed).toBe(false);
   });
 
+  it("a return value whose accessors throw fails rather than rejecting", async () => {
+    // The whole premise of this hook is fail-closed, so the reduction of the
+    // return value has to be inside the same guard as the call. A getter that
+    // raises is the reachable case: a config object backed by a Proxy, or a
+    // lazily-computed `status` that throws when the vendor client is missing.
+    const hostile = {
+      get status(): string {
+        throw new Error("config not loaded");
+      },
+    };
+    const verdict = await runStartupCheck(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (() => hostile) as any,
+      "a",
+    );
+    expect(verdict.passed).toBe(false);
+    expect(verdict.errors[0]).toContain("config not loaded");
+  });
+
   it("runs on every call — there is no cache", async () => {
     const check = vi.fn(() => true);
     await runStartupCheck(check, "a");

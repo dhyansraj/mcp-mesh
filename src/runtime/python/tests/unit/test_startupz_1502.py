@@ -76,6 +76,11 @@ def _gateway_app(pipeline_cls=APIPipeline, app=None):
     return app
 
 
+async def _async_true():
+    """The async half of the sync/async parametrisation below."""
+    return True
+
+
 @pytest.fixture
 def runtime_up(monkeypatch):
     from _mcp_mesh.shared import simple_shutdown
@@ -142,14 +147,12 @@ class TestRunStartupCheck:
 
     @pytest.mark.parametrize(
         "check",
-        [lambda: True, pytest.param(None, id="async")],
+        [
+            pytest.param(lambda: True, id="sync"),
+            pytest.param(_async_true, id="async"),
+        ],
     )
     def test_true_passes_sync_and_async(self, check):
-        if check is None:
-
-            async def check():  # noqa: F811 - the async variant
-                return True
-
         passed, _, errors = asyncio.run(run_startup_check(check))
         assert passed is True
         assert errors == []
@@ -233,6 +236,50 @@ class TestRunStartupCheck:
         passed, _, _ = asyncio.run(run_startup_check(lambda: None))
         assert passed is False
 
+    def test_a_dict_whose_lookup_raises_fails_rather_than_propagating(self):
+        """Fail-closed covers reducing the return value, not just calling it.
+
+        A check that hands back a dict-like config object — one lazily backed
+        by a vendor client that is the very thing missing — must fail the probe
+        the same way a throwing check does, not 500 the endpoint.
+        """
+
+        class HostileDict(dict):
+            def get(self, *args, **kwargs):
+                raise RuntimeError("config not loaded")
+
+        passed, _, errors = asyncio.run(run_startup_check(lambda: HostileDict()))
+        assert passed is False
+        assert "config not loaded" in errors[0]
+
+    def test_a_health_status_with_an_unvalidated_status_fails_closed(self):
+        """``raw.status.value`` is only safe while validation has run.
+
+        ``model_construct`` bypasses it, and formatting the *value* rather than
+        the type into a message is the hazard ``health_check_manager``'s
+        ``_for_warning`` exists for.
+        """
+        from _mcp_mesh.shared.support_types import HealthStatus
+
+        raw = HealthStatus.model_construct(
+            agent_name="a", status="not-an-enum", capabilities=["c"]
+        )
+
+        passed, _, errors = asyncio.run(run_startup_check(lambda: raw))
+        assert passed is False
+        assert errors
+
+    def test_an_unrepresentable_return_type_still_fails_closed(self):
+        """The invalid-type path names the TYPE, never ``repr`` of the value."""
+
+        class Unprintable:
+            def __repr__(self):
+                raise RuntimeError("cannot repr")
+
+        passed, _, errors = asyncio.run(run_startup_check(lambda: Unprintable()))
+        assert passed is False
+        assert "Unprintable" in errors[0]
+
     def test_the_check_runs_on_every_call_there_is_no_cache(self):
         calls = []
 
@@ -299,6 +346,13 @@ class TestProviderEndpoint:
             started.wait(timeout=5)
 
         monkeypatch.setattr(uvicorn.Server, "run", fake_run)
+        # `_start_uvicorn_immediately` ends by JOINING the server thread, which
+        # here is parked in `fake_run` — without this the fixture blocks for the
+        # full 5s budget before yielding (8 tests x 5s), and the real function
+        # installs process-wide SIGINT/SIGTERM handlers on its way there.
+        monkeypatch.setattr(
+            decorators, "start_blocking_loop_with_shutdown_support", lambda thread: None
+        )
         saved = list(simple_shutdown._simple_shutdown_coordinator._uvicorn_servers)
         try:
             decorators._start_uvicorn_immediately(BIND_HOST, 0)

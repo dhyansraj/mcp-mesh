@@ -162,7 +162,6 @@ class MeshStartupzControllerTest {
         // exists to cover exactly that window. Flooring on isRunning() would
         // fail the probe for the whole boot it is meant to be waiting through.
         MeshRuntime runtime = mock(MeshRuntime.class);
-        when(runtime.isRunning()).thenReturn(false);
         MeshHealthController c =
             new MeshHealthController(runtime, null, withCheck("passes"));
 

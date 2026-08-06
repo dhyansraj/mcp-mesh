@@ -264,17 +264,20 @@ public class MeshHealthController {
      * Kubernetes startup probe (RFC #1502).
      *
      * <p>Reports whether this agent is configured well enough to serve at all,
-     * as opposed to {@code /ready}'s "should traffic reach me now". A pod whose
-     * startup check never passes never becomes ready, never registers, and ends
-     * up in {@code CrashLoopBackOff} where a misconfiguration is visible instead
-     * of looking like a vendor outage.
+     * as opposed to {@code /ready}'s "should traffic reach me now". Step 1 of
+     * RFC #1502 is this endpoint and nothing else: a failing check answers 503
+     * here, and {@code /livez}, {@code /ready} and the heartbeat are unchanged.
+     * Pointing the chart's {@code startupProbe} at it — after which a check
+     * that never passes keeps the pod from ever becoming ready and lands it in
+     * {@code CrashLoopBackOff}, where a misconfiguration is visible instead of
+     * looking like a vendor outage — is step 2.
      *
      * <p>A NEW endpoint rather than a reuse of {@code /livez}: the chart points
      * both {@code startupProbe} and {@code livenessProbe} at {@code /livez}, and
      * an endpoint cannot tell which probe called it, so sharing one would let a
      * failing startup check kill a running pod every ten seconds.
      *
-     * <p>The check runs on every hit. {@code startupProbe} stops polling after
+     * <p>The check runs on every hit. A {@code startupProbe} stops polling after
      * its first success, so there is nothing to cache.
      */
     @GetMapping("/startupz")

@@ -49,6 +49,7 @@ from typing import Any, Optional
 
 from ...shared.config_resolver import ValidationRule, get_config_value
 from ...shared.fastapi_routes import iter_app_routes
+from ...shared.startup_check_manager import STARTUPZ_PATH
 from .base_step import PipelineStep
 from .pipeline_types import PipelineResult, PipelineStatus
 
@@ -57,7 +58,9 @@ logger = logging.getLogger(__name__)
 LIVEZ_PATH = "/livez"
 READY_PATH = "/ready"
 HEALTH_PATH = "/health"
-STARTUPZ_PATH = "/startupz"
+# STARTUPZ_PATH is imported, not redeclared: the hook module owns the path it
+# is served on, and two spellings of "/startupz" is one rename away from a
+# gateway serving the endpoint on a path nothing probes.
 
 # Stamped on the handlers mesh registers so a second pipeline pass (or a
 # second discovered app object that shares a router) can tell its own

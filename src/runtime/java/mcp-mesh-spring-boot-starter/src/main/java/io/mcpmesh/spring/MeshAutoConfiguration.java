@@ -735,7 +735,7 @@ public class MeshAutoConfiguration {
 
     /**
      * RFC #1502: holds the agent's {@code @MeshStartupCheck}. A plain holder
-     * with no collaborators and no scheduler — {@code startupProbe} stops
+     * with no collaborators and no scheduler — a {@code startupProbe} stops
      * polling after its first success, so the check runs on demand from
      * {@code /startupz} and there is nothing to refresh or cache.
      */

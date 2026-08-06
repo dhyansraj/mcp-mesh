@@ -20,7 +20,7 @@ import java.util.Map;
  * differences that both follow from what {@code startupProbe} does:
  *
  * <ul>
- *   <li><b>No stored latest result and no scheduler.</b> {@code startupProbe}
+ *   <li><b>No stored latest result and no scheduler.</b> A {@code startupProbe}
  *       stops polling after its first success, so the check runs a handful of
  *       times at most. A cached verdict would only add a way for
  *       {@code /startupz} to answer with a result older than the probe that

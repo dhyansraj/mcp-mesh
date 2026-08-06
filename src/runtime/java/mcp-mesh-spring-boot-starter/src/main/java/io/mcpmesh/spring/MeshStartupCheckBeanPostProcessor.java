@@ -26,9 +26,10 @@ import java.util.Map;
  *
  * <p>The signature is checked here rather than coerced at runtime — and it
  * matters more for this hook than for the health check. A startup check with a
- * wrong shape would fail its probe forever, which is a {@code CrashLoopBackOff}
- * whose only stated cause is "startup probe failed". Failing the boot names the
- * method instead.
+ * wrong shape would fail its endpoint forever, and once the chart's
+ * {@code startupProbe} points at {@code /startupz} (RFC #1502 step 2) that is a
+ * {@code CrashLoopBackOff} whose only stated cause is "startup probe failed".
+ * Failing the boot names the method instead.
  */
 public class MeshStartupCheckBeanPostProcessor implements BeanPostProcessor, Ordered {
 

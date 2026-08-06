@@ -23,6 +23,14 @@ class MeshStartupCheckBeanPostProcessorTest {
         }
     }
 
+    /** {@code Boolean} and {@code boolean} are different types to reflection. */
+    static class ValidBoxedBoolean {
+        @MeshStartupCheck
+        public Boolean check() {
+            return Boolean.TRUE;
+        }
+    }
+
     static class ValidMeshHealth {
         @MeshStartupCheck
         public MeshHealth check() {
@@ -93,6 +101,16 @@ class MeshStartupCheckBeanPostProcessorTest {
         MeshStartupCheckRegistry registry = process(new ValidBoolean());
         assertTrue(registry.hasStartupCheck());
         assertEquals("check", registry.registration().method().getName());
+    }
+
+    @Test
+    void discoversABoxedBooleanCheck() {
+        // `Method.getReturnType()` reports `Boolean` and `boolean` as distinct
+        // classes, so accepting one says nothing about the other — and a method
+        // that reads a nullable config field is naturally written boxed.
+        MeshStartupCheckRegistry registry = process(new ValidBoxedBoolean());
+        assertTrue(registry.hasStartupCheck());
+        assertTrue(registry.execute().passed());
     }
 
     @Test
