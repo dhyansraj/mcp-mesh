@@ -1,10 +1,13 @@
 package scaffold
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 // Issue #1483. `helm-values.yaml.tmpl` used to wire ANTHROPIC_API_KEY,
@@ -203,5 +206,106 @@ func TestHelmValues_EnvBlockShapePerBranch(t *testing.T) {
 			require.Contains(t, content, "# env:\n",
 				"the commented reference skeleton must survive")
 		})
+	}
+}
+
+// The other half of #1483: llm-provider was not the only template wiring vendor
+// keys. `llm-agent`, `api` and `basic` shipped the same `llm-secrets` block (and
+// a generic `API_KEY: "your-api-key"` secrets example) in all three languages.
+//
+// `api` and `basic` are not LLM agents at all. `llm-agent` is one, but it reaches
+// its model through mesh DI — `@mesh.llm(provider={"capability": "llm", ...})`,
+// `mesh.llm({provider: {capability: "llm"}})`, `@MeshLlm(providerSelector =
+// @Selector(capability = "llm"))`. The credential lives on the llm-provider agent
+// it resolves to, and none of the three carries a vendor SDK in its dependency
+// manifest to use one with. A key wired into the CONSUMER's pod is read by
+// nothing.
+//
+// So the assertion is flat: a template that is not llm-provider may not name a
+// vendor key, because none of them is in a position to know one. Same subtractive
+// shape as the guards above — stop asserting something false.
+var nonProviderTemplates = []string{"llm-agent", "api", "basic", "a2a-consumer"}
+
+// renderNonProviderHelmValues scaffolds one of the non-llm-provider templates and
+// returns its rendered helm-values.yaml. Defaults come from NewScaffoldContext so
+// the render matches what `meshctl scaffold -t <template>` actually produces.
+func renderNonProviderHelmValues(t *testing.T, language, template string) string {
+	t.Helper()
+	ctx := NewScaffoldContext()
+	ctx.Name = "credential-guard"
+	ctx.Description = "credential guard"
+	ctx.Language = language
+	ctx.OutputDir = t.TempDir()
+	ctx.Port = 9400
+	ctx.Template = template
+	ctx.TemplateDir = templatesRoot(t)
+	ctx.AgentType = ""
+	ctx.ProviderTags = []string{"llm", "+claude"}
+	require.NoError(t, NewStaticProvider().Execute(ctx))
+
+	path := filepath.Join(ctx.OutputDir, ctx.Name, "helm-values.yaml")
+	content, err := os.ReadFile(path)
+	require.NoError(t, err, "rendered helm values %s", path)
+	return string(content)
+}
+
+func TestHelmValues_NonProviderTemplatesWireNoVendorCredentials(t *testing.T) {
+	for _, language := range helmLanguages {
+		for _, template := range nonProviderTemplates {
+			t.Run(language+" "+template, func(t *testing.T) {
+				content := renderNonProviderHelmValues(t, language, template)
+
+				for _, key := range allVendorKeys {
+					require.NotContains(t, content, key,
+						"a %s/%s scaffold has no vendor credential to hold: an "+
+							"llm-agent resolves its provider through the mesh and "+
+							"api/basic are not LLM agents at all, so wiring %s "+
+							"sends the operator to configure something nothing reads",
+						language, template, key)
+				}
+				for _, key := range allVendorSecretKeys {
+					require.NotContains(t, content, key,
+						"the kubectl comment still instructs a %s literal for %s/%s",
+						key, language, template)
+				}
+				require.NotContains(t, content, "API_KEY",
+					"naming any API key here, vendor-specific or generic, is the "+
+						"assertion #1483 removes from %s/%s", language, template)
+				require.NotContains(t, content, "your-api-key",
+					"the generic secrets example names a credential nothing reads")
+			})
+		}
+	}
+}
+
+// Removing the block must leave valid YAML, and specifically must not leave an
+// `env:` key with nothing under it: helm parses that as null and the chart's
+// range over it fails. The whole point of these files is to be applied, so they
+// are parsed here rather than pattern-matched.
+func TestHelmValues_NonProviderTemplatesParseWithNoEmptyEnv(t *testing.T) {
+	for _, language := range helmLanguages {
+		for _, template := range nonProviderTemplates {
+			t.Run(language+" "+template, func(t *testing.T) {
+				content := renderNonProviderHelmValues(t, language, template)
+
+				var values map[string]interface{}
+				require.NoError(t, yaml.Unmarshal([]byte(content), &values),
+					"%s/%s helm values must parse", language, template)
+
+				if env, ok := values["env"]; ok {
+					require.NotNil(t, env,
+						"`env:` with no items parses as null and breaks the chart — "+
+							"omit the key instead of leaving it bare")
+				}
+				if secrets, ok := values["secrets"]; ok {
+					require.NotNil(t, secrets,
+						"`secrets:` with no items parses as null and breaks the chart")
+				}
+				require.NotContains(t, content, "\nenv:\n",
+					"%s/%s must keep its env skeleton commented out — an active but "+
+						"empty `env:` overrides the chart's base values with null",
+					language, template)
+			})
+		}
 	}
 }
