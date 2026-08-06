@@ -210,12 +210,28 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // names the two paths a liveness probe must not use. The `_java` and
 // `_typescript` variants carry the same three bullets, but their `/ready` and
 // `/health` lines and their closing reason are written to what those runtimes
-// actually return (no user health check; TypeScript's `/health` is a fixed
-// 200). None of that moves these constants: they sample only the default
-// variant, so edits confined to a `_java` / `_typescript` file are invisible
-// here and a review of those files cannot lean on this test.
+// actually return. That was "no user health check; TypeScript's `/health` is a
+// fixed 200" when this landed and is no longer true of either: #1474/#1475 gave
+// Java a user check, #1478/#1487 made TypeScript's `/ready` and `/health`
+// reflect its verdict, and #1488 exempted a Java gateway's `/ready` from it.
+// The variants have been rewritten to match; do not read the superseded
+// parenthetical as current behaviour. None of that moves these constants: they
+// sample only the default variant, so edits confined to a `_java` /
+// `_typescript` file are invisible here and a review of those files cannot lean
+// on this test.
+// #1472 follow-up: +25 / +0 / +0, all in `health.md`. The default variant
+// documented `health_check` without saying what an unhealthy verdict DOES,
+// while both siblings covered it — so the most-read page for the primary
+// runtime omitted the whole feature. It gains four sections: withdrawal (the
+// heartbeat stops, the registry withdraws, resolution reroutes) with the
+// startup-seed exemption, the probe endpoints, `degraded` splitting the two
+// surfaces, and the route/A2A case. Itemised so the next mover knows the bar:
+// intro 2, "one check per agent" 5, startup seed 1, probes 7, explicit-unhealthy
+// 5, `degraded` 3, route/A2A 2 = 25 added, 0 removed. The two list goldens held
+// because every added paragraph is prose — not one new bullet — and those tests
+// count only list lines.
 const (
-	wantInlineCodeSpans = 1698
+	wantInlineCodeSpans = 1723
 	wantListCodeSpans   = 516
 	wantMarkupListLines = 445
 )

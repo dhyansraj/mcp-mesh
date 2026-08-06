@@ -56,7 +56,7 @@ One check per agent, on any Spring bean. Return `MeshHealth` for full detail, or
 
 While the check reports unhealthy the agent **stops heartbeating**. The registry marks it unhealthy after the staleness window, dependency resolution stops selecting it, and consumers move to another provider. When the check passes again the heartbeat resumes and the registry restores the agent through the `410 Gone` re-register path - no restart. The TTL is the cadence, not the end-to-end latency: it only bounds how long until the next check runs. Withdrawal costs that plus the registry's staleness window once heartbeats stop, and recovery costs it plus the heartbeat resume and re-register round trip.
 
-The verdict also drives the probe endpoints: `/ready` answers 503 while unhealthy, and `/health` carries the `checks` and `errors` the method returned. `/livez` never consults it - a restart cannot fix a vendor outage.
+The verdict also drives the probe endpoints: `/ready` answers 503 while unhealthy, and `/health` carries the `checks` and `errors` the method returned. `/livez` never consults it - a restart cannot fix a vendor outage. On a route (`api`) or A2A agent `/ready` is exempt too - see below.
 
 ### Only an Explicit Unhealthy Withdraws the Agent
 
@@ -66,7 +66,7 @@ A check that **throws** is recorded as `degraded`, not unhealthy, and keeps hear
 
 ### Route and A2A Agents
 
-On a route-only (`api`) or A2A agent the check feeds `/health` and `/ready` but **never** suppresses the heartbeat. A gateway is a fan-out point that many requests enter through: withdrawing a provider is correct, withdrawing the gateway takes the application down. This matches Python, whose API and A2A pipelines have no health-refresh loop at all.
+On a route-only (`api`) or A2A agent the check feeds `/health` only. It **never** suppresses the heartbeat and **never** affects `/ready`, which reports whether the mesh runtime is up and nothing else. A gateway is a fan-out point that many requests enter through: withdrawing a provider is correct, withdrawing the gateway takes the application down - and a 503 on `/ready` drops it from its Kubernetes Service endpoints, which takes it down harder. `/health` is where you see what a gateway's check reports. This matches Python, whose API and A2A pipelines have no health-refresh loop at all.
 
 ## Checking Dependency Health
 

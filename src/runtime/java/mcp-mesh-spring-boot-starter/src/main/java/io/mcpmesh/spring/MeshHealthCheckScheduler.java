@@ -6,7 +6,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.SmartLifecycle;
 
-import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -48,16 +47,6 @@ public class MeshHealthCheckScheduler implements SmartLifecycle {
     /** After {@link MeshRuntime} (MAX-100) and {@link MeshEventProcessor} (MAX-50). */
     private static final int LIFECYCLE_PHASE = Integer.MAX_VALUE - 40;
 
-    /**
-     * Agent types whose health verdict must never suppress the heartbeat.
-     *
-     * <p>A route ({@code api}) or A2A agent is a fan-out point that many
-     * requests enter through: withdrawing a provider is correct, withdrawing
-     * the gateway takes the application down. Python encodes the same asymmetry
-     * by giving its API and A2A pipelines no health-refresh loop at all.
-     */
-    private static final Set<String> NEVER_WITHDRAWN = Set.of("api", "a2a");
-
     private final MeshRuntime runtime;
     private final MeshHealthCheckRegistry registry;
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -86,7 +75,8 @@ public class MeshHealthCheckScheduler implements SmartLifecycle {
             return;
         }
 
-        this.publishToRuntime = !NEVER_WITHDRAWN.contains(agentType());
+        String agentType = MeshAgentTypes.agentTypeOf(runtime);
+        this.publishToRuntime = !MeshAgentTypes.isGateway(agentType);
         int ttl = registry.ttlSeconds();
 
         if (publishToRuntime) {
@@ -94,10 +84,11 @@ public class MeshHealthCheckScheduler implements SmartLifecycle {
                 + "and withdraws this agent from dependency resolution",
                 registry.registration().describe(), ttl);
         } else {
-            log.info("Health check {} runs every {}s and feeds /health and /ready only — the "
-                + "heartbeat is never suppressed on an '{}' agent (a gateway is a fan-out "
-                + "point; withdrawing it takes the application down)",
-                registry.registration().describe(), ttl, agentType());
+            log.info("Health check {} runs every {}s and feeds /health only — on an '{}' agent "
+                + "neither the heartbeat nor /ready is affected (a gateway is a fan-out point; "
+                + "withdrawing it takes the application down, and dropping it from the Service "
+                + "endpoints takes it down harder)",
+                registry.registration().describe(), ttl, agentType);
         }
 
         executor = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -198,17 +189,5 @@ public class MeshHealthCheckScheduler implements SmartLifecycle {
             log.warn("Failed to report health status '{}' to the mesh runtime: {}",
                 health.status(), t.toString());
         }
-    }
-
-    private String agentType() {
-        try {
-            if (runtime != null && runtime.getAgentSpec() != null) {
-                String type = runtime.getAgentSpec().getAgentType();
-                return type == null ? "" : type;
-            }
-        } catch (Exception e) {
-            log.debug("Could not read agent type: {}", e.toString());
-        }
-        return "";
     }
 }
