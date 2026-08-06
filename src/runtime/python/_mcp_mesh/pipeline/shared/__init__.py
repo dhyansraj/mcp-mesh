@@ -8,8 +8,9 @@ from .base_step import PipelineStep
 from .mesh_pipeline import MeshPipeline
 from .pipeline_types import PipelineResult, PipelineStatus
 
-# NB: imported after the base symbols above — TracePublisherInitStep imports
+# NB: imported after the base symbols above — these steps import
 # PipelineStep/PipelineResult from this package.
+from .health_endpoints import HealthEndpointsStep
 from .trace_publisher_init import TracePublisherInitStep
 
 __all__ = [
@@ -17,5 +18,6 @@ __all__ = [
     "PipelineStep",
     "PipelineResult",
     "PipelineStatus",
+    "HealthEndpointsStep",
     "TracePublisherInitStep",
 ]

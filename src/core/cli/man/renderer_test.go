@@ -234,8 +234,16 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // `MCP_MESH_HEALTH_CHECK_TTL`, so the default variant's `health_check_ttl`
 // sentence closes with the same override clause both siblings already carried;
 // that one new inline span is prose, so the list goldens hold.
+// #1491 follow-up: +3 / +0 / +0, in `health.md`. A Python `@mesh.route` /
+// `@mesh.a2a` gateway served none of the three probe endpoints, so the
+// route/A2A section could only say the health check never runs there — it
+// could not say what a probe hits. Now that both gateway pipelines register
+// them on the user's own FastAPI app, that section states what each one
+// reports (`/livez`, `/ready`, `/health` — the whole delta) and that a path
+// the application already defines wins. Both sentences are prose, so the list
+// goldens hold.
 const (
-	wantInlineCodeSpans = 1724
+	wantInlineCodeSpans = 1727
 	wantListCodeSpans   = 516
 	wantMarkupListLines = 445
 )

@@ -12,7 +12,8 @@ Pipeline shape:
   1. A2A surface collection      (read ``mesh_a2a`` markers from registry)
   2. FastAPI app discovery       (locate the user's FastAPI instance)
   3. Tracing middleware          (attach distributed-tracing middleware)
-  4. A2A server setup            (heartbeat config + ``service_type=a2a``)
+  4. Health endpoints            (``/livez``, ``/ready``, ``/health``)
+  5. A2A server setup            (heartbeat config + ``service_type=a2a``)
 
 DI is wired by the ``@mesh.a2a`` decorator itself at module import (mirrors
 ``@mesh.route``), so this pipeline has no equivalent of
@@ -23,6 +24,7 @@ import logging
 
 from ..api_startup.middleware_integration import \
     TracingMiddlewareIntegrationStep
+from ..shared import HealthEndpointsStep
 from ..shared.mesh_pipeline import MeshPipeline
 from .a2a_server_setup import A2AServerSetupStep
 from .a2a_surface_collection import A2ASurfaceCollectionStep
@@ -39,7 +41,8 @@ class A2APipeline(MeshPipeline):
     1. A2A surface collection (read ``mesh_a2a`` markers)
     2. FastAPI app discovery (locate the user's FastAPI instance)
     3. Tracing middleware integration (shared with api_startup)
-    4. A2A server setup (heartbeat metadata + ``service_type=a2a``)
+    4. Health endpoints (``/livez``, ``/ready``, ``/health``; shared step)
+    5. A2A server setup (heartbeat metadata + ``service_type=a2a``)
 
     Like ``APIPipeline``, this is a consumer-style pipeline:
     - No FastAPI server is created (user owns the app + uvicorn).
@@ -57,6 +60,10 @@ class A2APipeline(MeshPipeline):
             A2ASurfaceCollectionStep(),  # Collect mesh_a2a markers
             A2AFastAPIDiscoveryStep(),  # Find user's FastAPI app
             TracingMiddlewareIntegrationStep(),  # Add tracing middleware
+            # Issue #1491: same probe endpoints as the api pipeline — an A2A
+            # gateway is deployed with the same Helm chart and was 404ing
+            # /livez and /ready just as hard.
+            HealthEndpointsStep(service_type="a2a"),
             A2AServerSetupStep(),  # Heartbeat + service_type=a2a
         ]
 
