@@ -259,8 +259,19 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // until the mesh runtime is up, and TypeScript's `/health` only started
 // answering 503 in 3.5.2 — and neither moves these constants, which sample the
 // default variant alone.
+// #1499 follow-up: +5 / +0 / +0, in `deployment.md`. #1494 gave Python route
+// and A2A gateways `/livez`, `/ready` and `/health` for the first time, with a
+// provider's semantics inverted: `health_check` never runs, `/ready` reports
+// runtime state alone and `/health` is a fixed 200. The page said `/ready`
+// "reflects your `health_check`" unqualified, so it described a provider to
+// the gateway operator reading it while writing a manifest, and it was the one
+// deployment variant with no carve-out — `_typescript` and `_java` both carry
+// one. The `/ready` bullet gains "on a provider agent" (no new span) and a
+// carve-out paragraph follows the endpoint list: the exception 5
+// (`@mesh.route`, `@mesh.a2a`, `health_check`, `/ready`, `/health`) = 5. It is
+// prose, not a bullet, so the two list goldens hold.
 const (
-	wantInlineCodeSpans = 1739
+	wantInlineCodeSpans = 1744
 	wantListCodeSpans   = 519
 	wantMarkupListLines = 447
 )

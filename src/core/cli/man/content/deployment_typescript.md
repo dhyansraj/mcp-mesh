@@ -286,7 +286,7 @@ readinessProbe:
   failureThreshold: 3
 ```
 
-Never point `livenessProbe` or `startupProbe` at `/ready` or `/health`. Both reflect your `healthCheck`, and the failure action of both probes is a container restart:
+Never point `livenessProbe` or `startupProbe` at `/ready` or `/health`. Both reflect a provider agent's `healthCheck`, and the failure action of both probes is a container restart:
 
 - `livenessProbe: /health` - a vendor outage answers 503, the default `failureThreshold` of three kills the pod, and the replacement finds the vendor still down. This is the one to check first on an upgraded agent: before 3.5.2 `/health` was a fixed 200 that consulted nothing, so a manifest wired this way survived by accident and stops surviving as soon as a declared `healthCheck` reports anything but `healthy`.
 - `startupProbe: /ready` - fires only during an outage, when the check is already failing at boot. The probe never succeeds, so the pod CrashLoops instead of starting and reporting unready - precisely when you want the agent up and withdrawn rather than dead.
