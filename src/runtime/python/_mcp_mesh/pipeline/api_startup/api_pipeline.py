@@ -8,7 +8,7 @@ route integration, and service registration.
 
 import logging
 
-from ..shared import TracePublisherInitStep
+from ..shared import HealthEndpointsStep, TracePublisherInitStep
 from ..shared.mesh_pipeline import MeshPipeline
 from .api_server_setup import APIServerSetupStep
 from .fastapi_discovery import FastAPIAppDiscoveryStep
@@ -28,7 +28,8 @@ class APIPipeline(MeshPipeline):
     2. FastAPI app discovery (find user's FastAPI instances)
     3. Route integration (apply dependency injection)
     4. Tracing middleware integration (add telemetry to FastAPI apps)
-    5. API server setup (service registration metadata)
+    5. Health endpoints (/livez, /ready, /health for Kubernetes probes)
+    6. API server setup (service registration metadata)
 
     Unlike MCP agents, API services are consumers so we focus on:
     - Dependency injection into route handlers
@@ -48,6 +49,10 @@ class APIPipeline(MeshPipeline):
             FastAPIAppDiscoveryStep(),  # Find user's FastAPI app instances
             RouteIntegrationStep(),  # Apply dependency injection to routes
             TracingMiddlewareIntegrationStep(),  # Add tracing middleware to FastAPI apps
+            # Issue #1491: /livez, /ready, /health on the user's app — the agent
+            # Helm chart probes the first two, and a gateway that serves neither
+            # is restart-looped by the kubelet.
+            HealthEndpointsStep(service_type="api"),
             # Issue #1363: build the Redis trace publisher here (off the request
             # path) so the sync block_on Redis connect never runs on the serving
             # event loop at first-span time. No-op when tracing is disabled.

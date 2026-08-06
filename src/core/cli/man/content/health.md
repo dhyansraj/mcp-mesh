@@ -158,6 +158,8 @@ A check that **raises** is recorded as `degraded`, not unhealthy, and keeps hear
 
 `@mesh.route` and `@mesh.a2a` agents never run the check at all - their startup pipelines have no health-refresh loop, so there is no verdict to suppress a heartbeat or to show anywhere. A gateway is a fan-out point that many requests enter through: withdrawing a provider is correct, withdrawing the gateway takes the application down. Declare the check on the agents behind the gateway instead.
 
+They still serve all three probe endpoints, on your own FastAPI app: `/livez` answers 200 for as long as the process serves, `/ready` reports only whether the mesh runtime is running, and `/health` is a diagnostic view that never answers 503. If your app already defines one of those paths, yours is left alone and the other two are still added.
+
 ## Graceful Failure
 
 The mesh handles failures gracefully:
