@@ -1,5 +1,5 @@
 # Dockerfile for openai-provider-py MCP Mesh LLM provider
-FROM mcpmesh/python-runtime:3.5.1
+FROM mcpmesh/python-runtime:3.5.2
 
 WORKDIR /app
 

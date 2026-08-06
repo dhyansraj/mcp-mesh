@@ -1,5 +1,5 @@
 # Dockerfile for transcribe-provider MCP Mesh agent (Java/Spring Boot)
-FROM mcpmesh/java-runtime:3.5.1
+FROM mcpmesh/java-runtime:3.5.2
 
 WORKDIR /app
 

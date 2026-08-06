@@ -28,7 +28,7 @@ services:
       retries: 5
 
   registry:
-    image: mcpmesh/registry:3.5.1
+    image: mcpmesh/registry:3.5.2
     container_name: trace-test-registry
     hostname: registry
     ports:
@@ -61,7 +61,7 @@ services:
   # ============== Agents ==============
 
   orchestrator:
-    image: mcpmesh/python-runtime:3.5.1
+    image: mcpmesh/python-runtime:3.5.2
     container_name: trace-test-orchestrator
     hostname: orchestrator
     ports:
@@ -114,7 +114,7 @@ services:
     restart: unless-stopped
 
   processor:
-    image: mcpmesh/python-runtime:3.5.1
+    image: mcpmesh/python-runtime:3.5.2
     container_name: trace-test-processor
     hostname: processor
     ports:
@@ -164,7 +164,7 @@ services:
     restart: unless-stopped
 
   analyzer:
-    image: mcpmesh/python-runtime:3.5.1
+    image: mcpmesh/python-runtime:3.5.2
     container_name: trace-test-analyzer
     hostname: analyzer
     ports:
@@ -214,7 +214,7 @@ services:
     restart: unless-stopped
 
   storage:
-    image: mcpmesh/python-runtime:3.5.1
+    image: mcpmesh/python-runtime:3.5.2
     container_name: trace-test-storage
     hostname: storage
     ports:

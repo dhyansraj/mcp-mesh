@@ -1,5 +1,5 @@
 # Dockerfile for poi-agent MCP Mesh agent
-FROM mcpmesh/python-runtime:3.5.1
+FROM mcpmesh/python-runtime:3.5.2
 
 WORKDIR /app
 
