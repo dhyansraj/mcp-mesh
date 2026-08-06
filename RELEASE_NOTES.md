@@ -1,6 +1,42 @@
 # MCP Mesh Release Notes
 
-[Unreleased changes](https://github.com/dhyansraj/mcp-mesh/compare/v3.5.1...HEAD)
+[Unreleased changes](https://github.com/dhyansraj/mcp-mesh/compare/v3.5.2...HEAD)
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.5.1...v3.5.2)
+
+## v3.5.2 (2026-08-06)
+
+A provider can now withdraw itself from dependency resolution while a health check it declares reports unhealthy, and returns automatically once the check passes again — in all three runtimes, with no pod restart. v3.5.1's notes said Java and TypeScript readiness could not yet reflect a dependency outage; this closes that. It also fixes a live defect in 3.5.1: Python `@mesh.route` and A2A agents serve none of the probe endpoints the agent chart points at, so a Python gateway is restart-looped by the kubelet. No wire-protocol, registry-schema or dependency-resolution changes, and the only declaration-syntax change is the additive, opt-in health check itself.
+
+> **⚠️ Python `@mesh.route` and A2A agents need the 3.5.2 image.** On chart 3.5.1 every probe 404s and Kubernetes restarts a healthy gateway. TypeScript `/health` and `/ready` also change shape. Both in Notes.
+
+### 🩺 Health checks
+
+- **A provider withdraws itself while its own health check fails, in all three runtimes.** Declare `health_check` (Python, #1473), `@MeshHealthCheck` (Java, #1475) or `healthCheck` (TypeScript, #1481): while it reports unhealthy the agent stops heartbeating, the registry ages it out and consumers resolve to another provider. The process keeps running throughout and comes back on its own when the check passes again.
+- **A check that throws, or that cannot reach a conclusion, is `degraded` and keeps heartbeating**, so a broken probe cannot take a working agent out of the mesh. Python's malformed-return case mapped to unhealthy and was aligned with the other two (#1477).
+- **A health check never withdraws a `mesh.route` or A2A agent.** They are fan-out points, and withdrawing one takes down every path that enters through it, so the verdict never reaches the heartbeat there whatever the check reports — nor, since #1489, a Java gateway's `/ready`.
+
+### 🐍 Python probes and cadence
+
+- **⚠️ Route and A2A agents now serve `/livez`, `/ready` and `/health` (#1494).** They served **none** of them, so a Python gateway deployed with the agent chart — which has probed `/livez` and `/ready` since 3.5.1 — 404s every probe and gets restart-looped by the kubelet. This is a live bug in 3.5.1 rather than something 3.5.2 introduces, and hand-rolling a `/health`, as the examples do, does not satisfy the two probes the chart actually uses. A path the app already declares wins; the others are still registered.
+- **`MCP_MESH_HEALTH_CHECK_TTL` is honoured on Python (#1493).** TypeScript and Java already read it; Python took the cadence only from the `health_check_ttl` decorator argument, which is baked into the image. It is now tunable at deploy time from Helm values — which matters in the release that makes the TTL govern how fast a provider withdraws and how fast it returns.
+
+### 📘 TypeScript probes
+
+- **⚠️ `/ready` and `/health` reflect the health verdict instead of FastMCP's built-ins (#1487).** `/ready` answered a hardcoded 200 and `/health` a fixed string, so a TypeScript provider whose vendor was down kept receiving direct Service traffic after mesh consumers had already failed over. Both changes are breaking for anything that parses them — see Notes.
+
+### 🛠 Scaffold
+
+- **Vendor probes are selected by the resolved vendor rather than a substring match on the model string (#1484).** A gateway-prefixed model such as `bedrock/anthropic.claude-*` or `vertex_ai/gemini-*` matched the underlying vendor's name and got a probe for credentials it does not have — which, now that the check is load-bearing, withdrew a fully working provider. Those models get the generic skeleton instead; discovery tags still follow the model family.
+- **Generated helm values wire only credentials the agent can use (#1487, #1496).** An `llm-provider` gets the selected vendor's API key and, for a gateway model, none at all. `api`, `basic` and `llm-agent` get none either: an `llm-agent` resolves a provider through mesh DI, and the provider holds the credentials.
+- **Generated compose healthchecks probe `/livez`, not `/health` (#1495).** `/health` answers 503 while a declared check reports degraded or unhealthy, so a vendor outage blocked every dependent gated on `depends_on: condition: service_healthy` and made `docker compose ps` report a serving agent as unhealthy.
+
+### ⚠️ Notes
+
+- **⚠️ Upgrade Python route and A2A agents to the 3.5.2 image.** Chart 3.5.1 points startup and liveness at `/livez` and readiness at `/ready`, and no Python gateway has ever served either, so the kubelet restarts it on the startup probe. The image is the whole fix — no chart or code change is needed — and MCP agents, which have served all three endpoints for far longer, are unaffected.
+- **⚠️ TypeScript `/health` is now JSON.** It previously returned the literal `text/plain` string `✓ Ok`. Anything string-matching that response breaks; a check on the HTTP status still works.
+- **⚠️ TypeScript `/ready` and `/health` now answer 503** when a declared `healthCheck` reports `unhealthy` **or** `degraded`, so a failing agent leaves its Kubernetes Service endpoints. This matches Python and Java. **Agents with no `healthCheck` are unaffected.**
+- **Regenerating a scaffold changes two of its generated files.** Helm values no longer wire vendor API keys the agent cannot use — every arm removed was `optional: true`, so there is no runtime effect — and compose healthchecks move from `/health` to `/livez`. Files you have already generated are untouched until you regenerate them.
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.5.0...v3.5.1)
 
