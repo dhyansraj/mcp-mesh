@@ -367,10 +367,46 @@ class MyAgent:
 Every runtime serves three endpoints, and Kubernetes probes must not share one:
 
 - `/livez` - `livenessProbe` and `startupProbe`. 200 for as long as the process is serving; consults nothing else.
-- `/ready` - `readinessProbe`. Whether traffic should be routed here; reflects your `health_check`.
+- `/ready` - `readinessProbe`. Whether traffic should be routed here; reflects your `health_check` on a provider agent.
 - `/health` - no probe. The diagnostic view: the `/ready` signal plus `checks` and `errors`.
 
-Pointing liveness or startup at `/health` or `/ready` turns an upstream outage into a pod restart, which cannot fix the outage. The Helm chart is already wired this way.
+Pointing liveness or startup at `/health` or `/ready` turns an upstream outage into a pod restart, which cannot fix the outage. Probe Wiring below has the manifest.
+
+Route (`@mesh.route`) and A2A (`@mesh.a2a`) agents are the exception: they never run `health_check`, and their `/ready` reports only whether the mesh runtime is up while `/health` stays 200. A gateway is a fan-out point, and withdrawing it takes the application down. Mesh registers the three paths on the gateway's own FastAPI app, and a path your application already defines wins.
+
+### Probe Wiring
+
+The agent chart already wires all three. If you write your own Deployment, wire them the same way - the paths are the whole contract:
+
+```yaml
+startupProbe:
+  httpGet:
+    path: /livez
+    port: 8080
+  periodSeconds: 10
+  failureThreshold: 30
+
+livenessProbe:
+  httpGet:
+    path: /livez
+    port: 8080
+  periodSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 8080
+  periodSeconds: 5
+  failureThreshold: 3
+```
+
+Never point `livenessProbe` or `startupProbe` at `/ready` or `/health`. Both reflect a provider agent's `health_check`, and the failure action of both probes is a container restart:
+
+- `livenessProbe: /health` - a dependency outage answers 503, the default `failureThreshold` of three kills the pod, and the replacement finds the same dependency still down. The pod restarts for as long as the outage lasts.
+- `startupProbe: /ready` - fires only during an outage, when the check is already failing at boot. The probe never succeeds, so the pod CrashLoops instead of starting and reporting unready - precisely when you want the agent up and withdrawn rather than dead.
+
+Nothing probes `/health`. It is the diagnostic view: curl it from `kubectl exec` to see the `checks` and `errors` behind an unready pod.
 
 ### Resource Limits
 

@@ -230,7 +230,7 @@ There are three of them, and Kubernetes probes must not share one:
 - `/ready` - `readinessProbe`. Whether traffic should be routed here; reflects your `healthCheck`, answering 200 only while it reports `healthy`. An agent with no `healthCheck` - or one whose first run has not finished - is healthy, so it is unaffected.
 - `/health` - no probe. The same verdict as `/ready`, plus the `checks` and `errors` your check returned.
 
-Both answer 503 while the check reports `degraded` or `unhealthy`, so pointing liveness or startup at either turns a vendor outage into a pod restart, which cannot fix it. The Helm chart is already wired this way.
+Both answer 503 while the check reports `degraded` or `unhealthy`, so pointing liveness or startup at either turns a vendor outage into a pod restart, which cannot fix it. Probe Wiring below has the manifest.
 
 Pass a `healthCheck` to `mesh()` to say what "able to serve" means for this agent:
 
@@ -258,6 +258,40 @@ const agent = mesh(server, {
 While the check returns unhealthy the agent stops heartbeating, the registry withdraws it, and consumers resolve to another provider - restored automatically when the check passes, with no restart. Returning `boolean` works too: `true` is healthy, `false` unhealthy. A check that throws is recorded as `degraded` and keeps heartbeating, so a bug in the check cannot take a working agent out of the mesh. `MCP_MESH_HEALTH_CHECK_TTL` overrides `healthCheckTtl` (default 15s).
 
 Route (`mesh.route`) and A2A agents are the exception: they ignore `healthCheck` entirely, and their `/ready` reports only whether the mesh runtime is up. A gateway is a fan-out point, and withdrawing it takes the application down.
+
+### Probe Wiring
+
+The agent chart already wires all three. If you write your own Deployment, wire them the same way - the paths are the whole contract:
+
+```yaml
+startupProbe:
+  httpGet:
+    path: /livez
+    port: 8080
+  periodSeconds: 10
+  failureThreshold: 30
+
+livenessProbe:
+  httpGet:
+    path: /livez
+    port: 8080
+  periodSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 8080
+  periodSeconds: 5
+  failureThreshold: 3
+```
+
+Never point `livenessProbe` or `startupProbe` at `/ready` or `/health`. Both reflect a provider agent's `healthCheck`, and the failure action of both probes is a container restart:
+
+- `livenessProbe: /health` - a vendor outage answers 503, the default `failureThreshold` of three kills the pod, and the replacement finds the vendor still down. This is the one to check first on an upgraded agent: before 3.5.2 `/health` was a fixed 200 that consulted nothing, so a manifest wired this way survived by accident and stops surviving as soon as a declared `healthCheck` reports anything but `healthy`.
+- `startupProbe: /ready` - fires only during an outage, when the check is already failing at boot. The probe never succeeds, so the pod CrashLoops instead of starting and reporting unready - precisely when you want the agent up and withdrawn rather than dead.
+
+Nothing probes `/health`. It is the diagnostic view: curl it from `kubectl exec` to see the `checks` and `errors` behind an unready pod.
 
 ### Graceful Shutdown
 

@@ -155,12 +155,14 @@ public String myTool(McpMeshTool<String> dateService) {
 }
 ```
 
-## Spring Boot Health Actuator
+## Spring Boot Actuator
 
-The MCP Mesh Spring Boot starter automatically integrates with Spring Boot's health actuator. The `/actuator/health` endpoint includes mesh status:
+Actuator is not a starter dependency, and mesh registers no `HealthIndicator` - deliberately. Actuator aggregates every registered indicator (datasource, disk, mail), while mesh gates traffic only on what `@MeshHealthCheck` says gates it. If your application adds Actuator itself, `/actuator/health` reports that application's indicators and says nothing about mesh; nothing mesh does appears there.
+
+The mesh verdict is on the endpoints above - `/health` is the one to curl:
 
 ```bash
-curl http://localhost:8080/actuator/health
+curl http://localhost:8080/health
 ```
 
 ## Configuration

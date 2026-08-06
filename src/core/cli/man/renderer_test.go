@@ -242,10 +242,38 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // reports (`/livez`, `/ready`, `/health` — the whole delta) and that a path
 // the application already defines wins. Both sentences are prose, so the list
 // goldens hold.
+// #1498 follow-up: +12 / +3 / +2, all in `deployment.md`. The three probe
+// bullets said which endpoint each probe belongs on but never showed a probe
+// stanza, so the contract existed only for people who read prose and never
+// wired a manifest — and the closing sentence handed the whole subject to the
+// Helm chart, which is exactly the reader who does not need it. A new "Probe
+// Wiring" section carries the stanza (fenced, so it contributes nothing) plus
+// the rule and the two ways it is got wrong. The delta: the never-point
+// paragraph 5 (`livenessProbe`, `startupProbe`, `/ready`, `/health`,
+// `health_check`), the `livenessProbe: /health` bullet 2 (with
+// `failureThreshold`), the `startupProbe: /ready` bullet 1, and the closing
+// diagnostic sentence 4 (`/health`, `kubectl exec`, `checks`, `errors`) = 12.
+// Only the two bullets are list lines, contributing 3 spans across 2 lines to
+// the other goldens. The `_java` and `_typescript` variants gain the same
+// section written to what those runtimes return — Java's endpoints answer 503
+// until the mesh runtime is up, and TypeScript's `/health` only started
+// answering 503 in 3.5.2 — and neither moves these constants, which sample the
+// default variant alone.
+// #1499 follow-up: +5 / +0 / +0, in `deployment.md`. #1494 gave Python route
+// and A2A gateways `/livez`, `/ready` and `/health` for the first time, with a
+// provider's semantics inverted: `health_check` never runs, `/ready` reports
+// runtime state alone and `/health` is a fixed 200. The page said `/ready`
+// "reflects your `health_check`" unqualified, so it described a provider to
+// the gateway operator reading it while writing a manifest, and it was the one
+// deployment variant with no carve-out — `_typescript` and `_java` both carry
+// one. The `/ready` bullet gains "on a provider agent" (no new span) and a
+// carve-out paragraph follows the endpoint list: the exception 5
+// (`@mesh.route`, `@mesh.a2a`, `health_check`, `/ready`, `/health`) = 5. It is
+// prose, not a bullet, so the two list goldens hold.
 const (
-	wantInlineCodeSpans = 1727
-	wantListCodeSpans   = 516
-	wantMarkupListLines = 445
+	wantInlineCodeSpans = 1744
+	wantListCodeSpans   = 519
+	wantMarkupListLines = 447
 )
 
 // assertCorpusSize replaces the t.Logf these tests used to end on.
