@@ -6,6 +6,8 @@ generation into a single module.
 """
 
 import logging
+import os
+import re
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -14,6 +16,144 @@ from typing import Any
 from .support_types import HealthStatus, HealthStatusType
 
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# TTL Resolution (issue #1492)
+# =============================================================================
+
+# TypeScript's DEFAULT_HEALTH_CHECK_TTL_SECONDS and Java's DEFAULT_TTL_SECONDS.
+DEFAULT_HEALTH_CHECK_TTL_SECONDS = 15
+
+# Overrides the ``health_check_ttl`` decorator argument when set.
+HEALTH_CHECK_TTL_ENV = "MCP_MESH_HEALTH_CHECK_TTL"
+
+# Integers only — "15s", "1.5" and "0x10" are all rejected. Mirrors
+# TypeScript's INTEGER_RE and Java's Integer.parseInt, both of which take a
+# leading sign and nothing else. Bare `int()` would additionally accept
+# "1_0" and non-ASCII digits, neither of which TypeScript honours.
+#
+# re.ASCII is deliberate: Python's `\d` and `int()` both accept non-ASCII
+# digits ("١٥" -> 15), as does Java's Integer.parseInt, but TypeScript
+# rejects them. Following TypeScript — an env var carrying an Arabic-Indic
+# numeral is far likelier an encoding accident than an intent, and a loud
+# fallback beats silently running a TTL the operator cannot read back.
+_INTEGER_RE = re.compile(r"^[+-]?\d+$", re.ASCII)
+
+
+# Long enough to recognize the value that was rejected, short enough that a
+# warning stays one readable line.
+_WARNING_VALUE_LIMIT = 32
+
+
+def _for_warning(value: Any, *, quote: bool = False) -> str:
+    """Render a value for a rejection message without raising or flooding the log.
+
+    Interpolating a value is not safe by default here. Python 3.11 caps
+    int<->str conversion at 4300 digits, so ``f"{value}"`` raises ValueError on
+    a large enough int — inside the one function whose contract is that it
+    never raises, on the very path that exists to keep a malformed TTL from
+    stopping an agent from booting. Length is the second hazard: an env var is
+    an unbounded paste, and a 300,000-character warning is not a warning.
+
+    Every rejection message below goes through this, so a message added later
+    cannot reintroduce either hazard by being written the obvious way.
+    """
+    try:
+        text = repr(value) if quote or not isinstance(value, str) else value
+    except Exception:
+        # Broad: this only formats a log line, and no failure to describe a
+        # bad value is worth turning into a raise here. Ints report their
+        # magnitude, which str() is exactly what cannot do for them.
+        if isinstance(value, int):
+            digits = int(value.bit_length() * 0.30103) + 1
+            return f"<{type(value).__name__} with ~{digits} digits>"
+        return f"<unprintable {type(value).__name__}>"
+
+    if len(text) > _WARNING_VALUE_LIMIT:
+        return f"{text[:_WARNING_VALUE_LIMIT]}… ({len(text)} chars)"
+    return text
+
+
+def resolve_health_check_ttl(
+    configured: Any = None, override: str | None = None
+) -> int:
+    """Resolve the health-check refresh period, in seconds.
+
+    Priority: ``MCP_MESH_HEALTH_CHECK_TTL`` > ``health_check_ttl`` > 15s.
+    Every rejected value warns and falls through to the next source rather
+    than raising — a malformed TTL must not stop an agent from booting, but
+    it must not be silently rounded into something else either.
+
+    ``override`` is a parameter rather than an ambient ``os.environ`` read so
+    the resolution rules are testable without mutating the environment (same
+    shape as TypeScript's ``resolveHealthCheckTtl`` and Java's
+    ``MeshHealthCheckRegistry.ttlSeconds(String)``).
+
+    Args:
+        configured: value from ``agent_config["health_check_ttl"]``
+        override: raw ``MCP_MESH_HEALTH_CHECK_TTL`` value, or None if unset
+    """
+    ttl = DEFAULT_HEALTH_CHECK_TTL_SECONDS
+    # Collected, not logged inline: a warning names the value that is
+    # actually used, and that is not known until every source has been
+    # considered. Warning "using 15s" while a valid env override goes on to
+    # win would print a number the agent never runs with.
+    rejected: list[str] = []
+
+    if configured is not None:
+        # bool is an int subclass in Python; True is not 1 second.
+        if isinstance(configured, bool) or not isinstance(configured, int):
+            rejected.append(
+                f"health_check_ttl={_for_warning(configured, quote=True)} "
+                f"is not a whole number of seconds >= 1"
+            )
+        elif configured < 1:
+            rejected.append(
+                f"health_check_ttl={_for_warning(configured)} "
+                f"is not a whole number of seconds >= 1"
+            )
+        else:
+            ttl = configured
+
+    if isinstance(override, str) and override.strip():
+        text = override.strip()
+        if not _INTEGER_RE.match(text):
+            rejected.append(
+                f"{HEALTH_CHECK_TTL_ENV}={_for_warning(override)} "
+                f"is not an integer number of seconds"
+            )
+        else:
+            try:
+                parsed = int(text)
+            except ValueError:
+                # Matching the regex is not enough: Python 3.11 caps
+                # string->int conversion at 4300 digits, so an all-digit paste
+                # reaches here and raises. Left unguarded it is the one
+                # malformed TTL that stops an agent from booting, which is
+                # exactly the case where falling back matters most.
+                rejected.append(
+                    f"{HEALTH_CHECK_TTL_ENV}={_for_warning(text)} "
+                    f"is too large to parse as a number of seconds"
+                )
+            else:
+                if parsed < 1:
+                    rejected.append(
+                        f"{HEALTH_CHECK_TTL_ENV}={_for_warning(override)} "
+                        f"is below the 1s minimum"
+                    )
+                else:
+                    ttl = parsed
+
+    for reason in rejected:
+        logger.warning("%s — using %ss", reason, ttl)
+
+    return ttl
+
+
+def resolve_health_check_ttl_from_env(configured: Any = None) -> int:
+    """Read ``MCP_MESH_HEALTH_CHECK_TTL`` and resolve against it."""
+    return resolve_health_check_ttl(configured, os.environ.get(HEALTH_CHECK_TTL_ENV))
+
 
 # =============================================================================
 # Health Result Storage (moved from DecoratorRegistry)

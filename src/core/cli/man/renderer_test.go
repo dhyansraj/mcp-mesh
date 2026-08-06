@@ -230,8 +230,12 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // 5, `degraded` 3, route/A2A 2 = 25 added, 0 removed. The two list goldens held
 // because every added paragraph is prose — not one new bullet — and those tests
 // count only list lines.
+// #1492 follow-up: +1 / +0 / +0, in `health.md`. The Python runtime now honours
+// `MCP_MESH_HEALTH_CHECK_TTL`, so the default variant's `health_check_ttl`
+// sentence closes with the same override clause both siblings already carried;
+// that one new inline span is prose, so the list goldens hold.
 const (
-	wantInlineCodeSpans = 1723
+	wantInlineCodeSpans = 1724
 	wantListCodeSpans   = 516
 	wantMarkupListLines = 445
 )

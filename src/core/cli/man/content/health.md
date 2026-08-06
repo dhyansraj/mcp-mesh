@@ -138,7 +138,7 @@ class MyAgent:
     pass
 ```
 
-One check per agent. Return a `{"status", "checks", "errors"}` dict for full detail, or a `bool` for the terse form (`True` healthy, `False` unhealthy). `health_check_ttl` is how often it re-runs (default 15).
+One check per agent. Return a `{"status", "checks", "errors"}` dict for full detail, or a `bool` for the terse form (`True` healthy, `False` unhealthy). `health_check_ttl` is how often it re-runs (default 15); `MCP_MESH_HEALTH_CHECK_TTL` overrides it.
 
 ### What a Failing Check Does
 
