@@ -47,7 +47,7 @@ const agent = mesh(server, {
 });
 ```
 
-`healthCheck` is what lets a provider take itself out of rotation. While it returns `{ status: "unhealthy" }` (or `false`) the agent stops heartbeating, the registry withdraws it, and consumers resolve to another provider — restored automatically when it passes again, with no restart. A check that throws is recorded as `degraded` and keeps heartbeating, so a bug in the check cannot remove a working agent. `MCP_MESH_HEALTH_CHECK_TTL` overrides `healthCheckTtl`. See [Health & Discovery](../concepts/health-discovery.md).
+`healthCheck` is what lets a provider take itself out of rotation. While it returns `{ status: "unhealthy" }` (or `false`) the agent stops heartbeating, the registry withdraws it, and consumers resolve to another provider — restored automatically when it passes again, with no restart. A check that throws is recorded as `degraded` and keeps heartbeating, so a bug in the check cannot remove a working agent. The verdict also drives the probe endpoints: `/ready` and `/health` answer 200 only while it reports `healthy`. `MCP_MESH_HEALTH_CHECK_TTL` overrides `healthCheckTtl`. See [Health & Discovery](../concepts/health-discovery.md).
 
 > **Import `FastMCP` from `@mcpmesh/sdk`**, which re-exports it — not directly from `"fastmcp"`. A direct `"fastmcp"` import can trigger duplicate class-identity type errors under `tsc` against the SDK's own bundled copy.
 

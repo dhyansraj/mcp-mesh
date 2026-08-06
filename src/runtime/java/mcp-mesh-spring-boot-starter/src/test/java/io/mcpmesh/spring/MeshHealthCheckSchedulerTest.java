@@ -198,7 +198,8 @@ class MeshHealthCheckSchedulerTest {
                 assertTrue(published.isEmpty(),
                     "'" + agentType + "' agent must never suppress its heartbeat");
                 assertEquals(MeshHealthStatus.UNHEALTHY, registry.latest().health().status(),
-                    "'" + agentType + "' agent must still reflect the verdict on its probes");
+                    "'" + agentType + "' agent must still reflect the verdict on /health "
+                        + "(but not on /ready — issue #1488)");
             } finally {
                 scheduler.stop();
             }

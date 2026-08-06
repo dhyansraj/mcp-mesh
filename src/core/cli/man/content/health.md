@@ -110,9 +110,9 @@ def my_tool(date_svc: mesh.McpMeshTool = None):
     return date_svc()
 ```
 
-## Custom Health Checks
+## Declaring Your Own Health Check
 
-Add custom health checks to your agent:
+Pass a `health_check` to `@mesh.agent` to tell the mesh what "able to serve" means for this agent:
 
 ```python
 async def my_health_check() -> dict:
@@ -137,6 +137,26 @@ async def my_health_check() -> dict:
 class MyAgent:
     pass
 ```
+
+One check per agent. Return a `{"status", "checks", "errors"}` dict for full detail, or a `bool` for the terse form (`True` healthy, `False` unhealthy). `health_check_ttl` is how often it re-runs (default 15).
+
+### What a Failing Check Does
+
+While the check reports unhealthy the agent **stops heartbeating**. The registry marks it unhealthy after the staleness window, dependency resolution stops selecting it, and consumers move to another provider. When the check passes again the heartbeat resumes and the registry restores the agent - no restart, no redeploy. The TTL is the cadence, not the end-to-end latency: it only bounds how long until the next check runs, and withdrawal costs that plus the registry's staleness window once heartbeats stop.
+
+The check that runs during startup is deliberately exempt: it seeds `/health` but is never reported to the core, so an agent registers and becomes visible first. The first refresh, one TTL later, is the earliest a check can withdraw it.
+
+The verdict also drives the probe endpoints: `/ready` and `/health` answer 200 only while the check reports `healthy`, and `/health` carries the `checks` and `errors` it returned. `/livez` never consults it - a restart cannot fix a vendor outage.
+
+### Only an Explicit Unhealthy Withdraws the Agent
+
+A check that **raises** is recorded as `degraded`, not unhealthy, and keeps heartbeating. So is one that returns something other than a dict, a `bool` or a `HealthStatus`. A bug in a health check must not be able to remove a working agent from the mesh. Return `False` or `{"status": "unhealthy"}` to actually withdraw.
+
+`degraded` splits the two surfaces on purpose: the agent keeps heartbeating and stays in dependency resolution, but `/ready` and `/health` answer 503. Readiness is a load-balancer decision about new external traffic; the heartbeat is a statement about whether this is still a valid mesh provider.
+
+### Route and A2A Agents
+
+`@mesh.route` and `@mesh.a2a` agents never run the check at all - their startup pipelines have no health-refresh loop, so there is no verdict to suppress a heartbeat or to show anywhere. A gateway is a fan-out point that many requests enter through: withdrawing a provider is correct, withdrawing the gateway takes the application down. Declare the check on the agents behind the gateway instead.
 
 ## Graceful Failure
 

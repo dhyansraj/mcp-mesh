@@ -66,11 +66,15 @@ const agent = mesh(server, {
 
 One check per agent. Return `{ status, checks, errors }` for full detail, or a `boolean` for the terse form (`true` healthy, `false` unhealthy). `healthCheckTtl` is how often it re-runs (default 15); `MCP_MESH_HEALTH_CHECK_TTL` overrides it.
 
+The verdict also drives the probe endpoints: `/ready` and `/health` answer 200 only while the check reports `healthy`, and `/health` carries the `checks` and `errors` it returned. `/livez` never consults it - a restart cannot fix a vendor outage. On a `mesh.route` or A2A agent the check is ignored entirely - see below.
+
 ### What a Failing Check Does
 
 While the check reports unhealthy the agent **stops heartbeating**. The registry marks it unhealthy after the staleness window, dependency resolution stops selecting it, and consumers move to another provider. When the check passes again the heartbeat resumes and the registry restores the agent through the `410 Gone` re-register path - no restart. The TTL is the cadence, not the end-to-end latency: it only bounds how long until the next check runs. Withdrawal costs that plus the registry's staleness window once heartbeats stop, and recovery costs it plus the heartbeat resume and re-register round trip.
 
 Report `unhealthy` only for conditions the mesh should route around: the upstream this agent needs is genuinely not serving. A check that **throws**, or that could not reach a conclusion, is recorded as `degraded` and keeps heartbeating - a broken probe says nothing about the upstream, and withdrawing a working agent over one is the worse failure.
+
+`degraded` splits the two surfaces on purpose, the same way it does on Python and Java: the agent keeps heartbeating and stays in dependency resolution, but `/ready` and `/health` answer 503. Readiness is a load-balancer decision about new external traffic; the heartbeat is a statement about whether this is still a valid mesh provider.
 
 `mesh.route` and A2A agents ignore `healthCheck`. They are fan-out points, so withdrawing one takes down every path that enters through it - declare the check on the agents behind the gateway instead.
 
@@ -164,12 +168,21 @@ agent.addTool({
 
 ## Health Endpoints
 
-TypeScript agents automatically expose health endpoints:
+TypeScript agents automatically expose three endpoints, and Kubernetes probes must not share one:
+
+- `/livez` - `livenessProbe` and `startupProbe`. 200 for as long as the process is serving; consults nothing else.
+- `/ready` - `readinessProbe`. 200 only while your `healthCheck` reports `healthy`; 503 on `degraded` or `unhealthy`. An agent with no `healthCheck` is healthy.
+- `/health` - no probe. The same verdict, plus the `checks` and `errors` the check returned.
 
 ```typescript
-// Automatic health check at /health
-// Returns: { status: "healthy", agentId: "my-agent-abc123" }
+// GET /health
+// { status: "healthy", agent: "my-agent", checks: { vendor_api_reachable: true }, errors: [], timestamp: "..." }
+
+// GET /ready
+// { ready: true, agent: "my-agent", status: "healthy", mcp_wrappers: 1, timestamp: "..." }
 ```
+
+A `mesh.route` or A2A agent serves the same three URLs, but its `/ready` reports only whether the mesh runtime is up and its `/health` is a fixed `healthy` - the `healthCheck` is ignored there.
 
 ## Graceful Shutdown
 

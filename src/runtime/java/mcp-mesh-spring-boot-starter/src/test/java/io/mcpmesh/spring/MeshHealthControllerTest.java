@@ -24,6 +24,17 @@ class MeshHealthControllerTest {
         return runtime;
     }
 
+    /** A runtime of a given agent type, as the probes see it. */
+    private static MeshRuntime runtimeOf(String agentType, boolean running) {
+        MeshRuntime runtime = mock(MeshRuntime.class);
+        when(runtime.isRunning()).thenReturn(running);
+        io.mcpmesh.core.AgentSpec spec = new io.mcpmesh.core.AgentSpec();
+        spec.setName("gateway");
+        spec.setAgentType(agentType);
+        when(runtime.getAgentSpec()).thenReturn(spec);
+        return runtime;
+    }
+
     @Test
     void livez_is200_whenRuntimeIsRunning() {
         MeshHealthController controller = new MeshHealthController(runtimeWith(true));
@@ -211,6 +222,98 @@ class MeshHealthControllerTest {
         assertEquals(200, controller.ready().getStatusCode().value());
         assertEquals(200, controller.health().getStatusCode().value());
         assertFalse(controller.health().getBody().containsKey("checks"));
+    }
+
+    // ---- gateways are never taken out of Service endpoints (issue #1488) ----
+
+    @Test
+    void gateway_ready_is200_whenTheUserHealthCheckIsUnhealthy() {
+        // A gateway is a fan-out point. Suppressing its heartbeat is already
+        // forbidden (MeshAgentTypes.isGateway); answering 503 on /ready reaches the same
+        // outcome by another route, because the chart's readiness probe points
+        // there and Kubernetes drops the pod from its Service endpoints.
+        for (String agentType : java.util.List.of("api", "a2a")) {
+            MeshHealthController controller = new MeshHealthController(
+                runtimeOf(agentType, true),
+                withVerdict(io.mcpmesh.MeshHealth.unhealthy("upstream down")));
+
+            ResponseEntity<Map<String, Object>> response = controller.ready();
+
+            assertEquals(200, response.getStatusCode().value(),
+                "'" + agentType + "' agent must stay in Service endpoints");
+            assertEquals(Boolean.TRUE, response.getBody().get("ready"));
+            assertEquals(200, controller.readyHead().getStatusCode().value(),
+                "HEAD /ready must agree with GET on an '" + agentType + "' agent");
+        }
+    }
+
+    @Test
+    void gateway_ready_is200_whenTheUserHealthCheckIsDegraded() {
+        for (String agentType : java.util.List.of("api", "a2a")) {
+            MeshHealthController controller = new MeshHealthController(
+                runtimeOf(agentType, true),
+                withVerdict(io.mcpmesh.MeshHealth.degraded("elevated latency")));
+
+            assertEquals(200, controller.ready().getStatusCode().value(),
+                "'" + agentType + "' agent must stay in Service endpoints");
+            assertEquals(200, controller.readyHead().getStatusCode().value());
+        }
+    }
+
+    @Test
+    void gateway_health_stillCarriesTheVerdict() {
+        // /health is the one place an operator can see what a gateway's check
+        // reports. Nothing probes it — the chart points startup and liveness at
+        // /livez and readiness at /ready — so carrying the verdict costs nothing.
+        for (String agentType : java.util.List.of("api", "a2a")) {
+            MeshHealthController controller = new MeshHealthController(
+                runtimeOf(agentType, true),
+                withVerdict(io.mcpmesh.MeshHealth.unhealthy("upstream down")
+                    .withCheck("upstream_reachable", false)));
+
+            ResponseEntity<Map<String, Object>> response = controller.health();
+
+            assertEquals(503, response.getStatusCode().value());
+            assertEquals("unhealthy", response.getBody().get("status"));
+            assertEquals(Map.of("upstream_reachable", false),
+                response.getBody().get("checks"));
+            assertEquals(java.util.List.of("upstream down"),
+                response.getBody().get("errors"));
+            assertEquals(503, controller.healthHead().getStatusCode().value());
+        }
+    }
+
+    @Test
+    void gateway_ready_is503_whenTheRuntimeIsNotRunning() {
+        // The runtime state is still the floor: a gateway whose mesh runtime is
+        // down cannot serve, and that is not the user's check talking.
+        MeshHealthController controller = new MeshHealthController(
+            runtimeOf("api", false), withVerdict(io.mcpmesh.MeshHealth.healthy()));
+
+        ResponseEntity<Map<String, Object>> response = controller.ready();
+
+        assertEquals(503, response.getStatusCode().value());
+        assertEquals("mesh runtime is not running", response.getBody().get("reason"));
+        assertEquals(503, controller.readyHead().getStatusCode().value());
+    }
+
+    @Test
+    void nonGateway_ready_is503_whenTheUserHealthCheckIsUnhealthy() {
+        // Guards against over-correcting: an mcp agent is a provider, and
+        // withdrawing ONE provider is exactly what the mechanism is for.
+        for (String agentType : java.util.List.of("mcp", "mcp_agent")) {
+            MeshHealthController controller = new MeshHealthController(
+                runtimeOf(agentType, true),
+                withVerdict(io.mcpmesh.MeshHealth.unhealthy("vendor 503")));
+
+            ResponseEntity<Map<String, Object>> response = controller.ready();
+
+            assertEquals(503, response.getStatusCode().value(),
+                "'" + agentType + "' agent must still leave rotation");
+            assertEquals(Boolean.FALSE, response.getBody().get("ready"));
+            assertEquals("service is unhealthy", response.getBody().get("reason"));
+            assertEquals(503, controller.readyHead().getStatusCode().value());
+        }
     }
 
     @Test
