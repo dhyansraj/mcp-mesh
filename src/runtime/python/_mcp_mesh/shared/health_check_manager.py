@@ -40,6 +40,40 @@ HEALTH_CHECK_TTL_ENV = "MCP_MESH_HEALTH_CHECK_TTL"
 _INTEGER_RE = re.compile(r"^[+-]?\d+$", re.ASCII)
 
 
+# Long enough to recognize the value that was rejected, short enough that a
+# warning stays one readable line.
+_WARNING_VALUE_LIMIT = 32
+
+
+def _for_warning(value: Any, *, quote: bool = False) -> str:
+    """Render a value for a rejection message without raising or flooding the log.
+
+    Interpolating a value is not safe by default here. Python 3.11 caps
+    int<->str conversion at 4300 digits, so ``f"{value}"`` raises ValueError on
+    a large enough int — inside the one function whose contract is that it
+    never raises, on the very path that exists to keep a malformed TTL from
+    stopping an agent from booting. Length is the second hazard: an env var is
+    an unbounded paste, and a 300,000-character warning is not a warning.
+
+    Every rejection message below goes through this, so a message added later
+    cannot reintroduce either hazard by being written the obvious way.
+    """
+    try:
+        text = repr(value) if quote or not isinstance(value, str) else value
+    except Exception:
+        # Broad: this only formats a log line, and no failure to describe a
+        # bad value is worth turning into a raise here. Ints report their
+        # magnitude, which str() is exactly what cannot do for them.
+        if isinstance(value, int):
+            digits = int(value.bit_length() * 0.30103) + 1
+            return f"<{type(value).__name__} with ~{digits} digits>"
+        return f"<unprintable {type(value).__name__}>"
+
+    if len(text) > _WARNING_VALUE_LIMIT:
+        return f"{text[:_WARNING_VALUE_LIMIT]}… ({len(text)} chars)"
+    return text
+
+
 def resolve_health_check_ttl(
     configured: Any = None, override: str | None = None
 ) -> int:
@@ -70,11 +104,13 @@ def resolve_health_check_ttl(
         # bool is an int subclass in Python; True is not 1 second.
         if isinstance(configured, bool) or not isinstance(configured, int):
             rejected.append(
-                f"health_check_ttl={configured!r} is not a whole number of seconds >= 1"
+                f"health_check_ttl={_for_warning(configured, quote=True)} "
+                f"is not a whole number of seconds >= 1"
             )
         elif configured < 1:
             rejected.append(
-                f"health_check_ttl={configured} is not a whole number of seconds >= 1"
+                f"health_check_ttl={_for_warning(configured)} "
+                f"is not a whole number of seconds >= 1"
             )
         else:
             ttl = configured
@@ -83,16 +119,30 @@ def resolve_health_check_ttl(
         text = override.strip()
         if not _INTEGER_RE.match(text):
             rejected.append(
-                f"{HEALTH_CHECK_TTL_ENV}={override} is not an integer number of seconds"
+                f"{HEALTH_CHECK_TTL_ENV}={_for_warning(override)} "
+                f"is not an integer number of seconds"
             )
         else:
-            parsed = int(text)
-            if parsed < 1:
+            try:
+                parsed = int(text)
+            except ValueError:
+                # Matching the regex is not enough: Python 3.11 caps
+                # string->int conversion at 4300 digits, so an all-digit paste
+                # reaches here and raises. Left unguarded it is the one
+                # malformed TTL that stops an agent from booting, which is
+                # exactly the case where falling back matters most.
                 rejected.append(
-                    f"{HEALTH_CHECK_TTL_ENV}={override} is below the 1s minimum"
+                    f"{HEALTH_CHECK_TTL_ENV}={_for_warning(text)} "
+                    f"is too large to parse as a number of seconds"
                 )
             else:
-                ttl = parsed
+                if parsed < 1:
+                    rejected.append(
+                        f"{HEALTH_CHECK_TTL_ENV}={_for_warning(override)} "
+                        f"is below the 1s minimum"
+                    )
+                else:
+                    ttl = parsed
 
     for reason in rejected:
         logger.warning("%s — using %ss", reason, ttl)

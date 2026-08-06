@@ -11,6 +11,7 @@ wrapper needs a monkeypatched environment.
 """
 
 import logging
+from fractions import Fraction
 
 import pytest
 from _mcp_mesh.shared.health_check_manager import (
@@ -149,6 +150,90 @@ class TestResolveHealthCheckTtl:
     def test_never_raises_on_a_malformed_value(self):
         """A malformed TTL must not stop an agent from booting."""
         assert resolve_health_check_ttl(object(), object()) == 15
+
+    def test_rejects_an_env_value_too_long_to_convert(self, warnings):
+        """An all-digit string can still be unconvertible.
+
+        Python 3.11 caps string->int conversion at 4300 digits, so a pasted
+        or fat-fingered value matches the integer regex and then raises out
+        of ``int()``. That is the one input that could stop an agent from
+        booting, which is exactly where falling back matters most.
+        """
+        raw = "1" * 5000
+
+        assert resolve_health_check_ttl(30, raw) == 30
+        assert resolve_health_check_ttl(None, raw) == 15
+
+        assert len(warnings) == 2
+        message = warnings[0].getMessage()
+        assert "too large" in message
+        # The whole 5000-digit value must not land in the log.
+        assert raw not in message
+        assert len(message) < 200
+
+    def test_rejects_a_configured_value_too_long_to_render(self, warnings):
+        """Rendering the rejected value must not raise either.
+
+        The 4300-digit cap applies to int->str as well, so a huge *negative*
+        ``health_check_ttl`` is rejected for being < 1 and then raises while
+        being formatted into its own warning. Same hazard as the env branch,
+        one line away.
+        """
+        huge_negative = -(10**5000)
+
+        assert resolve_health_check_ttl(huge_negative) == 15
+
+        assert len(warnings) == 1
+        message = warnings[0].getMessage()
+        assert "not a whole number of seconds >= 1" in message
+        assert "int" in message  # says what it could not print
+        assert len(message) < 200
+
+    @pytest.mark.parametrize(
+        "label,configured",
+        [
+            # repr() on these hits the same int<->str cap, one indirection out.
+            ("fraction", Fraction(10**5000)),
+            # No raise, but a warning is useless at 300k characters.
+            ("long list", [0] * 100_000),
+            ("long string", "x" * 100_000),
+        ],
+        ids=["fraction", "long-list", "long-string"],
+    )
+    def test_bounds_an_unprintable_configured_value(self, label, configured, warnings):
+        """Every rejection message stays short and safe, whatever it names."""
+        assert resolve_health_check_ttl(configured) == 15
+
+        assert len(warnings) == 1
+        assert len(warnings[0].getMessage()) < 200
+
+    def test_bounds_an_oversized_env_value_in_every_rejection(self, warnings):
+        """The env branch's other two messages are bounded as well."""
+        # Not an integer at all, and enormous.
+        assert resolve_health_check_ttl(None, "x" * 100_000) == 15
+        # Matches the regex and converts, but is zero-padded to ~4300 chars.
+        assert resolve_health_check_ttl(None, "-" + "0" * 4290 + "5") == 15
+
+        assert len(warnings) == 2
+        assert "not an integer" in warnings[0].getMessage()
+        assert "below the 1s minimum" in warnings[1].getMessage()
+        assert all(len(record.getMessage()) < 200 for record in warnings.records)
+
+    def test_accepts_a_configured_value_too_long_to_convert(self, warnings):
+        """A huge ``health_check_ttl`` int is honoured, deliberately.
+
+        This is NOT the env case above: ``configured`` is already an int
+        object, so no string->int conversion happens and nothing can raise.
+        Neither TypeScript nor Java caps the TTL either, and asyncio schedules
+        arbitrarily large sleeps without overflowing, so rejecting this would
+        add a Python-only divergence for no runtime benefit. A huge TTL means
+        "effectively never re-run" — odd, but what the operator asked for.
+        Do not "fix" this into a rejection.
+        """
+        huge = 10**5000  # built by arithmetic; int(str) would hit the same cap
+
+        assert resolve_health_check_ttl(huge) == huge
+        assert warnings == []
 
 
 class TestResolveHealthCheckTtlFromEnv:
