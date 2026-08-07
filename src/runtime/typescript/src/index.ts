@@ -212,6 +212,17 @@ export {
   type HealthVerdict,
 } from "./health-check.js";
 
+// Startup check (RFC #1502) — "can this agent EVER serve", reported by
+// `/startupz`. Step 1: the endpoint only. Pointing the chart's startupProbe at
+// it, so a failing check keeps the pod from coming up, is step 2.
+export {
+  runStartupCheck,
+  buildStartupBody,
+  startupStatusCodeFor,
+  type MeshStartupCheck,
+  type StartupVerdict,
+} from "./startup-check.js";
+
 // Service views (RFC #1280) — consumer view factory + facade types.
 export {
   serviceView,

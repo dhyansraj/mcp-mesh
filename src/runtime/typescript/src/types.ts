@@ -5,6 +5,7 @@
 import { z } from "zod";
 import type { ServiceView } from "./service-view.js";
 import type { MeshHealthCheck } from "./health-check.js";
+import type { MeshStartupCheck } from "./startup-check.js";
 
 /**
  * Metadata for media-typed tool parameters.
@@ -320,6 +321,42 @@ export interface AgentConfig {
    * round trip. Env: MCP_MESH_HEALTH_CHECK_TTL. Defaults to 15.
    */
   healthCheckTtl?: number;
+  /**
+   * RFC #1502: a check that answers "is this agent configured such that it can
+   * EVER serve?", as opposed to {@link healthCheck}'s "can I serve right now".
+   *
+   * Today (RFC #1502 step 1) the verdict is reported by `GET|HEAD /startupz`
+   * and nothing else: a failing check answers 503 there, and the agent is not
+   * withdrawn, the heartbeat is untouched, `/livez` and `/ready` are unchanged.
+   * The agent chart's `startupProbe` still points at `/livez`.
+   *
+   * Repointing that probe at `/startupz` is step 2, and it is what the hook
+   * exists for: a pod whose startup check never passes then never becomes
+   * ready, never registers, and ends up in `CrashLoopBackOff` — a missing API
+   * key is not going to fix itself, and without this it looks exactly like a
+   * vendor outage.
+   *
+   * The verdict rules are the OPPOSITE of {@link healthCheck}'s: a check that
+   * THROWS fails the probe (it does not degrade), and anything short of a
+   * clean pass fails. An indeterminate answer at boot is not a reason to let a
+   * possibly-misconfigured agent through, and the cost of being wrong is
+   * asymmetric — a false failure crash-loops a pod that was never serving, a
+   * false pass silently registers a broken one.
+   *
+   * Honoured on EVERY agent type, `mesh.route` and A2A included: it never
+   * withdraws a running fan-out point, it only stops a misconfigured one from
+   * coming up. Omitting it passes, so this is purely additive.
+   *
+   * Runs once per request — a startup probe stops polling on first success, so
+   * there is nothing to cache. Keep it fast: the chart's probe
+   * `timeoutSeconds` is 5.
+   *
+   * @example
+   * ```typescript
+   * startupCheck: () => Boolean(process.env.ANTHROPIC_API_KEY)
+   * ```
+   */
+  startupCheck?: MeshStartupCheck;
 }
 
 /**
@@ -339,6 +376,8 @@ export interface ResolvedAgentConfig {
   healthCheck?: MeshHealthCheck;
   /** Issue #1476: resolved refresh period in seconds (env > config > 15). */
   healthCheckTtl: number;
+  /** RFC #1502: user startup check, or undefined when none is declared. */
+  startupCheck?: MeshStartupCheck;
 }
 
 /**

@@ -479,6 +479,24 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
             """Kubernetes liveness probe - always returns 200 if app is running."""
             return build_livez_response(agent_name="mcp-mesh-agent")
 
+        from _mcp_mesh.shared.startup_check_manager import build_startupz_response
+
+        @app.get("/startupz")
+        @app.head("/startupz")
+        async def startupz(response: Response):
+            """Kubernetes startup probe - reports the agent's ``startup_check``.
+
+            RFC #1502: the "will this ever work" verdict, as opposed to
+            ``health_check``'s "can I serve right now". The check runs on every
+            hit; a ``startupProbe`` stops polling once it passes, so there is
+            nothing to cache.
+            """
+            data, status_code = await build_startupz_response(
+                agent_name="mcp-mesh-agent"
+            )
+            response.status_code = status_code
+            return data
+
         @app.get("/immediate-status")
         def immediate_status():
             return {
@@ -1459,6 +1477,7 @@ def agent(
     heartbeat_interval: int = 5,
     health_check: Callable[[], Awaitable[Any]] | None = None,
     health_check_ttl: int = 15,
+    startup_check: Callable[[], Any] | None = None,
     auto_run: bool = True,  # Changed to True by default!
     auto_run_interval: int = 10,
     **kwargs: Any,
@@ -1488,6 +1507,22 @@ def agent(
         health_check_ttl: Cache TTL for health check results in seconds (default: 15)
             Reduces expensive health check calls by caching results
             Environment variable: MCP_MESH_HEALTH_CHECK_TTL (takes precedence)
+        startup_check: Optional sync or async function reported by ``/startupz``
+            (RFC #1502). Where ``health_check`` answers "can I serve right now"
+            — a failing one pauses the heartbeat until it recovers —
+            ``startup_check`` answers "is this agent configured such that it
+            can ever serve". Today (step 1) the verdict is reported by
+            ``/startupz`` and nothing else — a failing check answers 503 there,
+            and the heartbeat, ``/livez`` and ``/ready`` are all unchanged.
+            Pointing the chart's ``startupProbe`` at ``/startupz``, so that a
+            check which never passes keeps the pod from becoming ready and
+            lands it in CrashLoopBackOff where it is visible, is step 2.
+            Returns a bool, a {status, checks, errors} dict, or a HealthStatus.
+            Only a clean pass passes: a throw, a degraded verdict or an
+            unrecognized return all fail the probe (the opposite of
+            ``health_check``, which degrades rather than withdrawing — see
+            ``_mcp_mesh.shared.startup_check_manager``). Omitting it passes,
+            so this is purely additive.
         auto_run: Automatically start service and keep process alive (default: True)
             Environment variable: MCP_MESH_AUTO_RUN (takes precedence)
         auto_run_interval: Keep-alive heartbeat interval in seconds (default: 10)
@@ -1572,6 +1607,9 @@ def agent(
         if health_check_ttl < 1:
             raise ValueError("health_check_ttl must be at least 1 second")
 
+        if startup_check is not None and not callable(startup_check):
+            raise ValueError("startup_check must be a callable (sync or async)")
+
         # Separate binding host (for uvicorn server) from external host (for registry)
         from _mcp_mesh.shared.host_resolver import HostResolver
 
@@ -1645,6 +1683,7 @@ def agent(
             "heartbeat_interval": final_heartbeat_interval,
             "health_check": health_check,
             "health_check_ttl": health_check_ttl,
+            "startup_check": startup_check,
             "auto_run": final_auto_run,
             "auto_run_interval": final_auto_run_interval,
             "agent_id": agent_id,
