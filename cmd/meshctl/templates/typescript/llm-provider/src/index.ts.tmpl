@@ -15,11 +15,41 @@ const server = new FastMCP({
   version: "1.0.0",
 });
 
-// ===== HEALTH CHECK =====
+// ===== HEALTH AND STARTUP CHECKS =====
 //
-// Runs every healthCheckTtl seconds. While it returns "unhealthy" the agent
-// stops heartbeating, the registry withdraws it, and consumers fail over to
-// another provider — automatically restored when the check passes again.
+// Two hooks, two questions, two different consequences.
+//
+//   healthCheck   "Can I serve RIGHT NOW?" Re-runs every healthCheckTtl
+//                 seconds. While it returns "unhealthy" this provider stops
+//                 heartbeating: the registry ages it out, dependency
+//                 resolution stops selecting it, and consumers fail over to
+//                 another provider. The process keeps running and the
+//                 registry restores it the moment the check passes again -
+//                 no restart, no redeploy. This is the hook for a vendor
+//                 OUTAGE, which is transient by definition.
+//
+//   startupCheck  "Can I EVER serve?" Read by the Kubernetes startupProbe,
+//                 on /startupz. A pod whose startup check fails never becomes
+//                 ready, never registers, and lands in CrashLoopBackOff -
+//                 which is the point: a missing or rejected API key is loud
+//                 instead of looking like an outage. A startupProbe stops
+//                 polling once it passes, so a key revoked later falls to
+//                 healthCheck. This is the hook for a MISCONFIGURATION,
+//                 which no restart is going to fix.
+//
+// The two checks below probe the same endpoint and read the verdict
+// differently, and that difference is the whole design. A rejected credential
+// fails startup; a 5xx, a rate limit or an unreachable vendor PASSES startup
+// and is left to healthCheck. Mapping an outage onto startupCheck would
+// crash-loop a correctly configured pod for as long as the vendor is down -
+// and, worse, would make CrashLoopBackOff stop meaning "your configuration is
+// wrong", which is the signal this hook exists to produce.
+//
+// They also disagree about exceptions, deliberately. A healthCheck that
+// throws is recorded as "degraded" and keeps heartbeating - a buggy probe
+// must not withdraw a working provider from a mesh that may have no other
+// one. A startupCheck that throws FAILS: at boot an indeterminate answer is
+// not a reason to admit a possibly-misconfigured agent.
 {{ if .ProbeVendor }}
 /**
  * Ceiling for one probe. `AbortSignal.timeout` rejects with a
@@ -269,6 +299,212 @@ async function healthCheck(): Promise<MeshHealthResult> {
   return { status: "healthy", checks: { provider_configured: true }, errors: [] };
 }
 {{- end }}
+{{- if eq .ProbeVendor "anthropic" }}
+
+/**
+ * Startup check for {{ .Name }}.
+ *
+ * Answers "is this provider configured such that it can EVER serve?" - the
+ * question a restart cannot change the answer to.
+ */
+async function startupCheck(): Promise<MeshHealthResult> {
+  // Local first: a missing key costs nothing to detect and never fixes
+  // itself, so it needs no network call to be certain about.
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return {
+      status: "unhealthy",
+      checks: { anthropic_api_key_present: false },
+      errors: ["ANTHROPIC_API_KEY not set"],
+    };
+  }
+
+  // A WRONG key can only be detected by asking the vendor. A network call on
+  // the startup path is acceptable because a startupProbe stops polling once
+  // it passes - this runs a handful of times, not every ten seconds forever.
+  const checks: Record<string, boolean> = { anthropic_api_key_present: true };
+  let response: Response;
+  try {
+    response = await fetch("https://api.anthropic.com/v1/models", {
+      headers: {
+        "anthropic-version": "2023-06-01",
+        "x-api-key": apiKey,
+      },
+      signal: AbortSignal.timeout(HEALTH_PROBE_TIMEOUT_MS),
+    });
+  } catch {
+    // The vendor could not be reached at all (DNS, connect, timeout, TLS).
+    // An outage, not a misconfiguration: startup PASSES and healthCheck
+    // withdraws this agent for as long as it lasts. Failing here would
+    // crash-loop a correctly configured pod, and would dilute
+    // CrashLoopBackOff from "your configuration is wrong" into "something
+    // somewhere is unwell".
+    checks.anthropic_api_reachable = false;
+    return { status: "healthy", checks, errors: [] };
+  }
+
+  if (response.status === 401 || response.status === 403) {
+    // The vendor answered and REJECTED the credential. Fatal: no restart
+    // mints a valid key, so fail startup and make the mistake visible.
+    checks.anthropic_api_key_valid = false;
+    return {
+      status: "unhealthy",
+      checks,
+      errors: ["Anthropic rejected ANTHROPIC_API_KEY"],
+    };
+  }
+
+  // The vendor answered with something that is not a rejection - a 200, a
+  // 5xx, a rate limit. The credential is not what is wrong, so startup
+  // PASSES and anything transient is healthCheck's to report.
+  checks.anthropic_api_key_valid = response.status === 200;
+  return { status: "healthy", checks, errors: [] };
+}
+{{- else if eq .ProbeVendor "openai" }}
+
+/**
+ * Startup check for {{ .Name }}.
+ *
+ * Answers "is this provider configured such that it can EVER serve?" - the
+ * question a restart cannot change the answer to.
+ */
+async function startupCheck(): Promise<MeshHealthResult> {
+  // Local first: a missing key costs nothing to detect and never fixes
+  // itself, so it needs no network call to be certain about.
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return {
+      status: "unhealthy",
+      checks: { openai_api_key_present: false },
+      errors: ["OPENAI_API_KEY not set"],
+    };
+  }
+
+  // A WRONG key can only be detected by asking the vendor. A network call on
+  // the startup path is acceptable because a startupProbe stops polling once
+  // it passes - this runs a handful of times, not every ten seconds forever.
+  const checks: Record<string, boolean> = { openai_api_key_present: true };
+  let response: Response;
+  try {
+    response = await fetch("https://api.openai.com/v1/models", {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(HEALTH_PROBE_TIMEOUT_MS),
+    });
+  } catch {
+    // The vendor could not be reached at all (DNS, connect, timeout, TLS).
+    // An outage, not a misconfiguration: startup PASSES and healthCheck
+    // withdraws this agent for as long as it lasts. Failing here would
+    // crash-loop a correctly configured pod, and would dilute
+    // CrashLoopBackOff from "your configuration is wrong" into "something
+    // somewhere is unwell".
+    checks.openai_api_reachable = false;
+    return { status: "healthy", checks, errors: [] };
+  }
+
+  if (response.status === 401 || response.status === 403) {
+    // The vendor answered and REJECTED the credential. Fatal: no restart
+    // mints a valid key, so fail startup and make the mistake visible.
+    checks.openai_api_key_valid = false;
+    return {
+      status: "unhealthy",
+      checks,
+      errors: ["OpenAI rejected OPENAI_API_KEY"],
+    };
+  }
+
+  // The vendor answered with something that is not a rejection - a 200, a
+  // 5xx, a rate limit. The credential is not what is wrong, so startup
+  // PASSES and anything transient is healthCheck's to report.
+  checks.openai_api_key_valid = response.status === 200;
+  return { status: "healthy", checks, errors: [] };
+}
+{{- else if eq .ProbeVendor "gemini" }}
+
+/**
+ * Startup check for {{ .Name }}.
+ *
+ * Answers "is this provider configured such that it can EVER serve?" - the
+ * question a restart cannot change the answer to.
+ */
+async function startupCheck(): Promise<MeshHealthResult> {
+  // Local first: a missing key costs nothing to detect and never fixes
+  // itself, so it needs no network call to be certain about.
+  const apiKey = process.env.GOOGLE_API_KEY;
+  if (!apiKey) {
+    return {
+      status: "unhealthy",
+      checks: { google_api_key_present: false },
+      errors: ["GOOGLE_API_KEY not set"],
+    };
+  }
+
+  // A WRONG key can only be detected by asking the vendor. A network call on
+  // the startup path is acceptable because a startupProbe stops polling once
+  // it passes - this runs a handful of times, not every ten seconds forever.
+  const checks: Record<string, boolean> = { google_api_key_present: true };
+  let response: Response;
+  try {
+    response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
+      { signal: AbortSignal.timeout(HEALTH_PROBE_TIMEOUT_MS) },
+    );
+  } catch {
+    // The vendor could not be reached at all (DNS, connect, timeout, TLS).
+    // An outage, not a misconfiguration: startup PASSES and healthCheck
+    // withdraws this agent for as long as it lasts. Failing here would
+    // crash-loop a correctly configured pod, and would dilute
+    // CrashLoopBackOff from "your configuration is wrong" into "something
+    // somewhere is unwell".
+    checks.gemini_api_reachable = false;
+    return { status: "healthy", checks, errors: [] };
+  }
+
+  // 400, not 401: Gemini answers a bad API key with INVALID_ARGUMENT rather
+  // than an auth status, which is why this branch is wider than the other
+  // two vendors'. It is the same pair the health check above reads.
+  if (response.status === 400 || response.status === 403) {
+    // The vendor answered and REJECTED the credential. Fatal: no restart
+    // mints a valid key, so fail startup and make the mistake visible.
+    checks.google_api_key_valid = false;
+    return {
+      status: "unhealthy",
+      checks,
+      errors: ["Google rejected GOOGLE_API_KEY"],
+    };
+  }
+
+  // The vendor answered with something that is not a rejection - a 200, a
+  // 5xx, a rate limit. The credential is not what is wrong, so startup
+  // PASSES and anything transient is healthCheck's to report.
+  checks.google_api_key_valid = response.status === 200;
+  return { status: "healthy", checks, errors: [] };
+}
+{{- else }}
+
+/**
+ * Startup check for {{ .Name }}.
+ *
+ * NOT IMPLEMENTED - a skeleton that always passes, so a {{ .Model }} pod with
+ * no credentials at all still comes up, registers, and fails every call it is
+ * given.
+ *
+ * Replace it with the local checks this deployment cannot run without: the
+ * credential your gateway authenticates with (an AWS role, ADC / Workload
+ * Identity, your proxy's token), a required endpoint URL. Return false and the
+ * pod never becomes ready, never registers, and lands in CrashLoopBackOff with
+ * the reason in its logs.
+ *
+ * Keep it local if you can. If you do call your gateway from here, branch on
+ * the answer: a REJECTED credential is fatal and must fail, but a 5xx, a rate
+ * limit, a timeout or an unreachable endpoint must PASS - those are outages,
+ * and crash-looping on one restarts a pod whose configuration was fine. Report
+ * those from the health check instead, which withdraws the agent while they
+ * last and restores it afterwards.
+ */
+function startupCheck(): boolean {
+  return true;
+}
+{{- end }}
 
 /**
  * LLM Provider agent that exposes {{ .Model }} via mesh.
@@ -288,6 +524,7 @@ const agent = mesh(server, {
   // costs the registry staleness window once heartbeats stop, and recovery
   // needs a passing check plus the heartbeat resume and re-register round trip.
   healthCheckTtl: 30,
+  startupCheck,
 });
 
 // ===== LLM PROVIDER =====

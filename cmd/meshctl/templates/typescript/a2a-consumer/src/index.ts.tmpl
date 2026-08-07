@@ -13,7 +13,12 @@
  * and skill IDs below before running.
 {{ else }} * Generated from: {{ .A2AURL }}/.well-known/agent.json
 {{ end }} */
-import { FastMCP, mesh, type A2AClient } from "@mcpmesh/sdk";
+import {
+  FastMCP,
+  mesh,
+  type A2AClient,
+  type MeshHealthResult,
+} from "@mcpmesh/sdk";
 import { z } from "zod";
 
 function parsePort(raw: string | undefined, fallback: number): number {
@@ -31,10 +36,72 @@ const server = new FastMCP({
   version: "1.0.0",
 });
 
+// ===== HEALTH AND STARTUP CHECKS =====
+//
+// Two hooks, two questions, two different consequences. Both default to
+// passing, so deleting either one leaves this bridge behaving exactly as it
+// does today.
+//
+//   healthCheck   "Can I serve RIGHT NOW?" Re-runs every healthCheckTtl
+//                 seconds. While it reports "unhealthy" the bridge stops
+//                 heartbeating: the registry ages it out and dependency
+//                 resolution stops selecting it. The process keeps running
+//                 and keeps serving, and the registry restores it the moment
+//                 the check passes again - no restart, no redeploy. Override
+//                 it for anything TRANSIENT: the A2A producer at
+//                 {{ .A2AURL }} being down is the obvious one here.
+//
+//   startupCheck  "Can I EVER serve?" Read by the Kubernetes startupProbe,
+//                 on /startupz. A pod whose startup check fails never becomes
+//                 ready, never registers, and lands in CrashLoopBackOff -
+//                 which is the point: a misconfiguration is loud instead of
+//                 looking like an outage. A startupProbe stops polling once
+//                 it passes, so a credential revoked later falls to
+//                 healthCheck. Override it for anything a restart CANNOT
+//                 fix{{ if .AuthBearer }}: {{ .AuthEnvVar }} not being set is exactly that{{ else }}: a missing token, an unreadable config file{{ end }}.
+//
+// Choosing the wrong hook is the trap this split exists to remove. A missing
+// token reported by healthCheck leaves the pod Running and silently
+// unregistered, indistinguishable from a producer outage; a producer outage
+// reported by startupCheck crash-loops a pod whose configuration was fine.
+//
+// They also disagree about exceptions, deliberately. A healthCheck that
+// throws is recorded as "degraded" and keeps heartbeating - a buggy probe
+// must not withdraw a working bridge from a mesh that may have no other one.
+// A startupCheck that throws FAILS: at boot an indeterminate answer is not a
+// reason to admit a possibly-misconfigured agent.
+
+/** Can this bridge serve right now? */
+async function healthCheck(): Promise<MeshHealthResult> {
+  // TODO: probe the producer this bridge fronts - its agent card at
+  // {{ .A2AURL }}/.well-known/agent.json is a cheap, metadata-only
+  // request. Return { status: "unhealthy", ... } (or plain false) to be
+  // withdrawn from the mesh until the producer is back.
+  return { status: "healthy", checks: {}, errors: [] };
+}
+
+/** Is this bridge configured such that it can ever serve? */
+function startupCheck(): boolean {
+{{- if .AuthBearer }}
+  // The producer needs a bearer token, and a pod that does not have one is
+  // never going to acquire it: failing here is the whole point of the hook.
+  return Boolean(process.env[{{ toJSON .AuthEnvVar }}]);
+{{- else }}
+  // TODO: assert the configuration this bridge cannot run without - the
+  // producer URL, a token, a mounted secret. Return false (or
+  // { status: "unhealthy", ... }) and the pod never comes up. Sync is fine
+  // here; a promise is accepted too.
+  return true;
+{{- end }}
+}
+
 const agent = mesh(server, {
   name: {{ toJSON .Name }},
   httpPort: HTTP_PORT,{{ if .Description }}
   description: {{ toJSON .Description }},{{ end }}
+  healthCheck,
+  healthCheckTtl: 30,
+  startupCheck,
 });
 
 {{ range .Skills }}

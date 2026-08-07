@@ -1,5 +1,8 @@
 package {{ .JavaPackage }};
 
+import io.mcpmesh.MeshHealth;
+import io.mcpmesh.MeshHealthCheck;
+import io.mcpmesh.MeshStartupCheck;
 import io.mcpmesh.spring.web.MeshDependency;
 import io.mcpmesh.spring.web.MeshInject;
 import io.mcpmesh.spring.web.MeshRoute;
@@ -43,6 +46,67 @@ public class {{ .NamePascal }}Application {
 
     public static void main(String[] args) {
         SpringApplication.run({{ .NamePascal }}Application.class, args);
+    }
+
+    // ===== HEALTH AND STARTUP CHECKS =====
+    //
+    // Both hooks work on a gateway in Java: the starter scans every Spring bean
+    // for them and the mesh health controller serves every agent type, so
+    // nothing here is agent-type specific. Both default to passing, so deleting
+    // either one leaves this gateway behaving exactly as it does today.
+    //
+    //   @MeshHealthCheck   "Can I serve RIGHT NOW?" Re-runs every ttlSeconds.
+    //                      While it reports UNHEALTHY the gateway stops
+    //                      heartbeating and the registry withdraws it from
+    //                      DISCOVERY. It does not go dark: the heartbeat is
+    //                      registry traffic only, so Tomcat keeps listening,
+    //                      the dependencies already resolved are retained, and
+    //                      /ready stays 200 - the pod keeps its Service
+    //                      endpoints and keeps taking ingress. Override it for
+    //                      anything TRANSIENT.
+    //
+    //   @MeshStartupCheck  "Can I EVER serve?" Read by the Kubernetes
+    //                      startupProbe, on /startupz. A pod whose startup
+    //                      check fails never becomes ready, never registers,
+    //                      and lands in CrashLoopBackOff - which is what you
+    //                      want from a gateway with a broken config, and it is
+    //                      also what plain Spring gives you by failing the boot
+    //                      outright. Override it for anything a restart CANNOT
+    //                      fix: a missing credential, an unreadable config.
+    //
+    // Choosing the wrong hook is the trap this split exists to remove. A
+    // missing credential reported by the health check leaves the pod Running
+    // and silently unregistered, indistinguishable from an outage; an upstream
+    // outage reported by the startup check crash-loops a pod whose
+    // configuration was fine all along - and on Java each of those restarts is
+    // a fresh JVM and a fresh Spring context.
+    //
+    // They also disagree about exceptions, deliberately. A health check that
+    // throws is recorded as DEGRADED and keeps heartbeating - a buggy probe
+    // must not withdraw a working gateway. A startup check that throws FAILS:
+    // at boot an indeterminate answer is not a reason to admit a
+    // possibly-misconfigured agent.
+
+    /** Can this gateway serve right now? */
+    @MeshHealthCheck(ttlSeconds = 30)
+    public MeshHealth healthCheck() {
+        // TODO: probe what this gateway needs in order to answer a request -
+        // a datasource, an upstream API of its own. Do NOT report an unresolved
+        // mesh capability here: mesh already knows, and a handler answering 503
+        // for the one route that needed it is more precise than withdrawing the
+        // whole gateway from discovery.
+        return MeshHealth.healthy();
+    }
+
+    /** Is this gateway configured such that it can ever serve? */
+    @MeshStartupCheck
+    public boolean startupCheck() {
+        // TODO: assert the configuration this gateway cannot run without - an
+        // env var, a mounted secret. Return false (or a MeshHealth that is not
+        // HEALTHY) and the pod never comes up. Name what is missing in the
+        // message, never its value: the body is served to anyone who can reach
+        // the pod.
+        return true;
     }
 }
 
@@ -98,12 +162,10 @@ class ApiController {
     //     return ResponseEntity.ok(response);
     // }
 
-    @GetMapping("/health")
-    public ResponseEntity<Map<String, Object>> health() {
-        return ResponseEntity.ok(Map.of(
-            "status", "healthy",
-            "service", "{{ .Name }}",
-            "timestamp", LocalDateTime.now().toString()
-        ));
-    }
+    // There is deliberately no @GetMapping("/health") here. The mesh starter
+    // mounts its own controller for /startupz, /livez, /ready and /health on
+    // every agent type, gateways included, so a second mapping for any of those
+    // four paths is an Ambiguous mapping and the application does not start at
+    // all. /health carries the @MeshHealthCheck verdict declared above; add
+    // your own diagnostics on a path of your own if you want more.
 }

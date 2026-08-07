@@ -17,6 +17,64 @@ app = FastMCP("{{ toPascalCase .Name }} Service")
 # System prompt is loaded from: prompts/{{ .Name }}.jinja2
 # Customize the prompt file to change the LLM behavior.
 
+# ===== HEALTH AND STARTUP CHECKS =====
+#
+# Two hooks, two questions, two different consequences. Both default to
+# passing, so deleting either one leaves this agent behaving exactly as it
+# does today.
+#
+#   health_check   "Can I serve RIGHT NOW?" Re-runs every health_check_ttl
+#                  seconds. While it reports unhealthy the agent stops
+#                  heartbeating: the registry ages it out and dependency
+#                  resolution stops selecting it. The process keeps running
+#                  and keeps serving, and the registry restores the agent the
+#                  moment the check passes again - no restart, no redeploy.
+#                  Override it for anything TRANSIENT: a database that may
+#                  come back, a vendor API having an outage.
+#
+#   startup_check  "Can I EVER serve?" Read by the Kubernetes startupProbe,
+#                  on /startupz. A pod whose startup check fails never becomes
+#                  ready, never registers, and lands in CrashLoopBackOff -
+#                  which is the point: a misconfiguration is loud instead of
+#                  looking like an outage. A startupProbe stops polling once
+#                  it passes, so a credential revoked later falls to
+#                  health_check. Override it for anything a restart CANNOT
+#                  fix: a missing API key, an unreadable config file.
+#
+# Choosing the wrong hook is the trap this split exists to remove. A missing
+# API key reported by health_check leaves the pod Running and silently
+# unregistered, indistinguishable from an outage; a vendor outage reported by
+# startup_check crash-loops a pod whose configuration was fine all along.
+#
+# They also disagree about exceptions, deliberately. A health_check that
+# raises is recorded as degraded and keeps heartbeating - a buggy probe must
+# not withdraw a working agent from a mesh that may have no other one. A
+# startup_check that raises FAILS: at boot an indeterminate answer is not a
+# reason to admit a possibly-misconfigured agent.
+#
+# Neither one belongs on the LLM provider this agent resolves through. The
+# provider holds the vendor credential and probes the vendor itself; this
+# agent has no key to check and no vendor to reach, and a provider that goes
+# unhealthy is withdrawn by mesh without help from here.
+
+
+async def health_check() -> dict:
+    """Can this agent serve right now?"""
+    # TODO: probe whatever this agent needs in order to answer a call - a
+    # database handle, a downstream API. Return {"status": "unhealthy", ...}
+    # (or plain False) to be withdrawn from the mesh until it recovers.
+    return {"status": "healthy", "checks": {}, "errors": []}
+
+
+def startup_check() -> bool:
+    """Is this agent configured such that it can ever serve?"""
+    # TODO: assert the configuration this agent cannot run without - an env
+    # var, a mounted secret, a readable prompt file. Return False (or
+    # {"status": "unhealthy", ...}) and the pod never comes up. Sync is fine
+    # here; an async def is accepted too.
+    return True
+
+
 # ===== CONTEXT MODEL =====
 
 class {{ toPascalCase .Name }}Context(BaseModel):
@@ -86,6 +144,9 @@ def {{ toSnakeCase .Name }}(
     http_port={{ .Port }},
     enable_http=True,
     auto_run=True,
+    health_check=health_check,
+    health_check_ttl=30,
+    startup_check=startup_check,
 )
 class {{ toAgentClassName .Name }}:
     """

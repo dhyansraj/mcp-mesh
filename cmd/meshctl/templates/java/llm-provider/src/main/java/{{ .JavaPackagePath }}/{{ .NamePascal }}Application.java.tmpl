@@ -4,6 +4,7 @@ import io.mcpmesh.MeshAgent;
 import io.mcpmesh.MeshHealth;
 import io.mcpmesh.MeshHealthCheck;
 import io.mcpmesh.MeshLlmProvider;
+import io.mcpmesh.MeshStartupCheck;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
@@ -64,11 +65,44 @@ public class {{ .NamePascal }}Application {
     // No implementation needed - @MeshLlmProvider handles everything!
     // Resource links (images, PDFs) in tool results are automatically resolved.
 
-    // ===== HEALTH CHECK =====
+    // ===== HEALTH AND STARTUP CHECKS =====
     //
-    // Runs every ttlSeconds. While it returns unhealthy the agent stops
-    // heartbeating, the registry withdraws it, and consumers fail over to
-    // another provider — automatically restored when the check passes again.
+    // Two hooks, two questions, two different consequences.
+    //
+    //   @MeshHealthCheck   "Can I serve RIGHT NOW?" Re-runs every ttlSeconds.
+    //                      While it returns UNHEALTHY this provider stops
+    //                      heartbeating: the registry ages it out, dependency
+    //                      resolution stops selecting it, and consumers fail
+    //                      over to another provider. The JVM keeps running and
+    //                      the registry restores it the moment the check
+    //                      passes again — no restart, no redeploy. This is the
+    //                      hook for a vendor OUTAGE, which is transient by
+    //                      definition.
+    //
+    //   @MeshStartupCheck  "Can I EVER serve?" Read by the Kubernetes
+    //                      startupProbe, on /startupz. A pod whose startup
+    //                      check fails never becomes ready, never registers,
+    //                      and lands in CrashLoopBackOff — which is the point:
+    //                      a missing or rejected API key is loud instead of
+    //                      looking like an outage. A startupProbe stops polling
+    //                      once it passes, so a key revoked later falls to the
+    //                      health check. This is the hook for a
+    //                      MISCONFIGURATION, which no restart is going to fix.
+    //
+    // The two checks below probe the same endpoint and read the verdict
+    // differently, and that difference is the whole design. A rejected
+    // credential fails startup; a 5xx, a rate limit or an unreachable vendor
+    // PASSES startup and is left to the health check. Mapping an outage onto
+    // the startup check would crash-loop a correctly configured pod for as long
+    // as the vendor is down — each restart a fresh JVM and a fresh Spring
+    // context — and, worse, would make CrashLoopBackOff stop meaning "your
+    // configuration is wrong", which is the signal this hook exists to produce.
+    //
+    // They also disagree about exceptions, deliberately. A health check that
+    // throws is recorded as DEGRADED and keeps heartbeating — a buggy probe
+    // must not withdraw a working provider from a mesh that may have no other
+    // one. A startup check that throws FAILS: at boot an indeterminate answer
+    // is not a reason to admit a possibly-misconfigured agent.
 {{ if eq $probeVendor "anthropic" }}
     private static final HttpClient HTTP = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(5))
@@ -302,4 +336,230 @@ public class {{ .NamePascal }}Application {
         return MeshHealth.healthy().withCheck("provider_configured", true);
     }
 {{ end }}
+{{- if eq $probeVendor "anthropic" }}
+
+    /**
+     * Startup check for {{ .Name }}.
+     *
+     * Answers "is this provider configured such that it can EVER serve?" — the
+     * question a restart cannot change the answer to.
+     */
+    @MeshStartupCheck
+    public MeshHealth startupCheck() {
+        // Local first: a missing key costs nothing to detect and never fixes
+        // itself, so it needs no network call to be certain about.
+        String apiKey = System.getenv("ANTHROPIC_API_KEY");
+        if (apiKey == null || apiKey.isBlank()) {
+            return MeshHealth.unhealthy("ANTHROPIC_API_KEY not set")
+                .withCheck("anthropic_api_key_present", false);
+        }
+
+        // A WRONG key can only be detected by asking the vendor. A network call
+        // on the startup path is acceptable because a startupProbe stops
+        // polling once it passes — this runs a handful of times, not every ten
+        // seconds forever.
+        int status;
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create("https://api.anthropic.com/v1/models"))
+                .header("anthropic-version", "2023-06-01")
+                .header("x-api-key", apiKey)
+                .timeout(Duration.ofSeconds(5))
+                .GET()
+                .build();
+            status = HTTP.send(request, HttpResponse.BodyHandlers.discarding()).statusCode();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            // The probe was cut short, which concluded nothing about the
+            // credential. Startup PASSES, for the same reason as below.
+            return MeshHealth.healthy()
+                .withCheck("anthropic_api_key_present", true)
+                .withCheck("anthropic_api_reachable", false);
+        } catch (Exception e) {
+            // The vendor could not be reached at all (DNS, connect, timeout,
+            // TLS). An outage, not a misconfiguration: startup PASSES and the
+            // health check withdraws this agent for as long as it lasts.
+            // Failing here would crash-loop a correctly configured pod, and
+            // would dilute CrashLoopBackOff from "your configuration is wrong"
+            // into "something somewhere is unwell".
+            return MeshHealth.healthy()
+                .withCheck("anthropic_api_key_present", true)
+                .withCheck("anthropic_api_reachable", false);
+        }
+
+        if (status == 401 || status == 403) {
+            // The vendor answered and REJECTED the credential. Fatal: no
+            // restart mints a valid key, so fail startup and make it visible.
+            return MeshHealth.unhealthy("Anthropic rejected ANTHROPIC_API_KEY")
+                .withCheck("anthropic_api_key_present", true)
+                .withCheck("anthropic_api_key_valid", false);
+        }
+
+        // The vendor answered with something that is not a rejection — a 200, a
+        // 5xx, a rate limit. The credential is not what is wrong, so startup
+        // PASSES and anything transient is the health check's to report.
+        return MeshHealth.healthy()
+            .withCheck("anthropic_api_key_present", true)
+            .withCheck("anthropic_api_key_valid", status == 200);
+    }
+{{- else if eq $probeVendor "openai" }}
+
+    /**
+     * Startup check for {{ .Name }}.
+     *
+     * Answers "is this provider configured such that it can EVER serve?" — the
+     * question a restart cannot change the answer to.
+     */
+    @MeshStartupCheck
+    public MeshHealth startupCheck() {
+        // Local first: a missing key costs nothing to detect and never fixes
+        // itself, so it needs no network call to be certain about.
+        String apiKey = System.getenv("OPENAI_API_KEY");
+        if (apiKey == null || apiKey.isBlank()) {
+            return MeshHealth.unhealthy("OPENAI_API_KEY not set")
+                .withCheck("openai_api_key_present", false);
+        }
+
+        // A WRONG key can only be detected by asking the vendor. A network call
+        // on the startup path is acceptable because a startupProbe stops
+        // polling once it passes — this runs a handful of times, not every ten
+        // seconds forever.
+        int status;
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create("https://api.openai.com/v1/models"))
+                .header("Authorization", "Bearer " + apiKey)
+                .timeout(Duration.ofSeconds(5))
+                .GET()
+                .build();
+            status = HTTP.send(request, HttpResponse.BodyHandlers.discarding()).statusCode();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            // The probe was cut short, which concluded nothing about the
+            // credential. Startup PASSES, for the same reason as below.
+            return MeshHealth.healthy()
+                .withCheck("openai_api_key_present", true)
+                .withCheck("openai_api_reachable", false);
+        } catch (Exception e) {
+            // The vendor could not be reached at all (DNS, connect, timeout,
+            // TLS). An outage, not a misconfiguration: startup PASSES and the
+            // health check withdraws this agent for as long as it lasts.
+            // Failing here would crash-loop a correctly configured pod, and
+            // would dilute CrashLoopBackOff from "your configuration is wrong"
+            // into "something somewhere is unwell".
+            return MeshHealth.healthy()
+                .withCheck("openai_api_key_present", true)
+                .withCheck("openai_api_reachable", false);
+        }
+
+        if (status == 401 || status == 403) {
+            // The vendor answered and REJECTED the credential. Fatal: no
+            // restart mints a valid key, so fail startup and make it visible.
+            return MeshHealth.unhealthy("OpenAI rejected OPENAI_API_KEY")
+                .withCheck("openai_api_key_present", true)
+                .withCheck("openai_api_key_valid", false);
+        }
+
+        // The vendor answered with something that is not a rejection — a 200, a
+        // 5xx, a rate limit. The credential is not what is wrong, so startup
+        // PASSES and anything transient is the health check's to report.
+        return MeshHealth.healthy()
+            .withCheck("openai_api_key_present", true)
+            .withCheck("openai_api_key_valid", status == 200);
+    }
+{{- else if eq $probeVendor "gemini" }}
+
+    /**
+     * Startup check for {{ .Name }}.
+     *
+     * Answers "is this provider configured such that it can EVER serve?" — the
+     * question a restart cannot change the answer to.
+     */
+    @MeshStartupCheck
+    public MeshHealth startupCheck() {
+        // Local first: a missing key costs nothing to detect and never fixes
+        // itself, so it needs no network call to be certain about.
+        String apiKey = System.getenv("GOOGLE_API_KEY");
+        if (apiKey == null || apiKey.isBlank()) {
+            return MeshHealth.unhealthy("GOOGLE_API_KEY not set")
+                .withCheck("google_api_key_present", false);
+        }
+
+        // A WRONG key can only be detected by asking the vendor. A network call
+        // on the startup path is acceptable because a startupProbe stops
+        // polling once it passes — this runs a handful of times, not every ten
+        // seconds forever.
+        int status;
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(
+                    "https://generativelanguage.googleapis.com/v1beta/models?key=" + apiKey))
+                .timeout(Duration.ofSeconds(5))
+                .GET()
+                .build();
+            status = HTTP.send(request, HttpResponse.BodyHandlers.discarding()).statusCode();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            // The probe was cut short, which concluded nothing about the
+            // credential. Startup PASSES, for the same reason as below.
+            return MeshHealth.healthy()
+                .withCheck("google_api_key_present", true)
+                .withCheck("gemini_api_reachable", false);
+        } catch (Exception e) {
+            // The vendor could not be reached at all (DNS, connect, timeout,
+            // TLS). An outage, not a misconfiguration: startup PASSES and the
+            // health check withdraws this agent for as long as it lasts.
+            // Failing here would crash-loop a correctly configured pod, and
+            // would dilute CrashLoopBackOff from "your configuration is wrong"
+            // into "something somewhere is unwell".
+            return MeshHealth.healthy()
+                .withCheck("google_api_key_present", true)
+                .withCheck("gemini_api_reachable", false);
+        }
+
+        // 400, not 401: Gemini answers a bad API key with INVALID_ARGUMENT
+        // rather than an auth status, which is why this branch is wider than
+        // the other two vendors'. It is the same pair the health check reads.
+        if (status == 400 || status == 403) {
+            // The vendor answered and REJECTED the credential. Fatal: no
+            // restart mints a valid key, so fail startup and make it visible.
+            return MeshHealth.unhealthy("Google rejected GOOGLE_API_KEY")
+                .withCheck("google_api_key_present", true)
+                .withCheck("google_api_key_valid", false);
+        }
+
+        // The vendor answered with something that is not a rejection — a 200, a
+        // 5xx, a rate limit. The credential is not what is wrong, so startup
+        // PASSES and anything transient is the health check's to report.
+        return MeshHealth.healthy()
+            .withCheck("google_api_key_present", true)
+            .withCheck("google_api_key_valid", status == 200);
+    }
+{{- else }}
+
+    /**
+     * Startup check for {{ .Name }}.
+     *
+     * NOT IMPLEMENTED — a skeleton that always passes, so a {{ $model }} pod
+     * with no credentials at all still comes up, registers, and fails every
+     * call it is given.
+     *
+     * Replace it with the local checks this deployment cannot run without: the
+     * credential your gateway authenticates with (an AWS role, ADC / Workload
+     * Identity, your proxy's token), a required endpoint URL. Return false and
+     * the pod never becomes ready, never registers, and lands in
+     * CrashLoopBackOff with the reason in its logs.
+     *
+     * Keep it local if you can. If you do call your gateway from here, branch
+     * on the answer: a REJECTED credential is fatal and must fail, but a 5xx, a
+     * rate limit, a timeout or an unreachable endpoint must PASS — those are
+     * outages, and crash-looping on one restarts a pod whose configuration was
+     * fine. Report those from the health check instead, which withdraws the
+     * agent while they last and restores it afterwards.
+     */
+    @MeshStartupCheck
+    public boolean startupCheck() {
+        return true;
+    }
+{{- end }}
 }

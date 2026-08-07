@@ -260,9 +260,11 @@ While the check returns unhealthy the agent stops heartbeating, the registry wit
 
 Route (`mesh.route`) and A2A agents are no exception: a `healthCheck` declared in the `meshExpress` config pauses the heartbeat too, so the registry stops advertising the gateway. It keeps serving the ingress it already had - `/ready` reports the mesh runtime on every agent type, so the pod keeps its Service endpoints.
 
+A bare `mesh.route()` app has no config object for either hook, and mesh leaves its Express server alone, so it also serves none of the four paths below. That is the design, not a gap: mesh gives a gateway dependency injection, not lifecycle management. Define the probe endpoints yourself - `meshctl scaffold api --lang typescript` generates them - and validate the configuration at boot with `process.exit(1)` in place of a `startupCheck`.
+
 ### Probe Wiring
 
-The agent chart already wires all three. If you write your own Deployment, wire them the same way - the paths are the whole contract:
+The agent chart already wires all three probes. If you write your own Deployment, wire them the same way - the paths are the whole contract:
 
 ```yaml
 startupProbe:

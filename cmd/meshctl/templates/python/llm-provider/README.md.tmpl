@@ -119,7 +119,39 @@ The provider includes a health check that validates:
   from, or this agent cannot withdraw itself when that endpoint is down.
 {{ end }}
 
-Health status is cached for 30 seconds.
+Health status is cached for 30 seconds. It answers "can I serve **right now**":
+while it reports unhealthy the agent stops heartbeating and the registry
+withdraws it from resolution, so consumers fail over to another provider. The
+pod keeps running and is restored automatically when the check passes again.
+
+## Startup Check
+
+`startup_check()` answers the other question — "can I **ever** serve" — and it
+is read by the Kubernetes `startupProbe`, on `/startupz`. A pod whose startup
+check fails never becomes ready, never registers, and lands in
+`CrashLoopBackOff`, where a misconfiguration is visible instead of looking like
+an outage.
+{{ if .ProbeVendor }}
+The generated check reads the API key locally first, then asks the vendor
+whether it is accepted. The two answers are not treated alike:
+
+| The vendor... | Startup | Because |
+|---|---|---|
+| has no key to read | **fails** | a key that is not set will not set itself |
+| rejects the key | **fails** | no restart mints a valid one |
+| answers 5xx or rate-limits | passes | an outage, not a misconfiguration |
+| does not answer at all | passes | same - the health check withdraws the agent meanwhile |
+
+Crash-looping on an outage would restart a pod whose configuration was fine, and
+would make `CrashLoopBackOff` stop meaning "your configuration is wrong".
+{{ else }}
+It is a skeleton that always passes, so a {{ .Model }} pod with no credentials
+at all still comes up and fails every call. Replace it with the local checks
+this deployment cannot run without - the credential your gateway authenticates
+with, a required endpoint URL. If you call your gateway from it, fail only on a
+rejected credential: a 5xx, a rate limit or an unreachable endpoint is an outage
+and belongs in the health check.
+{{ end }}
 
 ## License
 

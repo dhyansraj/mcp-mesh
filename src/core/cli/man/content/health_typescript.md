@@ -89,7 +89,7 @@ const meshApp = meshExpress(app, {
 });
 ```
 
-`mesh.route()` on its own auto-initializes a gateway with no config object, so there is nowhere to declare a check on that path - use `meshExpress` when you want one.
+`mesh.route()` on its own auto-initializes a gateway with no config object, so there is nowhere to declare a check on that path - use `meshExpress` when you want one, and use it INSTEAD of `mesh.route()`, not alongside it: `mesh.route()` starts the API runtime itself, so a process doing both registers two agents. That is not a gap awaiting a fix (issue #1506, for the equivalent on Python). Mesh gives a gateway dependency injection, not lifecycle management: a `mesh.route()` app is an ordinary Express application, so validate its configuration at boot and `process.exit(1)`, and Kubernetes reports `CrashLoopBackOff` with the cause in the logs.
 
 ## Registry Health Monitor
 
@@ -196,7 +196,7 @@ TypeScript agents automatically expose four endpoints, and Kubernetes probes mus
 // { ready: true, agent: "my-agent", runtime: "up", mcp_wrappers: 1, timestamp: "..." }
 ```
 
-A `mesh.route` or A2A agent serves the same URLs, and its `/health` carries the same verdict.
+A gateway wrapped in `meshExpress` serves the same four URLs, and its `/health` carries the same verdict. A bare `mesh.route()` app does not: mesh never touches the Express server there, so nothing mounts the four and the chart's probes 404 until you define them yourself. `meshctl scaffold api --lang typescript` generates them.
 
 ## Graceful Shutdown
 

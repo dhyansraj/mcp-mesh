@@ -295,11 +295,11 @@ public MeshHealth healthCheck() {
 
 While the check returns unhealthy the agent stops heartbeating, the registry withdraws it, and consumers resolve to another provider - restored automatically when the check passes, with no restart. Returning `boolean` works too: `true` is healthy, `false` unhealthy. A check that throws is recorded as `degraded` and keeps heartbeating, so a bug in the check cannot take a working agent out of the mesh. `MCP_MESH_HEALTH_CHECK_TTL` overrides `ttlSeconds`.
 
-Route-only (`api`) and A2A agents are no exception: their check pauses the heartbeat too, so the registry stops advertising the gateway. It keeps serving the ingress it already had - `/ready` reports the mesh runtime on every agent type, so the pod keeps its Service endpoints.
+Route-only (`api`) and A2A agents are no exception: their check pauses the heartbeat too, so the registry stops advertising the gateway. It keeps serving the ingress it already had - `/ready` reports the mesh runtime on every agent type, so the pod keeps its Service endpoints. Both hooks are declared the same way there, on any Spring bean, and the starter serves the four paths below from one controller whatever the agent type - so a `@GetMapping` of your own for any of them is an ambiguous mapping and the application does not start.
 
 ### Probe Wiring
 
-The agent chart already wires all three. If you write your own Deployment, wire them the same way - the paths are the whole contract:
+The agent chart already wires all three probes. If you write your own Deployment, wire them the same way - the paths are the whole contract:
 
 ```yaml
 startupProbe:

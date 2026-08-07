@@ -68,7 +68,9 @@ A check that **throws** is recorded as `degraded`, not unhealthy, and keeps hear
 
 A route-only (`api`) or A2A agent runs the check exactly as a provider does, and a failing one **pauses its heartbeat** too, so the registry stops advertising the gateway. Nothing else changes for it: the heartbeat is registry traffic, so the servlet container keeps serving, the dependencies it already resolved stay wired, and `/ready` still answers 200 - the pod keeps its Service endpoints and keeps taking ingress. A withdrawn gateway stops being discovered; it does not go dark.
 
-Declare it the same way you would on a provider: one `@MeshHealthCheck` method on any Spring bean. No agent type is a carve-out any more, on any endpoint or on the heartbeat.
+Declare it the same way you would on a provider: one `@MeshHealthCheck` method on any Spring bean. No agent type is a carve-out any more, on any endpoint or on the heartbeat. `@MeshStartupCheck` works on a gateway too, and it is the one that matters more there - a gateway with a broken config should never come up.
+
+The starter mounts `/startupz`, `/livez`, `/ready` and `/health` from one controller on every agent type, so those four paths are taken. A `@GetMapping` of your own for any of them is an ambiguous mapping and the application fails to start; put your own diagnostics on a path of your own.
 
 ## Checking Dependency Health
 

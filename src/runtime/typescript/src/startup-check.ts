@@ -5,19 +5,15 @@
  * failing one only pauses the heartbeat so the registry stops selecting this
  * agent until it recovers. `startupCheck` answers the other question: "is this
  * agent configured such that it can *ever* serve?" A missing API key is not
- * going to fix itself, and today it looks exactly like a vendor outage: the
- * agent sits unregistered, the pod runs, and nothing is loud.
+ * going to fix itself, and without this hook it looks exactly like a vendor
+ * outage: the agent sits unregistered, the pod runs, and nothing is loud.
  *
- * **What ships today (RFC #1502 step 1).** `startupCheck` is reported by
- * `GET|HEAD /startupz`, and that is the whole effect: a failing check answers
- * 503 there. Nothing else changes — the agent is not withdrawn, the heartbeat
- * is untouched, `/livez` and `/ready` answer exactly as they did.
- *
- * The agent chart's `startupProbe` still points at `/livez`, so nothing acts on
- * the verdict yet. Repointing it at `/startupz` is step 2, and it is what the
- * hook exists for: a pod whose startup check never passes then never becomes
- * ready, never registers, and ends up in `CrashLoopBackOff` — visible. Until
- * then, `/startupz` is a surface to build against and to scrape.
+ * The verdict is reported by `GET|HEAD /startupz`, which the agent chart's
+ * `startupProbe` asks for. So a pod whose startup check never passes never
+ * becomes ready, never registers, and ends up in `CrashLoopBackOff` — which is
+ * the point: the misconfiguration is visible. `/livez` still answers 200
+ * unconditionally and `/ready` still reports the mesh runtime; neither consults
+ * this hook.
  *
  * Three properties are deliberate, and each is the OPPOSITE of the
  * corresponding `healthCheck` rule:

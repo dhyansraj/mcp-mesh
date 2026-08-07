@@ -16,18 +16,14 @@ import java.lang.annotation.Target;
  * exactly like a vendor outage — the agent sits unregistered, the pod runs, and
  * nothing is loud.
  *
- * <h2>What ships today (RFC #1502 step 1)</h2>
+ * <h2>What it is wired to</h2>
  *
- * <p>The verdict is served from {@code GET}/{@code HEAD} {@code /startupz}, and
- * that is the whole effect: a failing check answers 503 there. Nothing else
- * changes — the agent is not withdrawn, the heartbeat is untouched, and
- * {@code /livez} and {@code /ready} answer exactly as they did.
- *
- * <p>The agent Helm chart's {@code startupProbe} still points at {@code /livez},
- * so nothing acts on the verdict yet. Repointing it at {@code /startupz} is
- * step 2, and it is what this hook exists for: a pod whose startup check never
- * passes then never becomes ready, never registers, and ends up in
- * {@code CrashLoopBackOff} — which is the point.
+ * <p>The verdict is served from {@code GET}/{@code HEAD} {@code /startupz},
+ * which the agent Helm chart's {@code startupProbe} asks for. So a pod whose
+ * startup check never passes never becomes ready, never registers, and ends up
+ * in {@code CrashLoopBackOff} — which is the point: the misconfiguration is
+ * visible. {@code /livez} still answers 200 unconditionally and {@code /ready}
+ * still reports the mesh runtime; neither consults this hook.
  *
  * <p>The message on a failing verdict is served to any caller who can reach the
  * pod, so name the setting that is missing without including its value:

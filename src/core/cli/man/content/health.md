@@ -158,9 +158,9 @@ A check that **raises** is recorded as `degraded`, not unhealthy, and keeps hear
 
 `@mesh.route` and `@mesh.a2a` agents run the check on the same timer as a provider, and a failing one pauses their heartbeat too, so the registry ages the gateway out and stops advertising it. That is the whole effect: the heartbeat is registry traffic, so a withdrawn gateway keeps serving its own routes, keeps the dependencies it already resolved, and still answers 200 on `/ready` - it stays in its Service endpoints and keeps taking ingress. It stops being discovered; it does not go dark.
 
-Declaring one on a gateway is another matter: `health_check` is an argument to `@mesh.agent`, which cannot share a process with `@mesh.route` or `@mesh.a2a`. The runtime honours a gateway's check; the decorators have no way to carry one yet.
+Declaring one on a gateway is another matter, and issue #1506 closes that as by design: `health_check` is an argument to `@mesh.agent`, and that decorator cannot share a process with `@mesh.route` or `@mesh.a2a` - the runtime rejects the combination at startup. Mesh gives a gateway dependency injection, not lifecycle management. It is an ordinary FastAPI application, so its startup and liveness stay yours to handle the way FastAPI already lets you: validate the configuration at import time and exit non-zero, which Kubernetes reports as `CrashLoopBackOff` with the cause in the logs.
 
-They still serve the same probe endpoints, on your own FastAPI app: `/livez` answers 200 for as long as the process serves, `/ready` reports only whether the mesh runtime is running, and `/health` carries the verdict. If your app already defines one of those paths, yours is left alone and the others are still added.
+They still serve the same four probe endpoints, on your own FastAPI app: `/startupz` reports the startup check (a gateway declares none, so it passes), `/livez` answers 200 for as long as the process serves, `/ready` reports only whether the mesh runtime is running, and `/health` carries the verdict. If your app already defines one of those paths, yours is left alone and the others are still added.
 
 ## Graceful Failure
 
