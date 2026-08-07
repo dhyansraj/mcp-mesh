@@ -179,10 +179,21 @@ agent:
 
 ### Health probes
 
-Mesh agents expose health endpoints automatically (`/health`). The Helm
-chart wires liveness and readiness probes to this endpoint -- no
-configuration needed. If an agent becomes unhealthy, Kubernetes restarts it
-and the registry removes it from the topology within one heartbeat cycle.
+Mesh agents serve four health endpoints automatically, and every probe gets
+its own -- the Helm chart wires `startupProbe` to `/startupz`,
+`livenessProbe` to `/livez`, and `readinessProbe` to `/ready`, with no
+configuration needed. Nothing probes `/health`: that one is the diagnostic
+view you curl, the only endpoint your health check's verdict moves.
+
+An unhealthy agent is not restarted. Its heartbeat pauses, the registry ages
+it out, and dependency resolution stops selecting it -- the pod keeps running
+and rejoins the topology on its own once the check passes again. That split
+is deliberate: restarting a pod cannot fix the upstream API that made the
+agent unhealthy, and it erases the state that knew.
+
+Full details: [Health and discovery](../concepts/health-discovery.md). Run
+`meshctl man deployment` for the probe stanzas to copy if you write your own
+manifests.
 
 ### Secrets management
 

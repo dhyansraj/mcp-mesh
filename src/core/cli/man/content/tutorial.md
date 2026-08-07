@@ -1901,8 +1901,13 @@ agent:
 
 ### Health probes
 
-Mesh agents expose health endpoints automatically (`/health`). The Helm
-chart wires liveness and readiness probes.
+The Helm chart gives every probe its own endpoint: `startupProbe` to
+`/startupz`, `livenessProbe` to `/livez`, `readinessProbe` to `/ready`.
+Nothing probes `/health` -- it is the diagnostic view.
+
+An unhealthy agent is not restarted. Its heartbeat pauses, the registry ages
+it out, and resolution stops selecting it; the pod keeps running and rejoins
+once the check passes. See `meshctl man deployment`.
 
 ### Secrets management
 

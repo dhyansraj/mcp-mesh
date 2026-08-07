@@ -345,8 +345,17 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // that fails the boot. As ever they move nothing here — these constants sample
 // the default variant alone, so a review of those files cannot lean on this
 // test.
+// Issue #1509: +7 / +0 / +0, all of it in `tutorial.md`'s "Health probes"
+// section, which predates #1468 and said the chart wires liveness and
+// readiness to `/health`. It had one span, `/health`, and now has eight: the
+// three probes with the endpoint each is actually wired to, `/health` as the
+// one nothing probes, and `meshctl man deployment` for the stanzas. The
+// replacement for the restart claim — heartbeat pause, age-out, no restart —
+// is plain prose and adds none. Prose throughout, so the list goldens hold.
+// The `docs/tutorial/day-10-whats-next.md` twin carries the same correction at
+// tutorial length and is not sampled here.
 const (
-	wantInlineCodeSpans = 1762
+	wantInlineCodeSpans = 1769
 	wantListCodeSpans   = 522
 	wantMarkupListLines = 448
 )
