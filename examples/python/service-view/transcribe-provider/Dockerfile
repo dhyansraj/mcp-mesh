@@ -1,5 +1,5 @@
 # Dockerfile for transcribe-provider MCP Mesh agent
-FROM mcpmesh/python-runtime:3.5.2
+FROM mcpmesh/python-runtime:3.6.0
 
 WORKDIR /app
 

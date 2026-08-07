@@ -1,5 +1,5 @@
 # Dockerfile for analyst-ts MCP Mesh LLM agent
-FROM mcpmesh/typescript-runtime:3.5.2
+FROM mcpmesh/typescript-runtime:3.6.0
 
 WORKDIR /app
 

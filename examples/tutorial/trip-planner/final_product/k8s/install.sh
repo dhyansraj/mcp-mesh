@@ -16,7 +16,7 @@ set -euo pipefail
 
 NAMESPACE="${1:-trip-planner}"
 DRY_RUN=""
-CHART_VERSION="3.5.2"
+CHART_VERSION="3.6.0"
 AGENT_CHART="oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent"
 CORE_CHART="oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
