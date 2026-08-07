@@ -1,0 +1,24 @@
+{
+  "name": "ts-hc-gateway",
+  "version": "1.0.0",
+  "description": "uc41 route gateway whose health check withdraws it from discovery (RFC #1502 step 3)",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "@mcpmesh/sdk": "^3.5.2",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.18.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}

@@ -64,6 +64,12 @@ import {
   runStartupCheck,
   startupStatusCodeFor,
 } from "./startup-check.js";
+import {
+  startHealthCheckLoop,
+  type HealthCheckLoop,
+  type HealthVerdict,
+} from "./health-check.js";
+import { buildHealthBody, statusCodeFor } from "./health-routes.js";
 import { createProxy } from "./proxy.js";
 import { RouteRegistry, type RouteMetadata } from "./route.js";
 import { initTracing, type AgentMetadata } from "./tracing.js";
@@ -172,6 +178,12 @@ export class MeshExpress {
     sigint: () => void;
     sigterm: () => void;
   } | null = null;
+  /**
+   * The `healthCheck` refresh loop (RFC #1502 step 3), or null when the
+   * gateway declares no check. Same machinery as `MeshAgent` — see
+   * {@link startHealthRefresh}.
+   */
+  private healthLoop: HealthCheckLoop | null = null;
 
   constructor(app: Application, config: MeshExpressConfig) {
     this.app = app;
@@ -182,19 +194,15 @@ export class MeshExpress {
     // Generate unique service ID with suffix (e.g., "my-api-a1b2c3d4")
     this.serviceId = `${this.config.name}-${generateAgentIdSuffix()}`;
 
-    // Issue #1476: a route agent is a fan-out point — withdrawing a
-    // provider is correct, withdrawing a gateway takes down every path
-    // that enters through it. Python and Java draw the same line (no
-    // health-refresh loop on their API/A2A pipelines). Say so rather than
-    // accepting the option and quietly doing nothing with it.
-    if (config.healthCheck) {
-      console.warn(
-        `[mesh-health] healthCheck is IGNORED on MeshExpress ('${this.config.name}'): ` +
-          `a route agent is a fan-out point, so an unhealthy verdict must not ` +
-          `withdraw it from the mesh. Declare the check on the MCP agents behind ` +
-          `this gateway instead.`,
-      );
-    }
+    // `healthCheck` is HONOURED here since RFC #1502 step 3; the loop
+    // itself starts in `start()`, after the heartbeat. #1476 warned that it
+    // was ignored on a gateway, on the grounds that withdrawing a fan-out
+    // point takes the application down. Step 2 removed that harm: pausing
+    // the heartbeat stops registry traffic ONLY — the Express server keeps
+    // listening, resolved dependencies are retained (#1131), and `/ready`
+    // reports the mesh runtime rather than the verdict, so the pod stays in
+    // its Service endpoints and keeps taking ingress. A gateway that
+    // reports unavailable stops being DISCOVERED; it does not go dark.
 
     // Add health check endpoint
     this.setupHealthEndpoints();
@@ -214,9 +222,19 @@ export class MeshExpress {
    * Setup health check endpoints for the registry.
    */
   private setupHealthEndpoints(): void {
-    // Health check endpoint for registry
+    // Diagnostic view of the `healthCheck` verdict (RFC #1502 step 3). It
+    // used to be a fixed `healthy` because a gateway never ran the check;
+    // now that a failing one withdraws the gateway, an endpoint that still
+    // said "healthy" would be the only place an operator could look and the
+    // one place that lied. Same body and same 200/503 rule as the MCP
+    // agent's `/health` (`health-routes.ts`) — nothing probes it, so its
+    // status code is free to carry the verdict.
     this.app.get("/health", (_req: Request, res: Response) => {
-      res.json({ status: "healthy", serviceId: this.serviceId });
+      const verdict = this.getHealthVerdict();
+      res.status(statusCodeFor(verdict)).json({
+        ...buildHealthBody(this.config.name, verdict),
+        serviceId: this.serviceId,
+      });
     });
 
     // Ready check endpoint
@@ -244,10 +262,10 @@ export class MeshExpress {
 
     // Startup endpoint (RFC #1502) — reports the user's `startupCheck`.
     //
-    // Unlike `healthCheck` (warned about and ignored above), this hook IS
-    // honoured on a gateway. It never withdraws a running fan-out point; it
-    // only stops a misconfigured one from coming up, and a gateway with a
-    // broken config should never come up.
+    // Both hooks are honoured on a gateway (RFC #1502). What this one does
+    // there is the milder of the two: it never withdraws a running fan-out
+    // point, it only stops a misconfigured one from coming up, and a gateway
+    // with a broken config should never come up.
     //
     // Registered as GET only, like the three above: Express routes HEAD to a
     // GET handler when no HEAD route exists, so HEAD answers with the same
@@ -319,8 +337,77 @@ export class MeshExpress {
     // 2. Start heartbeat to registry via Rust core
     await this.startHeartbeat();
 
+    // 2.5 RFC #1502 step 3: start the health-check refresh. AFTER the
+    // heartbeat, deliberately — the gateway registers and becomes visible
+    // first, and only the refreshes that follow can withdraw it. Returns
+    // immediately; the seed run is scheduled, never awaited.
+    this.startHealthRefresh();
+
     // 3. Install signal handlers for graceful shutdown
     this.installSignalHandlers();
+  }
+
+  /**
+   * RFC #1502 step 3: run the user's `healthCheck` on a timer and report
+   * each verdict to the Rust core, which stops heartbeating while the
+   * gateway is `unhealthy` so the registry withdraws it from discovery.
+   *
+   * This is `MeshAgent.startHealthRefresh` with the same shared loop
+   * (`startHealthCheckLoop`), not a second implementation: the seed run is
+   * scheduled rather than awaited and does not publish, a throwing check
+   * degrades instead of withdrawing, and both the check and the publish are
+   * deadline-bounded. Everything that made the provider loop safe applies
+   * unchanged here.
+   *
+   * What a withdrawn gateway keeps: the Express server, its resolved
+   * dependencies (#1131), and a 200 on `/ready` — so it stays in its
+   * Service endpoints and keeps taking ingress. It stops being discovered,
+   * it does not go dark.
+   */
+  private startHealthRefresh(): void {
+    const healthCheck = this.config.healthCheck;
+    if (!healthCheck || this.healthLoop) return;
+
+    const ttlSeconds = this.config.healthCheckTtl;
+    console.log(
+      `Health check runs every ${ttlSeconds}s for service ${this.serviceId}; ` +
+        `an unhealthy verdict stops the heartbeat and withdraws this gateway ` +
+        `from the registry (the Express server keeps serving)`,
+    );
+
+    this.healthLoop = startHealthCheckLoop({
+      agentName: this.serviceId,
+      healthCheck,
+      ttlSeconds,
+      publish: async (status) => {
+        // The handle is nulled by shutdown(); a verdict landing after
+        // teardown has nowhere to go and is not an error, so it stays
+        // silent — every clean shutdown would otherwise warn.
+        const handle = this.handle;
+        if (!handle || this.shutdownRequested) return false;
+        const queued = await handle.updateHealth(status);
+        if (!queued) {
+          // The runtime is up but did not take the verdict. Left silent,
+          // an `unhealthy` gateway would keep heartbeating with nothing in
+          // the logs to say why it was never withdrawn.
+          console.warn(
+            `[mesh-health] health status '${status}' for service ` +
+              `'${this.serviceId}' was not queued to the mesh runtime — this ` +
+              `verdict has not taken effect; the next refresh retries`,
+          );
+        }
+        return queued;
+      },
+    });
+  }
+
+  /**
+   * The latest health verdict, or null before the first run completes (or
+   * when no `healthCheck` is configured). Read per request by `/health`;
+   * null answers 200 there, so a gateway with no check is unaffected.
+   */
+  getHealthVerdict(): HealthVerdict | null {
+    return this.healthLoop?.latest() ?? null;
   }
 
   /**
@@ -749,6 +836,14 @@ export class MeshExpress {
     if (this.shutdownPromise) return this.shutdownPromise;
     this.shutdownRequested = true;
     this.shutdownPromise = (async () => {
+      // Stop the health refresh first (same order as `MeshAgent.shutdown`).
+      // Its verdicts are only meaningful while the gateway is serving, and a
+      // tick landing mid-teardown would push a status at a handle that is
+      // about to close.
+      if (this.healthLoop) {
+        this.healthLoop.stop();
+        this.healthLoop = null;
+      }
       if (this.handle) {
         await this.handle.shutdown();
         this.handle = null;

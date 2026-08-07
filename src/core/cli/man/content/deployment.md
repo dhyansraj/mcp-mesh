@@ -373,7 +373,7 @@ Every runtime serves four endpoints, and Kubernetes probes must not share one:
 
 Pointing liveness at `/health` turns an upstream outage into a pod restart, which cannot fix the outage. Probe Wiring below has the manifest.
 
-Route (`@mesh.route`) and A2A (`@mesh.a2a`) agents never run `health_check` at all, so their `/health` stays 200. A gateway is a fan-out point, and withdrawing it takes the application down. Mesh registers the four paths on the gateway's own FastAPI app, and a path your application already defines wins.
+Route (`@mesh.route`) and A2A (`@mesh.a2a`) agents run `health_check` on the same timer, and a failing one pauses their heartbeat too. A withdrawn gateway keeps serving the ingress it already had - `/ready` stays 200, so the pod keeps its Service endpoints - and stops being discovered. Mesh registers the four paths on the gateway's own FastAPI app, and a path your application already defines wins.
 
 ### Probe Wiring
 

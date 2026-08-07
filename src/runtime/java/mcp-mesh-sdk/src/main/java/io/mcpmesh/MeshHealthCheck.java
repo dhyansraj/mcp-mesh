@@ -60,11 +60,18 @@ import java.lang.annotation.Target;
  *
  * <h2>Route and A2A agents</h2>
  *
- * <p>On an {@code api} (route-only) or {@code a2a} agent the verdict feeds the
- * probe endpoints but <b>never</b> suppresses the heartbeat. A gateway is a
- * fan-out point that many requests enter through: withdrawing a provider is
- * correct, withdrawing the gateway takes the application down. This mirrors
- * Python, whose API and A2A pipelines have no health-refresh loop at all.
+ * <p>The hook works the same way on an {@code api} (route-only) or {@code a2a}
+ * agent: a failing check pauses the heartbeat there too (RFC #1502). It
+ * declares "I am not available" on every agent type, and mesh does the same
+ * thing with it everywhere — it stops wiring that agent. What differs is
+ * topology, not meaning: a provider is something others route <i>to</i>, a
+ * gateway is where requests <i>enter</i>.
+ *
+ * <p>So a withdrawn gateway is not a gateway that went down. Suppressing the
+ * heartbeat stops registry traffic only — the servlet container keeps serving,
+ * resolved dependencies are retained, and {@code /ready} answers 200 whatever
+ * the verdict, so the pod stays in its Service endpoints and keeps taking
+ * ingress. It stops being <i>discovered</i>.
  *
  * @see MeshHealth
  * @see MeshHealthStatus

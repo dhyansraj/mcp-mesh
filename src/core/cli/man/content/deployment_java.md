@@ -295,7 +295,7 @@ public MeshHealth healthCheck() {
 
 While the check returns unhealthy the agent stops heartbeating, the registry withdraws it, and consumers resolve to another provider - restored automatically when the check passes, with no restart. Returning `boolean` works too: `true` is healthy, `false` unhealthy. A check that throws is recorded as `degraded` and keeps heartbeating, so a bug in the check cannot take a working agent out of the mesh. `MCP_MESH_HEALTH_CHECK_TTL` overrides `ttlSeconds`.
 
-Route-only (`api`) and A2A agents are the exception on the heartbeat: their check feeds `/health` only and never suppresses it. A gateway is a fan-out point, and taking it out of rotation takes the application down. `/ready` was already exempt on those types and is now exempt on every type.
+Route-only (`api`) and A2A agents are no exception: their check pauses the heartbeat too, so the registry stops advertising the gateway. It keeps serving the ingress it already had - `/ready` reports the mesh runtime on every agent type, so the pod keeps its Service endpoints.
 
 ### Probe Wiring
 

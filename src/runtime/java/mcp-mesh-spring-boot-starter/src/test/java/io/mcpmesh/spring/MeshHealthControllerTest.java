@@ -249,10 +249,11 @@ class MeshHealthControllerTest {
 
     @Test
     void gateway_ready_is200_whenTheUserHealthCheckIsUnhealthy() {
-        // A gateway is a fan-out point. Suppressing its heartbeat is already
-        // forbidden (MeshAgentTypes.isGateway); answering 503 on /ready reaches the same
-        // outcome by another route, because the chart's readiness probe points
-        // there and Kubernetes drops the pod from its Service endpoints.
+        // A failing check DOES pause a gateway's heartbeat since RFC #1502 step
+        // 3, and that is safe precisely because readiness stays 200: the agent
+        // stops being discovered but keeps its Service endpoints and keeps
+        // taking ingress. A 503 here would empty those endpoints and take the
+        // fan-out point down for real.
         for (String agentType : java.util.List.of("api", "a2a")) {
             MeshHealthController controller = new MeshHealthController(
                 runtimeOf(agentType, true),

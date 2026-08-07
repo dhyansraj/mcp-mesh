@@ -52,7 +52,6 @@ public class MeshHealthCheckScheduler implements SmartLifecycle {
     private final AtomicBoolean running = new AtomicBoolean(false);
 
     private volatile ScheduledExecutorService executor;
-    private volatile boolean publishToRuntime = true;
 
     public MeshHealthCheckScheduler(MeshRuntime runtime, MeshHealthCheckRegistry registry) {
         this.runtime = runtime;
@@ -75,21 +74,22 @@ public class MeshHealthCheckScheduler implements SmartLifecycle {
             return;
         }
 
-        String agentType = MeshAgentTypes.agentTypeOf(runtime);
-        this.publishToRuntime = !MeshAgentTypes.isGateway(agentType);
         int ttl = registry.ttlSeconds();
 
-        if (publishToRuntime) {
-            log.info("Health check {} runs every {}s; an unhealthy verdict stops the heartbeat "
-                + "and withdraws this agent from dependency resolution",
-                registry.registration().describe(), ttl);
-        } else {
-            log.info("Health check {} runs every {}s and feeds /health only — on an '{}' agent "
-                + "neither the heartbeat nor /ready is affected (a gateway is a fan-out point; "
-                + "withdrawing it takes the application down, and dropping it from the Service "
-                + "endpoints takes it down harder)",
-                registry.registration().describe(), ttl, agentType);
-        }
+        // EVERY agent type publishes, route and A2A gateways included (RFC
+        // #1502 step 3). #1473 exempted them because withdrawing a fan-out
+        // point "takes the application down" — step 2 removed that harm.
+        // Heartbeat suppression stops registry traffic ONLY: the servlet
+        // container keeps serving, resolved dependencies are retained (#1131),
+        // and /ready reports the mesh runtime rather than the verdict, so the
+        // pod stays in its Service endpoints and keeps taking ingress. A
+        // gateway that reports unavailable stops being DISCOVERED; it does not
+        // go dark. The hook means the same thing on every agent type — "I am
+        // not available" — and mesh does the same thing with it everywhere:
+        // it stops wiring that agent. What differs is topology, not meaning.
+        log.info("Health check {} runs every {}s; an unhealthy verdict stops the heartbeat "
+            + "and withdraws this agent from dependency resolution",
+            registry.registration().describe(), ttl);
 
         executor = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "mesh-health-check");
@@ -144,8 +144,8 @@ public class MeshHealthCheckScheduler implements SmartLifecycle {
     }
 
     /**
-     * Run the check, store the verdict, and (optionally) report it to the
-     * runtime.
+     * Run the check, store the verdict, and (unless this is the startup seed)
+     * report it to the runtime.
      *
      * <p>Never throws — {@code Throwable}, not {@code Exception}. This runs on
      * a {@link java.util.concurrent.ScheduledExecutorService}, which silently
@@ -178,7 +178,7 @@ public class MeshHealthCheckScheduler implements SmartLifecycle {
             log.debug("Health check reports {}", health.status());
         }
 
-        if (!publish || !publishToRuntime) {
+        if (!publish) {
             return;
         }
         try {

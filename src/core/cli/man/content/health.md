@@ -156,9 +156,11 @@ A check that **raises** is recorded as `degraded`, not unhealthy, and keeps hear
 
 ### Route and A2A Agents
 
-`@mesh.route` and `@mesh.a2a` agents never run the check at all - their startup pipelines have no health-refresh loop, so there is no verdict to suppress a heartbeat or to show anywhere. A gateway is a fan-out point that many requests enter through: withdrawing a provider is correct, withdrawing the gateway takes the application down. Declare the check on the agents behind the gateway instead.
+`@mesh.route` and `@mesh.a2a` agents run the check on the same timer as a provider, and a failing one pauses their heartbeat too, so the registry ages the gateway out and stops advertising it. That is the whole effect: the heartbeat is registry traffic, so a withdrawn gateway keeps serving its own routes, keeps the dependencies it already resolved, and still answers 200 on `/ready` - it stays in its Service endpoints and keeps taking ingress. It stops being discovered; it does not go dark.
 
-They still serve all three probe endpoints, on your own FastAPI app: `/livez` answers 200 for as long as the process serves, `/ready` reports only whether the mesh runtime is running, and `/health` is a diagnostic view that never answers 503. If your app already defines one of those paths, yours is left alone and the other two are still added.
+Declaring one on a gateway is another matter: `health_check` is an argument to `@mesh.agent`, which cannot share a process with `@mesh.route` or `@mesh.a2a`. The runtime honours a gateway's check; the decorators have no way to carry one yet.
+
+They still serve the same probe endpoints, on your own FastAPI app: `/livez` answers 200 for as long as the process serves, `/ready` reports only whether the mesh runtime is running, and `/health` carries the verdict. If your app already defines one of those paths, yours is left alone and the others are still added.
 
 ## Graceful Failure
 

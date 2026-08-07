@@ -298,9 +298,11 @@ export interface AgentConfig {
    * the heartbeat alive — a broken probe says nothing about the upstream,
    * and withdrawing a working agent over one is the worse failure.
    *
-   * Honoured by MCP agents (`mesh(server, ...)`). `mesh.route` and A2A
-   * agents deliberately ignore it: they are fan-out points, and
-   * withdrawing a gateway takes down every path that enters through it.
+   * Honoured on EVERY agent type since RFC #1502 — MCP agents
+   * (`mesh(server, ...)`) and `mesh.route` gateways (`meshExpress`) alike.
+   * A withdrawn gateway keeps its HTTP server, its resolved dependencies
+   * and a 200 on `/ready`, so it stays in its Service endpoints and keeps
+   * taking ingress; it stops being discovered, it does not go dark.
    *
    * @example
    * ```typescript

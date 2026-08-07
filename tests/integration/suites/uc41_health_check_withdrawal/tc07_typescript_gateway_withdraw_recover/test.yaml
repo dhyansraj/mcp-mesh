@@ -1,0 +1,310 @@
+# tc07 — TypeScript: a ROUTE (api) gateway's health check withdraws it from
+# discovery without taking its ingress down (RFC #1502 step 3).
+#
+# WHAT THIS COVERS THAT tc01-tc06 DO NOT
+#
+# Every other artifact in this UC is a plain MCP provider. A gateway was
+# EXEMPT from the whole mechanism until now — TypeScript printed
+# "healthCheck is IGNORED on MeshExpress" and ran no loop, Python's api/a2a
+# pipelines had no refresh loop at all, and Java branched on the agent type
+# before publishing. The exemption existed because withdrawing a fan-out point
+# "takes the application down". Step 2 removed that harm by making readiness
+# report the mesh runtime instead of the verdict, so a withdrawn gateway keeps
+# its Service endpoints.
+#
+# That claim is the thing under test, and it has two halves that must BOTH
+# hold at the same instant:
+#
+#   withdrawn   the heartbeat stops and the registry marks the gateway
+#               unhealthy, so nothing discovers it any more
+#   not dark    /livez and /ready stay 200 and GET /ingress keeps answering
+#               from the SAME pid for the entire outage
+#
+# A regression on either half passes half of this file and fails the other:
+# an implementation that still ignores healthCheck on a gateway never reaches
+# WITHDRAWAL, and one that 503s readiness or exits the process trips the
+# per-second samplers below.
+#
+# WHY TYPESCRIPT
+#
+# `meshExpress` is the only gateway surface across the three runtimes that can
+# carry a health check today. Java takes a `@MeshHealthCheck` bean on a route
+# agent as well, but a JVM artifact costs a Maven build per run; Python has no
+# declaration surface at all (`health_check` is a `@mesh.agent` argument, and
+# that decorator cannot share a process with `@mesh.route` / `@mesh.a2a`), so
+# its half of step 3 is runtime-only and cannot be driven from an artifact.
+#
+# WHY THE GATEWAY HAS NO MESH DEPENDENCY
+#
+# `mesh.route([...deps])` auto-starts the singleton `ApiRuntime` on top of
+# `meshExpress`, which registers a SECOND agent from the same process — the
+# assertions here would then be pointing at an ambiguous registry. What is
+# under test is this gateway's own heartbeat, so the ingress route is a plain
+# Express handler.
+#
+# The rest of the design (file-toggled flag, poll-for-the-condition rather
+# than fixed waits, elapsed-time deadlines) is documented in tc01.
+
+name: "TypeScript: a route gateway's health check withdraws it without going dark"
+description: "A failing healthCheck on a meshExpress gateway stops its heartbeat and the registry withdraws it, while /ready stays 200 and its own ingress keeps serving from the same process (RFC #1502 step 3)"
+tags:
+  - health-check
+  - withdrawal
+  - gateway
+  - route
+  - lifecycle
+  - typescript
+  - integration
+timeout: 420
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/ts-hc-gateway /workspace/
+      # Seed the flag explicitly rather than relying on the artifact's
+      # absent-file default, so a phase that fails to write it later is
+      # distinguishable from one that never had a file at all.
+      echo ok > /workspace/gateway-health-flag
+      : > /workspace/hc-gateway-invocations.log
+      echo "seeded gateway-health-flag=$(cat /workspace/gateway-health-flag)"
+
+  - name: "Install gateway deps"
+    handler: npm-install
+    path: /workspace/ts-hc-gateway
+
+  - routine: start_registry_fast_sweep
+
+  # MCP_MESH_HEALTH_INTERVAL=2: the registry's staleness threshold is 5s, so a
+  # 5s default heartbeat would leave a HEALTHY agent one scheduling hiccup away
+  # from being swept.
+  - name: "Start the gateway (port 3431, health-check driven)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start ts-hc-gateway/src/index.ts --env MCP_MESH_HTTP_PORT=3431 --env MCP_MESH_HEALTH_INTERVAL=2 -d
+    capture: start_gateway
+
+  - name: "Gate: the gateway must be registered and healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 120); do
+        S=$(curl -s --max-time 3 http://localhost:8000/agents | jq -r '.agents[]? | select(.name=="hc-gateway-ts") | .status')
+        echo "t=${i}s hc-gateway-ts=$S"
+        if [ "$S" = "healthy" ]; then echo "GATE: OK after ~${i}s"; exit 0; fi
+        sleep 1
+      done
+      echo "GATE: TIMEOUT"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: gate_registered
+    timeout: 150
+
+  # A route agent registers as agent_type "api". Asserted so a future change
+  # that quietly registered this gateway as an mcp_agent would not let the
+  # withdrawal assertion below pass while proving something else.
+  - name: "Baseline: agent type, ingress and probes before any fault"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "AGENT_TYPE: $(curl -s --max-time 5 http://localhost:8000/agents | jq -r '.agents[]? | select(.name=="hc-gateway-ts") | .agent_type // "MISSING"')"
+      BODY=$(curl -s --max-time 5 http://localhost:3431/ingress || echo 'INGRESS_UNREACHABLE')
+      echo "INGRESS_BODY: $BODY"
+      printf '%s' "$BODY" | jq -r '.pid // empty' > /workspace/gateway-pid-baseline 2>/dev/null || true
+      echo "BASELINE_PID: $(cat /workspace/gateway-pid-baseline 2>/dev/null || echo NONE)"
+      echo "HEALTH_HTTP_CODE: $(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:3431/health)"
+      echo "READY_HTTP_CODE: $(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:3431/ready)"
+    capture: baseline
+
+  # ===== Phase B: inject the fault =====
+  - name: "Phase B: flip the health flag to fail"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo fail > /workspace/gateway-health-flag
+      echo "gateway-health-flag=$(cat /workspace/gateway-health-flag) at $(date -u +%H:%M:%S)"
+    capture: fault_injected
+
+  # The two halves are sampled in ONE loop, so "withdrawn" and "still serving"
+  # are asserted over the same window rather than one after the other.
+  - name: "Phase B: poll until the registry withdraws the gateway, sampling /livez, /ready and the ingress every second"
+    handler: shell
+    workdir: /workspace
+    command: |
+      LIVEZ_FAIL=0
+      READY_FAIL=0
+      INGRESS_FAIL=0
+      sample() {
+        curl -sf --max-time 2 http://localhost:3431/livez > /dev/null 2>&1 || LIVEZ_FAIL=$((LIVEZ_FAIL + 1))
+        curl -sf --max-time 2 http://localhost:3431/ready > /dev/null 2>&1 || READY_FAIL=$((READY_FAIL + 1))
+        curl -sf --max-time 2 http://localhost:3431/ingress > /dev/null 2>&1 || INGRESS_FAIL=$((INGRESS_FAIL + 1))
+      }
+      for i in $(seq 1 60); do
+        sample
+        S=$(curl -s --max-time 3 http://localhost:8000/agents | jq -r '.agents[]? | select(.name=="hc-gateway-ts") | .status')
+        echo "t=${i}s hc-gateway-ts=$S livez_failures=$LIVEZ_FAIL ready_failures=$READY_FAIL ingress_failures=$INGRESS_FAIL"
+        if [ "$S" = "unhealthy" ]; then
+          # One more sample AFTER the verdict landed: the interesting instant
+          # is the one where the registry has already withdrawn it.
+          sample
+          echo "WITHDRAWAL: OK after ~${i}s"
+          echo "LIVEZ_FAILURES: $LIVEZ_FAIL"
+          echo "READY_FAILURES: $READY_FAIL"
+          echo "INGRESS_FAILURES: $INGRESS_FAIL"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "WITHDRAWAL: TIMEOUT"
+      echo "LIVEZ_FAILURES: $LIVEZ_FAIL"
+      echo "READY_FAILURES: $READY_FAIL"
+      echo "INGRESS_FAILURES: $INGRESS_FAIL"
+    capture: withdrawal
+    timeout: 120
+
+  # Read from the gateway's own endpoints while it is withdrawn. `/ready` is
+  # captured as a bare status code so the assertion matches an exact
+  # `READY_HTTP_CODE: 200` rather than a substring a body could satisfy by
+  # accident; `READY_FLAG` is derived with jq so the assertion never has to
+  # match raw JSON punctuation through the expression parser.
+  - name: "Phase B: /health reports the verdict, /ready stays 200, the ingress still answers"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "HEALTH_BODY: $(curl -s --max-time 5 http://localhost:3431/health || echo 'HEALTH_UNREACHABLE')"
+      echo "READY_HTTP_CODE: $(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:3431/ready || echo 'READY_UNREACHABLE')"
+      READY_BODY=$(curl -s --max-time 5 http://localhost:3431/ready || echo 'READY_UNREACHABLE')
+      echo "READY_BODY: $READY_BODY"
+      echo "READY_FLAG: $(printf '%s' "$READY_BODY" | jq -r '.ready // "MISSING"' 2>/dev/null || echo MISSING)"
+      INGRESS=$(curl -s --max-time 5 http://localhost:3431/ingress || echo 'INGRESS_UNREACHABLE')
+      echo "INGRESS_BODY: $INGRESS"
+      BASE=$(cat /workspace/gateway-pid-baseline 2>/dev/null || echo '')
+      NOW=$(printf '%s' "$INGRESS" | jq -r '.pid // empty' 2>/dev/null || echo '')
+      if [ -n "$BASE" ] && [ "$BASE" = "$NOW" ]; then
+        echo "OUTAGE_PID_VERDICT: SAME ($BASE)"
+      else
+        echo "OUTAGE_PID_VERDICT: CHANGED (baseline=${BASE:-NONE} during_outage=${NOW:-NONE})"
+      fi
+    capture: gateway_during_outage
+
+  - name: "Phase B: the health check must actually have seen the fault"
+    handler: shell
+    workdir: /workspace
+    command: |
+      # `grep -c` prints 0 AND exits 1 when the file exists with no matches, so
+      # `|| echo 0` would emit "FAIL_TICKS: 0 0". `|| true` adds no output and
+      # ${:-0} covers the missing-file case.
+      FAIL_TICKS=$(grep -c 'flag=fail' /workspace/hc-gateway-invocations.log 2>/dev/null || true)
+      echo "FAIL_TICKS: ${FAIL_TICKS:-0}"
+      tail -12 /workspace/hc-gateway-invocations.log 2>/dev/null || echo 'NO_TRACE'
+    capture: fault_trace
+
+  # ===== Phase C: clear the fault =====
+  - name: "Phase C: flip the health flag back to ok"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo ok > /workspace/gateway-health-flag
+      echo "gateway-health-flag=$(cat /workspace/gateway-health-flag) at $(date -u +%H:%M:%S)"
+    capture: fault_cleared
+
+  # Per #955 a HEAD heartbeat from an agent whose row is `unhealthy` is
+  # answered 410 Gone precisely so a bare ping cannot revive it. The only route
+  # back to healthy is a full POST re-register, so this poll turning green IS
+  # the 410 path — on a gateway as on a provider.
+  - name: "Phase C: poll until the registry restores the gateway, and compare pids"
+    handler: shell
+    workdir: /workspace
+    command: |
+      BASE=$(cat /workspace/gateway-pid-baseline 2>/dev/null || echo '')
+      echo "BASELINE_PID: ${BASE:-NONE}"
+      for i in $(seq 1 60); do
+        S=$(curl -s --max-time 3 http://localhost:8000/agents | jq -r '.agents[]? | select(.name=="hc-gateway-ts") | .status')
+        echo "t=${i}s hc-gateway-ts=$S"
+        if [ "$S" = "healthy" ]; then
+          NOW=$(curl -s --max-time 5 http://localhost:3431/ingress | jq -r '.pid // empty' 2>/dev/null || echo '')
+          echo "RECOVERY: OK after ~${i}s"
+          echo "RECOVERED_PID: ${NOW:-NONE}"
+          if [ -n "$BASE" ] && [ "$BASE" = "$NOW" ]; then
+            echo "PID_VERDICT: SAME ($BASE)"
+          else
+            echo "PID_VERDICT: CHANGED (baseline=${BASE:-NONE} recovered=${NOW:-NONE})"
+          fi
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "RECOVERY: TIMEOUT"
+      echo "PID_VERDICT: UNKNOWN"
+    capture: recovery
+    timeout: 90
+
+  - name: "Diagnostic: gateway log"
+    handler: shell
+    workdir: /workspace
+    command: tail -n 60 ~/.mcp-mesh/logs/*.log 2>/dev/null || echo 'NO_LOGS'
+    capture: gateway_logs
+    ignore_errors: true
+
+  - name: "Diagnostic: registry view of all agents"
+    handler: shell
+    workdir: /workspace
+    command: curl -s --max-time 5 http://localhost:8000/agents | jq -c '.agents[]? | {name, status, agent_type, endpoint}' || echo 'NO_AGENTS'
+    capture: agents_final
+    ignore_errors: true
+
+assertions:
+  - expr: "${captured.gate_registered} contains 'GATE: OK'"
+    message: "SETUP: a meshExpress gateway must register and go healthy before the fault is injected"
+  - expr: "${captured.baseline} contains 'AGENT_TYPE: api'"
+    message: "SETUP: the artifact must register as a route (api) agent — this whole test is about the agent type that used to be exempt"
+  - expr: "${captured.baseline} not contains 'BASELINE_PID: NONE'"
+    message: "SETUP: the ingress must answer with a pid before the fault, otherwise the same-process checks below are vacuous"
+  - expr: "${captured.baseline} contains 'READY_HTTP_CODE: 200'"
+    message: "SETUP: /ready must be 200 on a healthy gateway"
+
+  # THE assertion. Fails if a gateway is still exempt from the health check —
+  # which, before RFC #1502 step 3, it was in all three runtimes.
+  - expr: "${captured.withdrawal} contains 'WITHDRAWAL: OK'"
+    message: "WITHDRAWAL: a healthCheck reporting unhealthy on a route gateway must stop its heartbeat so the registry marks it unhealthy"
+
+  # The other half: withdrawn is not dark. Sampled every second across the
+  # whole outage window, so a runtime that took the gateway out of service
+  # trips these even if the withdrawal itself worked.
+  - expr: "${captured.withdrawal} contains 'LIVEZ_FAILURES: 0'"
+    message: "WITHDRAWAL: /livez must answer for the ENTIRE outage — a restart cannot fix an upstream outage"
+  - expr: "${captured.withdrawal} contains 'READY_FAILURES: 0'"
+    message: "WITHDRAWAL: /ready must stay 200 for the ENTIRE outage — a 503 empties the Service endpoints, which is exactly the harm the route/A2A exemption existed to prevent"
+  - expr: "${captured.withdrawal} contains 'INGRESS_FAILURES: 0'"
+    message: "WITHDRAWAL: the gateway's own route must keep serving for the ENTIRE outage — it stops being discovered, it does not go dark"
+
+  - expr: "${captured.gateway_during_outage} contains 'unhealthy'"
+    message: "WITHDRAWAL: the gateway's /health must report the unhealthy verdict while withdrawn — it is the only surface that says why the heartbeat stopped"
+  - expr: "${captured.gateway_during_outage} contains 'simulated upstream outage'"
+    message: "WITHDRAWAL: /health must carry the health check's own error string, proving the verdict came from the user check rather than a generic failure"
+  - expr: "${captured.gateway_during_outage} contains 'READY_HTTP_CODE: 200'"
+    message: "WITHDRAWAL: /ready must answer 200 while the verdict is unhealthy — readiness reports the mesh runtime on every agent type"
+  - expr: "${captured.gateway_during_outage} contains 'READY_FLAG: true'"
+    message: "WITHDRAWAL: /ready's body must say ready — a 200 over a not-ready body would mean the status line and the body disagree"
+  - expr: "${captured.gateway_during_outage} contains 'OUTAGE_PID_VERDICT: SAME'"
+    message: "WITHDRAWAL: the ingress must be served by the SAME process during the outage — a changed pid means the gateway was restarted, not withdrawn"
+  - expr: "${captured.gateway_during_outage} not contains 'INGRESS_UNREACHABLE'"
+    message: "WITHDRAWAL: the gateway's HTTP server must still be reachable while withdrawn"
+
+  - expr: "${captured.fault_trace} not contains 'FAIL_TICKS: 0'"
+    message: "WITHDRAWAL: the gateway's health check must have been invoked at least once while the flag said fail — before this change it was never invoked at all"
+
+  - expr: "${captured.recovery} contains 'RECOVERY: OK'"
+    message: "RECOVERY: clearing the fault must resume the heartbeat and restore the gateway to healthy via the 410 Gone re-register path (#955)"
+  - expr: "${captured.recovery} contains 'PID_VERDICT: SAME'"
+    message: "RECOVERY: the gateway must recover in the SAME process — a changed pid means it was restarted, not restored"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

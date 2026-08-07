@@ -499,15 +499,16 @@ describe("MeshExpress /startupz", () => {
     expect(get.status).toBe(head.status);
   });
 
-  it("startupCheck is NOT ignored on a gateway, unlike healthCheck", async () => {
-    // #1476 warns that `healthCheck` is ignored on MeshExpress — withdrawing a
-    // fan-out point takes the application down. `startupCheck` withdraws
-    // nothing; it only stops a misconfigured gateway from coming up.
+  it("startupCheck is honoured on a gateway, like healthCheck", async () => {
+    // #1476 ignored `healthCheck` on MeshExpress; RFC #1502 step 3 honours it
+    // there too, so NEITHER hook is a gateway carve-out any more. This one
+    // withdraws nothing regardless — it only stops a misconfigured gateway
+    // from coming up.
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await listen(() => false);
     expect((await fetch(`${base}/startupz`)).status).toBe(503);
     expect(
-      warn.mock.calls.some((c) => String(c[0]).includes("startupCheck is IGNORED")),
+      warn.mock.calls.some((c) => String(c[0]).includes("is IGNORED")),
     ).toBe(false);
   });
 

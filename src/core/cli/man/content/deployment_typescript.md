@@ -258,7 +258,7 @@ const agent = mesh(server, {
 
 While the check returns unhealthy the agent stops heartbeating, the registry withdraws it, and consumers resolve to another provider - restored automatically when the check passes, with no restart. Returning `boolean` works too: `true` is healthy, `false` unhealthy. A check that throws is recorded as `degraded` and keeps heartbeating, so a bug in the check cannot take a working agent out of the mesh. `MCP_MESH_HEALTH_CHECK_TTL` overrides `healthCheckTtl` (default 15s).
 
-Route (`mesh.route`) and A2A agents are the exception: they ignore `healthCheck` entirely, so their `/health` is a fixed `healthy`. A gateway is a fan-out point, and withdrawing it takes the application down. Their `/ready` reports the mesh runtime, which is what every agent type's now reports.
+Route (`mesh.route`) and A2A agents are no exception: a `healthCheck` declared in the `meshExpress` config pauses the heartbeat too, so the registry stops advertising the gateway. It keeps serving the ingress it already had - `/ready` reports the mesh runtime on every agent type, so the pod keeps its Service endpoints.
 
 ### Probe Wiring
 

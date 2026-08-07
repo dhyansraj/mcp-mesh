@@ -18,13 +18,20 @@
  * degrades, it does not withdraw" rule, and the `checks`/`errors` keys
  * are deliberately identical across the three.
  *
- * ## Only providers are gated
+ * ## Every agent type is gated, gateways included
  *
- * This loop runs for MCP agents (`mesh(server, ...)`) only. `mesh.route`
- * and A2A agents are fan-out points: withdrawing a provider is correct,
- * withdrawing a gateway takes down every path that enters through it.
- * Python encodes the same asymmetry by giving its API and A2A pipelines
- * no health-refresh loop at all.
+ * This loop runs for MCP agents (`mesh(server, ...)`) and for `mesh.route`
+ * gateways (`express.ts`) alike. #1476 ran it for providers only, because
+ * withdrawing a fan-out point was thought to take the application down;
+ * RFC #1502 removed that harm by making `/ready` report the mesh runtime
+ * instead of the verdict. Pausing the heartbeat now stops registry traffic
+ * ONLY — the HTTP server keeps listening, resolved dependencies are
+ * retained (#1131), and the pod stays in its Service endpoints. A gateway
+ * that reports unavailable stops being DISCOVERED; it does not go dark.
+ *
+ * The hook means the same thing on every agent type — "I am not
+ * available" — and mesh does the same thing with it everywhere: it stops
+ * wiring that agent. What differs is topology, not meaning.
  */
 
 /** The verdict vocabulary shared by all three runtimes. */

@@ -479,6 +479,7 @@ async def rust_api_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
     logger.info(f"Starting Rust-backed heartbeat for API service '{service_id}'")
 
     handle = None
+    health_refresh = None
     try:
         # Build AgentSpec from API service context, passing service_id explicitly
         spec = _build_api_agent_spec(context, service_id=service_id)
@@ -497,6 +498,28 @@ async def rust_api_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
             register_rust_agent_handle(handle)
         except Exception as e:  # pragma: no cover - never block startup
             logger.debug(f"Could not register handle for atexit drain: {e}")
+
+        # RFC #1502 step 3: run the gateway's own `health_check` on a timer
+        # and report each verdict, exactly as a provider does. Started HERE,
+        # after start_agent(), for two reasons: the gateway registers and
+        # becomes visible before anything can withdraw it, and this loop's
+        # lifetime then matches the registration whose heartbeat it suppresses.
+        #
+        # #1473 exempted gateways because withdrawing a fan-out point "takes
+        # the application down". Step 2 removed that harm: suppressing the
+        # heartbeat stops registry traffic ONLY — the user's uvicorn keeps
+        # serving, resolved dependencies are retained (#1131), and /ready
+        # reports the mesh runtime rather than the verdict, so the pod stays in
+        # its Service endpoints and keeps taking ingress. A gateway that
+        # reports unavailable stops being DISCOVERED; it does not go dark.
+        from ..shared.health_refresh import start_gateway_health_refresh
+
+        health_refresh = start_gateway_health_refresh(
+            service_type="api",
+            service_id=service_id,
+            context=context,
+            log=logger,
+        )
 
         # Event loop - process events from Rust core
         while True:
@@ -543,6 +566,10 @@ async def rust_api_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
         logger.error(f"Rust API heartbeat failed for service '{service_id}': {e}")
         raise
     finally:
+        # Stop the health refresh BEFORE the core shuts down: a verdict landing
+        # mid-teardown would push a status at a handle that is about to close.
+        if health_refresh is not None:
+            health_refresh.cancel()
         # Always ensure graceful shutdown of Rust core to prevent daemon thread issues
         # This is critical: without shutdown(), Rust background threads may try to
         # write to stdout via tracing after Python's stdout is finalized
