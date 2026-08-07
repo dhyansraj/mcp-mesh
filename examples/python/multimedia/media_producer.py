@@ -131,19 +131,24 @@ async def generate_chart(
 @app.tool()
 @mesh.tool(capability="image_generator", description="Returns a sample PNG image")
 async def get_sample_image() -> ResourceLink:
-    """Create and return a minimal valid PNG image (a small blue square)."""
-    # Minimal 2x2 PNG with blue pixels, built from raw bytes.
+    """Create and return a valid PNG image (a blue square with an orange square centered in it)."""
+    # 64x64 PNG on a blue field with a centered orange square, built from raw bytes.
+    # Large enough and distinctive enough for a vision model to describe accurately.
     # PNG structure: signature + IHDR + IDAT + IEND
     import struct
     import zlib
 
-    width, height = 2, 2
+    width, height = 64, 64
+    background = b"\x33\x66\xcc"  # #3366cc blue
+    foreground = b"\xf2\x8e\x2b"  # #f28e2b orange
+    third = width // 3  # centered square spans the middle third
     # Each row: filter byte (0 = None) + RGB pixels
     raw_rows = b""
-    for _ in range(height):
+    for y in range(height):
         raw_rows += b"\x00"  # filter byte
-        for _ in range(width):
-            raw_rows += b"\x33\x66\xcc"  # RGB blue-ish
+        for x in range(width):
+            in_center = third <= x < width - third and third <= y < height - third
+            raw_rows += foreground if in_center else background
 
     def _chunk(chunk_type: bytes, data: bytes) -> bytes:
         c = chunk_type + data
@@ -167,7 +172,7 @@ async def get_sample_image() -> ResourceLink:
         uri=uri,
         name="Sample Image",
         mime_type="image/png",
-        description="A small 2x2 blue PNG image",
+        description="A 64x64 blue PNG image with a centered orange square",
         size=len(png_bytes),
     )
 
