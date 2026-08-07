@@ -1,6 +1,9 @@
 package {{ .JavaPackage }};
 
 import io.mcpmesh.MeshAgent;
+import io.mcpmesh.MeshHealth;
+import io.mcpmesh.MeshHealthCheck;
+import io.mcpmesh.MeshStartupCheck;
 import io.mcpmesh.MeshTool;
 import io.mcpmesh.a2a.A2AClient;
 import io.mcpmesh.a2a.A2AConsumer;
@@ -38,6 +41,74 @@ public class {{ .NamePascal }}Application {
 
     public static void main(String[] args) {
         SpringApplication.run({{ .NamePascal }}Application.class, args);
+    }
+
+    // ===== HEALTH AND STARTUP CHECKS =====
+    //
+    // Two hooks, two questions, two different consequences. Both default to
+    // passing, so deleting either one leaves this bridge behaving exactly as
+    // it does today.
+    //
+    //   @MeshHealthCheck   "Can I serve RIGHT NOW?" Re-runs every ttlSeconds.
+    //                      While it reports UNHEALTHY the bridge stops
+    //                      heartbeating: the registry ages it out and
+    //                      dependency resolution stops selecting it. The JVM
+    //                      keeps running and keeps serving, and the registry
+    //                      restores it the moment the check passes again - no
+    //                      restart, no redeploy. Override it for anything
+    //                      TRANSIENT: the A2A producer at {{ .A2AURL }}
+    //                      being down is the obvious one here.
+    //
+    //   @MeshStartupCheck  "Can I EVER serve?" Read by the Kubernetes
+    //                      startupProbe, on /startupz. A pod whose startup
+    //                      check fails never becomes ready, never registers,
+    //                      and lands in CrashLoopBackOff - which is the point:
+    //                      a misconfiguration is loud instead of looking like
+    //                      an outage. A startupProbe stops polling once it
+    //                      passes, so a credential revoked later falls to the
+    //                      health check. Override it for anything a restart
+    //                      CANNOT fix{{ if .AuthBearer }}: {{ .AuthEnvVar }} not being set is exactly that{{ else }}: a missing token, an unreadable config file{{ end }}.
+    //
+    // Choosing the wrong hook is the trap this split exists to remove. A
+    // missing token reported by the health check leaves the pod Running and
+    // silently unregistered, indistinguishable from a producer outage; a
+    // producer outage reported by the startup check crash-loops a pod whose
+    // configuration was fine - and on Java each of those restarts is a fresh
+    // JVM and a fresh Spring context.
+    //
+    // They also disagree about exceptions, deliberately. A health check that
+    // throws is recorded as DEGRADED and keeps heartbeating - a buggy probe
+    // must not withdraw a working bridge from a mesh that may have no other
+    // one. A startup check that throws FAILS: at boot an indeterminate answer
+    // is not a reason to admit a possibly-misconfigured agent.
+
+    /** Can this bridge serve right now? */
+    @MeshHealthCheck(ttlSeconds = 30)
+    public MeshHealth healthCheck() {
+        // TODO: probe the producer this bridge fronts - its agent card at
+        // {{ .A2AURL }}/.well-known/agent.json is a cheap, metadata-only
+        // request. Return MeshHealth.unhealthy(...) to be withdrawn from the
+        // mesh until the producer is back.
+        return MeshHealth.healthy();
+    }
+
+    /** Is this bridge configured such that it can ever serve? */
+    @MeshStartupCheck
+    public boolean startupCheck() {
+{{- if .AuthBearer }}
+        // The producer needs a bearer token, and a pod that does not have one
+        // is never going to acquire it: failing here is the whole point of the
+        // hook.
+        String token = System.getenv({{ toJSON .AuthEnvVar }});
+        return token != null && !token.isBlank();
+{{- else }}
+        // TODO: assert the configuration this bridge cannot run without - the
+        // producer URL, a token, a mounted secret. Return false (or a
+        // MeshHealth that is not HEALTHY) and the pod never comes up. Name what
+        // is missing in the message, never its value: the body is served to
+        // anyone who can reach the pod.
+        return true;
+{{- end }}
     }
 {{ range .Skills }}
     @MeshTool(

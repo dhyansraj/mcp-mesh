@@ -2010,19 +2010,18 @@ export class MeshAgent {
     // 1.7 RFC #1502: mount GET|HEAD /startupz, which reports the user's
     // `startupCheck` — "is this agent configured such that it can EVER
     // serve", as opposed to `healthCheck`'s "can I serve right now". A NEW
-    // URL rather than a reuse of /livez: the chart points both startupProbe
-    // and livenessProbe at /livez, and an endpoint cannot tell which probe
-    // called it, so sharing would kill a running pod every ten seconds on a
-    // failing startup check.
+    // URL rather than a reuse of /livez: an endpoint cannot tell which probe
+    // called it, so a path serving both startupProbe and livenessProbe would
+    // kill a running pod every ten seconds on a failing startup check.
     //
     // Ordered LAST of the three probe mounts deliberately. All three fail for
     // the same cause (a FastMCP whose Hono app cannot be reached), and the
     // abort message an operator sees should name the route whose absence has
     // been breaking agents the longest — /livez first, then /ready, then this.
     //
-    // Fail-fast for the same reason as those two: once the chart's
-    // startupProbe points here, a missing route 404s every startup probe and
-    // the pod never comes up, with nothing in the events naming the cause.
+    // Fail-fast for the same reason as those two: the chart's startupProbe
+    // points here, so a missing route 404s every startup probe and the pod
+    // never comes up, with nothing in the events naming the cause.
     if (
       !registerStartupzRoute(
         this.server,

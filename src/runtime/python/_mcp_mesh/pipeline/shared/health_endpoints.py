@@ -4,9 +4,10 @@
 ``_start_uvicorn_immediately`` because mesh owns the server it starts. A
 ``@mesh.route`` (api) or ``@mesh.a2a`` (a2a) gateway owns its own FastAPI app
 and its own uvicorn, so nothing registered those paths — and the agent Helm
-chart points ``startupProbe``/``livenessProbe`` at ``/livez`` and
-``readinessProbe`` at ``/ready`` (#1468). A Python gateway therefore 404'd
-every probe and the kubelet restart-looped a perfectly working process.
+chart points ``livenessProbe`` at ``/livez``, ``readinessProbe`` at ``/ready``
+(#1468) and ``startupProbe`` at ``/startupz`` (RFC #1502). A Python gateway
+therefore 404'd every probe and the kubelet restart-looped a perfectly working
+process.
 
 Semantics (matching TypeScript's ``express.ts`` ``setupHealthEndpoints``):
 
@@ -244,8 +245,7 @@ class HealthEndpointsStep(PipelineStep):
 
     Shared by the api (``@mesh.route``) and a2a (``@mesh.a2a``) pipelines —
     both hand mesh an app they do not own, and both are deployed with the
-    agent Helm chart that probes ``/livez`` and ``/ready`` (and, once the
-    chart is repointed, ``/startupz``).
+    agent Helm chart that probes ``/livez``, ``/ready`` and ``/startupz``.
 
     Optional (``required=False``): a failure here must not stop the gateway
     from starting. It is loud instead — the alternative, aborting startup,

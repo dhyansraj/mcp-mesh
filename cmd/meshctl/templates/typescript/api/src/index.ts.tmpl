@@ -12,12 +12,76 @@ app.use(express.json());
 
 const PORT = process.env.PORT || {{ .Port }};
 
+// ===== STARTUP VALIDATION =====
+//
+// There is no healthCheck or startupCheck hook to declare here, and that is a
+// design decision rather than a gap (issue #1506).
+//
+// This gateway is an ordinary Express application that happens to consume mesh
+// capabilities. What mesh gives it is dependency injection - mesh.route()
+// resolves capabilities and hands them to your handlers - not ownership of the
+// application's lifecycle. Both hooks live on a mesh agent's config object,
+// and this app has none: meshExpress() is the only TypeScript surface that
+// carries them, and wrapping this app in it as well would start a second mesh
+// agent from one process, since mesh.route() already auto-starts the API
+// runtime that registers this one.
+//
+// Startup validation is a solved problem here, and the solution is strictly
+// more flexible than a hook would be: check the configuration at boot and exit
+// non-zero. Kubernetes gives you CrashLoopBackOff with the cause in the logs,
+// with no mesh involvement at all.
+const REQUIRED_SETTINGS: string[] = []; // e.g. ["DATABASE_URL", "UPSTREAM_TOKEN"]
+
+const missing = REQUIRED_SETTINGS.filter((name) => !process.env[name]?.trim());
+if (missing.length > 0) {
+  // Exit non-zero BEFORE listening. A gateway that comes up misconfigured
+  // takes ingress it cannot answer; one that never comes up is visible
+  // immediately.
+  console.error(`{{ .Name }}: not configured: ${missing.join(", ")} not set`);
+  process.exit(1);
+}
+
+// ===== KUBERNETES PROBE ENDPOINTS =====
+//
+// These are yours, not mesh's. A mesh.route() gateway keeps its own Express
+// server and mesh never touches it, so nothing mounts the paths the agent Helm
+// chart probes - they are defined here so this scaffold is deployable as
+// generated. Each answers the question its own probe asks, and no two share a
+// URL: a probe whose failure action is a restart must never be able to see a
+// dependency outage, which a restart cannot fix.
+
+// startupProbe. Nothing here can fail yet - the configuration was validated
+// above, and a gateway that got this far is started. Add checks that a restart
+// CANNOT fix, and let the process exit rather than answering 503 forever.
+app.get("/startupz", (_req: Request, res: Response) => {
+  res.json({ started: true, service: "{{ .Name }}" });
+});
+
+// livenessProbe. 200 for as long as this process serves, consulting nothing:
+// reaching this handler is itself the proof, and a restart is the only remedy
+// it can offer.
+app.get("/livez", (_req: Request, res: Response) => {
+  res.json({ alive: true, service: "{{ .Name }}" });
+});
+
+// readinessProbe. 200 while this gateway should take ingress. Do NOT wire an
+// upstream capability's availability in here: mesh traffic and your ingress
+// both arrive through the Service, and a 503 empties its endpoints, so an
+// unresolved dependency would take the gateway off the network instead of
+// letting a handler answer 503 for the one route that needed it.
+app.get("/ready", (_req: Request, res: Response) => {
+  res.json({ ready: true, service: "{{ .Name }}" });
+});
+
 // ===== HEALTH & INFO ENDPOINTS =====
 
 app.get("/", (req: Request, res: Response) => {
   res.json({
     service: "{{ .Name }}",
     endpoints: [
+      "GET  /startupz   - startupProbe",
+      "GET  /livez      - livenessProbe",
+      "GET  /ready      - readinessProbe",
       "GET  /health     - Health check",
       "GET  /api/hello  - Call hello capability",
     ],

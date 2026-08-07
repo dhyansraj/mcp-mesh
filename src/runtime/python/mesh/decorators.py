@@ -1518,12 +1518,11 @@ def agent(
             (RFC #1502). Where ``health_check`` answers "can I serve right now"
             — a failing one pauses the heartbeat until it recovers —
             ``startup_check`` answers "is this agent configured such that it
-            can ever serve". Today (step 1) the verdict is reported by
-            ``/startupz`` and nothing else — a failing check answers 503 there,
-            and the heartbeat, ``/livez`` and ``/ready`` are all unchanged.
-            Pointing the chart's ``startupProbe`` at ``/startupz``, so that a
-            check which never passes keeps the pod from becoming ready and
-            lands it in CrashLoopBackOff where it is visible, is step 2.
+            can ever serve". The verdict is reported by ``/startupz``, which
+            the chart's ``startupProbe`` asks for, so a check that never passes
+            keeps the pod from ever becoming ready and lands it in
+            CrashLoopBackOff where it is visible. The heartbeat, ``/livez`` and
+            ``/ready`` never consult it.
             Returns a bool, a {status, checks, errors} dict, or a HealthStatus.
             Only a clean pass passes: a throw, a degraded verdict or an
             unrecognized return all fail the probe (the opposite of

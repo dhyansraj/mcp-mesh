@@ -320,8 +320,33 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // only (+1) and `meshctl man health` carries the detail (+1). Python-only, so
 // the `_java` and `_typescript` deployment pages do not get it — and they are
 // not sampled here anyway.
+// RFC #1502 step 4 follow-up: +4 / +0 / +0, split evenly between `health.md`
+// and `deployment.md`. Both said Python "cannot yet" carry a gateway hook.
+// Issue #1506 closed that as BY DESIGN, so "yet" promised a fix that is not
+// coming, and both pages are rewritten to state the design instead: mesh gives
+// a gateway dependency injection, not lifecycle management, so its startup
+// validation is its own — check the configuration at boot and exit non-zero.
+//
+// `health.md`: two paragraphs, +1 each. The declaration paragraph swaps its
+// four spans one-for-one and gains `CrashLoopBackOff`, the thing a gateway gets
+// instead of the hook. The endpoint paragraph went from three endpoints to
+// four — step 1 added `/startupz` and this page never counted it — which is the
+// other +1.
+//
+// `deployment.md`: one paragraph, +2. It keeps all seven of its spans (the
+// `#1506` citation stays; a closed issue carrying the rationale is a fine
+// reference) and gains `CrashLoopBackOff` plus the second `startup_check` that
+// names what it stands in for.
+//
+// Prose in both cases, so the two list goldens hold. The `_java` and
+// `_typescript` variants of both pages gained the same design statement, plus
+// two facts neither had: a bare `mesh.route()` app serves none of the four
+// paths, and a Java `@GetMapping` for any of the four is an ambiguous mapping
+// that fails the boot. As ever they move nothing here — these constants sample
+// the default variant alone, so a review of those files cannot lean on this
+// test.
 const (
-	wantInlineCodeSpans = 1758
+	wantInlineCodeSpans = 1762
 	wantListCodeSpans   = 522
 	wantMarkupListLines = 448
 )

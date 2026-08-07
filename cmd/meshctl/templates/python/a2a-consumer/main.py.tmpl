@@ -35,6 +35,68 @@ from fastmcp import FastMCP
 
 app = FastMCP("{{ toPascalCase .Name }} Bridge")
 
+
+# ===== HEALTH AND STARTUP CHECKS =====
+#
+# Two hooks, two questions, two different consequences. Both default to
+# passing, so deleting either one leaves this bridge behaving exactly as it
+# does today.
+#
+#   health_check   "Can I serve RIGHT NOW?" Re-runs every health_check_ttl
+#                  seconds. While it reports unhealthy the bridge stops
+#                  heartbeating: the registry ages it out and dependency
+#                  resolution stops selecting it. The process keeps running
+#                  and keeps serving, and the registry restores it the moment
+#                  the check passes again - no restart, no redeploy. Override
+#                  it for anything TRANSIENT: the A2A producer at
+#                  {{ .A2AURL }} being down is the obvious one here.
+#
+#   startup_check  "Can I EVER serve?" Read by the Kubernetes startupProbe,
+#                  on /startupz. A pod whose startup check fails never becomes
+#                  ready, never registers, and lands in CrashLoopBackOff -
+#                  which is the point: a misconfiguration is loud instead of
+#                  looking like an outage. A startupProbe stops polling once
+#                  it passes, so a credential revoked later falls to
+#                  health_check. Override it for anything a restart CANNOT
+#                  fix{{ if .AuthBearer }}: {{ .AuthEnvVar }} not being set is exactly that{{ else }}: a missing token, an unreadable config file{{ end }}.
+#
+# Choosing the wrong hook is the trap this split exists to remove. A missing
+# token reported by health_check leaves the pod Running and silently
+# unregistered, indistinguishable from a producer outage; a producer outage
+# reported by startup_check crash-loops a pod whose configuration was fine.
+#
+# They also disagree about exceptions, deliberately. A health_check that
+# raises is recorded as degraded and keeps heartbeating - a buggy probe must
+# not withdraw a working bridge from a mesh that may have no other one. A
+# startup_check that raises FAILS: at boot an indeterminate answer is not a
+# reason to admit a possibly-misconfigured agent.
+
+
+async def health_check() -> dict:
+    """Can this bridge serve right now?"""
+    # TODO: probe the producer this bridge fronts - its agent card at
+    # {{ .A2AURL }}/.well-known/agent.json is a cheap, metadata-only
+    # request. Return {"status": "unhealthy", ...} (or plain False) to be
+    # withdrawn from the mesh until the producer is back.
+    return {"status": "healthy", "checks": {}, "errors": []}
+
+
+def startup_check() -> bool:
+    """Is this bridge configured such that it can ever serve?"""
+{{- if .AuthBearer }}
+    # The producer needs a bearer token, and a pod that does not have one is
+    # never going to acquire it: failing here is the whole point of the hook.
+    # Stripped before the test: a credential pasted with a trailing newline,
+    # or a Secret key whose value is blank, is not a token.
+    return bool(os.getenv({{ toJSON .AuthEnvVar }}, "").strip())
+{{- else }}
+    # TODO: assert the configuration this bridge cannot run without - the
+    # producer URL, a token, a mounted secret. Return False (or
+    # {"status": "unhealthy", ...}) and the pod never comes up. Sync is fine
+    # here; an async def is accepted too.
+    return True
+{{- end }}
+
 {{ range .Skills }}
 
 @app.tool()
@@ -65,6 +127,9 @@ async def {{ .FunctionName }}(_a2a: mesh.A2AClient = None) -> dict:
     version="1.0.0",{{ if .Description }}
     description={{ toJSON .Description }},{{ end }}
     http_port=HTTP_PORT,
+    health_check=health_check,
+    health_check_ttl=30,
+    startup_check=startup_check,
 )
 class {{ toPascalCase .Name }}:
     """A2A consumer bridge agent."""

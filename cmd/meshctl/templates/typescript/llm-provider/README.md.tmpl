@@ -24,6 +24,39 @@ This provider uses `mesh.llmProvider()` which:
 - Provides health checks for API connectivity
 - Handles rate limiting and error recovery
 
+## Health and Startup Checks
+
+Two hooks in `src/index.ts`, answering two different questions:
+
+- `healthCheck()` - "can I serve **right now**". Re-runs every 30s. While it
+  reports unhealthy the agent stops heartbeating and the registry withdraws it,
+  so consumers fail over to another provider; the pod keeps running and is
+  restored the moment the check passes again.
+- `startupCheck()` - "can I **ever** serve". Read by the Kubernetes
+  `startupProbe`, on `/startupz`. A pod whose startup check fails never becomes
+  ready, never registers, and lands in `CrashLoopBackOff`, where a
+  misconfiguration is visible instead of looking like an outage.
+{{ if .ProbeVendor }}
+The generated `startupCheck()` reads the API key locally first, then asks the
+vendor whether it is accepted. The two answers are not treated alike:
+
+| The vendor... | Startup | Because |
+|---|---|---|
+| has no key to read | **fails** | a key that is not set will not set itself |
+| rejects the key | **fails** | no restart mints a valid one |
+| answers 5xx or rate-limits | passes | an outage, not a misconfiguration |
+| does not answer at all | passes | same - `healthCheck` withdraws the agent meanwhile |
+
+Crash-looping on an outage would restart a pod whose configuration was fine, and
+would make `CrashLoopBackOff` stop meaning "your configuration is wrong".
+{{ else }}
+Both are skeletons for {{ .Model }}: they always pass, so a pod with no
+credentials at all comes up and fails every call, and a {{ .Model }} outage
+never withdraws this agent. Implement them against the endpoint this model is
+actually served from. In `startupCheck()`, fail only on a rejected credential -
+a 5xx, a rate limit or an unreachable endpoint is an outage and belongs in
+`healthCheck()`.
+{{ end }}
 ## Using This Provider
 
 Other agents can use this provider via `mesh.llm()`:

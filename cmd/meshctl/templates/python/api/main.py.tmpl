@@ -5,6 +5,9 @@
 {{ if .Description }}{{ .Description }}{{ else }}An HTTP API gateway that consumes mesh capabilities via @mesh.route.{{ end }}
 """
 
+import os
+import sys
+
 import mesh
 from fastapi import FastAPI, HTTPException, Request
 from mesh.types import McpMeshTool
@@ -16,7 +19,39 @@ app = FastAPI(
 )
 
 
+# ===== STARTUP VALIDATION =====
+#
+# There is no health_check or startup_check hook to declare here, and that is
+# a design decision rather than a gap (issue #1506).
+#
+# This gateway is an ordinary FastAPI application that happens to consume mesh
+# capabilities. What mesh gives it is dependency injection - @mesh.route
+# resolves capabilities and hands them to your handlers - not ownership of the
+# application's lifecycle. Both hooks are arguments to @mesh.agent, and
+# @mesh.agent cannot share a process with @mesh.route: the runtime rejects the
+# combination at startup ("Mixed mode not supported"), because each family owns
+# the HTTP server and the heartbeat, and they cannot both.
+#
+# Startup validation is a solved problem here, and the solution is strictly
+# more flexible than a hook would be: check the configuration at boot and exit
+# non-zero. Kubernetes gives you CrashLoopBackOff with the cause in the logs,
+# with no mesh involvement at all.
+REQUIRED_SETTINGS = []  # e.g. ["DATABASE_URL", "UPSTREAM_TOKEN"]
+
+_missing = [name for name in REQUIRED_SETTINGS if not os.getenv(name, "").strip()]
+if _missing:
+    # Exit non-zero BEFORE serving. A gateway that comes up misconfigured takes
+    # ingress it cannot answer; one that never comes up is visible immediately.
+    print(f"{{ .Name }}: not configured: {', '.join(_missing)} not set", file=sys.stderr)
+    raise SystemExit(1)
+
+
 # ===== HEALTH CHECK =====
+#
+# Mesh registers /livez, /startupz, /ready and /health on this app for the
+# Kubernetes probes the agent Helm chart wires. A path your application already
+# defines wins - including this one, so the endpoint below is what /health
+# answers with and mesh does not add its own.
 
 @app.get("/health")
 async def health():

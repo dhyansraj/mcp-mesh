@@ -213,8 +213,8 @@ export {
 } from "./health-check.js";
 
 // Startup check (RFC #1502) — "can this agent EVER serve", reported by
-// `/startupz`. Step 1: the endpoint only. Pointing the chart's startupProbe at
-// it, so a failing check keeps the pod from coming up, is step 2.
+// `/startupz`, which the chart's startupProbe asks for: a failing check keeps
+// the pod from ever coming up.
 export {
   runStartupCheck,
   buildStartupBody,

@@ -123,11 +123,13 @@ Route (`@mesh.route` / `@MeshRoute` / `mesh.route`) and A2A agents are no longer
 
 So a withdrawn gateway is not a gateway that went down. Suppressing the heartbeat stops registry traffic only: the HTTP server keeps serving, already-resolved dependencies stay wired, and `/ready` reports the mesh runtime rather than the verdict on every agent type - so the pod keeps its Service endpoints and keeps taking ingress. It stops being discovered, it does not go dark.
 
-Declaring one differs by runtime. Java takes a `@MeshHealthCheck` bean on a gateway exactly as on a provider, and TypeScript a `healthCheck` in the `meshExpress` config (a bare `mesh.route()` gateway has no config object to put one in). Python has no declaration surface yet: `health_check` is an `@mesh.agent` argument, and that decorator cannot share a process with `@mesh.route` or `@mesh.a2a` - the runtime honours a gateway's check, the decorators cannot yet carry one.
+Declaring one differs by runtime, and where you cannot, that is the design rather than a gap waiting to be closed (issue #1506). Java takes a `@MeshHealthCheck` bean on a gateway exactly as on a provider. TypeScript takes a `healthCheck` in the `meshExpress` config; a bare `mesh.route()` gateway has no config object to put one in, and adding `meshExpress` alongside it would register a second agent from the one process. Python has no declaration surface at all: `health_check` is an `@mesh.agent` argument, and that decorator cannot share a process with `@mesh.route` or `@mesh.a2a` - the runtime rejects the combination at startup, because each family owns the HTTP server and the heartbeat.
+
+What mesh offers a gateway is dependency injection, not lifecycle management. A route or A2A agent is an ordinary FastAPI, Express or Spring application that happens to consume mesh capabilities, so its own startup and liveness stay yours, handled with the tools that framework already gives you: validate the configuration at boot and exit non-zero, and Kubernetes gives you `CrashLoopBackOff` with the cause in the logs and no mesh involvement at all. Mesh manages the mesh-facing parts - discovery, injection, and the withdrawal a failing check performs when one does reach it.
 
 ### Kubernetes Probes
 
-Every runtime serves four endpoints, and probes must not share one:
+Every runtime serves four endpoints on an MCP agent, and probes must not share one:
 
 | Endpoint    | Probe                             | Reports                                                                                             |
 | ----------- | --------------------------------- | --------------------------------------------------------------------------------------------------- |
@@ -135,6 +137,8 @@ Every runtime serves four endpoints, and probes must not share one:
 | `/livez`    | `livenessProbe`                   | 200 for as long as the process is serving. Consults nothing else.                                     |
 | `/ready`    | `readinessProbe`                  | Whether the mesh runtime is up, on every agent type. Your health check does NOT reach it: a failing check pauses the heartbeat, which is the whole withdrawal, and a 503 here would also empty the Service that mesh traffic arrives on. |
 | `/health`   | none                              | Your health check's verdict plus `checks` and `errors`, on all three runtimes. 503 while the verdict is not healthy. This is the one endpoint the verdict moves, so it and `/ready` diverge by design. |
+
+On a gateway the four are yours as much as mesh's. Python registers all four on the FastAPI app you hand it, leaving alone any path you defined yourself, and Java serves them from one controller whatever the agent type - so on Java a second `@GetMapping` for any of the four is an ambiguous mapping and the application does not start. TypeScript mounts them from `meshExpress`; a bare `mesh.route()` app keeps its own Express server untouched, so define them there yourself or the chart's probes 404.
 
 Never point liveness or startup at `/ready` or `/health`. `/health` reflects your health check on all three runtimes, so sharing a URL turns an upstream outage into a pod restart, which cannot fix the outage - and while an agent is still coming up both answer 503 (or are not mounted yet), which restart-loops a slow boot. The agent Helm chart is already wired this way; if you write your own manifests, you own this contract, and `meshctl man deployment` (`--typescript`, `--java`) has the probe stanzas to copy plus the two ways it is usually got wrong.
 

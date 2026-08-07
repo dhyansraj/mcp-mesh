@@ -16,7 +16,41 @@ from fastmcp import FastMCP
 app = FastMCP("{{ toPascalCase .Name }}")
 
 
-# ===== HEALTH CHECK =====
+# ===== HEALTH AND STARTUP CHECKS =====
+#
+# Two hooks, two questions, two different consequences.
+#
+#   health_check   "Can I serve RIGHT NOW?" Re-runs every health_check_ttl
+#                  seconds. While it reports unhealthy this provider stops
+#                  heartbeating: the registry ages it out, dependency
+#                  resolution stops selecting it, and consumers fail over to
+#                  another provider. The process keeps running and the
+#                  registry restores it the moment the check passes again -
+#                  no restart, no redeploy. This is the hook for a vendor
+#                  OUTAGE, which is transient by definition.
+#
+#   startup_check  "Can I EVER serve?" Read by the Kubernetes startupProbe,
+#                  on /startupz. A pod whose startup check fails never becomes
+#                  ready, never registers, and lands in CrashLoopBackOff -
+#                  which is the point: a missing or rejected API key is loud
+#                  instead of looking like an outage. A startupProbe stops
+#                  polling once it passes, so a key revoked later falls to
+#                  health_check. This is the hook for a MISCONFIGURATION,
+#                  which no restart is going to fix.
+#
+# The two checks below probe the same endpoint and read the verdict
+# differently, and that difference is the whole design. A rejected credential
+# fails startup; a 5xx, a rate limit or an unreachable vendor PASSES startup
+# and is left to health_check. Mapping an outage onto startup_check would
+# crash-loop a correctly configured pod for as long as the vendor is down -
+# and, worse, would make CrashLoopBackOff stop meaning "your configuration is
+# wrong", which is the signal this hook exists to produce.
+#
+# They also disagree about exceptions, deliberately. A health_check that
+# raises is recorded as degraded and keeps heartbeating - a buggy probe must
+# not withdraw a working provider from a mesh that may have no other one. A
+# startup_check that raises FAILS: at boot an indeterminate answer is not a
+# reason to admit a possibly-misconfigured agent.
 {{ if eq .ProbeVendor "anthropic" }}
 async def health_check() -> dict:
     """
@@ -34,7 +68,7 @@ async def health_check() -> dict:
     status = "healthy"
 
     # Check API Key presence
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
     if api_key:
         checks["anthropic_api_key_present"] = True
     else:
@@ -99,7 +133,7 @@ async def health_check() -> dict:
     status = "healthy"
 
     # Check API Key presence
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
     if api_key:
         checks["openai_api_key_present"] = True
     else:
@@ -161,7 +195,7 @@ async def health_check() -> dict:
     status = "healthy"
 
     # Check API Key presence
-    api_key = os.getenv("GOOGLE_API_KEY")
+    api_key = (os.getenv("GOOGLE_API_KEY") or "").strip()
     if api_key:
         checks["google_api_key_present"] = True
     else:
@@ -240,6 +274,212 @@ async def health_check() -> dict:
         "errors": [],
     }
 {{ end }}
+{{ if eq .ProbeVendor "anthropic" }}
+async def startup_check() -> dict:
+    """
+    Startup check for {{ .Name }}.
+
+    Answers "is this provider configured such that it can EVER serve?" - the
+    question a restart cannot change the answer to.
+
+    Returns:
+        dict: Startup verdict with checks and errors
+    """
+    # Local first: a missing key costs nothing to detect and never fixes
+    # itself, so it needs no network call to be certain about.
+    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    if not api_key:
+        return {
+            "status": "unhealthy",
+            "checks": {"anthropic_api_key_present": False},
+            "errors": ["ANTHROPIC_API_KEY not set"],
+        }
+
+    # A WRONG key can only be detected by asking the vendor. A network call on
+    # the startup path is acceptable because a startupProbe stops polling once
+    # it passes - this runs a handful of times, not every ten seconds forever.
+    checks = {"anthropic_api_key_present": True}
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(
+                "https://api.anthropic.com/v1/models",
+                headers={
+                    "anthropic-version": "2023-06-01",
+                    "x-api-key": api_key,
+                },
+            )
+    except Exception:
+        # The vendor could not be reached at all (DNS, connect, timeout, TLS).
+        # An outage, not a misconfiguration: startup PASSES and health_check
+        # withdraws this agent for as long as it lasts. Failing here would
+        # crash-loop a correctly configured pod, and would dilute
+        # CrashLoopBackOff from "your configuration is wrong" into "something
+        # somewhere is unwell".
+        checks["anthropic_api_reachable"] = False
+        return {"status": "healthy", "checks": checks, "errors": []}
+
+    if response.status_code in (401, 403):
+        # The vendor answered and REJECTED the credential. Fatal: no restart
+        # mints a valid key, so fail startup and make the mistake visible.
+        checks["anthropic_api_key_valid"] = False
+        return {
+            "status": "unhealthy",
+            "checks": checks,
+            "errors": ["Anthropic rejected ANTHROPIC_API_KEY"],
+        }
+
+    # The vendor answered with something that is not a rejection - a 200, a
+    # 5xx, a rate limit. The credential is not what is wrong, so startup
+    # PASSES and anything transient is health_check's to report.
+    checks["anthropic_api_key_valid"] = response.status_code == 200
+    return {"status": "healthy", "checks": checks, "errors": []}
+{{ else if eq .ProbeVendor "openai" }}
+async def startup_check() -> dict:
+    """
+    Startup check for {{ .Name }}.
+
+    Answers "is this provider configured such that it can EVER serve?" - the
+    question a restart cannot change the answer to.
+
+    Returns:
+        dict: Startup verdict with checks and errors
+    """
+    # Local first: a missing key costs nothing to detect and never fixes
+    # itself, so it needs no network call to be certain about.
+    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+    if not api_key:
+        return {
+            "status": "unhealthy",
+            "checks": {"openai_api_key_present": False},
+            "errors": ["OPENAI_API_KEY not set"],
+        }
+
+    # A WRONG key can only be detected by asking the vendor. A network call on
+    # the startup path is acceptable because a startupProbe stops polling once
+    # it passes - this runs a handful of times, not every ten seconds forever.
+    checks = {"openai_api_key_present": True}
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(
+                "https://api.openai.com/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+    except Exception:
+        # The vendor could not be reached at all (DNS, connect, timeout, TLS).
+        # An outage, not a misconfiguration: startup PASSES and health_check
+        # withdraws this agent for as long as it lasts. Failing here would
+        # crash-loop a correctly configured pod, and would dilute
+        # CrashLoopBackOff from "your configuration is wrong" into "something
+        # somewhere is unwell".
+        checks["openai_api_reachable"] = False
+        return {"status": "healthy", "checks": checks, "errors": []}
+
+    if response.status_code in (401, 403):
+        # The vendor answered and REJECTED the credential. Fatal: no restart
+        # mints a valid key, so fail startup and make the mistake visible.
+        checks["openai_api_key_valid"] = False
+        return {
+            "status": "unhealthy",
+            "checks": checks,
+            "errors": ["OpenAI rejected OPENAI_API_KEY"],
+        }
+
+    # The vendor answered with something that is not a rejection - a 200, a
+    # 5xx, a rate limit. The credential is not what is wrong, so startup
+    # PASSES and anything transient is health_check's to report.
+    checks["openai_api_key_valid"] = response.status_code == 200
+    return {"status": "healthy", "checks": checks, "errors": []}
+{{ else if eq .ProbeVendor "gemini" }}
+async def startup_check() -> dict:
+    """
+    Startup check for {{ .Name }}.
+
+    Answers "is this provider configured such that it can EVER serve?" - the
+    question a restart cannot change the answer to.
+
+    Returns:
+        dict: Startup verdict with checks and errors
+    """
+    # Local first: a missing key costs nothing to detect and never fixes
+    # itself, so it needs no network call to be certain about.
+    api_key = (os.getenv("GOOGLE_API_KEY") or "").strip()
+    if not api_key:
+        return {
+            "status": "unhealthy",
+            "checks": {"google_api_key_present": False},
+            "errors": ["GOOGLE_API_KEY not set"],
+        }
+
+    # A WRONG key can only be detected by asking the vendor. A network call on
+    # the startup path is acceptable because a startupProbe stops polling once
+    # it passes - this runs a handful of times, not every ten seconds forever.
+    checks = {"google_api_key_present": True}
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(
+                f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}",
+            )
+    except Exception:
+        # The vendor could not be reached at all (DNS, connect, timeout, TLS).
+        # An outage, not a misconfiguration: startup PASSES and health_check
+        # withdraws this agent for as long as it lasts. Failing here would
+        # crash-loop a correctly configured pod, and would dilute
+        # CrashLoopBackOff from "your configuration is wrong" into "something
+        # somewhere is unwell".
+        checks["gemini_api_reachable"] = False
+        return {"status": "healthy", "checks": checks, "errors": []}
+
+    # 400, not 401: Gemini answers a bad API key with INVALID_ARGUMENT rather
+    # than an auth status, which is why this branch is wider than the other
+    # two vendors'. It is the same pair the health check above reads.
+    if response.status_code in (400, 403):
+        # The vendor answered and REJECTED the credential. Fatal: no restart
+        # mints a valid key, so fail startup and make the mistake visible.
+        checks["google_api_key_valid"] = False
+        return {
+            "status": "unhealthy",
+            "checks": checks,
+            "errors": ["Google rejected GOOGLE_API_KEY"],
+        }
+
+    # The vendor answered with something that is not a rejection - a 200, a
+    # 5xx, a rate limit. The credential is not what is wrong, so startup
+    # PASSES and anything transient is health_check's to report.
+    checks["google_api_key_valid"] = response.status_code == 200
+    return {"status": "healthy", "checks": checks, "errors": []}
+{{ else }}
+async def startup_check() -> bool:
+    """
+    Startup check for {{ .Name }}.
+
+    NOT IMPLEMENTED - a skeleton that always passes, so a {{ .Model }} pod
+    with no credentials at all still comes up, registers, and fails every
+    call it is given.
+
+    Replace it with the local checks this deployment cannot run without: the
+    credential your gateway authenticates with (an AWS role, ADC / Workload
+    Identity, your proxy's token), a required endpoint URL. Return False and
+    the pod never becomes ready, never registers, and lands in
+    CrashLoopBackOff with the reason in its logs.
+
+    Keep it local if you can. If you do call your gateway from here, branch on
+    the answer: a REJECTED credential is fatal and must fail, but a 5xx, a
+    rate limit, a timeout or an unreachable endpoint must PASS - those are
+    outages, and crash-looping on one restarts a pod whose configuration was
+    fine. Report those from the health check instead, which withdraws the
+    agent while they last and restores it afterwards.
+
+    Returns:
+        bool: True to start, False to refuse
+    """
+    return True
+{{ end }}
 
 
 # ===== LLM PROVIDER =====
@@ -279,6 +519,7 @@ def {{ toSnakeCase .Name }}():
     auto_run=True,
     health_check=health_check,
     health_check_ttl=30,
+    startup_check=startup_check,
 )
 class {{ toAgentClassName .Name }}:
     """

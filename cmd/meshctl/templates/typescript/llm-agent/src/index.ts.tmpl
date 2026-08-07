@@ -5,7 +5,7 @@
  * {{ if .Description }}{{ .Description }}{{ else }}A MCP Mesh LLM agent generated using meshctl scaffold.{{ end }}
  */
 
-import { FastMCP, mesh } from "@mcpmesh/sdk";
+import { FastMCP, mesh, type MeshHealthResult } from "@mcpmesh/sdk";
 import { z } from "zod";
 
 // FastMCP server instance
@@ -13,6 +13,63 @@ const server = new FastMCP({
   name: "{{ toPascalCase .Name }} Service",
   version: "1.0.0",
 });
+
+// ===== HEALTH AND STARTUP CHECKS =====
+//
+// Two hooks, two questions, two different consequences. Both default to
+// passing, so deleting either one leaves this agent behaving exactly as it
+// does today.
+//
+//   healthCheck   "Can I serve RIGHT NOW?" Re-runs every healthCheckTtl
+//                 seconds. While it reports "unhealthy" the agent stops
+//                 heartbeating: the registry ages it out and dependency
+//                 resolution stops selecting it. The process keeps running
+//                 and keeps serving, and the registry restores the agent the
+//                 moment the check passes again - no restart, no redeploy.
+//                 Override it for anything TRANSIENT: a database that may
+//                 come back, a vendor API having an outage.
+//
+//   startupCheck  "Can I EVER serve?" Read by the Kubernetes startupProbe,
+//                 on /startupz. A pod whose startup check fails never becomes
+//                 ready, never registers, and lands in CrashLoopBackOff -
+//                 which is the point: a misconfiguration is loud instead of
+//                 looking like an outage. A startupProbe stops polling once
+//                 it passes, so a credential revoked later falls to
+//                 healthCheck. Override it for anything a restart CANNOT
+//                 fix: a missing API key, an unreadable config file.
+//
+// Choosing the wrong hook is the trap this split exists to remove. A missing
+// API key reported by healthCheck leaves the pod Running and silently
+// unregistered, indistinguishable from an outage; a vendor outage reported by
+// startupCheck crash-loops a pod whose configuration was fine all along.
+//
+// They also disagree about exceptions, deliberately. A healthCheck that
+// throws is recorded as "degraded" and keeps heartbeating - a buggy probe
+// must not withdraw a working agent from a mesh that may have no other one. A
+// startupCheck that throws FAILS: at boot an indeterminate answer is not a
+// reason to admit a possibly-misconfigured agent.
+//
+// Neither one belongs on the LLM provider this agent resolves through. The
+// provider holds the vendor credential and probes the vendor itself; this
+// agent has no key to check and no vendor to reach, and a provider that goes
+// unhealthy is withdrawn by mesh without help from here.
+
+/** Can this agent serve right now? */
+async function healthCheck(): Promise<MeshHealthResult> {
+  // TODO: probe whatever this agent needs in order to answer a call - a
+  // database handle, a downstream API. Return { status: "unhealthy", ... }
+  // (or plain false) to be withdrawn from the mesh until it recovers.
+  return { status: "healthy", checks: {}, errors: [] };
+}
+
+/** Is this agent configured such that it can ever serve? */
+function startupCheck(): boolean {
+  // TODO: assert the configuration this agent cannot run without - an env
+  // var, a mounted secret, a readable prompt file. Return false (or
+  // { status: "unhealthy", ... }) and the pod never comes up. Sync is fine
+  // here; a promise is accepted too.
+  return true;
+}
 
 // ===== CONTEXT SCHEMA =====
 
@@ -94,6 +151,9 @@ const agent = mesh(server, {
   version: "1.0.0",
   description: "{{ if .Description }}{{ .Description }}{{ else }}MCP Mesh LLM agent{{ end }}",
   httpPort: {{ .Port }},
+  healthCheck,
+  healthCheckTtl: 30,
+  startupCheck,
 });
 
 // No explicit start needed - auto-starts via process.nextTick()!

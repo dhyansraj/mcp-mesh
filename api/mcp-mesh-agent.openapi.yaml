@@ -51,63 +51,186 @@ paths:
       tags: [health]
       summary: Agent health check
       description: |
-        Returns agent health status and basic information.
+        The diagnostic view of the agent's `health_check` verdict. NOT probed by
+        Kubernetes: nothing acts on this status code, which is exactly why it is
+        free to carry the verdict (RFC #1502).
 
-        🤖 AI NOTE: This is AGENT health, not registry health.
-        Used by Kubernetes health checks and external monitoring.
+        200 only while the verdict is `healthy`; `degraded`, `unhealthy` and the
+        pre-first-check `starting` all answer 503. A `degraded` agent still
+        heartbeats and stays in dependency resolution, so 503 here does NOT mean
+        the agent has been withdrawn — a paused heartbeat does, and that is not
+        visible from a status code.
+
+        Also served on HEAD, with the same status code and no body.
+
+        🤖 AI NOTE: This is AGENT health, not registry health. Do NOT wire it to
+        a livenessProbe or a startupProbe: the failure action of both is a
+        restart, and a restart cannot fix the upstream outage this reports.
       operationId: getAgentHealth
       responses:
         "200":
-          description: Agent is healthy
+          description: The health check reports healthy
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/AgentHealthResponse"
         "503":
-          description: Agent is unhealthy
+          description: The health check reports degraded, unhealthy or unknown, or has not run yet
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/AgentHealthResponse"
+    head:
+      tags: [health]
+      summary: Agent health check (no body)
+      description: |
+        The same verdict and the same status code as `GET /health`, with no
+        response body. All three runtimes serve it.
+      operationId: headAgentHealth
+      responses:
+        "200":
+          description: The health check reports healthy
+        "503":
+          description: The health check reports degraded, unhealthy or unknown, or has not run yet
 
   /ready:
     get:
       tags: [health]
       summary: Agent readiness check
       description: |
-        Returns agent readiness status for Kubernetes readiness probes.
+        Whether the MESH RUNTIME is up, and nothing else, on every agent type
+        (RFC #1502). The user's `health_check` verdict deliberately does NOT
+        reach this endpoint.
 
-        🤖 AI NOTE: Kubernetes-specific readiness endpoint.
+        A failing check pauses the heartbeat, the registry ages the agent out
+        and resolution stops selecting it; that is the whole withdrawal and it
+        needs no help from readiness. Adding a 503 here is strictly worse:
+        `agent.advertisedHost` defaults to the per-agent Service DNS name, so
+        mesh traffic traverses the Service, and dropping the pod from its
+        Service endpoints while the registry may still be selecting it turns a
+        consumer's failover into a connection error.
+
+        Also served on HEAD, with the same status code and no body.
+
+        🤖 AI NOTE: Kubernetes-specific readiness endpoint. The body carries
+        `runtime` — one of `up`, `starting`, `shutting_down`, `standalone` — and
+        a `reason` when it is not ready.
       operationId: getAgentReadiness
       responses:
         "200":
-          description: Agent is ready
+          description: The mesh runtime is up (or the agent is standalone)
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ReadinessResponse"
         "503":
-          description: Agent is not ready
+          description: The mesh runtime has not started, or is shutting down
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+    head:
+      tags: [health]
+      summary: Agent readiness check (no body)
+      description: |
+        The same verdict and the same status code as `GET /ready`, with no
+        response body. All three runtimes serve it.
+      operationId: headAgentReadiness
+      responses:
+        "200":
+          description: The mesh runtime is up (or the agent is standalone)
+        "503":
+          description: The mesh runtime has not started, or is shutting down
 
   /livez:
     get:
       tags: [health]
       summary: Agent liveness check
       description: |
-        Returns agent liveness status for Kubernetes liveness probes.
+        200 UNCONDITIONALLY for as long as the process is serving. Consults
+        nothing — not the health check, not the mesh runtime state (issues
+        #1467/#1468).
 
-        🤖 AI NOTE: Kubernetes-specific liveness endpoint.
+        Reaching this handler at all is the proof, and a container restart is
+        the only remedy a livenessProbe can offer, so anything this endpoint
+        could consult is something a restart cannot fix. There is no 503 branch.
+
+        Also served on HEAD, with an empty body.
+
+        🤖 AI NOTE: Kubernetes-specific liveness endpoint. Returns JSON, not
+        text/plain.
       operationId: getAgentLiveness
       responses:
         "200":
-          description: Agent is alive
+          description: The process is serving
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
-                example: "OK"
+                $ref: "#/components/schemas/LivenessResponse"
+    head:
+      tags: [health]
+      summary: Agent liveness check (no body)
+      description: |
+        200 unconditionally, exactly as `GET /livez`, with no response body.
+        There is no 503 branch here either. All three runtimes serve it.
+      operationId: headAgentLiveness
+      responses:
+        "200":
+          description: The process is serving
+
+  /startupz:
+    get:
+      tags: [health]
+      summary: Agent startup check
+      description: |
+        The agent's `startup_check` verdict (RFC #1502): "is this agent
+        configured such that it can EVER serve?", as opposed to `/health`'s "can
+        I serve right now".
+
+        Wired to the chart's `startupProbe`, so a check that never passes keeps
+        the pod from ever becoming ready, keeps it from registering, and lands it
+        in `CrashLoopBackOff` — where a misconfiguration is visible instead of
+        looking like a vendor outage.
+
+        A NEW path rather than a reuse of `/livez`: an endpoint cannot tell
+        which probe called it, so a path serving both `startupProbe` and
+        `livenessProbe` would let a failing startup check kill a running pod
+        every ten seconds.
+
+        The verdict rules are the OPPOSITE of `/health`'s in one respect: a check
+        that RAISES fails here, where a raising health check is recorded as
+        `degraded` and keeps the agent heartbeating. An agent that declares no
+        `startup_check` passes.
+
+        The check runs on every hit and is never cached — a `startupProbe` stops
+        polling after its first success. Also served on HEAD.
+      operationId: getAgentStartup
+      responses:
+        "200":
+          description: The startup check passed, or none is declared
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StartupResponse"
         "503":
-          description: Agent is not alive
+          description: The startup check failed, returned a non-healthy verdict, or raised
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StartupResponse"
+    head:
+      tags: [health]
+      summary: Agent startup check (no body)
+      description: |
+        The same verdict and the same status code as `GET /startupz`, with no
+        response body — a HEAD that disagreed with the GET would be the #1488
+        bug for anyone who wired the probe to HEAD. All three runtimes serve it.
+      operationId: headAgentStartup
+      responses:
+        "200":
+          description: The startup check passed, or none is declared
+        "503":
+          description: The startup check failed, returned a non-healthy verdict, or raised
 
   /mesh/info:
     get:
@@ -219,69 +342,166 @@ paths:
 components:
   schemas:
     # Agent Health Schemas
+    #
+    # `checks` and `errors` on the two hook-driven schemas are whatever the
+    # user's check returned, verbatim. They are user data, not a mesh vocabulary:
+    # a scaffolded LLM provider reports `{"anthropic_api_key_present": true}`,
+    # and nothing in mesh reads either field — they exist so an operator running
+    # `curl` can see WHY the verdict is what it is.
     AgentHealthResponse:
       type: object
-      required: [status, agent_id, timestamp, transport]
+      # Only `status` is guaranteed. Before the first health-check refresh the
+      # body is the two-key placeholder `{status: starting, message: ...}`, which
+      # is why nothing else can be required here.
+      required: [status]
       properties:
         status:
           type: string
-          enum: [healthy, degraded, unhealthy]
-          description: Overall agent health status
-        agent_id:
+          enum: [healthy, degraded, unhealthy, unknown, starting]
+          description: |
+            The health check's verdict. `starting` is the placeholder served
+            before the first refresh has run; `unknown` is what a check that
+            returned an unrecognized type is recorded as. Only `healthy` answers
+            200.
+        agent:
           type: string
           example: "hello-world"
-          description: Agent identifier
+          description: Agent name. Absent from the pre-first-check placeholder.
+        checks:
+          type: object
+          additionalProperties: true
+          example: { anthropic_api_key_present: true, anthropic_api_reachable: true }
+          description: The `checks` map the user's health check returned.
+        errors:
+          type: array
+          items:
+            type: string
+          example: ["Anthropic API returned status: 529"]
+          description: The `errors` list the user's health check returned.
+        message:
+          type: string
+          example: "Agent is starting"
+          description: Present only on the pre-first-check `starting` placeholder.
+        service_type:
+          type: string
+          enum: [api, a2a]
+          description: |
+            Route (`api`) and A2A gateways only — they serve these endpoints
+            from the gateway pipeline, which stamps the type. Absent on an
+            `@mesh.agent` provider.
+        runtime:
+          type: string
+          enum: [up, starting, shutting_down, standalone]
+          description: Gateway responses only; see ReadinessResponse.runtime.
+        mesh_ready:
+          type: boolean
+          description: Gateway responses only; the boolean form of `runtime`.
         timestamp:
           type: string
           format: date-time
           example: "2024-01-20T10:30:45Z"
-          description: Current timestamp
-        transport:
-          type: array
-          items:
-            type: string
-          example: ["stdio", "http"]
-          description: Available transport methods
-        version:
-          type: string
-          example: "1.0.0"
-          description: Agent version
-        uptime_seconds:
-          type: integer
-          minimum: 0
-          example: 3600
-          description: Agent uptime in seconds
-        mcp_server_status:
-          type: string
-          enum: [connected, disconnected, error]
-          example: "connected"
-          description: MCP server connection status
+          description: When the verdict was recorded.
 
     ReadinessResponse:
       type: object
-      required: [ready, timestamp]
+      required: [ready, agent, runtime, timestamp]
       properties:
         ready:
           type: boolean
           example: true
-          description: Whether agent is ready to serve requests
+          description: |
+            Whether the MESH RUNTIME is up — NOT whether the user's health check
+            passes (RFC #1502).
+        agent:
+          type: string
+          example: "hello-world"
+        runtime:
+          type: string
+          enum: [up, starting, shutting_down, standalone]
+          example: "up"
+          description: |
+            `up` once a live Rust core handle exists; `starting` before that;
+            `shutting_down` once shutdown has been requested; `standalone` when
+            `MCP_MESH_STANDALONE` is set, which never starts a core at all and so
+            is ready as soon as the process serves.
+        reason:
+          type: string
+          example: "Mesh runtime has not started yet"
+          description: Present only when `ready` is false.
+        mcp_wrappers:
+          type: integer
+          minimum: 0
+          example: 1
+          description: "@mesh.agent providers only: how many MCP wrappers are mounted."
+        service_type:
+          type: string
+          enum: [api, a2a]
+          description: Route and A2A gateways only.
         timestamp:
           type: string
           format: date-time
           example: "2024-01-20T10:30:45Z"
+
+    LivenessResponse:
+      type: object
+      required: [alive, agent, timestamp]
+      properties:
+        alive:
+          type: boolean
+          enum: [true]
+          example: true
+          description: |
+            Always true. `/livez` has no failure branch — see the endpoint
+            description.
+        agent:
+          type: string
+          example: "hello-world"
+        timestamp:
+          type: string
+          format: date-time
+          example: "2024-01-20T10:30:45Z"
+
+    StartupResponse:
+      type: object
+      required: [started, agent, timestamp]
+      properties:
+        started:
+          type: boolean
+          example: true
+          description: |
+            The `startup_check` verdict. True when the check passed or none is
+            declared.
+        agent:
+          type: string
+          example: "hello-world"
         checks:
           type: object
-          additionalProperties:
-            type: object
-            properties:
-              status:
-                type: string
-                enum: [pass, fail]
-              message:
-                type: string
-          example:
-            mcp_server: { status: "pass", message: "Connected" }
-            registry: { status: "pass", message: "Registered" }
+          additionalProperties: true
+          example: { anthropic_api_key_present: true }
+          description: |
+            The `checks` map the user's startup check returned. Omitted when
+            empty. A check that returned a bare boolean is reported as
+            `{"startup_check": <bool>}`.
+        reason:
+          type: string
+          enum: ["Startup check failed"]
+          description: Present only when `started` is false.
+        errors:
+          type: array
+          items:
+            type: string
+          example: ["ANTHROPIC_API_KEY not set"]
+          description: |
+            Present only when `started` is false. Served to anyone who can reach
+            the pod, so name the setting that is missing, never its value.
+        service_type:
+          type: string
+          enum: [api, a2a]
+          description: Route and A2A gateways only.
+        timestamp:
+          type: string
+          format: date-time
+          example: "2024-01-20T10:30:45Z"
 
     # Agent Mesh Schemas
     AgentMeshInfo:

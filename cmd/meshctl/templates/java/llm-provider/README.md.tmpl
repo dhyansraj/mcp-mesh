@@ -40,6 +40,45 @@ The provider will start on port {{ .Port }} and register with the mesh.
 3. LLM requests are routed through the mesh to this provider
 4. This provider forwards requests to the LLM API via Spring AI
 
+## Health and Startup Checks
+
+Two annotated methods on the application class, answering two different
+questions:
+
+- `@MeshHealthCheck` - "can I serve **right now**". Re-runs every 30s. While it
+  returns UNHEALTHY the agent stops heartbeating and the registry withdraws it,
+  so consumers fail over to another provider; the JVM keeps running and the
+  registry restores it the moment the check passes again.
+- `@MeshStartupCheck` - "can I **ever** serve". Read by the Kubernetes
+  `startupProbe`, on `/startupz`. A pod whose startup check fails never becomes
+  ready, never registers, and lands in `CrashLoopBackOff`, where a
+  misconfiguration is visible instead of looking like an outage.
+{{ if probeVendor (default "anthropic/claude-sonnet-5" .Model) }}
+The generated startup check reads the API key locally first, then asks the
+vendor whether it is accepted. The two answers are not treated alike:
+
+| The vendor... | Startup | Because |
+|---|---|---|
+| has no key to read | **fails** | a key that is not set will not set itself |
+| rejects the key | **fails** | no restart mints a valid one |
+| answers 5xx or rate-limits | passes | an outage, not a misconfiguration |
+| does not answer at all | passes | same - the health check withdraws the agent meanwhile |
+
+Crash-looping on an outage would restart a pod whose configuration was fine -
+each restart a fresh JVM and a fresh Spring context - and would make
+`CrashLoopBackOff` stop meaning "your configuration is wrong".
+{{ else }}
+Both are skeletons for this model: they always pass, so a pod with no
+credentials at all comes up and fails every call, and an upstream outage never
+withdraws this agent. Implement them against the endpoint this model is actually
+served from. In the startup check, fail only on a rejected credential - a 5xx, a
+rate limit or an unreachable endpoint is an outage and belongs in the health
+check.
+{{ end }}
+Both are served from the mesh starter's own controller, alongside `/livez` and
+`/ready`. Those four paths are taken: a `@GetMapping` of your own for any of
+them is an ambiguous mapping and the application does not start.
+
 ## License
 
 MIT
