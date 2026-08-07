@@ -68,7 +68,7 @@ async def health_check() -> dict:
     status = "healthy"
 
     # Check API Key presence
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
     if api_key:
         checks["anthropic_api_key_present"] = True
     else:
@@ -133,7 +133,7 @@ async def health_check() -> dict:
     status = "healthy"
 
     # Check API Key presence
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
     if api_key:
         checks["openai_api_key_present"] = True
     else:
@@ -195,7 +195,7 @@ async def health_check() -> dict:
     status = "healthy"
 
     # Check API Key presence
-    api_key = os.getenv("GOOGLE_API_KEY")
+    api_key = (os.getenv("GOOGLE_API_KEY") or "").strip()
     if api_key:
         checks["google_api_key_present"] = True
     else:
@@ -287,7 +287,7 @@ async def startup_check() -> dict:
     """
     # Local first: a missing key costs nothing to detect and never fixes
     # itself, so it needs no network call to be certain about.
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
     if not api_key:
         return {
             "status": "unhealthy",
@@ -348,7 +348,7 @@ async def startup_check() -> dict:
     """
     # Local first: a missing key costs nothing to detect and never fixes
     # itself, so it needs no network call to be certain about.
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
     if not api_key:
         return {
             "status": "unhealthy",
@@ -406,7 +406,7 @@ async def startup_check() -> dict:
     """
     # Local first: a missing key costs nothing to detect and never fixes
     # itself, so it needs no network call to be certain about.
-    api_key = os.getenv("GOOGLE_API_KEY")
+    api_key = (os.getenv("GOOGLE_API_KEY") or "").strip()
     if not api_key:
         return {
             "status": "unhealthy",

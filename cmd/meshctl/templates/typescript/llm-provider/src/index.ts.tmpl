@@ -78,7 +78,7 @@ function describeError(err: unknown): string {
  * Uses /v1/models - metadata only, no tokens consumed.
  */
 async function healthCheck(): Promise<MeshHealthResult> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) {
     return {
       status: "unhealthy",
@@ -141,7 +141,7 @@ async function healthCheck(): Promise<MeshHealthResult> {
  * Uses /v1/models - metadata only, no tokens consumed.
  */
 async function healthCheck(): Promise<MeshHealthResult> {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
     return {
       status: "unhealthy",
@@ -201,7 +201,7 @@ async function healthCheck(): Promise<MeshHealthResult> {
  * Uses /v1beta/models - metadata only, no tokens consumed.
  */
 async function healthCheck(): Promise<MeshHealthResult> {
-  const apiKey = process.env.GOOGLE_API_KEY;
+  const apiKey = process.env.GOOGLE_API_KEY?.trim();
   if (!apiKey) {
     return {
       status: "unhealthy",
@@ -267,7 +267,7 @@ async function healthCheck(): Promise<MeshHealthResult> {
  *
  * A sketch of the shape:
  *
- *   const apiKey = process.env.MY_VENDOR_API_KEY;
+ *   const apiKey = process.env.MY_VENDOR_API_KEY?.trim();
  *   if (!apiKey) {
  *     return { status: "unhealthy", errors: ["MY_VENDOR_API_KEY not set"] };
  *   }
@@ -310,7 +310,7 @@ async function healthCheck(): Promise<MeshHealthResult> {
 async function startupCheck(): Promise<MeshHealthResult> {
   // Local first: a missing key costs nothing to detect and never fixes
   // itself, so it needs no network call to be certain about.
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) {
     return {
       status: "unhealthy",
@@ -371,7 +371,7 @@ async function startupCheck(): Promise<MeshHealthResult> {
 async function startupCheck(): Promise<MeshHealthResult> {
   // Local first: a missing key costs nothing to detect and never fixes
   // itself, so it needs no network call to be certain about.
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
     return {
       status: "unhealthy",
@@ -429,7 +429,7 @@ async function startupCheck(): Promise<MeshHealthResult> {
 async function startupCheck(): Promise<MeshHealthResult> {
   // Local first: a missing key costs nothing to detect and never fixes
   // itself, so it needs no network call to be certain about.
-  const apiKey = process.env.GOOGLE_API_KEY;
+  const apiKey = process.env.GOOGLE_API_KEY?.trim();
   if (!apiKey) {
     return {
       status: "unhealthy",

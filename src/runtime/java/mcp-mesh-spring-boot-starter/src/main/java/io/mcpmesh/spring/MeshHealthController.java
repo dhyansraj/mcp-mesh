@@ -269,10 +269,10 @@ public class MeshHealthController {
      * looking like a vendor outage. {@code /livez}, {@code /ready} and the
      * heartbeat are unaffected by it.
      *
-     * <p>A NEW endpoint rather than a reuse of {@code /livez}: the chart points
-     * both {@code startupProbe} and {@code livenessProbe} at {@code /livez}, and
-     * an endpoint cannot tell which probe called it, so sharing one would let a
-     * failing startup check kill a running pod every ten seconds.
+     * <p>A NEW endpoint rather than a reuse of {@code /livez}: an endpoint
+     * cannot tell which probe called it, so a path serving both
+     * {@code startupProbe} and {@code livenessProbe} would let a failing startup
+     * check kill a running pod every ten seconds.
      *
      * <p>The check runs on every hit. A {@code startupProbe} stops polling after
      * its first success, so there is nothing to cache.

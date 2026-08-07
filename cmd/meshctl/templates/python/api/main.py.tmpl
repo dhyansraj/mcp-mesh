@@ -38,7 +38,7 @@ app = FastAPI(
 # with no mesh involvement at all.
 REQUIRED_SETTINGS = []  # e.g. ["DATABASE_URL", "UPSTREAM_TOKEN"]
 
-_missing = [name for name in REQUIRED_SETTINGS if not os.getenv(name)]
+_missing = [name for name in REQUIRED_SETTINGS if not os.getenv(name, "").strip()]
 if _missing:
     # Exit non-zero BEFORE serving. A gateway that comes up misconfigured takes
     # ingress it cannot answer; one that never comes up is visible immediately.

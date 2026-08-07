@@ -6,10 +6,10 @@
  * underlying Hono app, which FastMCP consults before its own built-in health
  * handling — and Python's `/startupz` in `mesh/decorators.py` in semantics.
  *
- * It is a NEW endpoint rather than a reuse of `/livez` because the chart points
- * both `startupProbe` and `livenessProbe` at `/livez`, and an endpoint cannot
- * tell which probe called it. Sharing one would mean a failing startup check
- * kills a running pod every ten seconds.
+ * It is a NEW endpoint rather than a reuse of `/livez` because an endpoint
+ * cannot tell which probe called it. A path serving both `startupProbe` and
+ * `livenessProbe` would mean a failing startup check kills a running pod every
+ * ten seconds.
  *
  * `/livez` is unchanged and stays unconditional. Nothing here may make it
  * consult anything.

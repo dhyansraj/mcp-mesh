@@ -85,7 +85,9 @@ function startupCheck(): boolean {
 {{- if .AuthBearer }}
   // The producer needs a bearer token, and a pod that does not have one is
   // never going to acquire it: failing here is the whole point of the hook.
-  return Boolean(process.env[{{ toJSON .AuthEnvVar }}]);
+  // Trimmed before the test: a credential pasted with a trailing newline, or
+  // a Secret key whose value is blank, is not a token.
+  return Boolean(process.env[{{ toJSON .AuthEnvVar }}]?.trim());
 {{- else }}
   // TODO: assert the configuration this bridge cannot run without - the
   // producer URL, a token, a mounted secret. Return false (or

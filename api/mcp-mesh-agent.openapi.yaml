@@ -75,11 +75,23 @@ paths:
               schema:
                 $ref: "#/components/schemas/AgentHealthResponse"
         "503":
-          description: The health check reports degraded or unhealthy, or has not run yet
+          description: The health check reports degraded, unhealthy or unknown, or has not run yet
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/AgentHealthResponse"
+    head:
+      tags: [health]
+      summary: Agent health check (no body)
+      description: |
+        The same verdict and the same status code as `GET /health`, with no
+        response body. All three runtimes serve it.
+      operationId: headAgentHealth
+      responses:
+        "200":
+          description: The health check reports healthy
+        "503":
+          description: The health check reports degraded, unhealthy or unknown, or has not run yet
 
   /ready:
     get:
@@ -117,6 +129,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ReadinessResponse"
+    head:
+      tags: [health]
+      summary: Agent readiness check (no body)
+      description: |
+        The same verdict and the same status code as `GET /ready`, with no
+        response body. All three runtimes serve it.
+      operationId: headAgentReadiness
+      responses:
+        "200":
+          description: The mesh runtime is up (or the agent is standalone)
+        "503":
+          description: The mesh runtime has not started, or is shutting down
 
   /livez:
     get:
@@ -143,6 +167,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LivenessResponse"
+    head:
+      tags: [health]
+      summary: Agent liveness check (no body)
+      description: |
+        200 unconditionally, exactly as `GET /livez`, with no response body.
+        There is no 503 branch here either. All three runtimes serve it.
+      operationId: headAgentLiveness
+      responses:
+        "200":
+          description: The process is serving
 
   /startupz:
     get:
@@ -158,10 +192,10 @@ paths:
         in `CrashLoopBackOff` — where a misconfiguration is visible instead of
         looking like a vendor outage.
 
-        A NEW path rather than a reuse of `/livez`: the chart points both
-        `startupProbe` and `livenessProbe` at `/livez`, and an endpoint cannot
-        tell which probe called it, so sharing one would let a failing startup
-        check kill a running pod every ten seconds.
+        A NEW path rather than a reuse of `/livez`: an endpoint cannot tell
+        which probe called it, so a path serving both `startupProbe` and
+        `livenessProbe` would let a failing startup check kill a running pod
+        every ten seconds.
 
         The verdict rules are the OPPOSITE of `/health`'s in one respect: a check
         that RAISES fails here, where a raising health check is recorded as
@@ -184,6 +218,19 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/StartupResponse"
+    head:
+      tags: [health]
+      summary: Agent startup check (no body)
+      description: |
+        The same verdict and the same status code as `GET /startupz`, with no
+        response body — a HEAD that disagreed with the GET would be the #1488
+        bug for anyone who wired the probe to HEAD. All three runtimes serve it.
+      operationId: headAgentStartup
+      responses:
+        "200":
+          description: The startup check passed, or none is declared
+        "503":
+          description: The startup check failed, returned a non-healthy verdict, or raised
 
   /mesh/info:
     get:

@@ -32,7 +32,7 @@ const PORT = process.env.PORT || {{ .Port }};
 // with no mesh involvement at all.
 const REQUIRED_SETTINGS: string[] = []; // e.g. ["DATABASE_URL", "UPSTREAM_TOKEN"]
 
-const missing = REQUIRED_SETTINGS.filter((name) => !process.env[name]);
+const missing = REQUIRED_SETTINGS.filter((name) => !process.env[name]?.trim());
 if (missing.length > 0) {
   // Exit non-zero BEFORE listening. A gateway that comes up misconfigured
   // takes ingress it cannot answer; one that never comes up is visible

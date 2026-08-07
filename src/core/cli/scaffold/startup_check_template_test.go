@@ -458,9 +458,14 @@ func TestLlmProviderTemplates_GatewayModelGetsSkeletonStartupCheck(t *testing.T)
 // only reachable when the producer's card advertises bearer auth, which the
 // static render never sets, so the data is supplied directly.
 func TestA2AConsumerTemplates_BearerAuthGetsARealStartupCheck(t *testing.T) {
+	// Each spelling includes the blank-strip: a token pasted with a trailing
+	// newline, or a Secret key whose value is empty, must not satisfy the
+	// check. Java has always read it this way (`isBlank`); Python and
+	// TypeScript applied bare truthiness to the raw value until they were
+	// brought in line.
 	wantEnvRead := map[string]string{
-		"python":     `os.getenv("A2A_TEST_TOKEN")`,
-		"typescript": `process.env["A2A_TEST_TOKEN"]`,
+		"python":     `os.getenv("A2A_TEST_TOKEN", "").strip()`,
+		"typescript": `process.env["A2A_TEST_TOKEN"]?.trim()`,
 		"java":       `System.getenv("A2A_TEST_TOKEN")`,
 	}
 
