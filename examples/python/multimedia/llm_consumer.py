@@ -14,7 +14,7 @@ via a mesh tool and then describe the resulting image. The flow is:
 This tests that resource_links are correctly resolved to multimodal content
 before being sent to the LLM.
 
-Also supports multi-provider testing with Claude, OpenAI, and Gemini for
+Also supports multi-provider testing with Claude, OpenAI, Gemini, and Kimi for
 analyzing real distributed tracing screenshots via the image-tool agent.
 """
 
@@ -529,10 +529,77 @@ async def analyze_document_gemini(llm: mesh.MeshLlmAgent = None) -> str:
     return f"Gemini Analysis:\n{result}"
 
 
+# ---------------------------------------------------------------------------
+# Image analysis (chart generation) - Kimi
+# ---------------------------------------------------------------------------
+
+
+@app.tool()
+@mesh.llm(
+    provider={"capability": "llm", "tags": ["kimi", "media"]},
+    filter=[
+        {"capability": "chart_generator"},
+        {"capability": "image_generator"},
+    ],
+    max_iterations=5,
+    system_prompt=(
+        "You are an image analysis assistant. You have access to tools that "
+        "generate charts and images. When asked to analyze a topic, FIRST use "
+        "the generate_chart tool to create a chart, THEN describe what you see "
+        "in the resulting image. Be specific about colors, labels, and values."
+    ),
+)
+@mesh.tool(
+    capability="image_analyzer_kimi",
+    description="Generates a chart via media-producer then asks Kimi to describe it",
+)
+async def analyze_image_kimi(topic: str = "Sales", llm: mesh.MeshLlmAgent = None) -> str:
+    """Generate a chart on the given topic and ask Kimi to describe the image."""
+    if not llm:
+        return "Error: LLM not available"
+
+    result = await llm(
+        f"Generate a bar chart about {topic} with a few data categories, "
+        f"then describe the chart image you see in detail."
+    )
+    return f"Kimi Analysis:\n{result}"
+
+
+# ---------------------------------------------------------------------------
+# Sample PNG analysis - Kimi
+# ---------------------------------------------------------------------------
+
+
+@app.tool()
+@mesh.llm(
+    provider={"capability": "llm", "tags": ["kimi", "media"]},
+    filter=[
+        {"capability": "image_generator"},
+    ],
+    max_iterations=5,
+    system_prompt=(
+        "You are an image analysis assistant. You have access to a tool that "
+        "returns a sample PNG image. When asked, use the get_sample_image tool "
+        "to retrieve the image, then describe exactly what you see."
+    ),
+)
+@mesh.tool(
+    capability="png_analyzer_kimi",
+    description="Retrieves a sample PNG image via media-producer then asks Kimi to describe it",
+)
+async def analyze_png_kimi(llm: mesh.MeshLlmAgent = None) -> str:
+    """Retrieve a sample PNG from the media-producer and ask Kimi to describe it."""
+    if not llm:
+        return "Error: LLM not available"
+
+    result = await llm("Get the sample image and describe what you see in it.")
+    return f"Kimi Analysis:\n{result}"
+
+
 @mesh.agent(
     name="media-llm-consumer",
     version="1.0.0",
-    description="LLM consumer that generates and analyzes media from the producer, supports Claude/OpenAI/Gemini",
+    description="LLM consumer that generates and analyzes media from the producer, supports Claude/OpenAI/Gemini/Kimi",
     http_port=9203,
     enable_http=True,
     auto_run=True,
