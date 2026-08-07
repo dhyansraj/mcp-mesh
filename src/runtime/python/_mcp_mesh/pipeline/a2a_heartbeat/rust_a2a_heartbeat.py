@@ -430,6 +430,7 @@ async def rust_a2a_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
     logger.info(f"Starting Rust-backed heartbeat for A2A service '{service_id}'")
 
     handle = None
+    health_refresh = None
     try:
         spec = _build_a2a_agent_spec(context, service_id=service_id)
 
@@ -445,6 +446,19 @@ async def rust_a2a_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
             register_rust_agent_handle(handle)
         except Exception as e:  # pragma: no cover - never block startup
             logger.debug(f"Could not register handle for atexit drain: {e}")
+
+        # RFC #1502 step 3: the A2A gateway runs its own `health_check` too —
+        # same loop, same effect, same reason it is safe. See the twin comment
+        # in ``rust_api_heartbeat`` and the module docstring of
+        # ``pipeline/shared/health_refresh.py``.
+        from ..shared.health_refresh import start_gateway_health_refresh
+
+        health_refresh = start_gateway_health_refresh(
+            service_type="a2a",
+            service_id=service_id,
+            context=context,
+            log=logger,
+        )
 
         # Track consecutive failures from ``handle.next_event()`` /
         # ``_handle_a2a_mesh_event`` so a persistently-failing event
@@ -514,6 +528,10 @@ async def rust_a2a_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
         logger.error(f"Rust A2A heartbeat failed for service '{service_id}': {e}")
         raise
     finally:
+        # Stop the health refresh BEFORE the core shuts down: a verdict landing
+        # mid-teardown would push a status at a handle that is about to close.
+        if health_refresh is not None:
+            health_refresh.cancel()
         if handle is not None:
             try:
                 handle.shutdown()

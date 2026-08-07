@@ -40,10 +40,10 @@
  * An agent that declares no `startupCheck` passes. Default-true is what makes
  * this purely additive: every existing agent behaves exactly as it did.
  *
- * Unlike `healthCheck`, this hook is honoured on EVERY agent type, gateways
- * included. It never withdraws a running fan-out point — it only stops a
- * misconfigured one from coming up, and a gateway with a broken config should
- * never come up.
+ * Both hooks are honoured on EVERY agent type, gateways included (RFC #1502).
+ * What this one does there is the milder of the two: it never withdraws a
+ * running fan-out point, it only stops a misconfigured one from coming up, and
+ * a gateway with a broken config should never come up.
  */
 import type { MeshHealthResult } from "./health-check.js";
 

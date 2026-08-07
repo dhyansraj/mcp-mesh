@@ -119,7 +119,11 @@ Only an explicit unhealthy result does that. A check that raises is recorded as 
 
 `degraded` shows on the diagnostic surface only, on all three runtimes: the agent keeps heartbeating and stays in dependency resolution, and `/health` answers 503 while `/ready` is unmoved. Nothing probes `/health`, so its status code is free to carry the verdict.
 
-Route (`@mesh.route` / `@MeshRoute` / `mesh.route`) and A2A agents are deliberately exempt from the heartbeat half: the verdict never suppresses their heartbeat. A gateway is a fan-out point that many requests enter through - withdrawing a provider is correct, withdrawing the gateway takes the application down. On Java the verdict still shows on the gateway's `/health`; Python and TypeScript never run the check on a gateway at all. There is no readiness half to exempt any more: `/ready` reports the mesh runtime on every agent type.
+Route (`@mesh.route` / `@MeshRoute` / `mesh.route`) and A2A agents are no longer exempt: a failing check pauses their heartbeat too, and the registry stops advertising the gateway. The hook means the same thing on every agent type - "I am not available" - and mesh does the same thing with it everywhere: it stops wiring that agent. What differs is topology, not meaning. A provider is something others route _to_; a gateway is where requests _enter_, and the ingress it keeps serving was never mesh-routed in the first place.
+
+So a withdrawn gateway is not a gateway that went down. Suppressing the heartbeat stops registry traffic only: the HTTP server keeps serving, already-resolved dependencies stay wired, and `/ready` reports the mesh runtime rather than the verdict on every agent type - so the pod keeps its Service endpoints and keeps taking ingress. It stops being discovered, it does not go dark.
+
+Declaring one differs by runtime. Java takes a `@MeshHealthCheck` bean on a gateway exactly as on a provider, and TypeScript a `healthCheck` in the `meshExpress` config (a bare `mesh.route()` gateway has no config object to put one in). Python has no declaration surface yet: `health_check` is an `@mesh.agent` argument, and that decorator cannot share a process with `@mesh.route` or `@mesh.a2a` - the runtime honours a gateway's check, the decorators cannot yet carry one.
 
 ### Kubernetes Probes
 

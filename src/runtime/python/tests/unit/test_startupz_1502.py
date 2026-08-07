@@ -81,6 +81,20 @@ async def _async_true():
     return True
 
 
+@pytest.fixture(autouse=True)
+def _no_leaked_verdict(monkeypatch):
+    """Pin the stored ``health_check`` verdict to "none".
+
+    A gateway's ``/health`` reports it since RFC #1502 step 3, and the store
+    is a module global that a background refresh loop leaked by a sibling
+    test file republishes into on its own timer (#1225). These tests are
+    about ``/startupz``; they must not read another agent's verdict.
+    """
+    from _mcp_mesh.shared import health_check_manager
+
+    monkeypatch.setattr(health_check_manager, "_health_check_result", None)
+
+
 @pytest.fixture
 def runtime_up(monkeypatch):
     from _mcp_mesh.shared import simple_shutdown

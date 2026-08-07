@@ -50,9 +50,9 @@ import java.util.Map;
  *
  * <p>This subsumes #1488's gateway carve-out: readiness now reports the runtime
  * on a gateway and on a provider alike, so there is no longer a branch to take.
- * {@link MeshAgentTypes} still carries the rule for the heartbeat
- * ({@link MeshHealthCheckScheduler}), which is where the route/A2A exemption
- * actually lives.
+ * Nor is there one anywhere else — RFC #1502 step 3 reversed #1473's route/A2A
+ * exemption in {@link MeshHealthCheckScheduler} too, so no code in this package
+ * asks what type of agent it is running in.
  *
  * <p>{@code /health} is unchanged: it carries the verdict, its {@code checks}
  * and its {@code errors}, and answers 503 when the verdict is not healthy.

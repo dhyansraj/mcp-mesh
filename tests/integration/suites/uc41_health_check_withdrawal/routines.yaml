@@ -10,6 +10,17 @@
 #   2. recovery, same pid  |  tc01  |    tc03    | tc05
 #   3. a throw does NOT    |  tc02  |    tc04    | tc06
 #      withdraw (degraded) |        |            |
+#   4. a ROUTE gateway is  |   --   |    tc07    |  --
+#      withdrawn without   |        |            |
+#      going dark          |        |            |
+#
+# Scenario 4 is TypeScript-only, and not for want of trying. RFC #1502 step 3
+# removed the route/A2A exemption in all three runtimes, but `meshExpress` is
+# the only gateway surface that can carry a health check from an artifact:
+# Java would cost a Maven build per run for the same assertions, and Python
+# has no declaration surface at all (`health_check` is a `@mesh.agent`
+# argument, and that decorator cannot share a process with `@mesh.route` or
+# `@mesh.a2a`), so its half of step 3 is exercised by unit tests only.
 #
 # Scenarios 1 and 2 share a test file per runtime because they are one
 # continuous timeline, not two: recovery is only meaningful for the process
@@ -21,11 +32,16 @@
 # into separate test cases would pay the fleet-startup cost twice — three
 # JVMs, in the Java case — for a strictly weaker assertion.
 #
-# Topology is identical in all six: two providers of the same capability plus
-# one consumer. Provider A carries the health check the test drives; provider
-# B has none and is the control (it must stay healthy throughout, so a
+# Topology is identical in the first six: two providers of the same capability
+# plus one consumer. Provider A carries the health check the test drives;
+# provider B has none and is the control (it must stay healthy throughout, so a
 # container-wide stall cannot be mistaken for a withdrawal) and the failover
 # target. Artifacts are per-runtime: py-hc-*, ts-hc-*, java-hc-*.
+#
+# tc07 is one agent, because a gateway provides nothing for a consumer to fail
+# over to. What replaces the failover assertion is a per-second sample of the
+# gateway's own ingress, /livez and /ready across the outage: the claim is that
+# it stops being DISCOVERED and stays up, not that someone else takes over.
 #
 # NOT COVERED HERE: the scaffold's emitted vendor probe. Exercising it needs
 # a base-URL override that does not exist yet — see #1483.

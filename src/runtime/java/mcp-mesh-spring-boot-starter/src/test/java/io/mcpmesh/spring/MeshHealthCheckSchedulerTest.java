@@ -20,13 +20,15 @@ import static org.mockito.Mockito.*;
 /**
  * What the health-check timer does with each verdict (issue #1474).
  *
- * <p>Three invariants carried over from #1472, all asserted here:
+ * <p>Three invariants asserted here:
  * <ul>
  *   <li>only an explicit UNHEALTHY reaches the runtime as {@code "unhealthy"} —
  *       a throwing check publishes {@code "degraded"} and keeps beating;</li>
  *   <li>the startup seed does NOT publish, so a check that fails during boot
  *       cannot withdraw an agent that has only just registered;</li>
- *   <li>a route ({@code api}) or A2A agent is never withdrawn by its own check.</li>
+ *   <li>the verdict reaches the runtime on EVERY agent type, route
+ *       ({@code api}) and A2A gateways included (RFC #1502 step 3, reversing
+ *       #1473's exemption).</li>
  * </ul>
  */
 class MeshHealthCheckSchedulerTest {
@@ -181,9 +183,15 @@ class MeshHealthCheckSchedulerTest {
     }
 
     @Test
-    void aRouteAgentIsNeverWithdrawnByItsOwnCheck() throws Exception {
-        // A gateway is a fan-out point: withdrawing a provider is correct,
-        // withdrawing the gateway takes the application down.
+    void aFailingCheckPausesAGatewaysHeartbeatToo() throws Exception {
+        // RFC #1502 step 3 reverses #1473's route/A2A exemption. The exemption
+        // existed because withdrawing a fan-out point "takes the application
+        // down"; step 2 removed that harm. Heartbeat suppression stops
+        // registry traffic ONLY — the HTTP server keeps running, resolved
+        // dependencies are retained (#1131), and /ready reports the mesh
+        // runtime rather than the verdict, so the agent stays in its Service
+        // endpoints and keeps taking ingress. A gateway that reports
+        // unavailable stops being DISCOVERED; it does not go dark.
         for (String agentType : List.of("api", "a2a")) {
             List<String> published = Collections.synchronizedList(new ArrayList<>());
             Checks bean = new Checks();
@@ -195,11 +203,11 @@ class MeshHealthCheckSchedulerTest {
             scheduler.start();
             try {
                 scheduler.refresh(true);
-                assertTrue(published.isEmpty(),
-                    "'" + agentType + "' agent must never suppress its heartbeat");
+                assertEquals(List.of("unhealthy"), published,
+                    "'" + agentType + "' agent must suppress its heartbeat like any "
+                        + "other agent type — the hook means the same thing everywhere");
                 assertEquals(MeshHealthStatus.UNHEALTHY, registry.latest().health().status(),
-                    "'" + agentType + "' agent must still reflect the verdict on /health "
-                        + "(but not on /ready — issue #1488)");
+                    "'" + agentType + "' agent must still reflect the verdict on /health");
             } finally {
                 scheduler.stop();
             }

@@ -66,7 +66,9 @@ A check that **throws** is recorded as `degraded`, not unhealthy, and keeps hear
 
 ### Route and A2A Agents
 
-On a route-only (`api`) or A2A agent the check feeds `/health` only: it **never** suppresses the heartbeat. A gateway is a fan-out point that many requests enter through, so withdrawing a provider is correct while withdrawing the gateway takes the application down. `/health` is where you see what a gateway's check reports. This matches Python, whose API and A2A pipelines have no health-refresh loop at all. `/ready` needs no carve-out any more - it reports the mesh runtime on every agent type.
+A route-only (`api`) or A2A agent runs the check exactly as a provider does, and a failing one **pauses its heartbeat** too, so the registry stops advertising the gateway. Nothing else changes for it: the heartbeat is registry traffic, so the servlet container keeps serving, the dependencies it already resolved stay wired, and `/ready` still answers 200 - the pod keeps its Service endpoints and keeps taking ingress. A withdrawn gateway stops being discovered; it does not go dark.
+
+Declare it the same way you would on a provider: one `@MeshHealthCheck` method on any Spring bean. No agent type is a carve-out any more, on any endpoint or on the heartbeat.
 
 ## Checking Dependency Health
 

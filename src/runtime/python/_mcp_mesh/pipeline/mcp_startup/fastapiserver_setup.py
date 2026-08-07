@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-from datetime import UTC, datetime
 from typing import Any, Optional
 
 from ..shared import PipelineResult, PipelineStatus, PipelineStep
@@ -335,60 +334,21 @@ class FastAPIServerSetupStep(PipelineStep):
             agent_config.get("health_check_ttl")
         )
 
-        # Create a background task to update health check results periodically
+        # The verdict/store/publish step and the timer around it live in
+        # ``pipeline/shared/health_refresh.py`` — the api and a2a gateway
+        # pipelines drive the same code (RFC #1502 step 3), and a second copy
+        # here is how the two would drift.
+        from ..shared.health_refresh import health_refresh_loop, refresh_health_once
+
         async def update_health_result(publish_to_core: bool = False):
-            """Update health check result in DecoratorRegistry.
-
-            Args:
-                publish_to_core: Also report the verdict to the Rust core so a
-                    failing check withdraws the agent from dependency
-                    resolution (issue #1472). False for the startup seed call —
-                    see the call sites below.
-            """
-            if health_check_fn:
-                # Use health check cache if configured
-                from ...engine.decorator_registry import DecoratorRegistry
-                from ...shared.health_check_manager import get_health_status_with_cache
-
-                health_status = await get_health_status_with_cache(
-                    agent_id=agent_name,
-                    health_check_fn=health_check_fn,
-                    agent_config=agent_config,
-                    startup_context=context,
-                    ttl=health_check_ttl,
-                )
-
-                result = {
-                    "status": health_status.status.value,
-                    "agent": agent_name,
-                    "checks": health_status.checks,
-                    "errors": health_status.errors,
-                    "timestamp": health_status.timestamp.isoformat(),
-                }
-            else:
-                # No health check configured - return default healthy status
-                result = {
-                    "status": "healthy",
-                    "agent": agent_name,
-                    "timestamp": self._get_timestamp(),
-                }
-
-            # Store result for /health endpoint to use
-            from ...engine.decorator_registry import DecoratorRegistry
-
-            DecoratorRegistry.store_health_check_result(result)
-
-            # Issue #1472: also tell the Rust core, which stops heartbeating
-            # while the status is unhealthy so the registry withdraws this
-            # agent from dependency resolution (and restores it, without a
-            # restart, when the check passes again). Best-effort and
-            # idempotent — the core only acts on transitions.
-            if publish_to_core:
-                from ...shared.health_check_manager import (
-                    publish_health_status_to_core,
-                )
-
-                publish_health_status_to_core(result["status"])
+            await refresh_health_once(
+                agent_name=agent_name,
+                health_check_fn=health_check_fn,
+                agent_config=agent_config,
+                startup_context=context,
+                ttl_seconds=health_check_ttl,
+                publish_to_core=publish_to_core,
+            )
 
         # Run once immediately to populate initial result.
         # We're already in an async context (called from execute()), so just
@@ -429,8 +389,6 @@ class FastAPIServerSetupStep(PipelineStep):
                 user_loop = user_loops[0]
                 log = self.logger
 
-                from ...shared.health_check_manager import clear_health_cache
-
                 # Resolve the lifespan-ready future eagerly (on this
                 # thread, before scheduling the user-loop coroutine).
                 # Whichever side runs first creates it; the other side
@@ -440,55 +398,23 @@ class FastAPIServerSetupStep(PipelineStep):
                 async def _refresh_health_loop():
                     """Periodic health-check refresh on the user loop.
 
-                    Invalidates the per-agent health cache before each
-                    update so the user's ``health_check_fn`` is always
-                    re-executed (otherwise the refresh might land inside
-                    the cache window and return the previous result).
-
-                    Gated on the lifespan-ready signal — does not fire
-                    the first refresh until the user lifespan
-                    ``__aenter__`` has returned, so the user's
-                    ``health_check_fn`` never observes partially-
-                    initialized lifespan state.
-
-                    Since issue #1472 this loop also drives dependency
-                    resolution: each refresh reports its verdict to the
-                    Rust core, which stops heartbeating while the agent
-                    is unhealthy. The TTL is the cadence of that check,
-                    not the end-to-end latency in either direction:
-                    withdrawal costs up to one TTL plus the registry's
-                    staleness window once heartbeats stop, and recovery
-                    costs up to one TTL plus the heartbeat resume and
-                    re-register round trip.
+                    The loop body is the shared one (see
+                    ``pipeline/shared/health_refresh.py``). What is specific
+                    to a provider is WHERE it runs and WHAT it waits for:
+                    the user loop, gated on the lifespan-ready signal, so
+                    the user's ``health_check_fn`` never observes
+                    partially-initialized lifespan state and can touch the
+                    loop-affine resources ``lifespan`` created.
                     """
-                    try:
-                        await asyncio.wrap_future(ready_future)
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as e:
-                        # Better to refresh than to hang if the gate
-                        # mechanism breaks for some unexpected reason.
-                        log.warning(
-                            "Health refresh: lifespan-ready gate failed "
-                            "for agent '%s' (%s). Proceeding without "
-                            "gating.",
-                            agent_name,
-                            e,
-                        )
-
-                    while True:
-                        try:
-                            await asyncio.sleep(health_check_ttl)
-                            clear_health_cache(agent_name)
-                            await update_health_result(publish_to_core=True)
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception as e:
-                            log.warning(
-                                f"Health refresh failed for agent "
-                                f"'{agent_name}': {e}",
-                                exc_info=True,
-                            )
+                    await health_refresh_loop(
+                        agent_name=agent_name,
+                        health_check_fn=health_check_fn,
+                        agent_config=agent_config,
+                        startup_context=context,
+                        ttl_seconds=health_check_ttl,
+                        log=log,
+                        wait_ready=lambda: asyncio.wrap_future(ready_future),
+                    )
 
                 schedule_on_user_loop(
                     app,
@@ -687,11 +613,6 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
     # the configured port — registering an endpoint nothing ever bound.
     # Server startup now flows exclusively through pre-bound sockets
     # (see `_mcp_mesh.shared.port_binding` and `startup_orchestrator`).
-
-    def _get_timestamp(self) -> str:
-        """Get current timestamp in ISO format."""
-
-        return datetime.now(UTC).isoformat()
 
     def _store_context_for_shutdown(self, context: dict[str, Any]) -> None:
         """Store context for access during shutdown."""

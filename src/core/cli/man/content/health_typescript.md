@@ -66,7 +66,7 @@ const agent = mesh(server, {
 
 One check per agent. Return `{ status, checks, errors }` for full detail, or a `boolean` for the terse form (`true` healthy, `false` unhealthy). `healthCheckTtl` is how often it re-runs (default 15); `MCP_MESH_HEALTH_CHECK_TTL` overrides it.
 
-The verdict drives `/health`, which answers 200 only while the check reports `healthy` and carries the `checks` and `errors` it returned. It does not drive `/ready`, which reports whether the mesh runtime is up: pausing the heartbeat already withdraws the agent, and a 503 on `/ready` would additionally empty the Service that mesh traffic arrives on. `/livez` never consults it either - a restart cannot fix a vendor outage. On a `mesh.route` or A2A agent the check is ignored entirely - see below.
+The verdict drives `/health`, which answers 200 only while the check reports `healthy` and carries the `checks` and `errors` it returned. It does not drive `/ready`, which reports whether the mesh runtime is up: pausing the heartbeat already withdraws the agent, and a 503 on `/ready` would additionally empty the Service that mesh traffic arrives on. `/livez` never consults it either - a restart cannot fix a vendor outage.
 
 ### What a Failing Check Does
 
@@ -76,7 +76,20 @@ Report `unhealthy` only for conditions the mesh should route around: the upstrea
 
 `degraded` shows on the diagnostic surface only, the same way it does on Python and Java: the agent keeps heartbeating and stays in dependency resolution, and `/health` answers 503 while `/ready` is unmoved. Nothing probes `/health`, so its status code is free to carry the verdict; readiness reports the mesh runtime and nothing else.
 
-`mesh.route` and A2A agents ignore `healthCheck`. They are fan-out points, so withdrawing one takes down every path that enters through it - declare the check on the agents behind the gateway instead.
+A `mesh.route` or A2A gateway runs the check exactly as an MCP agent does, and a failing one pauses its heartbeat too, so the registry stops advertising it. Nothing else changes: the Express server keeps listening, the dependencies it already resolved stay wired, and `/ready` still answers 200 - the pod keeps its Service endpoints and keeps taking ingress. A withdrawn gateway stops being discovered; it does not go dark.
+
+Declare it on the gateway itself, in the `meshExpress` config:
+
+```typescript
+const meshApp = meshExpress(app, {
+  name: "my-gateway",
+  httpPort: 3000,
+  healthCheckTtl: 30,
+  healthCheck: async () => (await upstreamReachable()) || { status: "unhealthy", errors: ["upstream down"] },
+});
+```
+
+`mesh.route()` on its own auto-initializes a gateway with no config object, so there is nowhere to declare a check on that path - use `meshExpress` when you want one.
 
 ## Registry Health Monitor
 
@@ -183,7 +196,7 @@ TypeScript agents automatically expose four endpoints, and Kubernetes probes mus
 // { ready: true, agent: "my-agent", runtime: "up", mcp_wrappers: 1, timestamp: "..." }
 ```
 
-A `mesh.route` or A2A agent serves the same URLs, and its `/health` is a fixed `healthy` - the `healthCheck` is ignored there.
+A `mesh.route` or A2A agent serves the same URLs, and its `/health` carries the same verdict.
 
 ## Graceful Shutdown
 

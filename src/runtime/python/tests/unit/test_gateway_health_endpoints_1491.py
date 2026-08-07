@@ -15,7 +15,9 @@ registers the endpoints — rather than on an import error.
 Semantics under test (TypeScript's ``express.ts`` is the reference):
   * ``/livez``  — unconditional 200, consults nothing
   * ``/ready``  — mesh runtime state only
-  * ``/health`` — diagnostic, always 200, never consults ``health_check``
+  * ``/health`` — diagnostic: the stored ``health_check`` verdict, 200 only
+    while it is healthy (RFC #1502 step 3; it was a fixed 200 while a gateway
+    never ran the check). It reports the verdict, it never runs the check.
 """
 
 import asyncio
@@ -87,14 +89,30 @@ def runtime_down(monkeypatch):
     monkeypatch.setattr(simple_shutdown, "should_stop_heartbeat", lambda: False)
 
 
+@pytest.fixture(autouse=True)
+def _no_leaked_verdict(monkeypatch):
+    """Pin the stored verdict to "none" unless a test sets one.
+
+    ``/health`` reports the stored ``health_check`` result since RFC #1502
+    step 3, and that store is a module global. A background refresh loop
+    leaked by a sibling test file republishes into it on its own timer
+    (#1225), so a gateway test that did not pin it could read another agent's
+    verdict. ``monkeypatch`` restores whatever was there afterwards.
+    """
+    from _mcp_mesh.shared import health_check_manager
+
+    monkeypatch.setattr(health_check_manager, "_health_check_result", None)
+
+
 @pytest.fixture
-def declared_health_check(monkeypatch):
+def declared_health_check(monkeypatch, _no_leaked_verdict):
     """A gateway that declared a health check, and a failing stored result.
 
-    Both of the things a health check produces: the callable itself (which must
-    never be invoked from these endpoints) and the stored ``unhealthy`` verdict
-    that ``build_health_response`` would turn into a 503. Neither may reach a
-    gateway probe.
+    Both of the things a health check produces: the callable itself (which no
+    endpoint may invoke — the refresh loop owns that) and the stored
+    ``unhealthy`` verdict. The verdict belongs on ``/health`` and nowhere else:
+    a probe that carried it would empty the Service endpoints the gateway's
+    ingress arrives on.
     """
     from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
     from _mcp_mesh.shared import health_check_manager
@@ -365,10 +383,11 @@ class TestReady:
     def test_a_failing_declared_health_check_does_not_make_it_unready(
         self, api_app, runtime_up, declared_health_check
     ):
-        """#1473/#1488: a gateway is a fan-out point — its own check must not
-        withdraw it. Since RFC #1502 no agent type's ``/ready`` consults the
-        verdict, but a stored ``unhealthy`` result must still not reach this
-        endpoint by any other route."""
+        """A gateway's own check DOES withdraw it since RFC #1502 step 3, and
+        readiness staying 200 is exactly what makes that safe: the pod keeps
+        its Service endpoints and keeps taking ingress while the registry
+        stops advertising it. A stored ``unhealthy`` result must not reach
+        this endpoint by any route."""
         response = TestClient(api_app).get("/ready")
         assert response.status_code == 200
         assert response.json()["ready"] is True
@@ -396,24 +415,32 @@ class TestHealth:
         assert response.json()["mesh_ready"] is False
         assert response.json()["runtime"] == "starting"
 
-    def test_never_consults_the_declared_health_check(
+    def test_reports_the_stored_verdict_without_running_the_check(
         self, api_app, runtime_up, declared_health_check
     ):
+        """RFC #1502 step 3: a gateway runs its ``health_check`` now, so
+        ``/health`` shows what it said. The endpoint still never INVOKES it —
+        the refresh loop owns that, on its own cadence, and a probe that ran
+        the check per hit would be an unbounded vendor call per request."""
         response = TestClient(api_app).get("/health")
-        assert response.status_code == 200
+        assert response.status_code == 503
         body = response.json()
-        assert body["status"] == "healthy"
-        assert "errors" not in body
+        assert body["status"] == "unhealthy"
+        assert body["errors"] == ["database down"]
         assert declared_health_check == []
 
-    def test_declaring_a_health_check_changes_none_of_the_three(
+    def test_declaring_a_health_check_moves_only_health(
         self, runtime_up, declared_health_check
     ):
+        """The verdict reaches ``/health`` and stops there. ``/livez`` and
+        ``/ready`` staying 200 is what makes withdrawing a gateway safe: it
+        keeps its Service endpoints and keeps taking ingress while the
+        registry stops advertising it."""
         app = FastAPI(title="Gateway With Health Check")
         _run_step(APIPipeline(), app)
 
         client = TestClient(app)
         assert client.get("/livez").status_code == 200
         assert client.get("/ready").status_code == 200
-        assert client.get("/health").status_code == 200
+        assert client.get("/health").status_code == 503
         assert declared_health_check == []

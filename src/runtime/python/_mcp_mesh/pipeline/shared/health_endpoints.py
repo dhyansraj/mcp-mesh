@@ -29,13 +29,18 @@ Semantics (matching TypeScript's ``express.ts`` ``setupHealthEndpoints``):
     provider's ``build_ready_response`` answers from too.
 
 ``/health``
-    The diagnostic view. Always 200; no probe points at it.
+    The diagnostic view: the user's ``health_check`` verdict with its
+    ``checks`` and ``errors``, 200 only while it reports healthy. Nothing
+    probes it, so the status code is free to carry the verdict.
 
-The user's ``health_check`` is deliberately NOT consulted by any of the three.
-A gateway is an entry point: mesh injects dependencies *into* it, but nothing
-resolves *to* it, so an unhealthy verdict could only subtract — withdrawing a
-fan-out point takes down every path that enters through it (#1473, #1488).
-For the same reason there is no health-refresh loop on these pipelines.
+Only ``/health`` and ``/startupz`` consult a user hook. ``/livez`` and
+``/ready`` deliberately do not: a failing ``health_check`` already withdraws
+the gateway by pausing its heartbeat (RFC #1502 step 3 —
+``pipeline/shared/health_refresh.py``), and 503-ing readiness on top would
+empty the Service endpoints the gateway's ingress arrives on, which is the
+harm #1473's exemption existed to prevent. Withdrawal that stops registry
+traffic ONLY is what makes running the check on a gateway safe: it stops being
+*discovered*, it does not go dark.
 
 The app is the user's, so each path is registered only if the application has
 not already defined it (``examples/python/mesh-api/main.py`` hand-rolls
@@ -171,20 +176,36 @@ def register_health_endpoints(
         return JSONResponse(status_code=200 if is_ready else 503, content=body)
 
     async def health():
-        # Diagnostic only. A gateway's own health never withdraws it, so this
-        # is a fixed "healthy" plus the runtime detail — no health_check, no
-        # stored health-check result, no 503.
+        # Diagnostic view of the `health_check` verdict (RFC #1502 step 3).
+        # It used to be a fixed "healthy" because a gateway never ran the
+        # check; now that a failing one withdraws the gateway, an endpoint
+        # that still said "healthy" would be the only place an operator could
+        # look and the one place that lied. Nothing probes /health, so its
+        # status code is free to carry the verdict — same rule as a
+        # provider's (`build_health_response`: 200 iff healthy).
+        #
+        # A gateway with no check has no stored result, and the absence is
+        # reported as healthy: not running a check is not a failure.
+        from ...shared.health_check_manager import get_health_check_result
+
         is_ready, state = runtime_state(standalone)
+        stored = get_health_check_result() or {}
+        status = stored.get("status", "healthy")
+        body: dict[str, Any] = {
+            "status": status,
+            "agent": _agent_name(),
+            "service_type": service_type,
+            "runtime": state,
+            "mesh_ready": is_ready,
+            "timestamp": _now(),
+        }
+        if "checks" in stored:
+            body["checks"] = stored["checks"]
+        if "errors" in stored:
+            body["errors"] = stored["errors"]
         return JSONResponse(
-            status_code=200,
-            content={
-                "status": "healthy",
-                "agent": _agent_name(),
-                "service_type": service_type,
-                "runtime": state,
-                "mesh_ready": is_ready,
-                "timestamp": _now(),
-            },
+            status_code=200 if status == "healthy" else 503,
+            content=body,
         )
 
     handlers = (
