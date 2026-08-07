@@ -31,6 +31,8 @@
 #
 # Since #1478 TS `/health` reflects the verdict, exactly as Python's and
 # Java's do, so (2) is read from the endpoint rather than from a log line.
+# `/ready` does NOT reflect it (RFC #1502) and is asserted to stay 200
+# alongside, which is a claim about the split rather than an omission.
 # The core-transition grep stays alongside it: `/health` is what the runtime
 # BELIEVES, and `Health status changed: Healthy -> Degraded` is what actually
 # crossed the napi boundary and became the core's state. A runtime that
@@ -238,11 +240,12 @@ test:
   # Non-vacuity, part 2a: the runtime saw the throw and classified it as
   # degraded, read from the agent's own endpoint (#1478).
   #
-  # /ready is captured as a bare status code alongside it. `degraded` answers
-  # 503 there on all three runtimes — deliberately: readiness is a load
-  # balancer's "stop adding load", while the heartbeat below keeps running so
-  # the mesh can still resolve an impaired provider that may be the only one.
-  - name: "A's /health must report degraded, carrying the thrown message"
+  # /ready is captured as a bare status code alongside it, and it must be 200
+  # (RFC #1502). A `degraded` verdict is precisely the case where 503-ing
+  # readiness would be worst: the agent keeps heartbeating and the mesh keeps
+  # resolving to it — it may be the only provider — so emptying its Service
+  # endpoints would break the very calls the registry is still directing there.
+  - name: "A's /health must report degraded while /ready stays 200"
     handler: shell
     workdir: /workspace
     command: |
@@ -359,8 +362,8 @@ assertions:
     message: "CLASSIFICATION: /health must carry the thrown error's own message, proving the runtime caught THIS throw"
   - expr: "${captured.provider_a_health} not contains 'HEALTH_UNREACHABLE'"
     message: "CLASSIFICATION: provider A's HTTP server must still answer /health while its check is throwing"
-  - expr: "${captured.provider_a_health} contains 'READY_HTTP_CODE: 503'"
-    message: "CLASSIFICATION: /ready must answer 503 for a degraded agent — a load balancer is told to stop adding load even though the mesh keeps resolving it"
+  - expr: "${captured.provider_a_health} contains 'READY_HTTP_CODE: 200'"
+    message: "CLASSIFICATION: /ready must stay 200 for a degraded agent — the mesh keeps resolving it, so dropping it from its Service endpoints would break the calls the registry is still directing there"
   - expr: "${captured.degrade_log} not contains 'CORE_DEGRADE_TRANSITIONS: 0'"
     message: "CLASSIFICATION: the degraded verdict must reach the mesh core (Health status changed: Healthy -> Degraded) — otherwise the runtime only printed the word and published something else"
   - expr: "${captured.degrade_log} contains 'UNHEALTHY_LOG_LINES: 0'"

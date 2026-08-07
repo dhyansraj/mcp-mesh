@@ -117,21 +117,22 @@ While the check reports `unhealthy` the agent stops heartbeating. The registry's
 
 Only an explicit unhealthy result does that. A check that raises is recorded as `degraded` and keeps heartbeating, in all three runtimes: a bug in the health check must not be able to remove a working agent from the mesh.
 
-`degraded` splits the two surfaces on all three runtimes: the agent keeps heartbeating and stays in dependency resolution, but `/ready` and `/health` answer 503. Readiness is a load-balancer decision about new external traffic; the heartbeat is a statement about whether this is still a valid mesh provider.
+`degraded` shows on the diagnostic surface only, on all three runtimes: the agent keeps heartbeating and stays in dependency resolution, and `/health` answers 503 while `/ready` is unmoved. Nothing probes `/health`, so its status code is free to carry the verdict.
 
-Route (`@mesh.route` / `@MeshRoute` / `mesh.route`) and A2A agents are deliberately exempt, on both surfaces: the verdict never suppresses their heartbeat and never makes their `/ready` answer 503. A gateway is a fan-out point that many requests enter through - withdrawing a provider is correct, withdrawing the gateway takes the application down, and a 503 readiness probe drops it from its Service endpoints, which takes it down harder. On Java the verdict still shows on the gateway's `/health`; Python and TypeScript never run the check on a gateway at all.
+Route (`@mesh.route` / `@MeshRoute` / `mesh.route`) and A2A agents are deliberately exempt from the heartbeat half: the verdict never suppresses their heartbeat. A gateway is a fan-out point that many requests enter through - withdrawing a provider is correct, withdrawing the gateway takes the application down. On Java the verdict still shows on the gateway's `/health`; Python and TypeScript never run the check on a gateway at all. There is no readiness half to exempt any more: `/ready` reports the mesh runtime on every agent type.
 
 ### Kubernetes Probes
 
-Every runtime serves three endpoints, and probes must not share one:
+Every runtime serves four endpoints, and probes must not share one:
 
-| Endpoint  | Probe                             | Reports                                                                                             |
-| --------- | --------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `/livez`  | `livenessProbe`, `startupProbe`   | 200 for as long as the process is serving. Consults nothing else.                                     |
-| `/ready`  | `readinessProbe`                  | Whether traffic should be routed here. Reflects your health check on all three runtimes (`health_check`, `@MeshHealthCheck`, `healthCheck`) - 200 only while it reports `healthy` - except on a route or A2A agent, where it reports only that the mesh runtime is running. |
-| `/health` | none                              | The `/ready` verdict plus `checks` and `errors`, on all three runtimes. The two part company only on a gateway: a Java gateway's `/health` still carries its check's verdict while `/ready` ignores it, and Python and TypeScript never run a gateway's check at all. |
+| Endpoint    | Probe                             | Reports                                                                                             |
+| ----------- | --------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `/startupz` | `startupProbe`                    | Your startup check (`startup_check`, `@MeshStartupCheck`, `startupCheck`). An agent that declares none passes. |
+| `/livez`    | `livenessProbe`                   | 200 for as long as the process is serving. Consults nothing else.                                     |
+| `/ready`    | `readinessProbe`                  | Whether the mesh runtime is up, on every agent type. Your health check does NOT reach it: a failing check pauses the heartbeat, which is the whole withdrawal, and a 503 here would also empty the Service that mesh traffic arrives on. |
+| `/health`   | none                              | Your health check's verdict plus `checks` and `errors`, on all three runtimes. 503 while the verdict is not healthy. This is the one endpoint the verdict moves, so it and `/ready` diverge by design. |
 
-Never point liveness or startup at `/ready` or `/health`. Both reflect a provider agent's health check on all three runtimes, so sharing a URL turns an upstream outage into a pod restart, which cannot fix the outage - and while an agent is still coming up they answer 503 (or are not mounted yet), which restart-loops a slow boot. The agent Helm chart is already wired this way; if you write your own manifests, you own this contract, and `meshctl man deployment` (`--typescript`, `--java`) has the probe stanzas to copy plus the two ways it is usually got wrong.
+Never point liveness or startup at `/ready` or `/health`. `/health` reflects your health check on all three runtimes, so sharing a URL turns an upstream outage into a pod restart, which cannot fix the outage - and while an agent is still coming up both answer 503 (or are not mounted yet), which restart-loops a slow boot. The agent Helm chart is already wired this way; if you write your own manifests, you own this contract, and `meshctl man deployment` (`--typescript`, `--java`) has the probe stanzas to copy plus the two ways it is usually got wrong.
 
 ### Health States
 

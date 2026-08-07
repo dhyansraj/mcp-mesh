@@ -146,13 +146,13 @@ While the check reports unhealthy the agent **stops heartbeating**. The registry
 
 The check that runs during startup is deliberately exempt: it seeds `/health` but is never reported to the core, so an agent registers and becomes visible first. The first refresh, one TTL later, is the earliest a check can withdraw it.
 
-The verdict also drives the probe endpoints: `/ready` and `/health` answer 200 only while the check reports `healthy`, and `/health` carries the `checks` and `errors` it returned. `/livez` never consults it - a restart cannot fix a vendor outage.
+The verdict drives `/health`, which answers 200 only while the check reports `healthy` and carries the `checks` and `errors` it returned. It does not drive `/ready`, which reports whether the mesh runtime is up: pausing the heartbeat already withdraws the agent, and a 503 on `/ready` would additionally empty the Service that mesh traffic arrives on. `/livez` never consults it either - a restart cannot fix a vendor outage.
 
 ### Only an Explicit Unhealthy Withdraws the Agent
 
 A check that **raises** is recorded as `degraded`, not unhealthy, and keeps heartbeating. So is one that returns something other than a dict, a `bool` or a `HealthStatus`. A bug in a health check must not be able to remove a working agent from the mesh. Return `False` or `{"status": "unhealthy"}` to actually withdraw.
 
-`degraded` splits the two surfaces on purpose: the agent keeps heartbeating and stays in dependency resolution, but `/ready` and `/health` answer 503. Readiness is a load-balancer decision about new external traffic; the heartbeat is a statement about whether this is still a valid mesh provider.
+`degraded` shows on the diagnostic surface only: the agent keeps heartbeating and stays in dependency resolution, and `/health` answers 503 while `/ready` is unmoved. Nothing probes `/health`, so its status code is free to carry the verdict; readiness reports the mesh runtime and nothing else.
 
 ### Route and A2A Agents
 

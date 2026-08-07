@@ -4,12 +4,34 @@
  *
  * Until this landed both URLs were FastMCP's own built-ins: `/ready`
  * answered a hardcoded 200 in stateless mode and `/health` returned the
- * literal `text/plain` string `✓ Ok`. A TypeScript provider whose vendor
- * was down therefore kept receiving direct Kubernetes Service traffic
- * long after mesh consumers had failed over (#1468 made `/ready` gate
- * Service endpoints), and an operator who curled `/health` learned
- * nothing. Python (#1472) and Java (#1474) both answer 503 with detail;
- * this is the TypeScript half of that contract.
+ * literal `text/plain` string `✓ Ok`, so an operator who curled `/health`
+ * learned nothing about the agent. Python (#1472) and Java (#1474) both
+ * carry the verdict with detail; this is the TypeScript half of that
+ * contract.
+ *
+ * ## What each endpoint reports (RFC #1502)
+ *
+ * `/ready` reports whether the **mesh runtime** is up, and nothing else.
+ * `/health` reports the user's `healthCheck` verdict — 200 only while it
+ * is `healthy` — and nothing probes it. The two therefore DIVERGE on
+ * every agent type, deliberately.
+ *
+ * A failing check already withdraws the agent by pausing the heartbeat:
+ * the registry ages it out and resolution stops selecting it. Adding
+ * readiness on top is strictly worse rather than defence in depth,
+ * because mesh traffic traverses the Kubernetes Service — `advertisedHost`
+ * defaults to the per-agent Service DNS name. A 503 here empties the
+ * Service endpoints while the registry may still be selecting the agent,
+ * and the consumer gets a connection error instead of failing over.
+ *
+ * Readiness is not unconditional either. `startupCheck` defaults to
+ * passing, so `/startupz` answers 200 before the runtime is up; without
+ * the runtime floor a pod could go Ready with no mesh runtime behind it.
+ * The floor is also the only probe that notices a runtime that dies while
+ * the process lives, since `/livez` consults nothing.
+ *
+ * This matches `express.ts`, whose gateway `/ready` has always been
+ * `this.handle !== null`, and Python's `runtime_state`.
  *
  * ## Why registering here shadows FastMCP
  *
@@ -28,28 +50,15 @@
  * agent unready in Kubernetes until the first session arrived. Owning
  * the route removes the dependency on that flag entirely.
  *
- * ## An agent with no health check is unaffected
+ * ## An agent with no health check is unaffected on /health
  *
  * A null verdict means "no `healthCheck` configured, or the seed run has
- * not finished yet" and is treated as HEALTHY. Only a configured check
- * that reports a non-healthy verdict can make an agent unready.
- *
- * This MATCHES the other two runtimes; it is not a divergence from them:
- *
- *   - Java's `MeshHealthController.effectiveStatus` returns `HEALTHY`
- *     outright when `latest` is null and the runtime is running;
- *   - Python reaches the same answer one step earlier. Its startup seed
- *     stores a default result for an agent with no `health_check` at all
- *     (`{"status": "healthy", ...}` in `fastapiserver_setup.py`), so
- *     `build_ready_response` / `build_health_response` see a stored
- *     healthy status and answer 200. Its no-stored-result branch is
- *     `# No health check configured - assume ready` → 200 as well.
- *
- * Python's `"starting"` 503 in `build_health_response` is NOT the
- * check-less case: it is the window before the seed has stored anything,
- * i.e. an agent that is genuinely still starting. Do not read it as a
- * runtime disagreement and "fix" this branch to match it — that would
- * make every check-less agent, on every runtime, unready.
+ * not finished yet" and is treated as HEALTHY, so `/health` answers 200.
+ * Only a configured check that reports a non-healthy verdict can make it
+ * 503. Java's `MeshHealthController.effectiveStatus` returns `HEALTHY`
+ * outright when `latest` is null and the runtime is running, and Python's
+ * startup seed stores a default healthy result for an agent with no
+ * `health_check` at all.
  *
  * `/livez` is unchanged and stays in `livez-route.ts` — liveness must
  * never consult the verdict, or a vendor outage becomes a pod restart.
@@ -61,17 +70,33 @@ import type { HealthVerdict } from "./health-check.js";
 export type HealthVerdictSource = () => HealthVerdict | null;
 
 /**
- * Only `healthy` answers 200 — the same rule as Python's
- * `build_health_response` / `build_ready_response` (`200 if status ==
- * "healthy" else 503`) and Java's `MeshHealthController.serving`.
+ * Whether the mesh runtime is up, and in what state.
  *
- * So `degraded` answers 503 here while the agent keeps heartbeating and
- * stays in dependency resolution. That asymmetry is deliberate on all
- * three runtimes: readiness is a load-balancer decision about NEW
- * external traffic, while the heartbeat states whether this agent is
- * still a valid provider for the mesh. An impaired agent can honestly
- * say "stop adding load" without withdrawing itself from a mesh that may
- * have no other provider.
+ * `up` once `startAgent()` has returned a napi handle; `shutting_down`
+ * once shutdown has been requested; `starting` before either. The same
+ * three states Python's `runtime_state` reports, minus `standalone` —
+ * TypeScript has no standalone mode, `_autoStart` always calls
+ * `startAgent`.
+ */
+export type RuntimeState = "up" | "starting" | "shutting_down";
+
+/** Reads the runtime state at request time (see `snapshot` below). */
+export type RuntimeStateSource = () => RuntimeState;
+
+const NOT_READY_REASON: Record<string, string> = {
+  starting: "Mesh runtime has not started yet",
+  shutting_down: "Mesh runtime is shutting down",
+};
+
+/**
+ * Only `healthy` answers 200 on `/health` — the same rule as Python's
+ * `build_health_response` (`200 if status == "healthy" else 503`) and
+ * Java's `MeshHealthController.serving`.
+ *
+ * So `degraded` answers 503 there while the agent keeps heartbeating and
+ * stays in dependency resolution. Nothing probes `/health`, so the status
+ * code is free to carry the verdict; `/ready`, which the kubelet does
+ * read, is governed by the runtime state alone.
  */
 function serving(status: string): boolean {
   return status === "healthy";
@@ -104,14 +129,13 @@ export function buildHealthBody(
 }
 
 /**
- * `/ready` body — Python's `build_ready_response` keys.
+ * `/ready` body — Python's `build_ready_response` keys: `{ready, agent,
+ * runtime, mcp_wrappers, timestamp}`, plus `reason` when not ready.
  *
- * Python varies them per branch: `{ready, agent, status, mcp_wrappers,
- * timestamp}` when ready, `{ready, agent, status, reason, errors}` when
- * not (no `timestamp`), and no `status` at all in its no-stored-result
- * branch. This emits the common keys unconditionally and adds
- * `reason`/`errors` when not ready — again a superset, so nothing a
- * Python-shaped reader looks for is missing.
+ * There is deliberately no `status` key carrying the health verdict. It
+ * used to be here, and beside a 200 it now reads as a contradiction
+ * rather than as two separate facts — exactly the conflation RFC #1502
+ * exists to undo. The verdict is on `/health`.
  *
  * `mcp_wrappers` counts the MCP servers this agent fronts. A TypeScript
  * agent wraps exactly one FastMCP server, so the honest constant is 1.
@@ -123,25 +147,28 @@ export function buildHealthBody(
  */
 export function buildReadyBody(
   agentName: string,
-  verdict: HealthVerdict | null,
+  state: RuntimeState,
 ): Record<string, unknown> {
-  const status = verdict ? verdict.status : "healthy";
-  const ready = serving(status);
+  const ready = state === "up";
   const body: Record<string, unknown> = {
     ready,
     agent: agentName,
-    status,
+    runtime: state,
     mcp_wrappers: 1,
     timestamp: new Date().toISOString(),
   };
   if (!ready) {
-    body.reason = `Service is ${status}`;
-    body.errors = verdict ? verdict.errors : [];
+    body.reason = NOT_READY_REASON[state] ?? `Mesh runtime is ${state}`;
   }
   return body;
 }
 
-/** HTTP status for a verdict: 200 healthy, 503 otherwise. */
+/** HTTP status for `/ready`: 200 once the mesh runtime is up. */
+export function readyStatusCodeFor(state: RuntimeState): 200 | 503 {
+  return state === "up" ? 200 : 503;
+}
+
+/** HTTP status for `/health`: 200 healthy, 503 otherwise. */
 export function statusCodeFor(verdict: HealthVerdict | null): 200 | 503 {
   return serving(verdict ? verdict.status : "healthy") ? 200 : 503;
 }
@@ -155,14 +182,17 @@ export function statusCodeFor(verdict: HealthVerdict | null): 200 | 503 {
  * Each failure branch logs the CAUSE only. The consequence is stated
  * once, by the caller that throws (see `agent.ts`).
  *
- * `getVerdict` is a callback rather than a value because the routes are
- * mounted during startup, before the health-check loop has produced (or
- * even been started with) anything.
+ * `getVerdict` and `getRuntimeState` are callbacks rather than values
+ * because the routes are mounted during startup — before the health-check
+ * loop has produced anything, and before `startAgent()` has returned a
+ * handle. A `/ready` that captured either at registration would answer the
+ * boot value forever.
  */
 export function registerHealthRoutes(
   server: FastMCP,
   agentName: string,
   getVerdict: HealthVerdictSource,
+  getRuntimeState: RuntimeStateSource,
 ): boolean {
   let app: ReturnType<FastMCP["getApp"]> | null = null;
   try {
@@ -189,10 +219,9 @@ export function registerHealthRoutes(
   // and whose `errors` came from the next, or a 200 status line over an
   // unhealthy body. Java's `latestResult()` exists for the same reason.
   //
-  // A verdict source that THROWS must not take the endpoint down with
-  // it: a probe that cannot answer is not evidence the agent is broken,
-  // and a 500 here would fail the readiness probe and pull a working pod
-  // out of the Service. Falling back to null answers exactly as an agent
+  // A verdict source that THROWS must not take `/health` down with it: a
+  // diagnostic endpoint that 500s tells an operator less than one that
+  // says "no verdict". Falling back to null answers exactly as an agent
   // with no health check does.
   const snapshot = (): HealthVerdict | null => {
     try {
@@ -207,10 +236,30 @@ export function registerHealthRoutes(
     }
   };
 
+  // Same containment as `snapshot`, for the same reason: a runtime-state
+  // source that throws must not 500 the readiness probe. `starting` is the
+  // conservative answer — it 503s, which is what an agent whose state
+  // cannot be determined should report to a load balancer, and unlike the
+  // verdict path there is no "as if unconfigured" reading that is safe.
+  const runtimeSnapshot = (): RuntimeState => {
+    try {
+      return getRuntimeState();
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[mesh-health] reading the mesh runtime state for agent ` +
+          `'${agentName}' threw — reporting not ready: ${reason}`,
+      );
+      return "starting";
+    }
+  };
+
   try {
     app.on(["GET", "HEAD"], "/ready", (c) => {
-      const verdict = snapshot();
-      return c.json(buildReadyBody(agentName, verdict), statusCodeFor(verdict));
+      // RFC #1502: the mesh runtime, NOT the health verdict. See the module
+      // comment for why adding the verdict here is worse than leaving it out.
+      const state = runtimeSnapshot();
+      return c.json(buildReadyBody(agentName, state), readyStatusCodeFor(state));
     });
     app.on(["GET", "HEAD"], "/health", (c) => {
       const verdict = snapshot();

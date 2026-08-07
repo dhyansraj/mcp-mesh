@@ -56,17 +56,17 @@ One check per agent, on any Spring bean. Return `MeshHealth` for full detail, or
 
 While the check reports unhealthy the agent **stops heartbeating**. The registry marks it unhealthy after the staleness window, dependency resolution stops selecting it, and consumers move to another provider. When the check passes again the heartbeat resumes and the registry restores the agent through the `410 Gone` re-register path - no restart. The TTL is the cadence, not the end-to-end latency: it only bounds how long until the next check runs. Withdrawal costs that plus the registry's staleness window once heartbeats stop, and recovery costs it plus the heartbeat resume and re-register round trip.
 
-The verdict also drives the probe endpoints: `/ready` answers 503 while unhealthy, and `/health` carries the `checks` and `errors` the method returned. `/livez` never consults it - a restart cannot fix a vendor outage. On a route (`api`) or A2A agent `/ready` is exempt too - see below.
+The verdict drives `/health`, which answers 503 while unhealthy and carries the `checks` and `errors` the method returned. It does not drive `/ready`, which reports whether the mesh runtime is up, on every agent type: pausing the heartbeat already withdraws the agent, and a 503 on `/ready` would additionally empty the Kubernetes Service that mesh traffic arrives on. `/livez` never consults it either - a restart cannot fix a vendor outage.
 
 ### Only an Explicit Unhealthy Withdraws the Agent
 
 A check that **throws** is recorded as `degraded`, not unhealthy, and keeps heartbeating. A bug in a health check must not be able to remove a working agent from the mesh. Return `false` or `MeshHealth.unhealthy(...)` to actually withdraw.
 
-`degraded` splits the two surfaces on purpose, the same way it does on Python: the agent keeps heartbeating and stays in dependency resolution, but `/ready` and `/health` answer 503. Readiness is a load-balancer decision about new external traffic; the heartbeat is a statement about whether this is still a valid mesh provider.
+`degraded` shows on the diagnostic surface only, the same way it does on Python: the agent keeps heartbeating and stays in dependency resolution, and `/health` answers 503 while `/ready` is unmoved. Nothing probes `/health`, so its status code is free to carry the verdict; readiness reports the mesh runtime and nothing else.
 
 ### Route and A2A Agents
 
-On a route-only (`api`) or A2A agent the check feeds `/health` only. It **never** suppresses the heartbeat and **never** affects `/ready`, which reports whether the mesh runtime is up and nothing else. A gateway is a fan-out point that many requests enter through: withdrawing a provider is correct, withdrawing the gateway takes the application down - and a 503 on `/ready` drops it from its Kubernetes Service endpoints, which takes it down harder. `/health` is where you see what a gateway's check reports. This matches Python, whose API and A2A pipelines have no health-refresh loop at all.
+On a route-only (`api`) or A2A agent the check feeds `/health` only: it **never** suppresses the heartbeat. A gateway is a fan-out point that many requests enter through, so withdrawing a provider is correct while withdrawing the gateway takes the application down. `/health` is where you see what a gateway's check reports. This matches Python, whose API and A2A pipelines have no health-refresh loop at all. `/ready` needs no carve-out any more - it reports the mesh runtime on every agent type.
 
 ## Checking Dependency Health
 

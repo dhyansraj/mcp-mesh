@@ -26,17 +26,24 @@
 #
 # THE VERDICT IS READ FROM /health, NOT FROM THE LOG
 #
-# Since #1478 TypeScript's `/ready` and `/health` are mesh-owned routes that
-# reflect the user health check's verdict, exactly as Python's and Java's do.
-# That is what is asserted here, and it is strictly stronger than the log line
-# it replaced: a runtime that printed `[mesh-health] ... reports UNHEALTHY`
-# while serving a 200 `/ready` would still be shipping the #1478 bug — direct
-# Kubernetes Service traffic keeps arriving at a provider mesh consumers have
-# already abandoned — and the log grep could not see it.
+# Since #1478 TypeScript's `/health` is a mesh-owned route that reflects the
+# user health check's verdict, exactly as Python's and Java's do. That is what
+# is asserted here, and it is strictly stronger than the log line it replaced:
+# a runtime that printed `[mesh-health] ... reports UNHEALTHY` while serving a
+# healthy `/health` body would still be shipping the #1478 bug, and the log
+# grep could not see it.
 #
-# `/ready` is checked by STATUS CODE rather than body text because that is the
-# only thing the kubelet reads: #1468 made the agent chart gate Service
-# endpoints on it, so a 200 here is the outage this test exists to catch.
+# /ready IS ASSERTED TOO, AND IT MUST STAY 200 (RFC #1502)
+#
+# Readiness reports the mesh runtime, not the verdict, on every agent type.
+# The assertion below is not a relaxation of the one it replaces — it is the
+# opposite claim, and it is the one that matters operationally. #1468 made the
+# agent chart gate Service endpoints on `/ready`, and mesh traffic traverses
+# that Service (`advertisedHost` defaults to the per-agent Service DNS name).
+# A 503 during withdrawal empties the endpoints while the registry may still be
+# selecting the agent, so a consumer gets a connection error instead of the
+# failover this test then goes on to verify. Checked by STATUS CODE, because
+# that is the only thing the kubelet reads.
 #
 # The rest of the design (file-toggled flag, poll-for-the-condition rather
 # than fixed waits, provider B as the control) is documented in tc01.
@@ -245,16 +252,21 @@ test:
   # The verdict, read from provider A's own endpoints (#1478) — see the header.
   #
   # `/ready` is captured as a bare status code: `curl -o /dev/null -w` prints
-  # nothing else, so the assertion below matches an exact `READY_HTTP_CODE: 503`
+  # nothing else, so the assertion below matches an exact `READY_HTTP_CODE: 200`
   # rather than a substring that a body could satisfy by accident. `--max-time`
   # on both so a hung server fails the step instead of the whole run.
-  - name: "Phase B: A's own /health and /ready must report the unhealthy verdict, not a crash"
+  - name: "Phase B: A's /health must report the unhealthy verdict while /ready stays 200"
     handler: shell
     workdir: /workspace
     command: |
       echo "HEALTH_BODY: $(curl -s --max-time 5 http://localhost:3421/health || echo 'HEALTH_UNREACHABLE')"
       echo "READY_HTTP_CODE: $(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:3421/ready || echo 'READY_UNREACHABLE')"
-      echo "READY_BODY: $(curl -s --max-time 5 http://localhost:3421/ready || echo 'READY_UNREACHABLE')"
+      READY_BODY=$(curl -s --max-time 5 http://localhost:3421/ready || echo 'READY_UNREACHABLE')
+      echo "READY_BODY: $READY_BODY"
+      # Derived as its own token so the assertion never has to match raw JSON
+      # punctuation through the expression parser. MISSING covers both an
+      # absent key and an unparseable body.
+      echo "READY_FLAG: $(printf '%s' "$READY_BODY" | jq -r '.ready // "MISSING"' 2>/dev/null || echo MISSING)"
     capture: provider_a_health_during_outage
 
   - name: "Phase B: poll until the consumer fails over to provider B"
@@ -399,14 +411,18 @@ assertions:
   - expr: "${captured.provider_a_health_during_outage} not contains 'HEALTH_UNREACHABLE'"
     message: "WITHDRAWAL: provider A's HTTP server must still answer /health while withdrawn — withdrawn is not dead"
 
-  # The Kubernetes half, and the reason #1478 was a bug rather than a cosmetic
-  # gap: #1468 gates Service endpoints on /ready, so a provider that keeps
-  # answering 200 here goes on receiving direct traffic that mesh consumers
-  # have already routed away from.
-  - expr: "${captured.provider_a_health_during_outage} contains 'READY_HTTP_CODE: 503'"
-    message: "WITHDRAWAL: /ready must answer 503 while the health check reports unhealthy — a 200 keeps the pod in the Service and sends direct traffic to a provider the mesh has abandoned"
+  # The Kubernetes half (RFC #1502). Withdrawal is going quiet, not leaving the
+  # Service: #1468 gates Service endpoints on /ready, and mesh traffic arrives
+  # through that Service, so a 503 here would empty the endpoints while the
+  # registry may still be selecting A — turning the failover asserted below
+  # into a connection error. Asserted positively, and with a captured body, so
+  # a runtime that stopped serving /ready altogether cannot satisfy it.
+  - expr: "${captured.provider_a_health_during_outage} contains 'READY_HTTP_CODE: 200'"
+    message: "WITHDRAWAL: /ready must stay 200 while the health check reports unhealthy — readiness reports the mesh runtime, and a 503 would empty the Service endpoints the mesh itself routes through"
+  - expr: "${captured.provider_a_health_during_outage} contains 'READY_FLAG: true'"
+    message: "WITHDRAWAL: /ready's body must say ready — a 200 over a not-ready body would mean the status line and the body disagree"
   - expr: "${captured.provider_a_health_during_outage} not contains 'READY_UNREACHABLE'"
-    message: "WITHDRAWAL: provider A must still answer /ready while withdrawn — an unreachable endpoint is a different failure from an honest 503"
+    message: "WITHDRAWAL: provider A must still answer /ready while withdrawn — an unreachable endpoint is a different failure from an honest answer"
 
   - expr: "${captured.fault_trace} not contains 'FAIL_TICKS: 0'"
     message: "WITHDRAWAL: the health check must have been invoked at least once while the flag said fail"

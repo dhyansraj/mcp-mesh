@@ -469,6 +469,65 @@ def get_cache_stats() -> dict[str, Any]:
 # =============================================================================
 
 
+def _standalone_from_env() -> bool:
+    """Whether MCP_MESH_STANDALONE switches registry communication off.
+
+    Never raises: this feeds a probe response, and a config-resolution error
+    must not turn ``/ready`` into a 500. An unreadable value is treated as
+    "not standalone", which is the mode every deployed agent runs in.
+    """
+    try:
+        from .config_resolver import ValidationRule, get_config_value
+
+        return bool(
+            get_config_value(
+                "MCP_MESH_STANDALONE",
+                default=False,
+                rule=ValidationRule.TRUTHY_RULE,
+            )
+        )
+    except Exception:  # pragma: no cover - defensive
+        return False
+
+
+def runtime_state(standalone: bool | None = None) -> tuple[bool, str]:
+    """Report whether the mesh runtime is up, and in what state.
+
+    This is the ONE definition of "the runtime is up" for every Python probe
+    — the provider endpoints in ``mesh/decorators.py`` and the gateway
+    endpoints in ``pipeline/shared/health_endpoints.py`` both answer
+    ``/ready`` from it. Two copies of the rule is how a gateway and a
+    provider end up disagreeing about what readiness means.
+
+    ``standalone`` mode never starts a Rust core (registry communication is
+    switched off by configuration), so the agent is ready as soon as it
+    serves — the absence of a handle is the configured outcome, not a
+    startup that has not finished. ``None`` reads the environment; the
+    gateway pipeline passes the value it already resolved.
+    """
+    if standalone is None:
+        standalone = _standalone_from_env()
+    if standalone:
+        return True, "standalone"
+
+    from .simple_shutdown import (
+        get_active_rust_agent_handles,
+        should_stop_heartbeat,
+    )
+
+    if should_stop_heartbeat():
+        return False, "shutting_down"
+    if get_active_rust_agent_handles():
+        return True, "up"
+    return False, "starting"
+
+
+NOT_READY_REASON = {
+    "starting": "Mesh runtime has not started yet",
+    "shutting_down": "Mesh runtime is shutting down",
+}
+
+
 def build_health_response(
     agent_name: str,
     health_status: HealthStatus | None = None,
@@ -510,37 +569,35 @@ def build_ready_response(
     """
     Build /ready endpoint response with appropriate HTTP status code.
 
+    Reports whether the **mesh runtime** is up, and nothing else (RFC #1502).
+    The user's ``health_check`` is deliberately NOT consulted here — this is
+    the same rule the gateway pipelines have always applied, now applied to
+    every agent type.
+
+    A failing check pauses the heartbeat, the registry ages the agent out and
+    resolution stops selecting it; that is the whole withdrawal mechanism and
+    it needs no help from the readiness probe. Adding readiness on top is
+    strictly worse: ``agent.advertisedHost`` defaults to the per-agent
+    Service DNS name, so mesh traffic traverses the Service. A 503 here drops
+    the pod from its Service endpoints while the registry may still be
+    selecting it, and a consumer gets a connection error instead of failing
+    over. The verdict still shows on ``/health``, which nothing probes.
+
     Returns:
         Tuple of (response_dict, http_status_code)
     """
-    stored = get_health_check_result()
+    is_ready, state = runtime_state()
 
-    if stored:
-        status = stored.get("status", "starting")
-        if status == "healthy":
-            return {
-                "ready": True,
-                "agent": agent_name,
-                "status": status,
-                "mcp_wrappers": mcp_wrappers_count,
-                "timestamp": datetime.now(UTC).isoformat(),
-            }, 200
-        else:
-            return {
-                "ready": False,
-                "agent": agent_name,
-                "status": status,
-                "reason": f"Service is {status}",
-                "errors": stored.get("errors", []),
-            }, 503
-    else:
-        # No health check configured - assume ready
-        return {
-            "ready": True,
-            "agent": agent_name,
-            "mcp_wrappers": mcp_wrappers_count,
-            "timestamp": datetime.now(UTC).isoformat(),
-        }, 200
+    response: dict[str, Any] = {
+        "ready": is_ready,
+        "agent": agent_name,
+        "runtime": state,
+        "mcp_wrappers": mcp_wrappers_count,
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+    if not is_ready:
+        response["reason"] = NOT_READY_REASON.get(state, f"Mesh runtime is {state}")
+    return response, 200 if is_ready else 503
 
 
 def build_livez_response(agent_name: str) -> dict:

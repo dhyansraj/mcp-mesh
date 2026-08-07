@@ -23,7 +23,10 @@ Semantics (matching TypeScript's ``express.ts`` ``setupHealthEndpoints``):
 
 ``/ready``
     Whether the **mesh runtime** is up — a live Rust core handle exists and
-    shutdown has not been requested — and nothing else.
+    shutdown has not been requested — and nothing else. Since RFC #1502 that
+    is the rule on every agent type, not a gateway carve-out —
+    ``health_check_manager.runtime_state``, imported below, is what a
+    provider's ``build_ready_response`` answers from too.
 
 ``/health``
     The diagnostic view. Always 200; no probe points at it.
@@ -49,6 +52,7 @@ from typing import Any, Optional
 
 from ...shared.config_resolver import ValidationRule, get_config_value
 from ...shared.fastapi_routes import iter_app_routes
+from ...shared.health_check_manager import NOT_READY_REASON, runtime_state
 from ...shared.startup_check_manager import STARTUPZ_PATH
 from .base_step import PipelineStep
 from .pipeline_types import PipelineResult, PipelineStatus
@@ -93,35 +97,6 @@ def _agent_name(default: str = "mcp-mesh-gateway") -> str:
         return config.get("name") or config.get("agent_id") or default
     except Exception:  # pragma: no cover - defensive, name is cosmetic
         return default
-
-
-def runtime_state(standalone: bool = False) -> tuple[bool, str]:
-    """Report whether the mesh runtime is up, and in what state.
-
-    ``standalone`` mode never starts a Rust core (registry communication is
-    switched off by configuration), so the gateway is ready as soon as it
-    serves — the absence of a handle is the configured outcome, not a
-    startup that has not finished.
-    """
-    if standalone:
-        return True, "standalone"
-
-    from ...shared.simple_shutdown import (
-        get_active_rust_agent_handles,
-        should_stop_heartbeat,
-    )
-
-    if should_stop_heartbeat():
-        return False, "shutting_down"
-    if get_active_rust_agent_handles():
-        return True, "up"
-    return False, "starting"
-
-
-_NOT_READY_REASON = {
-    "starting": "Mesh runtime has not started yet",
-    "shutting_down": "Mesh runtime is shutting down",
-}
 
 
 def _find_route(app: Any, path: str) -> Optional[Any]:
@@ -192,7 +167,7 @@ def register_health_endpoints(
             "timestamp": _now(),
         }
         if not is_ready:
-            body["reason"] = _NOT_READY_REASON.get(state, f"Mesh runtime is {state}")
+            body["reason"] = NOT_READY_REASON.get(state, f"Mesh runtime is {state}")
         return JSONResponse(status_code=200 if is_ready else 503, content=body)
 
     async def health():

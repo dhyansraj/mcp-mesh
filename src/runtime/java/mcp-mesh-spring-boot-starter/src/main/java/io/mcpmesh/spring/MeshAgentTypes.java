@@ -8,14 +8,19 @@ import java.util.Set;
 /**
  * The "is this agent a gateway" rule, in ONE place (issue #1488).
  *
- * <p>Two mechanisms act on a failing {@link io.mcpmesh.MeshHealthCheck} — the
- * heartbeat in {@link MeshHealthCheckScheduler} and the readiness probe in
- * {@link MeshHealthController} — and both must exempt the same agent types. When
- * only the scheduler knew the rule, a gateway with a failing check kept
- * heartbeating (correct) but answered 503 on {@code /ready}, so Kubernetes
- * dropped it from its Service endpoints: the same outcome the exemption exists
- * to prevent, reached by another route. Two copies of the rule is how that
- * happens, so there is one.
+ * <p>It now has a single consumer: the heartbeat in
+ * {@link MeshHealthCheckScheduler}. {@link MeshHealthController} was the second
+ * — a gateway with a failing check kept heartbeating (correct) but answered 503
+ * on {@code /ready}, so Kubernetes dropped it from its Service endpoints, the
+ * same outcome the exemption exists to prevent reached by another route. RFC
+ * #1502 closed that route for every agent type rather than for gateways alone:
+ * readiness reports the mesh runtime and never the verdict, so the controller
+ * has no rule to ask about.
+ *
+ * <p>This stays a shared type rather than folding back into the scheduler
+ * because the exemption is a property of the agent type, not of the heartbeat,
+ * and the next mechanism that needs it must find the rule rather than write a
+ * second copy.
  */
 final class MeshAgentTypes {
 
@@ -39,10 +44,6 @@ final class MeshAgentTypes {
 
     static boolean isGateway(String agentType) {
         return GATEWAY_TYPES.contains(agentType);
-    }
-
-    static boolean isGateway(MeshRuntime runtime) {
-        return isGateway(agentTypeOf(runtime));
     }
 
     /**

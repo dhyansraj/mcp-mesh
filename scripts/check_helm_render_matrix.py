@@ -29,15 +29,16 @@ a non-empty render cannot detect.
 
 It may also pin the container probe paths:
 
-  probe_paths={"livenessProbe": "/livez", "readinessProbe": "/ready"}
+  probe_paths={"startupProbe": "/startupz", "livenessProbe": "/livez",
+               "readinessProbe": "/ready"}
 
 Issue #1467: liveness and readiness pointing at the SAME url is the bug —
 a dependency outage that should only make an agent unready instead restarts
 the pod, which cannot fix the dependency and launders the failing agent back
 into resolution. A values default is one careless edit away from collapsing
 back, and every render stays green when it does. Declaring the paths makes
-that edit fail here. Two probes sharing a path is additionally rejected
-outright, whatever the declared paths were.
+that edit fail here. Two declared probes sharing a path is additionally
+rejected outright, whatever the declared paths were.
 
 Usage: python3 scripts/check_helm_render_matrix.py  (run from anywhere)
 Exit code 0 = every case behaved as declared.
@@ -361,16 +362,29 @@ CASES: list[Case] = [
         "the v2.4.0 agent.environment defaults verbatim",
         {"agent": {"environment": dict(V240_AGENT_ENVIRONMENT)}},
     ),
-    # --- mcp-mesh-agent: liveness and readiness are different URLs --------
-    # Issue #1467. Liveness may only fail for something a restart can fix;
-    # /ready is what an unhealthy dependency is allowed to fail. The startup
-    # probe restarts the container too, so it gates on /livez as well.
+    # --- mcp-mesh-agent: every probe is a different URL --------------------
+    # Issues #1467/#1468: liveness may only fail for something a restart can
+    # fix, so it points at /livez — the process is serving, and nothing else.
+    # A liveness probe that consults a dependency restarts the pod for an
+    # outage a restart cannot fix, then launders the still-failing agent back
+    # into resolution. That history is why liveness must never grow a
+    # dependency check.
+    #
+    # RFC #1502 split the other two apart. /ready reports whether the mesh
+    # runtime is up and never carries the user's health verdict: a dependency
+    # outage now fails NO probe: it pauses the heartbeat, the registry ages
+    # the agent out and routing moves. /startupz is the fatal-configuration
+    # check, and it gets the startup probe because that probe also restarts
+    # the container — an agent that can never serve (unusable config, missing
+    # credential) is held in CrashLoopBackOff where the cause is visible,
+    # rather than coming up and registering broken. The verdict itself is
+    # served at /health, which no probe reads.
     Case(
         "mcp-mesh-agent",
         "probes at the shipped defaults point at distinct endpoints",
         {},
         probe_paths={
-            "startupProbe": "/livez",
+            "startupProbe": "/startupz",
             "livenessProbe": "/livez",
             "readinessProbe": "/ready",
         },
@@ -451,9 +465,12 @@ def run_case(case: Case, values_file: Path) -> str | None:
 def _check_probe_paths(manifests: str, expected: dict[str, str]) -> str | None:
     """Assert every workload container's probes use the declared httpGet paths.
 
-    Also rejects two probes sharing one path regardless of what was declared —
-    the invariant behind issue #1467 is that liveness (restart) and readiness
-    (stop routing) can never be the same signal.
+    Also rejects two declared probes sharing one path regardless of what was
+    declared — the invariant behind issues #1467/#1468 and RFC #1502 is that
+    startup (restart before serving), liveness (restart) and readiness (stop
+    routing) are three different failure actions and can never be one signal.
+    Matching three distinct literals already implies this today; asserting it
+    separately is what keeps the claim true if the literals are ever edited.
     """
     containers = [
         container
@@ -484,6 +501,18 @@ def _check_probe_paths(manifests: str, expected: dict[str, str]) -> str | None:
                 f"at the same path {liveness!r} — a dependency outage would "
                 "restart the pod instead of only taking it out of rotation"
             )
+        seen: dict[str, str] = {}
+        for probe in expected:
+            path = container.get(probe, {}).get("httpGet", {}).get("path")
+            if path is None:
+                continue
+            if path in seen:
+                return (
+                    f"container {container['name']!r} probes {seen[path]} and "
+                    f"{probe} at the same path {path!r} — each probe has its "
+                    "own failure action and needs its own endpoint"
+                )
+            seen[path] = probe
     return None
 
 

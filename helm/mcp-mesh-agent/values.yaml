@@ -311,38 +311,51 @@ agentCode:
 
 # Health probe configurations.
 #
-# Liveness and readiness MUST NOT share a URL (issue #1467). Every mesh
-# runtime serves three endpoints with three different meanings:
+# Every probe MUST have its own URL (issue #1467, RFC #1502). Each mesh
+# runtime serves four endpoints with four different meanings:
 #
-#   /livez   always 200 while the process is serving. Nothing else.
-#   /ready   should traffic be routed here? All three runtimes consult
-#            the user's health check (Python #1472, Java #1474,
-#            TypeScript #1478), so an upstream vendor outage takes the
-#            pod out of the Service. The same verdict separately stops
-#            the heartbeat, and THAT is what evicts the agent from mesh
-#            resolution — the registry never reads this probe.
-#   /health  the diagnostic view for humans and `kubectl exec` curls.
-#            No probe points at it: it carries no consequence of its own.
+#   /startupz  the agent's `startup_check` — "is this configured such
+#              that it can EVER serve". Defaults to passing, so an agent
+#              that declares none is unaffected. A check that never
+#              passes keeps the pod from becoming ready and lands it in
+#              CrashLoopBackOff, where a wrong API key is visible instead
+#              of looking like a vendor outage.
+#   /livez     always 200 while the process is serving. Nothing else.
+#   /ready     is the mesh runtime up? The user's health check does NOT
+#              reach this probe. A failing check pauses the heartbeat,
+#              the registry ages the agent out and resolution stops
+#              selecting it — that is the whole withdrawal mechanism, and
+#              the registry never reads this probe.
+#   /health    the diagnostic view for humans and `kubectl exec` curls.
+#              It DOES carry the health check's verdict, `checks` and
+#              `errors`, and answers 503 when the verdict is not healthy.
+#              No probe points at it, so that status code is free to
+#              carry information.
 #
-# When liveness also pointed at /health, an upstream outage failed the
+# Readiness is deliberately NOT wired to the health check. `agent.advertisedHost`
+# defaults to the per-agent Service DNS name and this chart ships a
+# service.yaml, so mesh traffic traverses the Service. A 503 here empties
+# the Service endpoints while the registry may still be selecting the
+# agent, and the consumer gets a connection error instead of failing over
+# to another provider. Withdrawal without readiness removal is safe; the
+# reverse is not.
+#
+# When liveness pointed at /health, an upstream outage failed the
 # LIVENESS probe and Kubernetes restarted the pod. A restart cannot fix
 # someone else's API, and it erases the only state that knew this
 # provider was failing — the agent re-registers as healthy, consumers
-# route back to it, it fails again, forever. Readiness is the probe
-# whose remedy (stop sending traffic) matches that cause.
+# route back to it, it fails again, forever.
 #
-# The same reasoning applies to the startup probe: its failure action is
-# also a container restart, so gating startup on /health meant an agent
-# that booted DURING an outage never became "started" and was killed
-# after failureThreshold × periodSeconds — reproducing the same loop on
-# a slower cadence. It gates on /livez instead; readiness still governs
-# traffic, and an agent stuck mid-boot stays visible as 0/1 READY rather
-# than flapping through CrashLoopBackOff.
+# The startup probe has the same failure action, which is why it points
+# at /startupz and not at /health or /ready: a check reached from there
+# would kill an agent that booted DURING an outage. /startupz is the one
+# check whose failure a restart-and-fix loop is the right response to,
+# and it runs once rather than every ten seconds forever.
 #
 # Do not collapse these back onto one path.
 startupProbe:
   httpGet:
-    path: /livez
+    path: /startupz
     port: http
   initialDelaySeconds: 5
   periodSeconds: 10
