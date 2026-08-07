@@ -53,7 +53,7 @@ services:
       - mcp-mesh-llm-delegation-test
 
   registry:
-    image: mcpmesh/registry:3.5.2
+    image: mcpmesh/registry:3.6.0
     container_name: mcp-mesh-registry-llm-delegation-test
     ports:
       - "8002:8000"
@@ -78,7 +78,7 @@ services:
 
   # Test PT-008: LLM Provider Registration
   test-pt-008-provider:
-    image: mcpmesh/python-runtime:3.5.2
+    image: mcpmesh/python-runtime:3.6.0
     container_name: mcp-mesh-test-pt-008-provider
     profiles:
       - test-pt-008
@@ -116,7 +116,7 @@ services:
 
   # Test PT-009: Basic Mesh Delegation - Provider
   test-pt-009-provider:
-    image: mcpmesh/python-runtime:3.5.2
+    image: mcpmesh/python-runtime:3.6.0
     container_name: mcp-mesh-test-pt-009-provider
     profiles:
       - test-pt-009
@@ -154,7 +154,7 @@ services:
 
   # Test PT-009: Basic Mesh Delegation - Consumer
   test-pt-009-consumer:
-    image: mcpmesh/python-runtime:3.5.2
+    image: mcpmesh/python-runtime:3.6.0
     container_name: mcp-mesh-test-pt-009-consumer
     profiles:
       - test-pt-009

@@ -1,6 +1,51 @@
 # MCP Mesh Release Notes
 
-[Unreleased changes](https://github.com/dhyansraj/mcp-mesh/compare/v3.5.2...HEAD)
+[Unreleased changes](https://github.com/dhyansraj/mcp-mesh/compare/v3.6.0...HEAD)
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.5.2...v3.6.0)
+
+## v3.6.0 (2026-08-07)
+
+A minor release with one breaking change, and it is the point of the release: mesh health and Kubernetes probes are now separate hooks wired to separate consumers. Mesh employs only healthy workers; Kubernetes keeps the sick and kills only the dead. A failing `health_check` pauses the heartbeat so the registry ages the agent out and consumers rewire — the process keeps running and returns on its own when the check passes, and Kubernetes never restarts it for a dependency outage. The new `startup_check` hook carries the other case, a configuration that will never work, and makes it visible instead of leaving a misconfigured agent indistinguishable from one waiting out an outage. RFC #1502 has the full design. No wire-protocol, registry-schema or dependency-resolution changes, and the only declaration-syntax change is the additive, opt-in `startup_check`.
+
+> **⚠️ The chart and the runtime images must move together.** The agent chart's `startupProbe` now asks for `/startupz`, which only a 3.6.0 image serves. `/ready` no longer reflects the health verdict, and a TypeScript gateway's previously-ignored `healthCheck` now takes effect. All in Notes.
+
+### 🩺 Health hooks and probes
+
+- **`startup_check` is a new hook, served at a new `/startupz` endpoint, in all three runtimes (#1503).** It answers "can this agent ever serve" — a missing or rejected credential — where `health_check` answers "can I serve right now". It defaults to passing, so an agent that declares none is unaffected, and a check that throws fails closed: an indeterminate answer at boot is not a reason to admit a possibly-misconfigured agent.
+- **⚠️ `/ready` reports whether the mesh runtime is up, never the user's health verdict, on every agent type (#1505).** Mesh traffic traverses the per-agent Service, so a readiness 503 empties the Service endpoints while the registry may still be selecting the agent — the consumer gets a connection error instead of failing over. Heartbeat suppression already stops the traffic that matters; readiness removal on top of it is strictly worse. Breaking, see Notes.
+- **The chart's `startupProbe` moves from `/livez` to `/startupz` (#1505).** It is the one check a restart-and-fix loop is the right response to, and it runs once rather than every ten seconds forever. Liveness stays unconditional on `/livez` and readiness stays on `/ready`.
+- **`@mesh.route` and A2A agents honour a declared health check (#1507).** This reverses the 3.5.2 exemption, which existed because withdrawing a fan-out point took the application down — making readiness unconditional removed that harm. A gateway that reports unavailable stops being *discovered*: its HTTP server keeps running, resolved dependencies are retained, readiness stays 200, and it keeps taking ingress.
+- **A gateway's `/health` reports the verdict on Python and TypeScript**, where it was a fixed 200 (#1507). `/health` remains the diagnostic view — it carries the verdict, `checks` and `errors`, and answers 503 when the verdict is not healthy — and no probe points at it, which is what leaves that status code free to carry information.
+- **A Python `@mesh.route` or A2A agent has no way to declare either hook (#1506, closed as by design).** Both are `@mesh.agent` arguments, and `@mesh.agent` cannot share a process with `@mesh.route`/`@mesh.a2a`. The Python runtime is wired end to end; only the declaration surface is missing. TypeScript declares both on `MeshExpressConfig` and Java on any bean.
+
+### 🛠 Scaffold
+
+- **Every scaffolded agent carries both hooks with default-true implementations (#1508)**, alongside a comment explaining which one controls mesh routing and which one controls whether the pod comes up at all. The Python and TypeScript `api` templates are exempt for the declaration-surface reasons above and generate boot-time config validation instead.
+- **The big-3 `llm-provider` templates generate real startup checks (#1508).** A missing key fails locally with no network and a rejected credential fails; any other answered status, and an unreachable vendor, pass startup and fall through to `health_check`. Gateway-prefixed models get a skeleton naming no vendor credential.
+- **Two templates that could not work are fixed (#1508).** The Java `api` scaffold did not boot — its generated controller mapped `/health`, colliding with the mesh health controller — and the TypeScript `api` scaffold 404'd every probe its own `helm-values.yaml` wires, because a bare `mesh.route()` app mounts no probe endpoints.
+
+### 📚 Docs and examples
+
+- **The Kubernetes probe contract is stated on all three deployment man pages, for anyone writing their own manifests (#1501).** The rule — never point a restart-capable probe at an endpoint that consults a dependency — previously existed only on a concepts page, closing with a sentence that told hand-rolling readers the problem belonged to someone else. A false claim that Spring Boot agents expose `/actuator/health` was corrected on the Java pages.
+- **The tutorial no longer teaches that Kubernetes restarts an unhealthy agent (#1510).** It also wired liveness and readiness to `/health`, both false since 3.5.1. An unhealthy agent's heartbeat pauses, the registry ages it out, and the pod keeps running and rejoins on its own once the check passes.
+- **The agent OpenAPI spec gains `/startupz` and is corrected in four places (#1508)**, including a `/livez` documented as `text/plain` with a 503 branch it has never had.
+- **A Kimi (Moonshot) media LLM provider example (#1512).** The first example pointing a provider at an OpenAI-compatible third-party endpoint — `base_url` and `api_key` overrides on `@mesh.llm_provider` are the whole pattern — and it exercises the media resolver against a vision-capable model. Its docstring records a reasoning-model trap where a small `max_tokens` returns empty content with no error.
+
+### 🔧 Maintenance
+
+- **The Python quality gate runs again, and can now fail (#1513).** Both jobs had been pinned to `if: false` since 2025; formatting is consolidated on ruff, the never-passing type-check job is removed, and the aggregate status check — which omitted the linter from its failure condition — now fails when the linter does. The shipped `mesh/` package is in scope for the first time.
+- **Scalar-to-list leniency now recognises the PEP 604 spelling (#1513).** `list[str] | None` has origin `types.UnionType` rather than `typing.Union`, so the leniency added in #1142 silently applied only to `Optional[list[str]]`. Both spellings now behave identically.
+
+### ⚠️ Notes
+
+- **⚠️ Upgrade the agent chart and your runtime images together.** The 3.6.0 chart points `startupProbe` at `/startupz`, and no image before 3.6.0 serves it — the probe 404s and the kubelet restarts an agent that is perfectly healthy. Nothing in the chart can detect the image version, so stage this as one operation: build the image against the 3.6.0 runtime and deploy it with the 3.6.0 chart.
+- **⚠️ `/ready` no longer diverts Service traffic during a dependency outage.** If you relied on a failing provider leaving its Service endpoints — behaviour Python and Java have had for several releases and TypeScript gained in 3.5.2 — that is deliberately gone. Withdrawal from mesh resolution is the mechanism now, and it is what consumers actually follow.
+- **⚠️ The Python and TypeScript `/ready` body changes shape.** It reports `runtime` in place of `status` and `errors`. Anything parsing that response breaks; a check on the HTTP status still works.
+- **⚠️ Repoint the probes in hand-rolled manifests.** `startupProbe` at `/startupz`, `livenessProbe` at `/livez`, `readinessProbe` at `/ready`, and nothing at `/health` — a `livenessProbe` on `/health` restarts the pod for the whole duration of a dependency outage, and a `startupProbe` on `/ready` or `/health` CrashLoops an agent that boots during one. `/startupz` is opt-in for hand-rolled manifests and `/livez` still answers 200 unconditionally, so a manifest you never change keeps working as it does today.
+- **⚠️ A TypeScript gateway's `healthCheck` now takes effect.** `MeshExpress` previously logged that it was ignored, so one left in place was harmless; it can now pause the gateway's heartbeat and remove it from discovery. Review any gateway that declares one before upgrading. Java and Python gateways honour it too, and agents with no check are unaffected on every runtime.
+- **Regenerating a scaffold adds both hooks to the generated agent.** They default to passing, so there is no behaviour change — except on a big-3 `llm-provider`, whose generated `startup_check` fails the startup probe when the vendor key is missing or rejected. That is the intent: a wrong key should CrashLoop visibly rather than register and fail on the first call.
+- **No wire-protocol, registry-schema or dependency-resolution changes.** `health_check` keeps its name, signature and semantics in every runtime, and `startup_check` is additive with a default that passes.
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.5.1...v3.5.2)
 

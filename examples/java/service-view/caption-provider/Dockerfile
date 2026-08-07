@@ -1,5 +1,5 @@
 # Dockerfile for caption-provider MCP Mesh agent (Java/Spring Boot)
-FROM mcpmesh/java-runtime:3.5.2
+FROM mcpmesh/java-runtime:3.6.0
 
 WORKDIR /app
 
