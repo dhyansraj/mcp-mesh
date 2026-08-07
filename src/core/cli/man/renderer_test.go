@@ -270,10 +270,36 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // carve-out paragraph follows the endpoint list: the exception 5
 // (`@mesh.route`, `@mesh.a2a`, `health_check`, `/ready`, `/health`) = 5. It is
 // prose, not a bullet, so the two list goldens hold.
+// RFC #1502 step 2 follow-up: +2 / +3 / +1, split between `deployment.md`
+// (+1 / +3 / +1) and `health.md` (+1 / +0 / +0). `/ready` stopped reflecting
+// the health verdict on every agent type and the chart repointed
+// `startupProbe` from `/livez` to `/startupz`, so both pages described
+// behaviour the runtimes no longer have.
+//
+// `deployment.md`: the endpoint list goes from three bullets to four — the new
+// `/startupz` bullet is 3 spans (`/startupz`, `startupProbe`, `startup_check`)
+// and the `/livez` bullet loses `startupProbe`, which is the whole +2 on the
+// list goldens and the +1 markup list line. The rewritten `/ready` and
+// `/health` bullets swap spans one-for-one. In prose, the two "never point
+// liveness at" sentences shed `/ready` and `health_check` and the closing
+// diagnostic sentence gains `health_check` back, netting 0; the `startupProbe:
+// /ready` bullet gains `/startupz`, which is the remaining +1 on both the
+// inline and list goldens. The stanza's `path:` change is fenced, so it
+// contributes nothing.
+//
+// `health.md`: the two sentences that said a failing check 503s `/ready` are
+// rewritten to say it 503s `/health` alone. Both swap spans one-for-one except
+// the `degraded` sentence, which gains one `/health` explaining why the
+// diagnostic endpoint is free to carry a status code — the single inline span.
+// Prose throughout, so its list goldens hold.
+//
+// The `_java` and `_typescript` variants of both pages were rewritten the same
+// way and, as ever, move nothing here: these constants sample the default
+// variant alone, so a review of those files cannot lean on this test.
 const (
-	wantInlineCodeSpans = 1744
-	wantListCodeSpans   = 519
-	wantMarkupListLines = 447
+	wantInlineCodeSpans = 1746
+	wantListCodeSpans   = 522
+	wantMarkupListLines = 448
 )
 
 // assertCorpusSize replaces the t.Logf these tests used to end on.

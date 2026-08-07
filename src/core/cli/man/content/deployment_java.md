@@ -271,13 +271,14 @@ The Helm chart sets `MCP_MESH_HTTP_PORT=8080` which overrides `@MeshAgent(port =
 
 Spring Actuator is not a starter dependency, and mesh contributes nothing to it. If your application adds Actuator itself, `/actuator/health` aggregates every registered indicator - datasource, disk, mail - so it is not a substitute for `/ready`: gating mesh traffic on it gates on conditions the agent's author never intended to affect routing.
 
-The starter serves the three mesh endpoints, and Kubernetes probes must not share one:
+The starter serves the four mesh endpoints, and Kubernetes probes must not share one:
 
-- `/livez` - `livenessProbe` and `startupProbe`. 200 for as long as the process is serving; consults nothing else.
-- `/ready` - `readinessProbe`. Whether traffic should be routed here; reflects your `@MeshHealthCheck` on top of the mesh runtime state, except on a route-only (`api`) or A2A agent, where only the runtime state counts.
-- `/health` - no probe. The `/ready` signal plus the `checks` and `errors` your check returned - except on a route-only (`api`) or A2A agent, where `/ready` ignores the check but `/health` still reports its verdict.
+- `/startupz` - `startupProbe`. Reports your `@MeshStartupCheck`; an agent that declares none passes.
+- `/livez` - `livenessProbe`. 200 for as long as the process is serving; consults nothing else.
+- `/ready` - `readinessProbe`. Whether the mesh runtime is up, on every agent type. Your `@MeshHealthCheck` does not reach it: a failing check pauses the heartbeat and the registry stops resolving to this agent, which is the whole withdrawal, and a 503 here would also empty the Service that mesh traffic arrives on.
+- `/health` - no probe. Your check's verdict plus the `checks` and `errors` it returned, 503 while the verdict is not healthy.
 
-Both `/health` and `/ready` answer 503 until the mesh runtime is up, so pointing liveness or startup at either restarts pods that are merely still booting. Probe Wiring below has the manifest.
+Both `/health` and `/ready` answer 503 until the mesh runtime is up - it starts late in the Spring lifecycle - so pointing liveness at either restarts pods that are merely still booting. Probe Wiring below has the manifest.
 
 Annotate one no-argument method with `@MeshHealthCheck` to say what "ready" means for this agent:
 
@@ -294,7 +295,7 @@ public MeshHealth healthCheck() {
 
 While the check returns unhealthy the agent stops heartbeating, the registry withdraws it, and consumers resolve to another provider - restored automatically when the check passes, with no restart. Returning `boolean` works too: `true` is healthy, `false` unhealthy. A check that throws is recorded as `degraded` and keeps heartbeating, so a bug in the check cannot take a working agent out of the mesh. `MCP_MESH_HEALTH_CHECK_TTL` overrides `ttlSeconds`.
 
-Route-only (`api`) and A2A agents are the exception: their check feeds `/health` only - it never suppresses the heartbeat and never makes `/ready` answer 503. A gateway is a fan-out point, and taking it out of rotation takes the application down.
+Route-only (`api`) and A2A agents are the exception on the heartbeat: their check feeds `/health` only and never suppresses it. A gateway is a fan-out point, and taking it out of rotation takes the application down. `/ready` was already exempt on those types and is now exempt on every type.
 
 ### Probe Wiring
 
@@ -303,7 +304,7 @@ The agent chart already wires all three. If you write your own Deployment, wire 
 ```yaml
 startupProbe:
   httpGet:
-    path: /livez
+    path: /startupz
     port: 8080
   periodSeconds: 10
   failureThreshold: 30
@@ -326,11 +327,11 @@ readinessProbe:
 Never point `livenessProbe` or `startupProbe` at `/ready` or `/health`. The failure action of both probes is a container restart, and a restart cannot fix what either endpoint reports:
 
 - `livenessProbe: /health` - a dependency outage answers 503, the default `failureThreshold` of three kills the pod, and the replacement finds the same dependency still down.
-- `startupProbe: /ready` - the mesh runtime starts late in the Spring lifecycle, so this gates "started" on something that is not up yet, and during an outage `@MeshHealthCheck` keeps it failing. The probe never succeeds and the pod CrashLoops instead of starting and reporting unready - precisely when you want the agent up and withdrawn rather than dead.
+- `startupProbe: /ready` - readiness reports the mesh runtime, not whether this agent has finished starting, and it goes down again on every shutdown. `/startupz` is the endpoint whose failure a restart is the right response to, and unlike `/ready` it is not gated on a runtime that starts late in the Spring lifecycle.
 
 `/actuator/health` is not an option either, for the reason above: a liveness probe pointed there restarts the pod for whatever an unrelated indicator reports.
 
-Nothing probes `/health`. It is the diagnostic view: curl it from `kubectl exec` to see the `checks` and `errors` behind an unready pod.
+Nothing probes `/health`. It is the diagnostic view: curl it from `kubectl exec` to see the `checks` and `errors` behind a `@MeshHealthCheck` that has withdrawn an agent.
 
 ### Graceful Shutdown
 

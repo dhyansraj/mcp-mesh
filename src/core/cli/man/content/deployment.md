@@ -364,15 +364,16 @@ class MyAgent:
     pass
 ```
 
-Every runtime serves three endpoints, and Kubernetes probes must not share one:
+Every runtime serves four endpoints, and Kubernetes probes must not share one:
 
-- `/livez` - `livenessProbe` and `startupProbe`. 200 for as long as the process is serving; consults nothing else.
-- `/ready` - `readinessProbe`. Whether traffic should be routed here; reflects your `health_check` on a provider agent.
-- `/health` - no probe. The diagnostic view: the `/ready` signal plus `checks` and `errors`.
+- `/startupz` - `startupProbe`. Reports your `startup_check`; an agent that declares none passes.
+- `/livez` - `livenessProbe`. 200 for as long as the process is serving; consults nothing else.
+- `/ready` - `readinessProbe`. Whether the mesh runtime is up. Your `health_check` does not reach it: a failing check pauses the heartbeat and the registry stops resolving to this agent, which is the whole withdrawal, and a 503 here would also empty the Service that mesh traffic arrives on.
+- `/health` - no probe. The diagnostic view: your `health_check`'s verdict plus its `checks` and `errors`, 503 while the verdict is not healthy.
 
-Pointing liveness or startup at `/health` or `/ready` turns an upstream outage into a pod restart, which cannot fix the outage. Probe Wiring below has the manifest.
+Pointing liveness at `/health` turns an upstream outage into a pod restart, which cannot fix the outage. Probe Wiring below has the manifest.
 
-Route (`@mesh.route`) and A2A (`@mesh.a2a`) agents are the exception: they never run `health_check`, and their `/ready` reports only whether the mesh runtime is up while `/health` stays 200. A gateway is a fan-out point, and withdrawing it takes the application down. Mesh registers the three paths on the gateway's own FastAPI app, and a path your application already defines wins.
+Route (`@mesh.route`) and A2A (`@mesh.a2a`) agents never run `health_check` at all, so their `/health` stays 200. A gateway is a fan-out point, and withdrawing it takes the application down. Mesh registers the four paths on the gateway's own FastAPI app, and a path your application already defines wins.
 
 ### Probe Wiring
 
@@ -381,7 +382,7 @@ The agent chart already wires all three. If you write your own Deployment, wire 
 ```yaml
 startupProbe:
   httpGet:
-    path: /livez
+    path: /startupz
     port: 8080
   periodSeconds: 10
   failureThreshold: 30
@@ -401,12 +402,12 @@ readinessProbe:
   failureThreshold: 3
 ```
 
-Never point `livenessProbe` or `startupProbe` at `/ready` or `/health`. Both reflect a provider agent's `health_check`, and the failure action of both probes is a container restart:
+Never point `livenessProbe` or `startupProbe` at `/health` or `/ready`. The failure action of both probes is a container restart, and a restart cannot fix what either endpoint reports:
 
 - `livenessProbe: /health` - a dependency outage answers 503, the default `failureThreshold` of three kills the pod, and the replacement finds the same dependency still down. The pod restarts for as long as the outage lasts.
-- `startupProbe: /ready` - fires only during an outage, when the check is already failing at boot. The probe never succeeds, so the pod CrashLoops instead of starting and reporting unready - precisely when you want the agent up and withdrawn rather than dead.
+- `startupProbe: /ready` - readiness reports the mesh runtime, not whether this agent has finished starting, and it goes down again on every shutdown. `/startupz` is the endpoint whose failure a restart is the right response to.
 
-Nothing probes `/health`. It is the diagnostic view: curl it from `kubectl exec` to see the `checks` and `errors` behind an unready pod.
+Nothing probes `/health`. It is the diagnostic view: curl it from `kubectl exec` to see the `checks` and `errors` behind a `health_check` that has withdrawn an agent.
 
 ### Resource Limits
 

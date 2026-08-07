@@ -21,9 +21,9 @@ import java.util.Map;
  *
  * <p>Unlike Python and TypeScript, which serve their provider and gateway
  * probes from two different places, Java serves every agent type from this one
- * controller — the starter mounts it whatever the agent is. Where the other two
- * runtimes have to keep two sites in step, the per-agent-type rules here are
- * expressed as branches ({@link #readyStatus}) instead.
+ * controller — the starter mounts it whatever the agent is. Since RFC #1502
+ * every endpoint here answers the same way for every agent type, so there is
+ * nothing left for the other two runtimes to keep in step with either.
  *
  * <p>Liveness and readiness are deliberately DIFFERENT endpoints (issue #1467).
  * When both probes share a URL, anything that makes an agent unready also makes
@@ -32,18 +32,33 @@ import java.util.Map;
  * 200 unconditionally, while {@code /ready} reports whether the agent should be
  * receiving traffic.
  *
- * <p>Since issue #1474 {@code /ready} also reflects the user's
- * {@link io.mcpmesh.MeshHealthCheck}, and {@code /health} carries its
- * {@code checks} and {@code errors} so an operator can see WHICH probe failed.
- * The runtime state remains the floor: an agent whose mesh runtime is not up is
- * not ready regardless of what the user's check says.
+ * <p>{@code /ready} reports whether the mesh runtime is up, on every agent type
+ * (RFC #1502). The user's {@link io.mcpmesh.MeshHealthCheck} does NOT reach it.
+ * A failing check already withdraws the agent by pausing the heartbeat — the
+ * registry ages it out and resolution stops selecting it — and answering 503
+ * here as well is not defence in depth but a regression: mesh traffic traverses
+ * the Kubernetes Service, so emptying the Service endpoints while the registry
+ * may still be selecting the agent turns a consumer's failover into a
+ * connection error.
  *
- * <p>On a gateway ({@link MeshAgentTypes#isGateway}) the verdict does NOT reach
- * {@code /ready} (issue #1488): readiness there reports only whether the mesh
- * runtime is up, exactly as Python's {@code build_ready_response} and
- * TypeScript's {@code express.ts} do. The verdict still shows on {@code /health}
- * — nothing probes it, so it costs nothing and it is where an operator can see
- * what a gateway's check reports.
+ * <p>Readiness is not unconditional either. {@link io.mcpmesh.MeshStartupCheck}
+ * defaults to passing, so {@code /startupz} answers 200 before the mesh runtime
+ * has started in the Spring lifecycle; without the runtime floor a pod could go
+ * Ready with no runtime behind it. The floor is also the only probe that can
+ * notice a runtime that dies while the JVM lives, since {@code /livez} consults
+ * nothing.
+ *
+ * <p>This subsumes #1488's gateway carve-out: readiness now reports the runtime
+ * on a gateway and on a provider alike, so there is no longer a branch to take.
+ * {@link MeshAgentTypes} still carries the rule for the heartbeat
+ * ({@link MeshHealthCheckScheduler}), which is where the route/A2A exemption
+ * actually lives.
+ *
+ * <p>{@code /health} is unchanged: it carries the verdict, its {@code checks}
+ * and its {@code errors}, and answers 503 when the verdict is not healthy.
+ * Nothing probes it, so its status code is free to carry information — which
+ * means {@code /ready} and {@code /health} now diverge on every agent type, by
+ * design.
  */
 @Controller
 public class MeshHealthController {
@@ -87,25 +102,19 @@ public class MeshHealthController {
     }
 
     /**
-     * The readiness verdict: the effective status, except on a gateway, where
-     * the user's check is ignored and only the runtime floor applies.
+     * The readiness verdict: the mesh runtime state, and nothing else (RFC
+     * #1502).
      *
-     * <p>A route ({@code api}) or A2A agent is exempt from withdrawal by its own
-     * check — {@link MeshAgentTypes} carries that rule for both this controller
-     * and {@link MeshHealthCheckScheduler}. Answering 503 here would evade the
-     * exemption: the chart's readiness probe points at {@code /ready}, so a 503
-     * drops the gateway from its Kubernetes Service endpoints, which takes the
-     * application down harder than withdrawing it from dependency resolution
-     * would have. The runtime floor still applies — a gateway whose mesh runtime
-     * is not up genuinely cannot serve.
+     * <p>Takes no {@link MeshHealth} argument on purpose. A parameter the method
+     * ignores is an invitation to start consulting it again, and the whole point
+     * of this change is that the user's check has no path to the readiness
+     * probe. See the class comment for why 503-ing readiness on a failing check
+     * makes an outage worse rather than safer.
      */
-    private MeshHealthStatus readyStatus(MeshHealth latest) {
-        if (MeshAgentTypes.isGateway(runtime)) {
-            return runtime != null && runtime.isRunning()
-                ? MeshHealthStatus.HEALTHY
-                : MeshHealthStatus.UNHEALTHY;
-        }
-        return effectiveStatus(latest);
+    private MeshHealthStatus readyStatus() {
+        return runtime != null && runtime.isRunning()
+            ? MeshHealthStatus.HEALTHY
+            : MeshHealthStatus.UNHEALTHY;
     }
 
     /**
@@ -126,18 +135,16 @@ public class MeshHealthController {
     }
 
     /**
-     * Whether the probes answer 200. Only {@link MeshHealthStatus#HEALTHY}
-     * does — exactly Python's {@code build_health_response} /
-     * {@code build_ready_response}, which are {@code 200 if status ==
-     * "healthy" else 503}.
+     * Whether a status maps to 200. Only {@link MeshHealthStatus#HEALTHY} does —
+     * exactly Python's {@code build_health_response}, which is {@code 200 if
+     * status == "healthy" else 503}.
      *
-     * <p>So {@code degraded} answers 503 here while the agent keeps
-     * heartbeating and stays in dependency resolution. That asymmetry is
-     * Python's and is deliberate on both sides: readiness is a load-balancer
-     * decision about NEW external traffic, while the heartbeat is a statement
-     * about whether this agent is still a valid provider for the mesh. An
-     * impaired agent can honestly answer "stop adding load" without also
-     * withdrawing itself from a mesh that may have no other provider.
+     * <p>So {@code degraded} answers 503 on {@code /health} while the agent
+     * keeps heartbeating and stays in dependency resolution. Nothing probes
+     * {@code /health}, so its status code is free to carry the verdict. The
+     * probe the kubelet actually reads is {@code /ready}, and the only statuses
+     * that reach this from there are the two {@link #readyStatus} produces from
+     * the runtime state.
      */
     private static boolean serving(MeshHealthStatus status) {
         return status == MeshHealthStatus.HEALTHY;
@@ -170,29 +177,21 @@ public class MeshHealthController {
     /**
      * Kubernetes readiness probe.
      *
-     * <p>Reports whether traffic should be routed here: the mesh runtime is up
-     * AND the user's {@link io.mcpmesh.MeshHealthCheck} (if any) is not
-     * reporting unhealthy — except on a gateway, where only the runtime counts
-     * (see {@link #readyStatus}). It does NOT restart anything — see the class
-     * comment on why this is a separate endpoint from {@code /livez}.
+     * <p>Reports whether the mesh runtime is up, and nothing else (see
+     * {@link #readyStatus}). It does NOT restart anything — see the class
+     * comment on why this is a separate endpoint from {@code /livez}, and on why
+     * the user's health check reaches {@code /health} but not this.
      */
     @GetMapping("/ready")
     public ResponseEntity<Map<String, Object>> ready() {
-        boolean running = runtime != null && runtime.isRunning();
-        MeshHealth latest = healthOf(latestResult());
-        MeshHealthStatus status = readyStatus(latest);
+        MeshHealthStatus status = readyStatus();
         boolean ready = serving(status);
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("ready", ready);
         body.put("status", status.wireValue());
         if (!ready) {
-            body.put("reason", running
-                ? "service is " + status.wireValue()
-                : "mesh runtime is not running");
-            if (latest != null && !latest.errors().isEmpty()) {
-                body.put("errors", latest.errors());
-            }
+            body.put("reason", "mesh runtime is not running");
         }
         return ResponseEntity.status(ready ? 200 : 503).body(body);
     }
@@ -201,8 +200,7 @@ public class MeshHealthController {
     public ResponseEntity<Void> readyHead() {
         // Same verdict as GET — a HEAD probe that disagreed with the GET would
         // be the #1488 bug again for anyone who configured HEAD.
-        return ResponseEntity.status(
-            serving(readyStatus(healthOf(latestResult()))) ? 200 : 503).build();
+        return ResponseEntity.status(serving(readyStatus()) ? 200 : 503).build();
     }
 
     /**

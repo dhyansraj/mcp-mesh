@@ -93,8 +93,8 @@ def declared_health_check(monkeypatch):
 
     Both of the things a health check produces: the callable itself (which must
     never be invoked from these endpoints) and the stored ``unhealthy`` verdict
-    that ``build_health_response`` / ``build_ready_response`` would turn into a
-    503. Neither may reach a gateway probe.
+    that ``build_health_response`` would turn into a 503. Neither may reach a
+    gateway probe.
     """
     from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
     from _mcp_mesh.shared import health_check_manager
@@ -366,8 +366,9 @@ class TestReady:
         self, api_app, runtime_up, declared_health_check
     ):
         """#1473/#1488: a gateway is a fan-out point — its own check must not
-        withdraw it. A stored ``unhealthy`` verdict would 503 through
-        ``build_ready_response``; this endpoint must not consult it."""
+        withdraw it. Since RFC #1502 no agent type's ``/ready`` consults the
+        verdict, but a stored ``unhealthy`` result must still not reach this
+        endpoint by any other route."""
         response = TestClient(api_app).get("/ready")
         assert response.status_code == 200
         assert response.json()["ready"] is True

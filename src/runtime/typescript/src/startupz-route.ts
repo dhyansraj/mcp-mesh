@@ -34,8 +34,8 @@ export type StartupCheckSource = () => MeshStartupCheck | undefined;
  * aborted — is stated once, by the caller that throws (see `agent.ts`).
  *
  * `getCheck` is a callback rather than a value for the same reason
- * `registerHealthRoutes` takes one: the route is mounted during startup, and
- * reading the config lazily keeps the two in step.
+ * `registerHealthRoutes` takes callbacks: the route is mounted during startup,
+ * and reading the config lazily keeps the two in step.
  */
 export function registerStartupzRoute(
   server: FastMCP,

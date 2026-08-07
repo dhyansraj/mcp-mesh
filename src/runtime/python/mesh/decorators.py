@@ -468,7 +468,14 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
         @app.get("/ready")
         @app.head("/ready")
         async def ready(response: Response):
-            """Kubernetes readiness probe - service ready to serve traffic."""
+            """Kubernetes readiness probe.
+
+            RFC #1502: reports whether the mesh runtime is up, NOT the user's
+            ``health_check`` verdict. A failing check withdraws the agent by
+            pausing the heartbeat; adding a 503 here would additionally drop
+            the pod from its Service endpoints, which is where mesh traffic
+            arrives. See ``build_ready_response``.
+            """
             data, status_code = build_ready_response(agent_name="mcp-mesh-agent")
             response.status_code = status_code
             return data

@@ -75,6 +75,7 @@ import {
 import { registerCancelRoute } from "./jobs-cancel-route.js";
 import { registerLivezRoute } from "./livez-route.js";
 import { registerHealthRoutes } from "./health-routes.js";
+import type { RuntimeState } from "./health-routes.js";
 import { registerStartupzRoute } from "./startupz-route.js";
 import {
   startHealthCheckLoop,
@@ -1968,12 +1969,15 @@ export class MeshAgent {
     }
 
     // 1.6 Issue #1478: take over GET|HEAD /ready and /health from FastMCP's
-    // built-ins so both reflect the user health check's verdict, matching
-    // Python (#1472) and Java (#1474). Before this, `/ready` answered a
-    // hardcoded 200 and `/health` the literal string `✓ Ok`, so a TS
-    // provider whose vendor was down kept receiving direct Service traffic
-    // that mesh consumers had already routed away from, and `kubectl exec
-    // curl /health` told an operator nothing.
+    // built-ins, matching Python (#1472) and Java (#1474). Before this,
+    // `/ready` answered a hardcoded 200 and `/health` the literal string
+    // `✓ Ok`, so `kubectl exec curl /health` told an operator nothing.
+    //
+    // /ready reports the MESH RUNTIME STATE and /health the user health
+    // check's verdict (RFC #1502) — the two diverge, deliberately. See the
+    // module comment in health-routes.ts for why a failing check must not
+    // 503 readiness: mesh traffic traverses the Service, so emptying the
+    // Service endpoints turns a failover into a connection error.
     //
     // Owning /ready also removes a latent trap: FastMCP's built-in returns
     // 503 when `totalSessions === 0` in STATEFUL mode, and mesh escapes it
@@ -1982,22 +1986,24 @@ export class MeshAgent {
     // otherwise have made every TypeScript agent unready in Kubernetes
     // until its first session.
     //
-    // Fail-fast for the same reason as /livez, one step up: the agent chart
-    // gates Service endpoints on /ready (#1468). An unregistered route here
-    // is not a silent fallback to the built-in — the built-in is the wrong
-    // answer (always-200), so the agent would serve traffic while lying
-    // about its readiness, which is precisely the bug this fixes. Throwing
-    // makes the cause visible instead of shipping the regression.
+    // Fail-fast for the same reason as /livez: the agent chart gates
+    // Service endpoints on /ready (#1468), and the built-in it would fall
+    // back to is hardcoded 200 — so the pod would go Ready before the mesh
+    // runtime exists, which is the boot window the runtime floor closes.
+    // Throwing makes the cause visible instead of shipping the regression.
     if (
-      !registerHealthRoutes(this.server, this.config.name, () =>
-        this.getHealthVerdict(),
+      !registerHealthRoutes(
+        this.server,
+        this.config.name,
+        () => this.getHealthVerdict(),
+        () => this.getRuntimeState(),
       )
     ) {
       throw new Error(
         `agent ${this.agentId} cannot start: the /ready and /health routes ` +
           `failed to register (cause logged above). Kubernetes gates Service ` +
-          `endpoints on /ready, so serving without them would keep sending ` +
-          `traffic to this agent after its health check reported it unhealthy.`,
+          `endpoints on /ready, so serving without them would put this agent ` +
+          `in the Service before its mesh runtime is up.`,
       );
     }
 
@@ -2136,12 +2142,29 @@ export class MeshAgent {
    * Issue #1476: the latest health verdict, or null before the first run
    * completes (or when no `healthCheck` is configured).
    *
-   * Read per request by the `/ready` and `/health` routes (#1478); null
-   * is answered as healthy there, so an agent with no `healthCheck` is
-   * unaffected by those endpoints becoming mesh-aware.
+   * Read per request by the `/health` route (#1478); null is answered as
+   * healthy there, so an agent with no `healthCheck` is unaffected by that
+   * endpoint becoming mesh-aware. `/ready` does NOT read this — RFC #1502
+   * put it on the mesh runtime state instead (`getRuntimeState`).
    */
   getHealthVerdict(): HealthVerdict | null {
     return this.healthLoop?.latest() ?? null;
+  }
+
+  /**
+   * RFC #1502: whether the mesh runtime is up, for `/ready`.
+   *
+   * `up` once `startAgent()` has handed back a napi handle, `starting`
+   * before that, `shutting_down` from the moment shutdown is requested —
+   * checked first, because `shutdown()` nulls the handle only after the
+   * napi teardown returns and a pod being drained is not "starting".
+   *
+   * The same floor `express.ts` has always applied to a gateway
+   * (`this.handle !== null`) and Python's `runtime_state`.
+   */
+  getRuntimeState(): RuntimeState {
+    if (this.shutdownRequested) return "shutting_down";
+    return this.handle !== null ? "up" : "starting";
   }
 
   /**

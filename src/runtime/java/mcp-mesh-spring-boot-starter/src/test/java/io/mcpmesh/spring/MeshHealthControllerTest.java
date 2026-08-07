@@ -9,12 +9,21 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Unit tests for the probe endpoints (issue #1467).
+ * Unit tests for the probe endpoints (issue #1467, RFC #1502).
  *
- * <p>The invariant under test: liveness and readiness are DIFFERENT signals.
- * {@code /ready} follows {@code runtime.isRunning()} so an agent whose runtime
- * is down is taken out of rotation; {@code /livez} answers 200 regardless, so
- * the same condition never causes a pod restart.
+ * <p>Two invariants, and they are separate:
+ *
+ * <ul>
+ *   <li>liveness and readiness are DIFFERENT signals. {@code /ready} follows
+ *       {@code runtime.isRunning()} so an agent whose runtime is down is taken
+ *       out of rotation; {@code /livez} answers 200 regardless, so the same
+ *       condition never causes a pod restart (#1467).
+ *   <li>readiness and the health VERDICT are different signals too. The
+ *       runtime state is all {@code /ready} reports, on every agent type; a
+ *       failing {@link io.mcpmesh.MeshHealthCheck} withdraws the agent by
+ *       pausing the heartbeat and never touches this probe (RFC #1502). It
+ *       still drives {@code /health}, which nothing probes.
+ * </ul>
  */
 class MeshHealthControllerTest {
 
@@ -147,44 +156,50 @@ class MeshHealthControllerTest {
     }
 
     @Test
-    void ready_is503_whenTheUserHealthCheckIsUnhealthy() {
+    void ready_is200_whenTheUserHealthCheckIsUnhealthy() {
+        // RFC #1502. The heartbeat pause is the whole withdrawal mechanism; a
+        // 503 here would ALSO empty the Kubernetes Service the mesh routes
+        // through, so a consumer calling the withdrawn agent before the
+        // registry sweeps gets a connection error instead of a failover.
         MeshHealthController controller = new MeshHealthController(runtimeWith(true),
             withVerdict(io.mcpmesh.MeshHealth.unhealthy("anthropic API unreachable")));
 
         ResponseEntity<Map<String, Object>> response = controller.ready();
 
-        assertEquals(503, response.getStatusCode().value());
-        assertEquals(Boolean.FALSE, response.getBody().get("ready"));
-        assertEquals("unhealthy", response.getBody().get("status"));
-        assertEquals("service is unhealthy", response.getBody().get("reason"));
-        assertEquals(java.util.List.of("anthropic API unreachable"),
-            response.getBody().get("errors"));
-        assertEquals(503, controller.readyHead().getStatusCode().value());
+        assertEquals(200, response.getStatusCode().value());
+        assertEquals(Boolean.TRUE, response.getBody().get("ready"));
+        assertFalse(response.getBody().containsKey("reason"));
+        assertFalse(response.getBody().containsKey("errors"),
+            "/ready must not carry the health check's errors — it did not consult it");
+        assertEquals(200, controller.readyHead().getStatusCode().value());
+
+        // ...and the verdict is still visible where an operator looks for it.
+        assertEquals(503, controller.health().getStatusCode().value());
+        assertEquals("unhealthy", controller.health().getBody().get("status"));
     }
 
     @Test
-    void ready_is503_whenTheUserHealthCheckIsDegraded() {
-        // Python parity: build_ready_response / build_health_response are
-        // `200 if status == "healthy" else 503`. Degraded therefore leaves the
-        // load balancer while STILL heartbeating and staying in dependency
-        // resolution — readiness is about new external traffic, the heartbeat
-        // is about whether this is still a valid mesh provider.
+    void ready_is200_whenTheUserHealthCheckIsDegraded() {
         MeshHealthController controller = new MeshHealthController(runtimeWith(true),
             withVerdict(io.mcpmesh.MeshHealth.degraded("elevated latency")));
 
-        ResponseEntity<Map<String, Object>> response = controller.ready();
+        assertEquals(200, controller.ready().getStatusCode().value());
+        assertEquals(200, controller.readyHead().getStatusCode().value());
 
-        assertEquals(503, response.getStatusCode().value());
-        assertEquals(Boolean.FALSE, response.getBody().get("ready"));
-        assertEquals("degraded", response.getBody().get("status"));
-        assertEquals("service is degraded", response.getBody().get("reason"));
+        // /health is unchanged: Python parity, `200 if status == "healthy"
+        // else 503`. Nothing probes it, so the status code is free to carry
+        // the verdict.
         assertEquals(503, controller.health().getStatusCode().value());
+        assertEquals("degraded", controller.health().getBody().get("status"));
     }
 
     @Test
     void ready_is503_whenTheRuntimeIsDownEvenIfTheCheckSaysHealthy() {
-        // The runtime state is the FLOOR: a vendor probe says nothing about
-        // whether this agent is registered and reachable.
+        // The runtime state is all readiness reports, and it is not vestigial:
+        // MeshStartupCheck defaults to passing, so /startupz answers 200 before
+        // the mesh runtime has started in the Spring lifecycle. Without this a
+        // pod would go Ready with no runtime behind it, and /livez — which
+        // consults nothing — would never notice a runtime that died either.
         MeshHealthController controller = new MeshHealthController(runtimeWith(false),
             withVerdict(io.mcpmesh.MeshHealth.healthy()));
 
@@ -224,7 +239,13 @@ class MeshHealthControllerTest {
         assertFalse(controller.health().getBody().containsKey("checks"));
     }
 
-    // ---- gateways are never taken out of Service endpoints (issue #1488) ----
+    // ---- no agent type is taken out of Service endpoints by its own check ----
+    //
+    // These started as the #1488 gateway carve-out. RFC #1502 generalised it:
+    // the rule is the same for every agent type now, so the pairs below assert
+    // the SAME behaviour for gateways and providers. They are kept apart
+    // because a future change that reintroduces a per-type branch has to fail
+    // one of them, and which one it fails names the direction of the mistake.
 
     @Test
     void gateway_ready_is200_whenTheUserHealthCheckIsUnhealthy() {
@@ -298,9 +319,11 @@ class MeshHealthControllerTest {
     }
 
     @Test
-    void nonGateway_ready_is503_whenTheUserHealthCheckIsUnhealthy() {
-        // Guards against over-correcting: an mcp agent is a provider, and
-        // withdrawing ONE provider is exactly what the mechanism is for.
+    void nonGateway_ready_is200_whenTheUserHealthCheckIsUnhealthy() {
+        // A provider withdraws by GOING QUIET, not by leaving its Service. The
+        // registry ages it out on the missing heartbeat and resolution stops
+        // selecting it; the pod keeps its endpoint so an in-flight consumer
+        // gets an answer rather than a refused connection.
         for (String agentType : java.util.List.of("mcp", "mcp_agent")) {
             MeshHealthController controller = new MeshHealthController(
                 runtimeOf(agentType, true),
@@ -308,23 +331,32 @@ class MeshHealthControllerTest {
 
             ResponseEntity<Map<String, Object>> response = controller.ready();
 
-            assertEquals(503, response.getStatusCode().value(),
-                "'" + agentType + "' agent must still leave rotation");
-            assertEquals(Boolean.FALSE, response.getBody().get("ready"));
-            assertEquals("service is unhealthy", response.getBody().get("reason"));
-            assertEquals(503, controller.readyHead().getStatusCode().value());
+            assertEquals(200, response.getStatusCode().value(),
+                "'" + agentType + "' agent must stay in Service endpoints");
+            assertEquals(Boolean.TRUE, response.getBody().get("ready"));
+            assertEquals(200, controller.readyHead().getStatusCode().value());
+            assertEquals(503, controller.health().getStatusCode().value(),
+                "'" + agentType + "' agent's /health must still carry the verdict");
         }
     }
 
     @Test
-    void livez_is200_evenWhenTheUserHealthCheckIsUnhealthy() {
-        // The #1467 invariant, extended: a vendor outage must never restart the
-        // pod — a restart cannot fix the vendor and erases the evidence.
+    void everyProbeIsUnmovedByAnUnhealthyCheckExceptHealth() {
+        // The #1467 invariant, extended by RFC #1502: a vendor outage must move
+        // exactly ONE endpoint. Asserted together so a change that quietly
+        // rewires any of the four has to edit this line.
         MeshHealthController controller = new MeshHealthController(runtimeWith(true),
             withVerdict(io.mcpmesh.MeshHealth.unhealthy("vendor down")));
 
-        assertEquals(200, controller.livez().getStatusCode().value());
+        assertEquals(200, controller.livez().getStatusCode().value(),
+            "a restart cannot fix the vendor and erases the evidence");
         assertEquals(200, controller.livezHead().getStatusCode().value());
-        assertEquals(503, controller.ready().getStatusCode().value());
+        assertEquals(200, controller.ready().getStatusCode().value(),
+            "the heartbeat pause withdraws the agent; readiness must not also "
+                + "empty the Service the mesh routes through");
+        assertEquals(200, controller.startupz().getStatusCode().value(),
+            "startup answers the 'will this ever work' question, not this one");
+        assertEquals(503, controller.health().getStatusCode().value(),
+            "the diagnostic view is where the verdict shows");
     }
 }
