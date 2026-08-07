@@ -60,6 +60,7 @@ def _should_refuse_startup(
         return cluster_strict and tool_strict
     return False
 
+
 # Lazy import to avoid ImportError if Rust core not built
 _rust_core = None
 
@@ -102,9 +103,7 @@ def _resolve_registration_port(http_port: int, context: dict[str, Any]) -> int:
 
     if bound_port > 0:
         if http_port == 0:
-            logger.info(
-                f"Using detected port {bound_port} (agent_config had port=0)"
-            )
+            logger.info(f"Using detected port {bound_port} (agent_config had port=0)")
         elif http_port != bound_port:
             logger.warning(
                 f"⚠️ Registering ACTUAL bound port {bound_port} instead of "
@@ -150,9 +149,7 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
 
     # Get HTTP config
     http_host = agent_config.get("http_host", "localhost")
-    http_port = _resolve_registration_port(
-        agent_config.get("http_port", 0), context
-    )
+    http_port = _resolve_registration_port(agent_config.get("http_port", 0), context)
 
     namespace = agent_config.get("namespace", "default")
     version = agent_config.get("version", "1.0.0")
@@ -197,17 +194,15 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
             # Issue #547 Phase 1D: normalize the consumer's expected schema
             # via the Rust normalizer (deferred from decorator time to keep
             # import cheap and consistent with producer-side normalization).
-            expected_canonical: Optional[str] = None
-            expected_hash: Optional[str] = None
+            expected_canonical: str | None = None
+            expected_hash: str | None = None
             match_mode = dep_info.get("match_mode")
             expected_raw = dep_info.get("expected_schema_raw")
             if expected_raw is not None:
                 try:
                     normalize_fn = getattr(core, "normalize_schema_py", None)
                     if normalize_fn is None:
-                        raise AttributeError(
-                            "normalize_schema_py not in mcp_mesh_core"
-                        )
+                        raise AttributeError("normalize_schema_py not in mcp_mesh_core")
                     result = json.loads(
                         normalize_fn(json.dumps(expected_raw), "python")
                     )
@@ -292,10 +287,10 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
         # Issue #547: Normalize input + output schemas via Rust normalizer.
         # If the wheel hasn't been rebuilt to expose normalize_schema_py yet,
         # we register without schema fields so legacy environments keep working.
-        input_canonical_json: Optional[str] = None
-        input_hash: Optional[str] = None
-        output_canonical_json: Optional[str] = None
-        output_hash: Optional[str] = None
+        input_canonical_json: str | None = None
+        input_hash: str | None = None
+        output_canonical_json: str | None = None
+        output_hash: str | None = None
         combined_warnings: list[str] = []
 
         try:
@@ -303,7 +298,24 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
             if normalize_fn is None:
                 raise AttributeError("normalize_schema_py not in mcp_mesh_core")
 
-            def _apply_schema_policy(result: dict, kind: str) -> None:
+            # The default-argument bindings pin the enclosing values at
+            # definition time (B023). For ``combined_warnings`` that is only
+            # equivalent to a closure because the list is MUTATED here and never
+            # rebound while this function is reachable: the one reassignment
+            # (``combined_warnings = []``, below) lives in the ``except``
+            # handler, which runs strictly after the last call into this
+            # closure. Move that reassignment above the call sites and the bound
+            # default would silently go on mutating the ORPHANED list. If you
+            # need to reset the list before or between calls, clear it in place
+            # (``combined_warnings.clear()``) rather than rebinding it.
+            def _apply_schema_policy(
+                result: dict,
+                kind: str,
+                *,
+                tool_name: str = tool_name,
+                tool_strict: bool = tool_strict,
+                combined_warnings: list[str] = combined_warnings,
+            ) -> None:
                 """Issue #547 Phase 4: enforce verdict policy for one schema slot.
 
                 Mutates combined_warnings; raises RuntimeError when startup
@@ -328,9 +340,7 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
                         f"Schema BLOCK demoted to WARN for tool '{tool_name}' "
                         f"{kind} (output_schema_strict=False): {warnings_list}"
                     )
-                    warnings_list = [
-                        f"[demoted from BLOCK] {w}" for w in warnings_list
-                    ]
+                    warnings_list = [f"[demoted from BLOCK] {w}" for w in warnings_list]
                 elif verdict == "WARN":
                     logger.warning(
                         f"Schema WARN for tool '{tool_name}' {kind}: {warnings_list}"
@@ -460,7 +470,9 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
         # work.
         published_tags = tool_metadata.get("tags", []) or []
         if "__MESH_CONSUMER_SELF__" in published_tags:
-            published_tags = [t for t in published_tags if t != "__MESH_CONSUMER_SELF__"]
+            published_tags = [
+                t for t in published_tags if t != "__MESH_CONSUMER_SELF__"
+            ]
             logger.warning(
                 f"@mesh.a2a_consumer tool '{tool_name}': consumer-name self "
                 "tag was never resolved (no @mesh.agent in this process at "
@@ -793,10 +805,7 @@ async def _handle_dependency_change(
             json.dumps(kwargs_config, sort_keys=True, default=str),
             agent_id,
         )
-        if (
-            injector.get_applied_dependency_signature(dep_key)
-            == applied_signature
-        ):
+        if injector.get_applied_dependency_signature(dep_key) == applied_signature:
             logger.debug(
                 f"Dependency {dep_key} unchanged (idempotent re-emit); "
                 f"skipping proxy rebuild"

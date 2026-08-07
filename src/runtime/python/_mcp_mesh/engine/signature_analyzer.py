@@ -4,8 +4,9 @@ Function signature analysis for MCP Mesh dependency injection.
 
 import inspect
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, get_type_hints
+from typing import Any, Optional, get_type_hints
 
 from mesh.types import McpMeshTool, MeshJob, MeshLlmAgent
 
@@ -313,8 +314,8 @@ class MeshJobResolution:
     """
 
     mesh_tool_positions: list[int] = field(default_factory=list)
-    mesh_job_param_index: Optional[int] = None
-    mesh_job_param_name: Optional[str] = None
+    mesh_job_param_index: int | None = None
+    mesh_job_param_name: str | None = None
 
 
 def analyze_mesh_job_signature(func: Any) -> MeshJobResolution:
@@ -357,13 +358,15 @@ def analyze_mesh_job_signature(func: Any) -> MeshJobResolution:
         # fall back to empty resolution — same defensive posture as the
         # legacy positional analysers above. The caller can still invoke
         # the function as a plain tool; jobs just won't bind.
-        logger.warning(f"analyze_mesh_job_signature: get_type_hints failed for {func}: {e}")
+        logger.warning(
+            f"analyze_mesh_job_signature: get_type_hints failed for {func}: {e}"
+        )
         return MeshJobResolution()
 
     sig = inspect.signature(func)
     mesh_tool_positions: list[int] = []
-    mesh_job_param_index: Optional[int] = None
-    mesh_job_param_name: Optional[str] = None
+    mesh_job_param_index: int | None = None
+    mesh_job_param_name: str | None = None
 
     for i, (param_name, _param) in enumerate(sig.parameters.items()):
         if param_name not in type_hints:

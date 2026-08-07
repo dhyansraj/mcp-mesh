@@ -89,9 +89,7 @@ class RedisTracePublisher:
             else:
                 import asyncio
 
-                await asyncio.to_thread(
-                    mcp_mesh_core.publish_span_py, redis_trace_data
-                )
+                await asyncio.to_thread(mcp_mesh_core.publish_span_py, redis_trace_data)
             logger.debug(
                 f"Published trace for '{trace_data.get('function_name', 'unknown')}' via Rust core (async)"
             )
@@ -121,7 +119,7 @@ class RedisTracePublisher:
 
 
 # Global instance for reuse
-_trace_publisher: Optional[RedisTracePublisher] = None
+_trace_publisher: RedisTracePublisher | None = None
 
 
 def get_trace_publisher() -> RedisTracePublisher:
@@ -139,7 +137,7 @@ def get_trace_publisher() -> RedisTracePublisher:
     return _trace_publisher
 
 
-def get_initialized_trace_publisher() -> Optional[RedisTracePublisher]:
+def get_initialized_trace_publisher() -> RedisTracePublisher | None:
     """Return the publisher singleton IF already built, else None.
 
     Request-path callers running ON the asyncio event loop use this instead of

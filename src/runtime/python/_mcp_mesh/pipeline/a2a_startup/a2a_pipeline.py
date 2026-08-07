@@ -22,8 +22,7 @@ DI is wired by the ``@mesh.a2a`` decorator itself at module import (mirrors
 
 import logging
 
-from ..api_startup.middleware_integration import \
-    TracingMiddlewareIntegrationStep
+from ..api_startup.middleware_integration import TracingMiddlewareIntegrationStep
 from ..shared import HealthEndpointsStep
 from ..shared.mesh_pipeline import MeshPipeline
 from .a2a_server_setup import A2AServerSetupStep

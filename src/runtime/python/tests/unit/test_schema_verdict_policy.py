@@ -16,9 +16,17 @@ from _mcp_mesh.pipeline.mcp_heartbeat.rust_heartbeat import (
 
 class TestShouldRefuseStartup:
     def test_ok_never_refuses(self):
-        assert _should_refuse_startup("OK", cluster_strict=False, tool_strict=True) is False
-        assert _should_refuse_startup("OK", cluster_strict=True, tool_strict=True) is False
-        assert _should_refuse_startup("OK", cluster_strict=True, tool_strict=False) is False
+        assert (
+            _should_refuse_startup("OK", cluster_strict=False, tool_strict=True)
+            is False
+        )
+        assert (
+            _should_refuse_startup("OK", cluster_strict=True, tool_strict=True) is False
+        )
+        assert (
+            _should_refuse_startup("OK", cluster_strict=True, tool_strict=False)
+            is False
+        )
 
     def test_block_with_default_tool_strict_refuses(self):
         # Default behavior: BLOCK refuses startup.
@@ -67,9 +75,7 @@ class TestClusterStrictEnabled:
         with patch.dict(os.environ, {"MCP_MESH_SCHEMA_STRICT": value}):
             assert _cluster_strict_enabled() is True
 
-    @pytest.mark.parametrize(
-        "value", ["", "0", "false", "no", "off", "anything-else"]
-    )
+    @pytest.mark.parametrize("value", ["", "0", "false", "no", "off", "anything-else"])
     def test_falsy_values(self, value):
         with patch.dict(os.environ, {"MCP_MESH_SCHEMA_STRICT": value}):
             assert _cluster_strict_enabled() is False
@@ -107,6 +113,7 @@ class TestToolDecoratorAcceptsFlag:
         import mesh
 
         with pytest.raises(ValueError, match="output_schema_strict must be a boolean"):
+
             @mesh.tool(capability="bad", output_schema_strict="yes")  # type: ignore[arg-type]
             def my_bad_tool():
                 return "ok"

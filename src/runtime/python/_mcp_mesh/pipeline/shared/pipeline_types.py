@@ -26,8 +26,8 @@ class PipelineResult:
         self,
         status: PipelineStatus = PipelineStatus.SUCCESS,
         message: str = "",
-        context: Optional[dict[str, Any]] = None,
-        errors: Optional[list[str]] = None,
+        context: dict[str, Any] | None = None,
+        errors: list[str] | None = None,
     ):
         self.status = status
         self.message = message

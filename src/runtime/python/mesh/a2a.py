@@ -60,8 +60,9 @@ import json as _json
 import logging
 import time
 import uuid
-from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Callable, Dict, Optional
+from collections.abc import AsyncIterator, Callable
+from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -89,7 +90,7 @@ logger = logging.getLogger(__name__)
 # across replicas. A client that connected to replica A and then
 # reconnects (via ``tasks/resubscribe``) to replica B would get an
 # unknown-task error. Cross-replica sharing is out of scope for v1.
-_A2A_TASK_STORE: Dict[str, dict] = {}
+_A2A_TASK_STORE: dict[str, dict] = {}
 
 # Evict terminal-state entries from ``_A2A_TASK_STORE`` after this many
 # seconds. Five minutes balances "give the client time to fetch the
@@ -109,7 +110,7 @@ _MESH_TO_A2A_STATE = {
 }
 
 
-def _map_mesh_state(mesh_status: Optional[str]) -> str:
+def _map_mesh_state(mesh_status: str | None) -> str:
     """Translate a mesh job status string to its A2A v1.0 equivalent.
 
     Unknown / unset statuses fall back to ``"working"`` — preserves the
@@ -139,7 +140,7 @@ def _is_job_proxy(value: Any) -> bool:
     return isinstance(value, JobProxy)
 
 
-def _sweep_terminal_tasks(now: Optional[float] = None) -> None:
+def _sweep_terminal_tasks(now: float | None = None) -> None:
     """Evict entries from ``_A2A_TASK_STORE`` whose terminal_at is older
     than ``_TERMINAL_GRACE_SECS`` ago. Best-effort housekeeping called
     on each store access — keeps the dict bounded for long-lived agents
@@ -162,8 +163,8 @@ def _store_task(
     task_id: str,
     proxy: Any,
     *,
-    request_message: Optional[dict] = None,
-    session_id: Optional[str] = None,
+    request_message: dict | None = None,
+    session_id: str | None = None,
 ) -> None:
     """Register a long-running task → proxy mapping for later lookups.
 
@@ -203,7 +204,7 @@ def _mark_terminal(task_id: str) -> None:
 # (path, skill_id). Populated by :func:`update_public_url_cache` from the
 # heartbeat-response handler; read by the agent-card endpoint at request
 # time. Process-local — not persisted.
-_PUBLIC_URL_CACHE: Dict[tuple, str] = {}
+_PUBLIC_URL_CACHE: dict[tuple, str] = {}
 
 
 # Tracks already-mounted A2A surfaces keyed by ``(id(app), path)`` so a
@@ -214,7 +215,7 @@ _PUBLIC_URL_CACHE: Dict[tuple, str] = {}
 _MOUNTED_A2A_PATHS: set = set()
 
 
-def update_public_url_cache(path: str, skill_id: str, public_url: Optional[str]) -> None:
+def update_public_url_cache(path: str, skill_id: str, public_url: str | None) -> None:
     """Cache (or clear) a registry-stamped public URL for one A2A surface.
 
     Called from the heartbeat-response handler when the registry returns
@@ -228,7 +229,7 @@ def update_public_url_cache(path: str, skill_id: str, public_url: Optional[str])
         _PUBLIC_URL_CACHE.pop(key, None)
 
 
-def get_cached_public_url(path: str, skill_id: str) -> Optional[str]:
+def get_cached_public_url(path: str, skill_id: str) -> str | None:
     """Return the registry-stamped public URL for a surface, if cached."""
     return _PUBLIC_URL_CACHE.get((path, skill_id))
 
@@ -289,7 +290,7 @@ def _underlying_tool_is_task(metadata: dict) -> bool:
     return False
 
 
-def _underlying_tool_input_schema(metadata: dict) -> Optional[dict]:
+def _underlying_tool_input_schema(metadata: dict) -> dict | None:
     """Return the underlying mesh tool's input schema if available."""
     try:
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
@@ -337,11 +338,7 @@ def _make_card_endpoint(
 
     async def get_agent_card() -> dict:
         agent_config = agent_config_provider() or {}
-        agent_name = (
-            agent_config.get("name")
-            or agent_config.get("agent_id")
-            or "agent"
-        )
+        agent_name = agent_config.get("name") or agent_config.get("agent_id") or "agent"
         agent_version = agent_config.get("version", "1.0.0")
         agent_description = agent_config.get("description")
 
@@ -380,13 +377,13 @@ def _make_card_endpoint(
 
 def _utc_now_iso() -> str:
     """Return current UTC time in A2A v1.0 ``...Z`` ISO-8601 form."""
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _build_completed_task(
     task_id: str,
     session_id: str,
-    request_message: Optional[dict],
+    request_message: dict | None,
     result: Any,
 ) -> dict:
     """Build an A2A v1.0 ``Task`` with ``state=completed``.
@@ -422,7 +419,7 @@ def _build_completed_task(
 def _build_failed_task(
     task_id: str,
     session_id: str,
-    request_message: Optional[dict],
+    request_message: dict | None,
     error_msg: str,
 ) -> dict:
     """Build an A2A v1.0 ``Task`` with ``state=failed``.
@@ -450,10 +447,10 @@ def _build_failed_task(
 def _build_working_task(
     task_id: str,
     session_id: str,
-    request_message: Optional[dict],
+    request_message: dict | None,
     *,
-    progress: Optional[Any] = None,
-    progress_message: Optional[str] = None,
+    progress: Any | None = None,
+    progress_message: str | None = None,
 ) -> dict:
     """Build an A2A v1.0 ``Task`` envelope with ``state=working``.
 
@@ -485,7 +482,7 @@ def _build_working_task(
 def _build_task_from_status(
     task_id: str,
     session_id: str,
-    request_message: Optional[dict],
+    request_message: dict | None,
     status: dict,
     *,
     final_result: Any = None,
@@ -591,9 +588,7 @@ def _extract_task_inputs(params: dict) -> tuple[str, str, dict]:
     return task_id, session_id, message
 
 
-async def _invoke_user_handler(
-    user_handler: Callable[..., Any], message: dict
-) -> Any:
+async def _invoke_user_handler(user_handler: Callable[..., Any], message: dict) -> Any:
     """Call the user handler, awaiting if it returned a coroutine.
 
     Handler errors propagate to the caller — each tasks/* handler wraps
@@ -710,9 +705,7 @@ async def _handle_tasks_get(
 
     entry = _A2A_TASK_STORE.get(task_id)
     if entry is None:
-        return _jsonrpc_error(
-            req_id, -32602, f"Unknown task id: {task_id}"
-        )
+        return _jsonrpc_error(req_id, -32602, f"Unknown task id: {task_id}")
 
     proxy = entry["proxy"]
     try:
@@ -798,14 +791,14 @@ async def _handle_tasks_cancel(
 
     entry = _A2A_TASK_STORE.get(task_id)
     if entry is None:
-        return _jsonrpc_error(
-            req_id, -32602, f"Unknown task id: {task_id}"
-        )
+        return _jsonrpc_error(req_id, -32602, f"Unknown task id: {task_id}")
 
     proxy = entry["proxy"]
     reason = params.get("reason")
     try:
-        await proxy.cancel(reason=reason) if reason is not None else await proxy.cancel()
+        await proxy.cancel(
+            reason=reason
+        ) if reason is not None else await proxy.cancel()
     except Exception as exc:
         logger.info(
             "A2A tasks/cancel: proxy.cancel() raised for task %s "
@@ -877,10 +870,10 @@ def _status_update_event(
     req_id: Any,
     task_id: str,
     a2a_state: str,
-    message_text: Optional[str],
+    message_text: str | None,
     *,
     final: bool,
-    progress: Optional[Any] = None,
+    progress: Any | None = None,
 ) -> dict:
     """Build an A2A v1.0 ``TaskStatusUpdateEvent`` wrapped in a JSON-RPC envelope.
 
@@ -951,9 +944,7 @@ async def _stream_failed_only(
     frame followed by stream close. No artifact event because there's
     no result payload to carry.
     """
-    yield _sse_event(
-        _status_update_event(req_id, task_id, "failed", error, final=True)
-    )
+    yield _sse_event(_status_update_event(req_id, task_id, "failed", error, final=True))
 
 
 async def _stream_long_running(
@@ -1004,7 +995,10 @@ async def _stream_long_running(
                 )
                 yield _sse_event(
                     _status_update_event(
-                        req_id, task_id, "failed", f"status unavailable: {exc}",
+                        req_id,
+                        task_id,
+                        "failed",
+                        f"status unavailable: {exc}",
                         final=True,
                     )
                 )
@@ -1189,14 +1183,10 @@ async def _handle_tasks_resubscribe(
 
     entry = _A2A_TASK_STORE.get(task_id)
     if entry is None:
-        return _jsonrpc_error(
-            req_id, -32602, f"Unknown task id: {task_id}"
-        )
+        return _jsonrpc_error(req_id, -32602, f"Unknown task id: {task_id}")
 
     proxy = entry["proxy"]
-    return _sse_response(
-        _stream_long_running(req_id, task_id, task_id, {}, proxy)
-    )
+    return _sse_response(_stream_long_running(req_id, task_id, task_id, {}, proxy))
 
 
 def _make_rpc_endpoint(*, metadata: dict, user_handler: Callable[..., Any]):
@@ -1324,14 +1314,14 @@ def mount(
     app: FastAPI,
     *,
     path: str,
-    dependencies: Optional[list] = None,
-    description: Optional[str] = None,
-    skill_id: Optional[str] = None,
-    skill_name: Optional[str] = None,
-    input_modes: Optional[list] = None,
-    output_modes: Optional[list] = None,
-    tags: Optional[list] = None,
-    auth: Optional[str] = None,
+    dependencies: list | None = None,
+    description: str | None = None,
+    skill_id: str | None = None,
+    skill_name: str | None = None,
+    input_modes: list | None = None,
+    output_modes: list | None = None,
+    tags: list | None = None,
+    auth: str | None = None,
     **kwargs: Any,
 ) -> Callable[[Callable], Callable]:
     """Mount an A2A surface on the user's FastAPI ``app``.
@@ -1503,7 +1493,8 @@ def mount(
             added_paths.append(card_path)
             logger.debug(
                 "Mounted A2A card route GET %s (skill=%s)",
-                card_path, skill_id_resolved,
+                card_path,
+                skill_id_resolved,
             )
         elif existing_endpoints[card_path] is card_endpoint:
             # Identical callable already wired (e.g., test fixture re-mount
@@ -1531,7 +1522,8 @@ def mount(
             added_paths.append(rpc_path)
             logger.debug(
                 "Mounted A2A RPC route POST %s (skill=%s)",
-                rpc_path, skill_id_resolved,
+                rpc_path,
+                skill_id_resolved,
             )
         elif existing_endpoints[rpc_path] is rpc_endpoint:
             logger.debug(
@@ -1564,7 +1556,9 @@ def mount(
 
         logger.info(
             "🌐 Mounted A2A surface: %s (skill=%s, %d route(s))",
-            path_resolved, skill_id_resolved, len(added_paths),
+            path_resolved,
+            skill_id_resolved,
+            len(added_paths),
         )
 
         # Validation + route registration succeeded — only NOW record the

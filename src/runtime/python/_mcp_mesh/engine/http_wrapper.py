@@ -33,6 +33,7 @@ def _parse_session_ttl() -> int:
         ttl = 3600
     return max(1, min(ttl, 86400))
 
+
 SESSION_TTL = _parse_session_ttl()
 
 
@@ -64,7 +65,11 @@ class SessionStorage:
 
     def _session_key(self, session_id: str, capability: str = None) -> str:
         """Build a session storage key."""
-        return f"session:{session_id}:{capability}" if capability else f"session:{session_id}"
+        return (
+            f"session:{session_id}:{capability}"
+            if capability
+            else f"session:{session_id}"
+        )
 
     async def get_session_pod(self, session_id: str, capability: str = None) -> str:
         """Get assigned pod for session."""

@@ -32,7 +32,7 @@ def build_agent_card(
     tags: list[str],
     streaming: bool,
     bearer_auth: bool,
-    underlying_tool_input_schema: Optional[dict[str, Any]] = None,
+    underlying_tool_input_schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build an A2A v1.0 AgentCard dict.
 

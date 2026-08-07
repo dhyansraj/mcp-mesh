@@ -38,7 +38,6 @@ from _mcp_mesh.engine.provider_handlers import capabilities as caps_mod
 from _mcp_mesh.engine.provider_handlers import gemini_handler as gemini_handler_module
 from _mcp_mesh.engine.provider_handlers.gemini_handler import GeminiHandler
 
-
 # ---------------------------------------------------------------------------
 # has_native() gating
 # ---------------------------------------------------------------------------
@@ -297,9 +296,7 @@ class TestDispatchStatusLog:
         assert "disabled" in status_records[0].message
         assert "MCP_MESH_NATIVE_LLM=0" in status_records[0].message
 
-    def test_logs_disabled_when_sdk_missing(
-        self, caplog, _reset_dispatch_status_log
-    ):
+    def test_logs_disabled_when_sdk_missing(self, caplog, _reset_dispatch_status_log):
         handler = GeminiHandler()
         assert "MCP_MESH_NATIVE_LLM" not in os.environ
 
@@ -324,9 +321,7 @@ class TestDispatchStatusLog:
         assert "google-genai SDK not installed" in status_records[0].message
         assert "mcp-mesh[gemini]" in status_records[0].message
 
-    def test_log_fires_only_once_across_calls(
-        self, caplog, _reset_dispatch_status_log
-    ):
+    def test_log_fires_only_once_across_calls(self, caplog, _reset_dispatch_status_log):
         handler = GeminiHandler()
         assert "MCP_MESH_NATIVE_LLM" not in os.environ
 
@@ -480,9 +475,7 @@ class TestGatedResponseJsonSchemaApplyStructuredOutput:
     def test_default_on_gemini3_stamps_marker(self, monkeypatch):
         """Default (env unset) → server-enforced response_json_schema for
         Gemini-3 + tools + modern SDK."""
-        monkeypatch.setattr(
-            caps_mod, "_sdk_at_least", lambda dist, floor: True
-        )
+        monkeypatch.setattr(caps_mod, "_sdk_at_least", lambda dist, floor: True)
         assert _GATE not in os.environ
         handler = GeminiHandler()
         model_params = {
@@ -502,17 +495,13 @@ class TestGatedResponseJsonSchemaApplyStructuredOutput:
         assert out["tools"] == _TOOLS
 
     @pytest.mark.parametrize("value", ["0", "false", "no", "off", "OFF", "False"])
-    def test_kill_switch_reverts_to_hint_exactly_as_pre_1102(
-        self, monkeypatch, value
-    ):
+    def test_kill_switch_reverts_to_hint_exactly_as_pre_1102(self, monkeypatch, value):
         """Kill-switch MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=0 (or
         false/no/off) reverts Gemini-3 + tools to the HINT path:
         _mesh_hint_mode set, response_format popped, marker absent — byte-
         identical to the pre-#1102 default."""
         monkeypatch.setenv(_GATE, value)
-        monkeypatch.setattr(
-            caps_mod, "_sdk_at_least", lambda dist, floor: True
-        )
+        monkeypatch.setattr(caps_mod, "_sdk_at_least", lambda dist, floor: True)
         handler = GeminiHandler()
         model_params = {
             "messages": [{"role": "system", "content": "base"}],
@@ -534,9 +523,7 @@ class TestGatedResponseJsonSchemaApplyStructuredOutput:
         self, monkeypatch
     ):
         monkeypatch.setenv(_GATE, "true")
-        monkeypatch.setattr(
-            caps_mod, "_sdk_at_least", lambda dist, floor: True
-        )
+        monkeypatch.setattr(caps_mod, "_sdk_at_least", lambda dist, floor: True)
         handler = GeminiHandler()
         model_params = {
             "messages": [{"role": "system", "content": "base"}],
@@ -560,9 +547,7 @@ class TestGatedResponseJsonSchemaApplyStructuredOutput:
     @pytest.mark.parametrize("value", ["1", "true", "yes", "on", "ON", "True"])
     def test_gate_accepts_truthy_values(self, monkeypatch, value):
         monkeypatch.setenv(_GATE, value)
-        monkeypatch.setattr(
-            caps_mod, "_sdk_at_least", lambda dist, floor: True
-        )
+        monkeypatch.setattr(caps_mod, "_sdk_at_least", lambda dist, floor: True)
         handler = GeminiHandler()
         model_params = {
             "messages": [{"role": "system", "content": "base"}],
@@ -578,9 +563,7 @@ class TestGatedResponseJsonSchemaApplyStructuredOutput:
 
     def test_gate_on_gemini2x_falls_back_to_hint(self, monkeypatch):
         monkeypatch.setenv(_GATE, "true")
-        monkeypatch.setattr(
-            caps_mod, "_sdk_at_least", lambda dist, floor: True
-        )
+        monkeypatch.setattr(caps_mod, "_sdk_at_least", lambda dist, floor: True)
         handler = GeminiHandler()
         model_params = {
             "messages": [{"role": "system", "content": "base"}],
@@ -598,9 +581,7 @@ class TestGatedResponseJsonSchemaApplyStructuredOutput:
 
     def test_gate_on_gemini3_but_old_sdk_falls_back_to_hint(self, monkeypatch):
         monkeypatch.setenv(_GATE, "true")
-        monkeypatch.setattr(
-            caps_mod, "_sdk_at_least", lambda dist, floor: False
-        )
+        monkeypatch.setattr(caps_mod, "_sdk_at_least", lambda dist, floor: False)
         handler = GeminiHandler()
         model_params = {
             "messages": [{"role": "system", "content": "base"}],
@@ -623,9 +604,7 @@ class TestGatedResponseJsonSchemaPrepareRequest:
         """Kill-switch MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=0 → Gemini-3 +
         tools omits response_format (HINT path), no marker."""
         monkeypatch.setenv(_GATE, "0")
-        monkeypatch.setattr(
-            caps_mod, "_sdk_at_least", lambda dist, floor: True
-        )
+        monkeypatch.setattr(caps_mod, "_sdk_at_least", lambda dist, floor: True)
         handler = GeminiHandler()
         params = handler.prepare_request(
             messages=[{"role": "user", "content": "Hi"}],
@@ -641,9 +620,7 @@ class TestGatedResponseJsonSchemaPrepareRequest:
     ):
         """Default (env unset) → Gemini-3 + tools stamps the marker and keeps
         response_format as the response_json_schema carrier."""
-        monkeypatch.setattr(
-            caps_mod, "_sdk_at_least", lambda dist, floor: True
-        )
+        monkeypatch.setattr(caps_mod, "_sdk_at_least", lambda dist, floor: True)
         assert _GATE not in os.environ
         handler = GeminiHandler()
         params = handler.prepare_request(

@@ -16,6 +16,7 @@ handler still runs.
 import asyncio
 
 import pytest
+
 from _mcp_mesh.engine import dependency_injector as di_module
 from _mcp_mesh.engine.claim_dispatcher import PythonClaimDispatcher
 
@@ -66,17 +67,13 @@ class TestRequiredDepPredicate:
     def test_first_of_many_unresolved_wins(self, clean_injector):
         clean_injector._dependencies[f"{_FUNC_ID}:dep_0"] = object()
         # dep_1 (cap_b) is the first unresolved.
-        d = _make_dispatcher(
-            handler=None, required_deps=[(0, "cap_a"), (1, "cap_b")]
-        )
+        d = _make_dispatcher(handler=None, required_deps=[(0, "cap_a"), (1, "cap_b")])
         assert d._first_unresolved_required() == "cap_b"
 
 
 class TestPreInvokeGuard:
     @pytest.mark.asyncio
-    async def test_unresolved_required_releases_lease_not_fail(
-        self, clean_injector
-    ):
+    async def test_unresolved_required_releases_lease_not_fail(self, clean_injector):
         called: list = []
 
         async def handler(**kwargs):
@@ -158,9 +155,7 @@ class TestPreInvokeGuard:
         async def handler(**kwargs):
             # Simulate the DI wrapper's #1273 guard firing on the race.
             raise ToolError(
-                json.dumps(
-                    {"error": "dependency_unavailable", "capability": "cap_a"}
-                )
+                json.dumps({"error": "dependency_unavailable", "capability": "cap_a"})
             )
 
         d = _make_dispatcher(handler=handler, required_deps=[(0, "cap_a")])
@@ -188,9 +183,7 @@ class TestPreInvokeGuard:
         )
 
     @pytest.mark.asyncio
-    async def test_real_handler_exception_still_terminal_fails(
-        self, clean_injector
-    ):
+    async def test_real_handler_exception_still_terminal_fails(self, clean_injector):
         """Regression: an ordinary handler exception (NOT a dependency_unavailable
         refusal) still routes to terminal fail, unchanged by #1273."""
         clean_injector._dependencies[f"{_FUNC_ID}:dep_0"] = object()
@@ -224,9 +217,9 @@ class TestMeshJobDepExcludedFromGate:
     meshJobDepIndex / Java's structural exclusion)."""
 
     def test_discover_excludes_meshjob_paired_required_dep(self):
-        from mesh.types import MeshJob
         from _mcp_mesh.engine.claim_dispatcher import discover_task_handlers
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+        from mesh.types import MeshJob
 
         saved = DecoratorRegistry.get_mesh_tools()
         try:
@@ -247,9 +240,7 @@ class TestMeshJobDepExcludedFromGate:
             )
 
             dispatchers = discover_task_handlers("inst", "http://r:8000")
-            match = [
-                d for d in dispatchers if d.capability == "gate_meshjob_cap"
-            ]
+            match = [d for d in dispatchers if d.capability == "gate_meshjob_cap"]
             assert len(match) == 1
             # The MeshJob-paired required dep (dep_index 0) is excluded, so the
             # gate has nothing to hold on and the predicate is a no-op.
@@ -260,9 +251,9 @@ class TestMeshJobDepExcludedFromGate:
             DecoratorRegistry._mesh_tools.update(saved)
 
     def test_discover_keeps_non_meshjob_required_dep(self):
-        from mesh.types import McpMeshTool, MeshJob
         from _mcp_mesh.engine.claim_dispatcher import discover_task_handlers
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+        from mesh.types import McpMeshTool, MeshJob
 
         saved = DecoratorRegistry.get_mesh_tools()
         try:
@@ -298,9 +289,7 @@ class TestMeshJobDepExcludedFromGate:
 
 class TestPreClaimSkip:
     @pytest.mark.asyncio
-    async def test_run_loop_skips_claim_while_required_unresolved(
-        self, clean_injector
-    ):
+    async def test_run_loop_skips_claim_while_required_unresolved(self, clean_injector):
         claim_calls: list = []
 
         async def fake_claim_once():

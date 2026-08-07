@@ -125,12 +125,8 @@ class TestGeminiApplyStructuredOutputHintMode:
         monkeypatch.setenv("MCP_MESH_HINT_FALLBACK_TIMEOUT", "not-an-int")
         handler = GeminiHandler()
         model_params = {"messages": [{"role": "system", "content": "X"}]}
-        with caplog.at_level(
-            "WARNING", logger=base_provider_handler.logger.name
-        ):
-            result = handler.apply_structured_output(
-                _schema(), "MyType", model_params
-            )
+        with caplog.at_level("WARNING", logger=base_provider_handler.logger.name):
+            result = handler.apply_structured_output(_schema(), "MyType", model_params)
         assert result["_mesh_hint_fallback_timeout"] == 90
         assert any(
             "not an integer" in r.getMessage()
@@ -168,9 +164,7 @@ class TestHintFallbackTimeoutEnvBackCompat:
     ):
         monkeypatch.setenv("MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT", "120")
         base_provider_handler._reset_legacy_hint_timeout_dedupe()
-        with caplog.at_level(
-            "WARNING", logger=base_provider_handler.logger.name
-        ):
+        with caplog.at_level("WARNING", logger=base_provider_handler.logger.name):
             timeout = base_provider_handler.resolve_hint_fallback_timeout()
         assert timeout == 120
         deprecation_warns = [
@@ -188,9 +182,7 @@ class TestHintFallbackTimeoutEnvBackCompat:
         monkeypatch.setenv("MCP_MESH_HINT_FALLBACK_TIMEOUT", "45")
         monkeypatch.setenv("MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT", "120")
         base_provider_handler._reset_legacy_hint_timeout_dedupe()
-        with caplog.at_level(
-            "WARNING", logger=base_provider_handler.logger.name
-        ):
+        with caplog.at_level("WARNING", logger=base_provider_handler.logger.name):
             timeout = base_provider_handler.resolve_hint_fallback_timeout()
         assert timeout == 45
         # Deprecation warning still fires because the legacy var was set
@@ -204,14 +196,10 @@ class TestHintFallbackTimeoutEnvBackCompat:
         ]
         assert len(deprecation_warns) == 1
 
-    def test_deprecation_warning_fires_only_once_per_process(
-        self, monkeypatch, caplog
-    ):
+    def test_deprecation_warning_fires_only_once_per_process(self, monkeypatch, caplog):
         monkeypatch.setenv("MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT", "120")
         base_provider_handler._reset_legacy_hint_timeout_dedupe()
-        with caplog.at_level(
-            "WARNING", logger=base_provider_handler.logger.name
-        ):
+        with caplog.at_level("WARNING", logger=base_provider_handler.logger.name):
             base_provider_handler.resolve_hint_fallback_timeout()
             base_provider_handler.resolve_hint_fallback_timeout()
             base_provider_handler.resolve_hint_fallback_timeout()
@@ -232,15 +220,12 @@ class TestHintFallbackTimeoutEnvBackCompat:
     def test_canonical_only_no_deprecation_warning(self, monkeypatch, caplog):
         monkeypatch.setenv("MCP_MESH_HINT_FALLBACK_TIMEOUT", "60")
         base_provider_handler._reset_legacy_hint_timeout_dedupe()
-        with caplog.at_level(
-            "WARNING", logger=base_provider_handler.logger.name
-        ):
+        with caplog.at_level("WARNING", logger=base_provider_handler.logger.name):
             timeout = base_provider_handler.resolve_hint_fallback_timeout()
         assert timeout == 60
         deprecation_warns = [
             r.getMessage()
             for r in caplog.records
-            if r.levelname == "WARNING"
-            and "deprecated" in r.getMessage()
+            if r.levelname == "WARNING" and "deprecated" in r.getMessage()
         ]
         assert deprecation_warns == []

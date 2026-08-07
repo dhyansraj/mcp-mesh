@@ -251,12 +251,12 @@ async def _handle_api_mesh_event(event: Any, context: dict[str, Any]) -> None:
 
 async def _handle_api_dependency_change(
     capability: str,
-    endpoint: Optional[str],
-    function_name: Optional[str],
-    agent_id: Optional[str],
+    endpoint: str | None,
+    function_name: str | None,
+    agent_id: str | None,
     available: bool,
     context: dict[str, Any],
-    producer_kwargs: Optional[str] = None,
+    producer_kwargs: str | None = None,
 ) -> None:
     """
     Handle dependency availability change for API services.
@@ -434,9 +434,7 @@ async def _handle_api_dependency_change(
 
                 # Update the route wrapper
                 wrapper._mesh_update_dependency(dep_index, proxy)
-                injector.set_applied_dependency_signature(
-                    sig_key, applied_signature
-                )
+                injector.set_applied_dependency_signature(sig_key, applied_signature)
                 logger.info(
                     f"Updated dependency '{capability}' at index {dep_index} "
                     f"for route '{route_id}' -> {endpoint}/{function_name}"

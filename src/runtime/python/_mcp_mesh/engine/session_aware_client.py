@@ -9,7 +9,7 @@ import asyncio
 import json
 import logging
 import random
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from .session_manager import get_session_manager
 from .unified_mcp_proxy import UnifiedMCPProxy
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 class SessionAwareMCPClient:
     """MCP client that handles session affinity routing."""
 
-    def __init__(self, registry_client=None, redis_url: Optional[str] = None):
+    def __init__(self, registry_client=None, redis_url: str | None = None):
         self.registry_client = registry_client
         self.redis_url = redis_url
         self._session_manager = None
@@ -37,8 +37,8 @@ class SessionAwareMCPClient:
         self,
         capability: str,
         arguments: dict[str, Any],
-        session_id: Optional[str] = None,
-        routing_metadata: Optional[dict] = None,
+        session_id: str | None = None,
+        routing_metadata: dict | None = None,
     ) -> Any:
         """
         Call a capability with session affinity routing.
@@ -178,7 +178,7 @@ class SessionAwareMCPClient:
             return {}
 
     def _determine_routing_strategy(
-        self, agent_info: dict, session_id: Optional[str]
+        self, agent_info: dict, session_id: str | None
     ) -> dict:
         """Determine routing strategy based on capability metadata."""
         capability_metadata = agent_info.get("capability_metadata", {})
@@ -198,7 +198,7 @@ class SessionAwareMCPClient:
         self,
         capability: str,
         available_agents: list[dict],
-        session_id: Optional[str],
+        session_id: str | None,
         routing_strategy: dict,
     ) -> dict:
         """Select the best target agent based on routing strategy."""

@@ -41,7 +41,7 @@ class StrictDIError(ValueError):
 # process-level posture, not a per-call toggle — resolve the env var once
 # (mirrors the cached-global convention used elsewhere in the engine, e.g.
 # ``_REPORT_PROGRESS_CONVENTION`` in dependency_injector.py).
-_STRICT_DI_ENABLED: Optional[bool] = None
+_STRICT_DI_ENABLED: bool | None = None
 
 
 def is_strict_di_enabled() -> bool:
@@ -70,7 +70,7 @@ def _reset_strict_di_cache() -> None:
     _STRICT_DI_ENABLED = None
 
 
-def pluralize(count: int, singular: str, plural: Optional[str] = None) -> str:
+def pluralize(count: int, singular: str, plural: str | None = None) -> str:
     """Render ``count`` + a correctly-inflected noun (``"1 dependency"``,
     ``"3 dependencies"``, ``"0 entries"``).
 
@@ -79,7 +79,9 @@ def pluralize(count: int, singular: str, plural: Optional[str] = None) -> str:
     warn-or-raise message should route through this so the prescriptive
     text never reads ``"1 entries"``.
     """
-    noun = singular if count == 1 else (plural if plural is not None else f"{singular}s")
+    noun = (
+        singular if count == 1 else (plural if plural is not None else f"{singular}s")
+    )
     return f"{count} {noun}"
 
 

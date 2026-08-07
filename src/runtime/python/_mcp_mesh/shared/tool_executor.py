@@ -54,8 +54,9 @@ import itertools
 import logging
 import os
 import threading
+from collections.abc import Callable, Coroutine
 from concurrent.futures import Future
-from typing import Any, Callable, Coroutine
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +115,11 @@ def _start_workers() -> list[tuple[threading.Thread, asyncio.AbstractEventLoop]]
             loop_holder: dict[str, asyncio.AbstractEventLoop] = {}
             init_error: dict[str, BaseException] = {}
 
-            def _run() -> None:
+            def _run(
+                ready: threading.Event = ready,
+                loop_holder: dict = loop_holder,
+                init_error: dict = init_error,
+            ) -> None:
                 loop: asyncio.AbstractEventLoop | None = None
                 try:
                     loop = asyncio.new_event_loop()

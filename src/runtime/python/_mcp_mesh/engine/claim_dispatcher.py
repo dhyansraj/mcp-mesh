@@ -54,7 +54,7 @@ from .job_dispatch import maybe_dispatch_as_job
 logger = logging.getLogger(__name__)
 
 
-def _dependency_unavailable_capability(exc: BaseException) -> Optional[str]:
+def _dependency_unavailable_capability(exc: BaseException) -> str | None:
     """Return the capability named by a ``dependency_unavailable`` refusal, or
     ``None`` when ``exc`` is an ordinary handler exception (issue #1273).
 
@@ -113,7 +113,7 @@ _STOP_CANCEL_WAIT_SECS = 5.0
 _STOP_BUDGET_GRACE_SECS = 10.0
 
 
-def _valid_claim_epoch(raw: Any) -> Optional[int]:
+def _valid_claim_epoch(raw: Any) -> int | None:
     """Return ``raw`` iff it is a registry-minted claim generation — a
     non-negative ``int`` (issue #1252) — otherwise ``None``.
 
@@ -140,8 +140,8 @@ class PythonClaimDispatcher:
         instance_id: str,
         registry_url: str,
         handler: Any,
-        func_id: Optional[str] = None,
-        required_deps: Optional[list[tuple[int, str]]] = None,
+        func_id: str | None = None,
+        required_deps: list[tuple[int, str]] | None = None,
     ) -> None:
         self.capability = capability
         self.instance_id = instance_id
@@ -167,8 +167,8 @@ class PythonClaimDispatcher:
         # capability we're currently gated on, or ``None`` when the gate is
         # open. Logged only on the edges (close/open) so a long-gated worker
         # doesn't spam one line per poll.
-        self._gate_missing_cap: Optional[str] = None
-        self._task: Optional[asyncio.Task] = None
+        self._gate_missing_cap: str | None = None
+        self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
         # One httpx.AsyncClient per dispatcher instead of per poll —
         # avoids burning a TCP/TLS handshake on every claim cycle once
@@ -176,7 +176,7 @@ class PythonClaimDispatcher:
         # ``_claim_once`` so we bind to the running event loop, not the
         # pipeline's one-shot loop (see jobs_claim_workers.py for the
         # lifetime story).
-        self._http_client: Optional[Any] = None
+        self._http_client: Any | None = None
         # Bounded concurrency for handler dispatch (W6).
         self._dispatch_sem = asyncio.Semaphore(_MAX_CONCURRENT_DISPATCHES)
         # Consecutive failure tracker for log-level escalation (W1).
@@ -188,7 +188,7 @@ class PythonClaimDispatcher:
         # best-effort terminal fail() reports aren't killed with the loop.
         self._dispatch_tasks: set[asyncio.Task] = set()
 
-    def _first_unresolved_required(self) -> Optional[str]:
+    def _first_unresolved_required(self) -> str | None:
         """Return the capability of the first ``required=True`` dependency slot
         that is NOT locally resolved (its injected proxy is ``None``/absent),
         or ``None`` when every required dep has a live proxy (issue #1268).
@@ -254,7 +254,7 @@ class PythonClaimDispatcher:
                 # registry surfaces at ERROR after the threshold.
                 self._consecutive_failures += 1
                 self._log_claim_failure(
-                    "unexpected status %s from %s" % (resp.status_code, url)
+                    f"unexpected status {resp.status_code} from {url}"
                 )
                 return []
             body = resp.json() or {}
@@ -263,7 +263,7 @@ class PythonClaimDispatcher:
             if not isinstance(claimed, list):
                 self._consecutive_failures += 1
                 self._log_claim_failure(
-                    "malformed response — 'claimed' is not a list: %r" % (claimed,)
+                    f"malformed response — 'claimed' is not a list: {claimed!r}"
                 )
                 return []
             # Successful poll — reset failure window so a one-off blip
@@ -274,9 +274,7 @@ class PythonClaimDispatcher:
             return [c for c in claimed if isinstance(c, dict) and c.get("id")]
         except Exception as e:
             self._consecutive_failures += 1
-            self._log_claim_failure(
-                "claim_once error: %s: %s" % (type(e).__name__, e)
-            )
+            self._log_claim_failure(f"claim_once error: {type(e).__name__}: {e}")
             return []
 
     def _log_claim_failure(self, detail: str) -> None:
@@ -289,9 +287,10 @@ class PythonClaimDispatcher:
         (a wedged dispatcher means jobs in this capability never run).
         """
         msg = (
-            "claim_dispatcher capability=%s instance=%s: %s "
-            "(consecutive_failures=%d)"
-        ) % (self.capability, self.instance_id, detail, self._consecutive_failures)
+            f"claim_dispatcher capability={self.capability} "
+            f"instance={self.instance_id}: {detail} "
+            f"(consecutive_failures={self._consecutive_failures})"
+        )
         if self._consecutive_failures >= _CONSECUTIVE_FAILURES_ERROR_THRESHOLD:
             logger.error(msg)
         else:
@@ -416,7 +415,7 @@ class PythonClaimDispatcher:
             await self._report_terminal_fail(job_id, e, claim_epoch)
 
     async def _report_terminal_fail(
-        self, job_id: str, error: Exception, claim_epoch: Optional[int] = None
+        self, job_id: str, error: Exception, claim_epoch: int | None = None
     ) -> None:
         """Best-effort: report failure to registry so the job doesn't
         stay "working" until lease expiry. Failures here are logged and
@@ -435,12 +434,10 @@ class PythonClaimDispatcher:
             )
             await ctrl.fail(str(error))
         except Exception as inner:
-            logger.debug(
-                "claim_dispatcher: terminal-fail report failed: %s", inner
-            )
+            logger.debug("claim_dispatcher: terminal-fail report failed: %s", inner)
 
     async def _release_lease(
-        self, job_id: str, capability: str, claim_epoch: Optional[int] = None
+        self, job_id: str, capability: str, claim_epoch: int | None = None
     ) -> None:
         """Best-effort: release the claim's lease so the job returns to the
         queue (retryable) instead of staying "working" until lease expiry.
@@ -465,9 +462,7 @@ class PythonClaimDispatcher:
                 )
             )
         except Exception as inner:
-            logger.debug(
-                "claim_dispatcher: release-lease report failed: %s", inner
-            )
+            logger.debug("claim_dispatcher: release-lease report failed: %s", inner)
 
     async def _run_loop(self) -> None:
         """Main loop: gate, poll, claim, dispatch, backoff.
@@ -566,7 +561,7 @@ class PythonClaimDispatcher:
                         await asyncio.wait_for(
                             self._stop.wait(), timeout=_POLL_BASE_SECS
                         )
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         pass
                     continue
 
@@ -614,7 +609,7 @@ class PythonClaimDispatcher:
                 permit_held = False
                 try:
                     await asyncio.wait_for(self._stop.wait(), timeout=backoff)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     pass
                 backoff = min(backoff * 2, _POLL_MAX_SECS)
             finally:
@@ -685,7 +680,7 @@ class PythonClaimDispatcher:
         if self._task is not None:
             try:
                 await asyncio.wait_for(self._task, timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(
                     "claim_dispatcher: stop timed out for capability=%s; "
                     "cancelling task",
@@ -779,8 +774,7 @@ async def stop_dispatchers(
             await d.stop(drain_timeout=drain_timeout)
         except Exception as e:
             logger.warning(
-                "claim_dispatcher: error stopping dispatcher for "
-                "capability=%s: %s",
+                "claim_dispatcher: error stopping dispatcher for capability=%s: %s",
                 getattr(d, "capability", "?"),
                 e,
             )
@@ -790,7 +784,7 @@ async def stop_dispatchers(
             asyncio.gather(*(_stop_one(d) for d in dispatchers)),
             timeout=drain_timeout + grace,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning(
             "claim_dispatcher: shutdown of %d dispatcher(s) exceeded the "
             "shared budget (%.1fs drain + %.1fs grace); abandoning "
@@ -846,7 +840,7 @@ def discover_task_handlers(
         # "<module>.<qualname>"; functools.wraps copies these onto the wrapper,
         # and the dep_index aligns with ``metadata["dependencies"]`` order (the
         # same list the injector enumerates into ``:dep_<N>`` keys).
-        func_id: Optional[str] = None
+        func_id: str | None = None
         orig = handler
         try:
             orig = getattr(handler, "_mesh_original_func", handler)
@@ -866,7 +860,7 @@ def discover_task_handlers(
         # dep_index is the rank of the MeshJob parameter position among the
         # sorted eligible (McpMeshTool ∪ MeshJob) positions — mirrors the
         # injection loop in ``dependency_injector._prepare_injection_kwargs``.
-        mesh_job_dep_index: Optional[int] = None
+        mesh_job_dep_index: int | None = None
         try:
             from .signature_analyzer import (
                 analyze_mesh_job_signature,
@@ -876,8 +870,7 @@ def discover_task_handlers(
             _mj = analyze_mesh_job_signature(orig)
             if _mj.mesh_job_param_index is not None:
                 _eligible = sorted(
-                    set(get_mesh_agent_positions(orig))
-                    | {_mj.mesh_job_param_index}
+                    set(get_mesh_agent_positions(orig)) | {_mj.mesh_job_param_index}
                 )
                 mesh_job_dep_index = _eligible.index(_mj.mesh_job_param_index)
         except Exception as e:  # noqa: BLE001 — best-effort; err on allow-claim

@@ -65,8 +65,8 @@ class ProviderHandlerRegistry:
     _handlers: dict[str, type[BaseProviderHandler]] = {
         "anthropic": ClaudeHandler,
         "openai": OpenAIHandler,
-        "gemini": GeminiHandler,        # Google AI Studio (GOOGLE_API_KEY)
-        "vertex_ai": GeminiHandler,     # Vertex AI / IAM (same Gemini family, different auth)
+        "gemini": GeminiHandler,  # Google AI Studio (GOOGLE_API_KEY)
+        "vertex_ai": GeminiHandler,  # Vertex AI / IAM (same Gemini family, different auth)
     }
 
     # Cache of instantiated handlers (singleton per vendor)
@@ -107,7 +107,7 @@ class ProviderHandlerRegistry:
             del cls._instances[vendor]
 
     @classmethod
-    def get_handler(cls, vendor: Optional[str] = None) -> BaseProviderHandler:
+    def get_handler(cls, vendor: str | None = None) -> BaseProviderHandler:
         """
         Get provider handler for vendor.
 

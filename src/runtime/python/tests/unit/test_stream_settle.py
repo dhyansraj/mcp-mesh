@@ -76,7 +76,9 @@ class FakeStreamingDep:
 def _make_stream_tool_wrapper(injector):
     """Async-generator @mesh.tool shape (the multi-hop passthrough agent)."""
 
-    async def passthrough(prompt: str, chat: mesh.McpMeshTool = None) -> mesh.Stream[str]:
+    async def passthrough(
+        prompt: str, chat: mesh.McpMeshTool = None
+    ) -> mesh.Stream[str]:
         # Defensive user idiom — must keep working unchanged on timeout.
         if chat is None:
             yield "degraded"
@@ -98,9 +100,7 @@ def _make_canonical_route_handler():
         prompt: str, chat: mesh.McpMeshTool = None
     ) -> mesh.Stream[str]:
         if chat is None:
-            raise HTTPException(
-                status_code=503, detail="chat capability unavailable"
-            )
+            raise HTTPException(status_code=503, detail="chat capability unavailable")
         return _stream(prompt, chat)
 
     return chat_endpoint
@@ -315,9 +315,7 @@ class TestDecorationTimeSseEndpoint:
         client = TestClient(app)
         with client.stream("POST", "/api/chat?prompt=hi") as response:
             assert response.status_code == 200
-            assert response.headers["content-type"].startswith(
-                "text/event-stream"
-            )
+            assert response.headers["content-type"].startswith("text/event-stream")
             body = response.read().decode("utf-8")
 
         assert body == "data: alpha\n\ndata: beta\n\ndata: [DONE]\n\n"
@@ -439,9 +437,7 @@ class TestDecorationTimeSseEndpoint:
         eager settle latch still flips (no per-request budget-long holds)."""
         _set_budget(monkeypatch, "10")
         injector = DependencyInjector()
-        monkeypatch.setattr(
-            route_integration, "get_global_injector", lambda: injector
-        )
+        monkeypatch.setattr(route_integration, "get_global_injector", lambda: injector)
 
         # Two evaluations of the same source function under different
         # module names — same qualname, same code location.
@@ -558,9 +554,7 @@ class TestStreamAnnotationFailFast:
         with pytest.raises(ValueError):
             mesh.route(dependencies=[])(bad_route)
 
-        assert "bad_route" not in DecoratorRegistry.get_all_by_type(
-            "mesh_route"
-        )
+        assert "bad_route" not in DecoratorRegistry.get_all_by_type("mesh_route")
 
     def test_unresolvable_hint_on_non_stream_route_stays_quiet(self):
         """Benign hint-resolution failure (forward ref to a name that does
@@ -580,9 +574,7 @@ class TestStreamAnnotationFailFast:
 
 
 class TestRetiredKeyTerminal:
-    def test_late_sync_wait_on_retired_key_returns_immediately(
-        self, monkeypatch
-    ):
+    def test_late_sync_wait_on_retired_key_returns_immediately(self, monkeypatch):
         """A wait_for that STARTS after the key was retired must
         short-circuit — the abandoned twin wrapper remains callable after
         convergence, and its keys can never resolve."""
@@ -632,9 +624,7 @@ class TestRetiredKeyTerminal:
         state.retire_declared("twin:dep_0")
         assert state.is_settled()
 
-    def test_retire_with_unresolved_keys_left_keeps_latch_open(
-        self, monkeypatch
-    ):
+    def test_retire_with_unresolved_keys_left_keeps_latch_open(self, monkeypatch):
         _set_budget(monkeypatch, "10")
         state = get_settle_state()
         state.register_declared("twin:dep_0")

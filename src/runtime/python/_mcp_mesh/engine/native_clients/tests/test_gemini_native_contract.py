@@ -38,7 +38,6 @@ pytest.importorskip(
 from _mcp_mesh.engine.llm_errors import LLMRefusedError
 from _mcp_mesh.engine.native_clients import gemini_native
 
-
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
 # ---------------------------------------------------------------------------
@@ -73,7 +72,8 @@ def _make_gemini_response(
             SimpleNamespace(
                 text=None,
                 function_call=SimpleNamespace(
-                    name=fc["name"], args=fc.get("args", {}),
+                    name=fc["name"],
+                    args=fc.get("args", {}),
                 ),
             )
         )
@@ -611,10 +611,7 @@ class TestPromptLevelSafetyBlockDetection:
         )
         with pytest.raises(LLMRefusedError) as exc_info:
             gemini_native._adapt_response(raw, model="gemini-2.5-flash")
-        assert (
-            exc_info.value.refusal_text
-            == "Prompt contained disallowed content."
-        )
+        assert exc_info.value.refusal_text == "Prompt contained disallowed content."
         assert exc_info.value.category == "PROMPT_BLOCK"
 
     def test_adapt_response_prompt_block_wins_over_candidate_block(self):
@@ -669,9 +666,7 @@ class TestPromptLevelSafetyBlockDetection:
         assert exc_info.value.model == "gemini-3-pro-preview"
 
     @pytest.mark.asyncio
-    async def test_complete_propagates_prompt_block_LLMRefusedError(
-        self, monkeypatch
-    ):
+    async def test_complete_propagates_prompt_block_LLMRefusedError(self, monkeypatch):
         """End-to-end: ``complete()`` MUST surface PROMPT_BLOCK refusal."""
         monkeypatch.setenv("GOOGLE_API_KEY", "GAK-test")
         api_resp = _make_gemini_response(

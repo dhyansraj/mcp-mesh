@@ -33,8 +33,9 @@ import threading
 import time
 import uuid
 import weakref
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -52,12 +53,12 @@ logger = logging.getLogger(__name__)
 # + the OS reclaim the actual sockets. No async aclose() in the atexit hook —
 # interpreter is finalizing and there's no guaranteed loop to await on.
 # ---------------------------------------------------------------------------
-_ACTIVE_CLIENTS: "weakref.WeakSet[A2AClient]" = weakref.WeakSet()
+_ACTIVE_CLIENTS: weakref.WeakSet[A2AClient] = weakref.WeakSet()
 _ATEXIT_LOCK = threading.Lock()
 _ATEXIT_HOOK_REGISTERED = False
 
 
-def _register_active_client(client: "A2AClient") -> None:
+def _register_active_client(client: A2AClient) -> None:
     global _ATEXIT_HOOK_REGISTERED
     with _ATEXIT_LOCK:
         _ACTIVE_CLIENTS.add(client)
@@ -99,8 +100,8 @@ class A2ABearer:
     ``A2ABearer`` (PR #927) for runtime parity.
     """
 
-    token_env: Optional[str] = None
-    token: Optional[str] = None
+    token_env: str | None = None
+    token: str | None = None
 
     def __post_init__(self) -> None:
         # Mirror Java A2ABearer (PR #919) and TS A2ABearer (PR #927):
@@ -122,9 +123,7 @@ class A2ABearer:
                     "A2ABearer: token and token_env must be non-blank "
                     "(received whitespace-only value)."
                 )
-            raise RuntimeError(
-                "A2ABearer: must specify either token or token_env."
-            )
+            raise RuntimeError("A2ABearer: must specify either token or token_env.")
 
     def header(self) -> dict[str, str]:
         tok = self.token or (os.getenv(self.token_env) if self.token_env else None)
@@ -173,7 +172,7 @@ class A2AClient:
         self,
         url: str,
         skill_id: str,
-        auth: Optional[A2ABearer] = None,
+        auth: A2ABearer | None = None,
         timeout_default: float = 30.0,
         poll_interval: float = 0.5,
         poll_interval_max: float = 2.0,
@@ -184,8 +183,8 @@ class A2AClient:
         self.timeout_default = timeout_default
         self.poll_interval = poll_interval
         self.poll_interval_max = poll_interval_max
-        self._client: Optional[httpx.AsyncClient] = None
-        self._client_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._client: httpx.AsyncClient | None = None
+        self._client_loop: asyncio.AbstractEventLoop | None = None
         self._closed: bool = False
         _register_active_client(self)
 
@@ -243,8 +242,7 @@ class A2AClient:
         if "error" in body:
             err = body["error"]
             raise RuntimeError(
-                f"A2A error from {self.url}: "
-                f"{err.get('code')} {err.get('message')}"
+                f"A2A error from {self.url}: {err.get('code')} {err.get('message')}"
             )
         return body.get("result", {})
 
@@ -252,8 +250,8 @@ class A2AClient:
         self,
         message: dict[str, Any],
         *,
-        task_id: Optional[str] = None,
-        timeout: Optional[float] = None,
+        task_id: str | None = None,
+        timeout: float | None = None,
     ) -> A2AResponse:
         """POST ``tasks/send`` and poll ``tasks/get`` until terminal.
 
@@ -325,8 +323,8 @@ class A2AClient:
         self,
         message: dict[str, Any],
         *,
-        task_id: Optional[str] = None,
-    ) -> "A2AJob":
+        task_id: str | None = None,
+    ) -> A2AJob:
         """POST ``tasks/send`` and return an ``A2AJob`` handle WITHOUT polling.
 
         Use this when the surrounding @mesh.tool is decorated with
@@ -362,8 +360,8 @@ class A2AClient:
         self,
         message: dict[str, Any],
         *,
-        task_id: Optional[str] = None,
-    ) -> "A2AStream":
+        task_id: str | None = None,
+    ) -> A2AStream:
         """POST ``tasks/sendSubscribe`` and return an async iterator of A2AEvent.
 
         The returned stream MUST be either iterated to completion OR
@@ -452,7 +450,7 @@ class A2AJobCanceled(A2AJobError):
 _TERMINAL_STATES = ("completed", "failed", "canceled", "cancelled")
 
 
-def _is_terminal(state: Optional[str]) -> bool:
+def _is_terminal(state: str | None) -> bool:
     return state in _TERMINAL_STATES
 
 
@@ -502,7 +500,7 @@ class A2AJob:
     ``job`` parameter.
     """
 
-    client: "A2AClient"
+    client: A2AClient
     task_id: str
     initial_state: str
     initial_result: dict[str, Any] = field(default_factory=dict)
@@ -516,7 +514,7 @@ class A2AJob:
             request_timeout=self.client.timeout_default,
         )
 
-    async def cancel(self, reason: Optional[str] = None) -> None:
+    async def cancel(self, reason: str | None = None) -> None:
         """POST ``tasks/cancel``. Idempotent — already-terminal tasks return cleanly."""
         params: dict[str, Any] = {"id": self.task_id}
         if reason is not None:
@@ -542,9 +540,9 @@ class A2AJob:
 
     async def wait(
         self,
-        timeout_secs: Optional[float] = None,
-        poll_interval: Optional[float] = None,
-    ) -> "A2AResponse":
+        timeout_secs: float | None = None,
+        poll_interval: float | None = None,
+    ) -> A2AResponse:
         """Poll ``tasks/get`` until terminal; return an A2AResponse on completed.
 
         Raises ``A2AJobFailed`` on state=failed, ``A2AJobCanceled`` on
@@ -552,14 +550,18 @@ class A2AJob:
         ``poll_interval`` defaults to the client's ``poll_interval`` and
         backs off (1.5x per iteration) up to ``poll_interval_max``.
         """
-        timeout = timeout_secs if timeout_secs is not None else self.client.timeout_default
+        timeout = (
+            timeout_secs if timeout_secs is not None else self.client.timeout_default
+        )
         deadline = time.monotonic() + timeout
 
         # If the initial submit response was already terminal, short-circuit.
         if _is_terminal(self.initial_state) and self.initial_result:
             return self._terminal_to_response_or_raise(self.initial_result)
 
-        interval = poll_interval if poll_interval is not None else self.client.poll_interval
+        interval = (
+            poll_interval if poll_interval is not None else self.client.poll_interval
+        )
         while time.monotonic() < deadline:
             await asyncio.sleep(interval)
             result = await self.status()
@@ -573,7 +575,7 @@ class A2AJob:
             f"terminal state within {timeout}s"
         )
 
-    def _terminal_to_response_or_raise(self, result: dict[str, Any]) -> "A2AResponse":
+    def _terminal_to_response_or_raise(self, result: dict[str, Any]) -> A2AResponse:
         state = (result.get("status") or {}).get("state", "unknown")
         if state == "completed":
             return self.client._build_response(self.task_id, result)
@@ -584,9 +586,9 @@ class A2AJob:
 
     async def bridge(
         self,
-        mesh_job: "MeshJob",
+        mesh_job: MeshJob,
         *,
-        poll_interval: Optional[float] = None,
+        poll_interval: float | None = None,
     ) -> Any:
         """Poll the A2A backend, mirror progress into ``mesh_job`` until terminal.
 
@@ -603,7 +605,9 @@ class A2AJob:
                 during the polling loop triggers ``tasks/cancel``
                 upstream and re-raises as A2AJobCanceled).
         """
-        interval = poll_interval if poll_interval is not None else self.client.poll_interval
+        interval = (
+            poll_interval if poll_interval is not None else self.client.poll_interval
+        )
         last_progress: Any = None
         last_message: Any = None
 
@@ -613,7 +617,7 @@ class A2AJob:
             progress = metadata.get("progress")
             status = result.get("status") or {}
             msg_obj = status.get("message")
-            message: Optional[str] = None
+            message: str | None = None
             if isinstance(msg_obj, dict):
                 parts = msg_obj.get("parts") or []
                 if parts and isinstance(parts[0], dict):
@@ -629,7 +633,9 @@ class A2AJob:
                 # message-only progress events. Clamp to [0.0, 1.0] —
                 # the MeshJob.update_progress contract expects a normalized
                 # fraction; raw A2A producer progress values are advisory.
-                raw_p = float(progress) if progress is not None else (last_progress or 0.0)
+                raw_p = (
+                    float(progress) if progress is not None else (last_progress or 0.0)
+                )
                 p = min(1.0, max(0.0, raw_p))
                 await mesh_job.update_progress(p, message)
             except Exception:
@@ -641,7 +647,9 @@ class A2AJob:
                 logger.warning(
                     "A2AJob.bridge: mesh_job.update_progress failed "
                     "(task=%s, progress=%s, msg=%r) — will retry on next poll",
-                    self.task_id, progress, message,
+                    self.task_id,
+                    progress,
+                    message,
                     exc_info=True,
                 )
                 return
@@ -740,15 +748,15 @@ class A2AEvent:
     """
 
     kind: str
-    state: Optional[str] = None
-    progress: Optional[float] = None
-    message: Optional[str] = None
-    artifact_text: Optional[str] = None
+    state: str | None = None
+    progress: float | None = None
+    message: str | None = None
+    artifact_text: str | None = None
     final: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
 
 
-def _parse_sse_envelope(envelope: dict[str, Any], task_id: str) -> Optional[A2AEvent]:
+def _parse_sse_envelope(envelope: dict[str, Any], task_id: str) -> A2AEvent | None:
     """Translate one A2A v1.0 JSON-RPC SSE envelope into an A2AEvent.
 
     Returns ``None`` for envelopes that don't match either known shape
@@ -772,13 +780,13 @@ def _parse_sse_envelope(envelope: dict[str, Any], task_id: str) -> Optional[A2AE
     status = result.get("status")
     if isinstance(status, dict):
         state = status.get("state")
-        message: Optional[str] = None
+        message: str | None = None
         msg_obj = status.get("message")
         if isinstance(msg_obj, dict):
             parts = msg_obj.get("parts") or []
             if parts and isinstance(parts[0], dict):
                 message = parts[0].get("text")
-        progress: Optional[float] = None
+        progress: float | None = None
         metadata = result.get("metadata") or {}
         if isinstance(metadata, dict) and "progress" in metadata:
             try:
@@ -798,7 +806,7 @@ def _parse_sse_envelope(envelope: dict[str, Any], task_id: str) -> Optional[A2AE
     return None
 
 
-def _stream_finalizer(response_ref: "weakref.ref", task_id: str) -> None:
+def _stream_finalizer(response_ref: weakref.ref, task_id: str) -> None:
     """Best-effort sync cleanup when an A2AStream is GC'd without
     explicit aclose(). Warning fires unconditionally so the user sees
     the leak even if the response was already collected. Sync close is
@@ -844,7 +852,7 @@ class A2AStream:
         self._response = response
         self.task_id = task_id
         self._cm = _cm
-        self._line_iter: Optional[AsyncIterator[str]] = None
+        self._line_iter: AsyncIterator[str] | None = None
         self._closed = False
         # weakref.finalize fires when self is GC'd. Holding a weakref to the
         # response (rather than the response directly) keeps the finalizer
@@ -859,7 +867,7 @@ class A2AStream:
             task_id,
         )
 
-    def __aiter__(self) -> "A2AStream":
+    def __aiter__(self) -> A2AStream:
         return self
 
     async def __anext__(self) -> A2AEvent:
@@ -887,7 +895,9 @@ class A2AStream:
                             logger.debug(
                                 "A2AStream: skipping non-JSON SSE frame "
                                 "(task=%s): %s — payload=%r",
-                                self.task_id, exc, payload,
+                                self.task_id,
+                                exc,
+                                payload,
                             )
                             continue
                         event = _parse_sse_envelope(envelope, self.task_id)
@@ -908,7 +918,8 @@ class A2AStream:
             except httpx.RemoteProtocolError as exc:
                 logger.debug(
                     "A2AStream: remote closed mid-frame (task=%s): %s",
-                    self.task_id, exc,
+                    self.task_id,
+                    exc,
                 )
 
             # Iterator exhausted — flush any pending frame, then stop.
@@ -933,7 +944,7 @@ class A2AStream:
             await self.aclose()
             raise
 
-    async def __aenter__(self) -> "A2AStream":
+    async def __aenter__(self) -> A2AStream:
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
@@ -951,14 +962,14 @@ class A2AStream:
                 await self._cm.__aexit__(None, None, None)
             except Exception as exc:
                 logger.debug(
-                    "A2AStream.aclose: response cleanup raised "
-                    "(task=%s): %s",
-                    self.task_id, exc,
+                    "A2AStream.aclose: response cleanup raised (task=%s): %s",
+                    self.task_id,
+                    exc,
                 )
             finally:
                 self._cm = None
 
-    async def bridge(self, mesh_job: "MeshJob") -> Any:
+    async def bridge(self, mesh_job: MeshJob) -> Any:
         """Iterate events; mirror progress to ``mesh_job``; return artifact value.
 
         Returns the final artifact value (parsed via ``json.loads`` when
@@ -978,8 +989,8 @@ class A2AStream:
         last_message: Any = None
         artifact_value: Any = None
         saw_artifact = False
-        terminal_state: Optional[str] = None
-        terminal_message: Optional[str] = None
+        terminal_state: str | None = None
+        terminal_message: str | None = None
 
         try:
             try:
@@ -1018,7 +1029,9 @@ class A2AStream:
                                     "A2AStream.bridge: mesh_job.update_progress "
                                     "failed (task=%s, progress=%s, msg=%r) — "
                                     "will retry on next event",
-                                    self.task_id, event.progress, event.message,
+                                    self.task_id,
+                                    event.progress,
+                                    event.message,
                                     exc_info=True,
                                 )
                             else:
@@ -1047,9 +1060,7 @@ class A2AStream:
                 terminal_message or f"A2A task {self.task_id} canceled"
             )
         if terminal_state == "failed":
-            raise A2AJobFailed(
-                terminal_message or f"A2A task {self.task_id} failed"
-            )
+            raise A2AJobFailed(terminal_message or f"A2A task {self.task_id} failed")
         if not saw_artifact:
             # Stream closed without an artifact event AND without a
             # terminal failure — surface as failed so the user function

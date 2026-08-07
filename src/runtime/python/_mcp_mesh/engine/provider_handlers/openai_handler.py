@@ -50,6 +50,7 @@ def _openai_sdk_version() -> str:
     """Probe the installed openai SDK version for the dispatch-status log."""
     try:
         import openai
+
         return getattr(openai, "__version__", "<unknown>")
     except Exception:
         return "<import-failed>"
@@ -117,7 +118,7 @@ class OpenAIHandler(BaseProviderHandler):
     def prepare_request(
         self,
         messages: list[dict[str, Any]],
-        tools: Optional[list[dict[str, Any]]],
+        tools: list[dict[str, Any]] | None,
         output_type: type,
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -158,9 +159,7 @@ class OpenAIHandler(BaseProviderHandler):
         is_basemodel = isinstance(output_type, type) and issubclass(
             output_type, BaseModel
         )
-        caps = resolve_capabilities(
-            self.vendor, None, output_is_basemodel=is_basemodel
-        )
+        caps = resolve_capabilities(self.vendor, None, output_is_basemodel=is_basemodel)
 
         if caps.structured_output == StructuredOutputMode.RESPONSE_FORMAT_STRICT:
             # CRITICAL: Add response_format for structured output
@@ -184,7 +183,7 @@ class OpenAIHandler(BaseProviderHandler):
     def format_system_prompt(
         self,
         base_prompt: str,
-        tool_schemas: Optional[list[dict[str, Any]]],
+        tool_schemas: list[dict[str, Any]] | None,
         output_type: type,
     ) -> str:
         """
@@ -227,12 +226,12 @@ class OpenAIHandler(BaseProviderHandler):
     def apply_structured_output(
         self,
         output_schema: dict[str, Any],
-        output_type_name: Optional[str],
+        output_type_name: str | None,
         model_params: dict[str, Any],
         *,
         streaming: bool = False,
-        model: Optional[str] = None,
-        output_mode: Optional[str] = None,
+        model: str | None = None,
+        output_mode: str | None = None,
     ) -> dict[str, Any]:
         """
         Apply OpenAI structured output for mesh delegation.

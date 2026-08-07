@@ -11,6 +11,7 @@ Part of Phase 0: Enhanced Schema Extraction - MeshContextModel support
 
 import inspect
 import logging
+import types
 from typing import Annotated, Any, Optional, Union, get_args, get_origin, get_type_hints
 
 logger = logging.getLogger(__name__)
@@ -312,8 +313,14 @@ class FastMCPSchemaExtractor:
                     return result
             return None
 
-        # Check Union[Annotated[...], None] (which is what Optional[Annotated[...]] becomes)
-        if origin is Union:
+        # Check Union[Annotated[...], None] (which is what Optional[Annotated[...]]
+        # becomes). ``Optional[X]`` has origin ``typing.Union``; the PEP 604
+        # spelling ``X | None`` has origin ``types.UnionType``, a *different*
+        # object on <3.14. A union with an ``Annotated`` arm currently collapses
+        # to ``typing.Union`` either way (``_AnnotatedAlias.__or__`` intercepts),
+        # but that is a typing implementation detail, so test for both forms —
+        # same dual test as ``mesh._service._unwrap_optional``.
+        if origin is Union or isinstance(hint, types.UnionType):
             for union_arg in get_args(hint):
                 if union_arg is type(None):
                     continue
@@ -407,7 +414,7 @@ class FastMCPSchemaExtractor:
         return filtered_schema
 
     @staticmethod
-    def extract_type_schema(t: Any) -> Optional[dict[str, Any]]:
+    def extract_type_schema(t: Any) -> dict[str, Any] | None:
         """
         Extract a JSON Schema from a Python type.
 
@@ -425,26 +432,24 @@ class FastMCPSchemaExtractor:
             return None
 
         try:
-            from collections.abc import AsyncIterator as AbcAsyncIterator
-            from collections.abc import Awaitable as AbcAwaitable
-            from collections.abc import Coroutine as AbcCoroutine
-            from typing import AsyncIterator, Awaitable, Coroutine
+            # One import each, deliberately. This used to import the same three
+            # names twice — once from ``typing``, once from ``collections.abc``
+            # under an ``Abc*`` alias — because the two spellings were once
+            # distinct objects. They are not: ``get_origin`` normalises
+            # ``typing.Awaitable[T]`` to ``collections.abc.Awaitable``, so both
+            # arms of every membership test below matched the same object.
+            from collections.abc import AsyncIterator, Awaitable, Coroutine
 
             unwrapped = t
             for _ in range(4):
                 origin = get_origin(unwrapped)
-                if origin in (
-                    Awaitable,
-                    AbcAwaitable,
-                    AsyncIterator,
-                    AbcAsyncIterator,
-                ):
+                if origin in (Awaitable, AsyncIterator):
                     args = get_args(unwrapped)
                     if not args:
                         break
                     unwrapped = args[0]
                     continue
-                if origin in (Coroutine, AbcCoroutine):
+                if origin is Coroutine:
                     args = get_args(unwrapped)
                     if len(args) < 3:
                         break
@@ -492,7 +497,7 @@ class FastMCPSchemaExtractor:
             return None
 
     @staticmethod
-    def extract_output_schema(function: Any) -> Optional[dict[str, Any]]:
+    def extract_output_schema(function: Any) -> dict[str, Any] | None:
         """
         Extract JSON Schema for the function's return type.
 
@@ -518,7 +523,7 @@ class FastMCPSchemaExtractor:
         return FastMCPSchemaExtractor.extract_type_schema(return_annotation)
 
     @staticmethod
-    def extract_input_schema(function: Any) -> Optional[dict[str, Any]]:
+    def extract_input_schema(function: Any) -> dict[str, Any] | None:
         """
         Extract inputSchema from a function that may have a FastMCP tool attached.
 
@@ -574,8 +579,8 @@ class FastMCPSchemaExtractor:
 
     @staticmethod
     def extract_from_fastmcp_servers(
-        function: Any, fastmcp_servers: Optional[dict[str, Any]]
-    ) -> Optional[dict[str, Any]]:
+        function: Any, fastmcp_servers: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
         """
         Extract inputSchema by looking up function in FastMCP server tool managers.
 
@@ -650,8 +655,8 @@ class FastMCPSchemaExtractor:
 
     @staticmethod
     def extract_all_schemas_from_tools(
-        mesh_tools: dict[str, Any], fastmcp_servers: Optional[dict[str, Any]] = None
-    ) -> dict[str, Optional[dict[str, Any]]]:
+        mesh_tools: dict[str, Any], fastmcp_servers: dict[str, Any] | None = None
+    ) -> dict[str, dict[str, Any] | None]:
         """
         Extract inputSchemas from all tools in a mesh_tools dict.
 

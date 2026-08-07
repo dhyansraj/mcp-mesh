@@ -112,20 +112,20 @@ class TestOutputConfigModeNoToolCalls:
         answer = json.dumps({"destination": "Paris", "days": 5})
         msg = _message(content=answer, tool_calls=None)
 
-        with patch(
-            "asyncio.to_thread", new=AsyncMock(return_value=_response(msg))
-        ), patch(
-            "mesh.helpers._maybe_run_synthetic_fallback",
-            new=AsyncMock(),
-        ) as mock_synth_fb, patch(
-            "mesh.helpers._maybe_run_hint_fallback",
-            new=AsyncMock(),
-        ) as mock_hint_fb:
+        with (
+            patch("asyncio.to_thread", new=AsyncMock(return_value=_response(msg))),
+            patch(
+                "mesh.helpers._maybe_run_synthetic_fallback",
+                new=AsyncMock(),
+            ) as mock_synth_fb,
+            patch(
+                "mesh.helpers._maybe_run_hint_fallback",
+                new=AsyncMock(),
+            ) as mock_hint_fb,
+        ):
             result = await _provider_agentic_loop(
                 effective_model="anthropic/claude-sonnet-4-6",
-                messages=[
-                    {"role": "user", "content": "Plan a 5-day Paris trip."}
-                ],
+                messages=[{"role": "user", "content": "Plan a 5-day Paris trip."}],
                 tools=[],
                 tool_endpoints={},
                 model_params={
@@ -202,17 +202,16 @@ class TestOutputConfigModeNoToolCalls:
 
         # Make the synthetic fallback a no-op pass-through so we can assert
         # it WAS invoked.
-        async def _passthrough_synth(
-            *, final_content, message, response, **kwargs
-        ):
+        async def _passthrough_synth(*, final_content, message, response, **kwargs):
             return final_content, message, response
 
-        with patch(
-            "asyncio.to_thread", new=AsyncMock(return_value=_response(msg))
-        ), patch(
-            "mesh.helpers._maybe_run_synthetic_fallback",
-            new=AsyncMock(side_effect=_passthrough_synth),
-        ) as mock_synth_fb:
+        with (
+            patch("asyncio.to_thread", new=AsyncMock(return_value=_response(msg))),
+            patch(
+                "mesh.helpers._maybe_run_synthetic_fallback",
+                new=AsyncMock(side_effect=_passthrough_synth),
+            ) as mock_synth_fb,
+        ):
             await _provider_agentic_loop(
                 effective_model="anthropic/claude-sonnet-4-6",
                 messages=[{"role": "user", "content": "Q?"}],
@@ -230,9 +229,7 @@ class TestOutputConfigModeNoToolCalls:
         mock_synth_fb.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_output_config_mode_logs_warning_on_unparseable_text(
-        self, caplog
-    ):
+    async def test_output_config_mode_logs_warning_on_unparseable_text(self, caplog):
         """Defense-in-depth: when the model's text doesn't parse against the
         captured schema, the loop logs a WARN but does NOT retry — the
         framework principle is "don't force the model after it has answered".
@@ -243,12 +240,13 @@ class TestOutputConfigModeNoToolCalls:
         unparseable = "I cannot plan that trip."
         msg = _message(content=unparseable, tool_calls=None)
 
-        with patch(
-            "asyncio.to_thread", new=AsyncMock(return_value=_response(msg))
-        ), patch(
-            "mesh.helpers._maybe_run_synthetic_fallback",
-            new=AsyncMock(),
-        ) as mock_synth_fb:
+        with (
+            patch("asyncio.to_thread", new=AsyncMock(return_value=_response(msg))),
+            patch(
+                "mesh.helpers._maybe_run_synthetic_fallback",
+                new=AsyncMock(),
+            ) as mock_synth_fb,
+        ):
             with caplog.at_level("WARNING", logger="mesh.helpers"):
                 result = await _provider_agentic_loop(
                     effective_model="anthropic/claude-sonnet-4-6",
@@ -269,12 +267,9 @@ class TestOutputConfigModeNoToolCalls:
         assert result["content"] == unparseable
         mock_synth_fb.assert_not_called()
         # WARN was logged about the parse failure.
-        warn_msgs = [
-            r.getMessage() for r in caplog.records if r.levelname == "WARNING"
-        ]
+        warn_msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
         assert any(
-            "output_config mode" in m and "did not parse" in m
-            for m in warn_msgs
+            "output_config mode" in m and "did not parse" in m for m in warn_msgs
         ), f"Expected parse-warning; got: {warn_msgs}"
 
 
@@ -302,32 +297,33 @@ class TestOutputConfigModeWithToolCalls:
             tool_calls=None,
         )
 
-        with patch(
-            "asyncio.to_thread",
-            new=AsyncMock(
-                side_effect=[_response(tool_call_msg), _response(final_msg)]
+        with (
+            patch(
+                "asyncio.to_thread",
+                new=AsyncMock(
+                    side_effect=[_response(tool_call_msg), _response(final_msg)]
+                ),
             ),
-        ), patch(
-            "mesh.helpers._execute_tool_calls_for_iteration",
-            new=AsyncMock(
-                return_value=(
-                    [
-                        {
-                            "role": "tool",
-                            "tool_call_id": "call_real",
-                            "content": "sunny",
-                        }
-                    ],
-                    [],
-                )
-            ),
-        ) as mock_exec:
+            patch(
+                "mesh.helpers._execute_tool_calls_for_iteration",
+                new=AsyncMock(
+                    return_value=(
+                        [
+                            {
+                                "role": "tool",
+                                "tool_call_id": "call_real",
+                                "content": "sunny",
+                            }
+                        ],
+                        [],
+                    )
+                ),
+            ) as mock_exec,
+        ):
             result = await _provider_agentic_loop(
                 effective_model="anthropic/claude-sonnet-4-6",
                 messages=[{"role": "user", "content": "Plan a NYC trip."}],
-                tools=[
-                    {"type": "function", "function": {"name": "get_weather"}}
-                ],
+                tools=[{"type": "function", "function": {"name": "get_weather"}}],
                 tool_endpoints={"get_weather": "http://weather"},
                 model_params={
                     "_mesh_output_config_mode": True,
@@ -371,17 +367,20 @@ class TestOutputConfigShortCircuitContentFallback:
         msg.parsed = None
         msg.provider_specific_fields = None
 
-        with patch(
-            "asyncio.to_thread", new=AsyncMock(return_value=_response(msg))
-        ), patch(
-            "mesh.helpers._extract_text_from_message_content",
-            return_value=None,
-        ), patch(
-            "mesh.helpers._maybe_run_synthetic_fallback",
-            new=AsyncMock(),
-        ), patch(
-            "mesh.helpers._maybe_run_hint_fallback",
-            new=AsyncMock(),
+        with (
+            patch("asyncio.to_thread", new=AsyncMock(return_value=_response(msg))),
+            patch(
+                "mesh.helpers._extract_text_from_message_content",
+                return_value=None,
+            ),
+            patch(
+                "mesh.helpers._maybe_run_synthetic_fallback",
+                new=AsyncMock(),
+            ),
+            patch(
+                "mesh.helpers._maybe_run_hint_fallback",
+                new=AsyncMock(),
+            ),
         ):
             result = await _provider_agentic_loop(
                 effective_model="anthropic/claude-sonnet-4-6",
@@ -418,12 +417,10 @@ class TestOutputConfigNonTextCarrierRecovery:
         msg.parsed = {"destination": "Paris", "days": 5}
         msg.provider_specific_fields = None
 
-        with patch(
-            "asyncio.to_thread", new=AsyncMock(return_value=_response(msg))
-        ), patch(
-            "mesh.helpers._maybe_run_synthetic_fallback", new=AsyncMock()
-        ), patch(
-            "mesh.helpers._maybe_run_hint_fallback", new=AsyncMock()
+        with (
+            patch("asyncio.to_thread", new=AsyncMock(return_value=_response(msg))),
+            patch("mesh.helpers._maybe_run_synthetic_fallback", new=AsyncMock()),
+            patch("mesh.helpers._maybe_run_hint_fallback", new=AsyncMock()),
         ):
             result = await _provider_agentic_loop(
                 effective_model="anthropic/claude-sonnet-4-6",
@@ -447,16 +444,12 @@ class TestOutputConfigNonTextCarrierRecovery:
 
         msg = _message(content=None, tool_calls=None)
         msg.parsed = None
-        msg.provider_specific_fields = {
-            "parsed": {"destination": "Tokyo", "days": 3}
-        }
+        msg.provider_specific_fields = {"parsed": {"destination": "Tokyo", "days": 3}}
 
-        with patch(
-            "asyncio.to_thread", new=AsyncMock(return_value=_response(msg))
-        ), patch(
-            "mesh.helpers._maybe_run_synthetic_fallback", new=AsyncMock()
-        ), patch(
-            "mesh.helpers._maybe_run_hint_fallback", new=AsyncMock()
+        with (
+            patch("asyncio.to_thread", new=AsyncMock(return_value=_response(msg))),
+            patch("mesh.helpers._maybe_run_synthetic_fallback", new=AsyncMock()),
+            patch("mesh.helpers._maybe_run_hint_fallback", new=AsyncMock()),
         ):
             result = await _provider_agentic_loop(
                 effective_model="anthropic/claude-sonnet-4-6",
@@ -482,12 +475,10 @@ class TestOutputConfigNonTextCarrierRecovery:
         msg.parsed = None
         msg.provider_specific_fields = None
 
-        with patch(
-            "asyncio.to_thread", new=AsyncMock(return_value=_response(msg))
-        ), patch(
-            "mesh.helpers._maybe_run_synthetic_fallback", new=AsyncMock()
-        ), patch(
-            "mesh.helpers._maybe_run_hint_fallback", new=AsyncMock()
+        with (
+            patch("asyncio.to_thread", new=AsyncMock(return_value=_response(msg))),
+            patch("mesh.helpers._maybe_run_synthetic_fallback", new=AsyncMock()),
+            patch("mesh.helpers._maybe_run_hint_fallback", new=AsyncMock()),
         ):
             with caplog.at_level("WARNING", logger="mesh.helpers"):
                 result = await _provider_agentic_loop(
@@ -507,9 +498,7 @@ class TestOutputConfigNonTextCarrierRecovery:
         # Still returns an envelope with content "".
         assert result["content"] == ""
         # WARN names the output type, the model, and the empty-carrier reason.
-        warn_msgs = [
-            r.getMessage() for r in caplog.records if r.levelname == "WARNING"
-        ]
+        warn_msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
         assert any(
             "Trip" in m
             and "claude-sonnet-4-6" in m
@@ -562,9 +551,7 @@ class TestRecoverStructuredContentHelper:
 
         msg = _message(
             content=None,
-            tool_calls=[
-                _tool_call("c1", "get_weather", '{"city": "NYC"}')
-            ],
+            tool_calls=[_tool_call("c1", "get_weather", '{"city": "NYC"}')],
         )
         msg.parsed = None
         msg.provider_specific_fields = None
@@ -605,33 +592,36 @@ class TestIntermediateToolCallReplayUnchanged:
         completion = AsyncMock(
             side_effect=[_response(tool_call_msg), _response(final_msg)]
         )
-        with patch("asyncio.to_thread", new=completion), patch(
-            "mesh.helpers._execute_tool_calls_for_iteration",
-            new=AsyncMock(
-                return_value=(
-                    [
-                        {
-                            "role": "tool",
-                            "tool_call_id": "call_1",
-                            "content": "sunny",
-                        }
-                    ],
-                    [],
-                )
+        with (
+            patch("asyncio.to_thread", new=completion),
+            patch(
+                "mesh.helpers._execute_tool_calls_for_iteration",
+                new=AsyncMock(
+                    return_value=(
+                        [
+                            {
+                                "role": "tool",
+                                "tool_call_id": "call_1",
+                                "content": "sunny",
+                            }
+                        ],
+                        [],
+                    )
+                ),
             ),
-        ), patch(
-            "mesh.helpers._maybe_run_synthetic_fallback",
-            new=AsyncMock(side_effect=_passthrough),
-        ), patch(
-            "mesh.helpers._maybe_run_hint_fallback",
-            new=AsyncMock(side_effect=_passthrough),
+            patch(
+                "mesh.helpers._maybe_run_synthetic_fallback",
+                new=AsyncMock(side_effect=_passthrough),
+            ),
+            patch(
+                "mesh.helpers._maybe_run_hint_fallback",
+                new=AsyncMock(side_effect=_passthrough),
+            ),
         ):
             await _provider_agentic_loop(
                 effective_model="anthropic/claude-sonnet-4-6",
                 messages=[{"role": "user", "content": "Weather in NYC?"}],
-                tools=[
-                    {"type": "function", "function": {"name": "get_weather"}}
-                ],
+                tools=[{"type": "function", "function": {"name": "get_weather"}}],
                 tool_endpoints={"get_weather": "http://weather"},
                 model_params={},
                 litellm_kwargs={},

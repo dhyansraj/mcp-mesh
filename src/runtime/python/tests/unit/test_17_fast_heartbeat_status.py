@@ -6,8 +6,11 @@ as well as resilient decision-making logic for pipeline optimization.
 """
 
 import pytest
-from _mcp_mesh.shared.fast_heartbeat_status import (FastHeartbeatStatus,
-                                                    FastHeartbeatStatusUtil)
+
+from _mcp_mesh.shared.fast_heartbeat_status import (
+    FastHeartbeatStatus,
+    FastHeartbeatStatusUtil,
+)
 
 
 class TestFastHeartbeatStatus:

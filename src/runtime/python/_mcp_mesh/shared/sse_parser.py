@@ -47,7 +47,7 @@ class SSEParser:
             raise RuntimeError(f"Could not parse SSE response from {context}: {e}")
 
     @staticmethod
-    def parse_streaming_sse_chunk(chunk_data: str) -> Optional[dict[str, Any]]:
+    def parse_streaming_sse_chunk(chunk_data: str) -> dict[str, Any] | None:
         """
         Parse a single streaming SSE chunk.
 

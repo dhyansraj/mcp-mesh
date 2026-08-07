@@ -321,9 +321,7 @@ class TestClaudeOutputModeOverride:
             )
         assert out["_mesh_synthetic_format_tool_name"] == SYNTHETIC_FORMAT_TOOL_NAME
         assert "_mesh_output_config_mode" not in out
-        assert any(
-            "output_mode='strict'" in r.message for r in caplog.records
-        )
+        assert any("output_mode='strict'" in r.message for r in caplog.records)
 
     def test_override_strict_falls_back_to_hint_without_native(
         self, _claude_native_off, caplog
@@ -342,9 +340,7 @@ class TestClaudeOutputModeOverride:
             )
         assert out["_mesh_hint_mode"] is True
         assert "_mesh_output_config_mode" not in out
-        assert any(
-            "output_mode='strict'" in r.message for r in caplog.records
-        )
+        assert any("output_mode='strict'" in r.message for r in caplog.records)
 
     def test_override_hint_forces_hint_on_capable_model(self, _claude_native_on):
         """output_mode='hint' forces prose HINT even when native + a capable

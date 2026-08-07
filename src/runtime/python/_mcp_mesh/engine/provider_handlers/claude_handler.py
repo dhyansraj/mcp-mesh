@@ -60,7 +60,7 @@ OUTPUT_MODE_TEXT = "text"
 # single source of truth lives in the shared module so adapter-side
 # response_format translation (anthropic_native._build_create_kwargs) and
 # this handler stay byte-identical on the wire.
-from .._structured_output_helpers import (  # noqa: F401
+from .._structured_output_helpers import (  # noqa: E402, F401
     SYNTHETIC_FORMAT_SYSTEM_INSTRUCTION,
     SYNTHETIC_FORMAT_TOOL_DESCRIPTION,
     SYNTHETIC_FORMAT_TOOL_NAME,
@@ -91,6 +91,8 @@ _OUTPUT_CONFIG_SENTINELS = (
     "_mesh_output_config_schema",
     "_mesh_output_config_output_type_name",
 )
+
+
 def _clear_structured_output_sentinels(
     model_params: dict[str, Any], *keys: str
 ) -> None:
@@ -131,6 +133,7 @@ def _anthropic_sdk_version() -> str:
     """Probe the installed anthropic SDK version for the dispatch-status log."""
     try:
         import anthropic
+
         return getattr(anthropic, "__version__", "<unknown>")
     except Exception:
         return "<import-failed>"

@@ -10,7 +10,7 @@ import gc
 import logging
 import threading
 import time
-from typing import List, Optional, Set
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ class FastAPIMiddlewareManager:
     """
 
     def __init__(self):
-        self._processed_apps: Set[int] = set()  # Track processed apps by id()
+        self._processed_apps: set[int] = set()  # Track processed apps by id()
         self._monkey_patch_applied = False
         self._pending_middleware_needed = False  # Flag that middleware is needed
 
@@ -71,7 +71,7 @@ class FastAPIMiddlewareManager:
                             )
                         else:
                             logger.debug(
-                                f"🔍 TRACING: Failed to auto-inject middleware during app creation"
+                                "🔍 TRACING: Failed to auto-inject middleware during app creation"
                             )
                 except Exception as e:
                     # Never break FastAPI app creation
@@ -159,7 +159,7 @@ class FastAPIMiddlewareManager:
         """
         return self._add_middleware_to_app_with_retry(app)
 
-    def _discover_fastapi_apps(self) -> List:
+    def _discover_fastapi_apps(self) -> list:
         """
         Discover FastAPI apps using multiple methods.
 
@@ -202,7 +202,7 @@ class FastAPIMiddlewareManager:
         logger.debug(f"🔍 TRACING: Discovered {len(unique_apps)} unique FastAPI apps")
         return unique_apps
 
-    def _discover_apps_via_gc(self, FastAPI) -> List:
+    def _discover_apps_via_gc(self, FastAPI) -> list:
         """Discover FastAPI apps via garbage collector."""
         apps = []
         try:
@@ -213,7 +213,7 @@ class FastAPIMiddlewareManager:
             logger.debug(f"🔍 TRACING: GC discovery failed: {e}")
         return apps
 
-    def _discover_apps_via_modules(self, FastAPI) -> List:
+    def _discover_apps_via_modules(self, FastAPI) -> list:
         """Discover FastAPI apps via module globals."""
         apps = []
         try:
@@ -231,7 +231,7 @@ class FastAPIMiddlewareManager:
             logger.debug(f"🔍 TRACING: Module discovery failed: {e}")
         return apps
 
-    def _discover_apps_via_stack(self, FastAPI) -> List:
+    def _discover_apps_via_stack(self, FastAPI) -> list:
         """Discover FastAPI apps via stack frame inspection."""
         apps = []
         try:
@@ -385,12 +385,11 @@ class FastAPIMiddlewareManager:
 
     def _add_middleware_to_app(self, app):
         """Add dedicated FastAPI tracing middleware to a single FastAPI app."""
-        from ..tracing.fastapi_tracing_middleware import \
-            FastAPITracingMiddleware
+        from ..tracing.fastapi_tracing_middleware import FastAPITracingMiddleware
 
         # Add the dedicated FastAPI tracing middleware
         app.add_middleware(FastAPITracingMiddleware, logger_instance=logger)
-        logger.debug(f"🔍 TRACING: Added dedicated FastAPI tracing middleware to app")
+        logger.debug("🔍 TRACING: Added dedicated FastAPI tracing middleware to app")
 
     def get_stats(self) -> dict:
         """
@@ -406,7 +405,7 @@ class FastAPIMiddlewareManager:
 
 
 # Global instance for reuse
-_middleware_manager: Optional[FastAPIMiddlewareManager] = None
+_middleware_manager: FastAPIMiddlewareManager | None = None
 
 
 def get_fastapi_middleware_manager() -> FastAPIMiddlewareManager:

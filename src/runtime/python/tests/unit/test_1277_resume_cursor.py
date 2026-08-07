@@ -16,8 +16,9 @@ from __future__ import annotations
 import json
 from unittest import mock
 
-import mesh
 import pytest
+
+import mesh
 from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
 
 
@@ -55,7 +56,9 @@ class TestResumeCursorDecorator:
         assert handler._mesh_tool_metadata["resume_cursor"] is False
 
     def test_resume_cursor_on_non_task_tool_raises(self):
-        with pytest.raises(ValueError, match="resume_cursor is only valid with task=True"):
+        with pytest.raises(
+            ValueError, match="resume_cursor is only valid with task=True"
+        ):
 
             @mesh.tool(capability="bad", resume_cursor=True)
             async def handler():
@@ -342,10 +345,9 @@ class TestResumeGate:
             return await awaitable
 
         try:
-            with mock.patch(
-                "mcp_mesh_core.JobController", _FakeController, create=True
-            ), mock.patch(
-                "mcp_mesh_core.with_job_async", _passthrough, create=True
+            with (
+                mock.patch("mcp_mesh_core.JobController", _FakeController, create=True),
+                mock.patch("mcp_mesh_core.with_job_async", _passthrough, create=True),
             ):
                 await maybe_dispatch_as_job(fn, invoke, {"user": "alice"})
         finally:
@@ -371,9 +373,7 @@ class TestResumeGate:
     @pytest.mark.asyncio
     async def test_opted_in_no_cursor_does_not_seed(self, monkeypatch):
         # resume_cursor ON but no cursor rode the header → no seed.
-        seen = await self._run_gate(
-            monkeypatch, resume_cursor=True, header_cursor=None
-        )
+        seen = await self._run_gate(monkeypatch, resume_cursor=True, header_cursor=None)
         assert seen["initial_cursors"] is None
 
     @pytest.mark.asyncio

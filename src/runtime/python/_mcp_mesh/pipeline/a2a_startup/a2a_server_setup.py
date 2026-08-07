@@ -11,7 +11,7 @@ registry on each round-trip.
 
 import logging
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from ...shared.config_resolver import ValidationRule, get_config_value
 from ...shared.host_resolver import HostResolver
@@ -43,7 +43,7 @@ class A2AServerSetupStep(PipelineStep):
 
         try:
             fastapi_apps = context.get("fastapi_apps", {})
-            a2a_surfaces: List[Dict[str, Any]] = context.get("a2a_surfaces", [])
+            a2a_surfaces: list[dict[str, Any]] = context.get("a2a_surfaces", [])
 
             if not fastapi_apps:
                 result.status = PipelineStatus.FAILED
@@ -120,7 +120,7 @@ class A2AServerSetupStep(PipelineStep):
 
         return result
 
-    def _prepare_display_config(self) -> Dict[str, Any]:
+    def _prepare_display_config(self) -> dict[str, Any]:
         """
         Prepare display configuration for service registration.
 
@@ -158,10 +158,10 @@ class A2AServerSetupStep(PipelineStep):
 
     def _prepare_service_metadata(
         self,
-        app_info: Dict[str, Any],
-        a2a_surfaces: List[Dict[str, Any]],
-        display_config: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        app_info: dict[str, Any],
+        a2a_surfaces: list[dict[str, Any]],
+        display_config: dict[str, Any],
+    ) -> dict[str, Any]:
         """
         Prepare service registration metadata for the registry.
 
@@ -200,11 +200,11 @@ class A2AServerSetupStep(PipelineStep):
 
     def _prepare_heartbeat_config(
         self,
-        app_info: Dict[str, Any],
-        display_config: Dict[str, Any],
-        service_metadata: Dict[str, Any],
-        a2a_surfaces: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
+        app_info: dict[str, Any],
+        display_config: dict[str, Any],
+        service_metadata: dict[str, Any],
+        a2a_surfaces: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """
         Prepare heartbeat configuration for A2A service.
 
@@ -229,7 +229,7 @@ class A2AServerSetupStep(PipelineStep):
             rule=ValidationRule.TRUTHY_RULE,
         )
 
-        seed_context: Dict[str, Any] = {"a2a_surfaces": list(a2a_surfaces)}
+        seed_context: dict[str, Any] = {"a2a_surfaces": list(a2a_surfaces)}
 
         heartbeat_config = {
             "service_id": service_id,
@@ -277,9 +277,7 @@ class A2AServerSetupStep(PipelineStep):
 
         return heartbeat_config
 
-    def _generate_a2a_service_id(
-        self, app_info: Optional[Dict[str, Any]] = None
-    ) -> str:
+    def _generate_a2a_service_id(self, app_info: dict[str, Any] | None = None) -> str:
         """
         Generate A2A service ID using the same priority logic as MCP/API agents.
 
@@ -350,7 +348,7 @@ class A2AServerSetupStep(PipelineStep):
         return service_id
 
     def _get_or_generate_a2a_service_id(
-        self, app_info: Optional[Dict[str, Any]] = None
+        self, app_info: dict[str, Any] | None = None
     ) -> str:
         """
         Get existing service ID from decorator registry or generate a new one.
@@ -361,21 +359,14 @@ class A2AServerSetupStep(PipelineStep):
             current_config = DecoratorRegistry.get_resolved_agent_config()
             existing_id = current_config.get("agent_id", "")
 
-            is_a2a_format = (
-                existing_id.startswith("a2a-")
-                or "-a2a-" in existing_id
-            )
+            is_a2a_format = existing_id.startswith("a2a-") or "-a2a-" in existing_id
 
             if existing_id and is_a2a_format:
-                self.logger.info(
-                    f"🔄 Reusing existing A2A service ID: '{existing_id}'"
-                )
+                self.logger.info(f"🔄 Reusing existing A2A service ID: '{existing_id}'")
                 return existing_id
 
             new_id = self._generate_a2a_service_id(app_info)
-            self.logger.info(
-                f"🆕 Generated new A2A service ID: '{new_id}'"
-            )
+            self.logger.info(f"🆕 Generated new A2A service ID: '{new_id}'")
             return new_id
 
         except Exception as e:

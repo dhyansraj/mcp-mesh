@@ -24,6 +24,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from _mcp_mesh.engine.llm_stop_reason import (
     encode_chunk,
     encode_end,
@@ -180,7 +181,10 @@ class TestTextOnlySingleIteration:
         """``parallel_tool_calls`` must NOT reach litellm (Claude rejects it)."""
         from mesh.helpers import _provider_agentic_loop_stream
 
-        chunks = [_chunk(content="ok"), _chunk(usage={"prompt_tokens": 1, "completion_tokens": 1})]
+        chunks = [
+            _chunk(content="ok"),
+            _chunk(usage={"prompt_tokens": 1, "completion_tokens": 1}),
+        ]
         with patch("litellm.acompletion", new=AsyncMock()) as mock_ac:
             mock_ac.return_value = _FakeStream(chunks)
 
@@ -233,10 +237,24 @@ class TestToolCallIteration:
             _chunk(usage={"prompt_tokens": 15, "completion_tokens": 4}),
         ]
 
-        with patch("litellm.acompletion", new=AsyncMock()) as mock_ac, patch(
-            "mesh.helpers._execute_tool_calls_for_iteration",
-            new=AsyncMock(return_value=([{"role": "tool", "tool_call_id": "call_1", "content": "sunny"}], [])),
-        ) as mock_exec:
+        with (
+            patch("litellm.acompletion", new=AsyncMock()) as mock_ac,
+            patch(
+                "mesh.helpers._execute_tool_calls_for_iteration",
+                new=AsyncMock(
+                    return_value=(
+                        [
+                            {
+                                "role": "tool",
+                                "tool_call_id": "call_1",
+                                "content": "sunny",
+                            }
+                        ],
+                        [],
+                    )
+                ),
+            ) as mock_exec,
+        ):
             mock_ac.side_effect = [
                 _FakeStream(first_iter),
                 _FakeStream(second_iter),
@@ -293,18 +311,21 @@ class TestToolCallIteration:
             _chunk(usage={"prompt_tokens": 1, "completion_tokens": 1}),
         ]
 
-        with patch("litellm.acompletion", new=AsyncMock()) as mock_ac, patch(
-            "mesh.helpers._execute_tool_calls_for_iteration",
-            new=AsyncMock(
-                return_value=(
-                    [
-                        {"role": "tool", "tool_call_id": "call_a", "content": "A"},
-                        {"role": "tool", "tool_call_id": "call_b", "content": "B"},
-                    ],
-                    [],
-                )
-            ),
-        ) as mock_exec:
+        with (
+            patch("litellm.acompletion", new=AsyncMock()) as mock_ac,
+            patch(
+                "mesh.helpers._execute_tool_calls_for_iteration",
+                new=AsyncMock(
+                    return_value=(
+                        [
+                            {"role": "tool", "tool_call_id": "call_a", "content": "A"},
+                            {"role": "tool", "tool_call_id": "call_b", "content": "B"},
+                        ],
+                        [],
+                    )
+                ),
+            ) as mock_exec,
+        ):
             mock_ac.side_effect = [
                 _FakeStream(first_iter),
                 _FakeStream(second_iter),
@@ -349,13 +370,22 @@ class TestToolCallIteration:
             "type": "image_url",
             "image_url": {"url": "data:image/png;base64,abc"},
         }
-        with patch("litellm.acompletion", new=AsyncMock()) as mock_ac, patch(
-            "mesh.helpers._execute_tool_calls_for_iteration",
-            new=AsyncMock(
-                return_value=(
-                    [{"role": "tool", "tool_call_id": "call_1", "content": "[Image]"}],
-                    [image_part],
-                )
+        with (
+            patch("litellm.acompletion", new=AsyncMock()) as mock_ac,
+            patch(
+                "mesh.helpers._execute_tool_calls_for_iteration",
+                new=AsyncMock(
+                    return_value=(
+                        [
+                            {
+                                "role": "tool",
+                                "tool_call_id": "call_1",
+                                "content": "[Image]",
+                            }
+                        ],
+                        [image_part],
+                    )
+                ),
             ),
         ):
             mock_ac.side_effect = [
@@ -412,17 +442,19 @@ class TestMaxIterations:
                 _chunk(usage={"prompt_tokens": 1, "completion_tokens": 1}),
             ]
 
-        with patch("litellm.acompletion", new=AsyncMock()) as mock_ac, patch(
-            "mesh.helpers._execute_tool_calls_for_iteration",
-            new=AsyncMock(
-                return_value=(
-                    [{"role": "tool", "tool_call_id": "call_x", "content": "{}"}],
-                    [],
-                )
+        with (
+            patch("litellm.acompletion", new=AsyncMock()) as mock_ac,
+            patch(
+                "mesh.helpers._execute_tool_calls_for_iteration",
+                new=AsyncMock(
+                    return_value=(
+                        [{"role": "tool", "tool_call_id": "call_x", "content": "{}"}],
+                        [],
+                    )
+                ),
             ),
-        ), patch(
-            "_mcp_mesh.tracing.context.set_llm_metadata"
-        ) as mock_set_meta:
+            patch("_mcp_mesh.tracing.context.set_llm_metadata") as mock_set_meta,
+        ):
             mock_ac.side_effect = [_FakeStream(make_tool_call_iter()) for _ in range(2)]
 
             collected: list[str] = []
@@ -451,9 +483,7 @@ class TestMaxIterations:
 
         # Issue #1355: the token stream must NOT contain the English marker.
         assert "Maximum tool call iterations reached" not in collected
-        assert not any(
-            "Maximum tool call iterations" in c for c in collected
-        )
+        assert not any("Maximum tool call iterations" in c for c in collected)
         # The stream ends with exactly one typed terminal ``end`` frame
         # carrying the max_iterations stop_reason; no text frames precede it
         # (the model only ever emitted tool calls).
@@ -480,7 +510,7 @@ class TestHintMode:
         content_chunks = [
             _chunk(content='{"answer":'),
             _chunk(content='"42"'),
-            _chunk(content='}'),
+            _chunk(content="}"),
             _chunk(usage={"prompt_tokens": 1, "completion_tokens": 1}),
         ]
 
@@ -528,7 +558,10 @@ class TestHintMode:
         ]
         model_params = {
             "_mesh_hint_mode": True,
-            "_mesh_hint_schema": {"type": "object", "properties": {"a": {"type": "integer"}}},
+            "_mesh_hint_schema": {
+                "type": "object",
+                "properties": {"a": {"type": "integer"}},
+            },
         }
 
         with patch("litellm.acompletion", new=AsyncMock()) as mock_ac:
@@ -571,7 +604,7 @@ class TestHintMode:
 
         # JSON that does NOT parse against the schema so the fallback fires.
         content_chunks = [
-            _chunk(content='not json at all'),
+            _chunk(content="not json at all"),
             _chunk(usage={"prompt_tokens": 1, "completion_tokens": 1}),
         ]
         model_params = {
@@ -598,10 +631,13 @@ class TestHintMode:
             # Return a passable answer so the loop doesn't blow up.
             return '{"answer":"42"}', None, None
 
-        with patch("litellm.acompletion", new=AsyncMock()) as mock_ac, patch(
-            "mesh.helpers._maybe_run_hint_fallback",
-            new=AsyncMock(side_effect=_capture_fallback),
-        ) as mock_fb:
+        with (
+            patch("litellm.acompletion", new=AsyncMock()) as mock_ac,
+            patch(
+                "mesh.helpers._maybe_run_hint_fallback",
+                new=AsyncMock(side_effect=_capture_fallback),
+            ) as mock_fb,
+        ):
             mock_ac.return_value = _FakeStream(content_chunks)
 
             async for _ in _provider_agentic_loop_stream(

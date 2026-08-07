@@ -79,9 +79,7 @@ class TestStatusMapping:
             ("unhealthy", FakeHealthStatus.Unhealthy),
         ],
     )
-    def test_known_statuses_map_directly(
-        self, fake_core, one_handle, status, expected
-    ):
+    def test_known_statuses_map_directly(self, fake_core, one_handle, status, expected):
         assert health_check_manager.publish_health_status_to_core(status) is True
         assert one_handle.calls == [expected]
 
@@ -91,9 +89,7 @@ class TestStatusMapping:
         health_check_manager.publish_health_status_to_core("UNHEALTHY")
         assert one_handle.calls == [FakeHealthStatus.Unhealthy]
 
-    def test_unknown_status_degrades_rather_than_withdraws(
-        self, fake_core, one_handle
-    ):
+    def test_unknown_status_degrades_rather_than_withdraws(self, fake_core, one_handle):
         # "unknown" is what ``_parse_health_result`` produces for a dict with an
         # unrecognized status string. Withdrawing an agent from the mesh because
         # its status was unparseable is a worse failure than keeping it, so this

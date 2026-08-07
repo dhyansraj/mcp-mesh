@@ -51,8 +51,6 @@ class MediaStoreValidationStep(PipelineStep):
             result.status = PipelineStatus.FAILED
             result.message = f"Media store initialization failed: {e}"
             result.add_error(str(e))
-            self.logger.error(
-                "Media store initialization failed: %s", e
-            )
+            self.logger.error("Media store initialization failed: %s", e)
 
         return result

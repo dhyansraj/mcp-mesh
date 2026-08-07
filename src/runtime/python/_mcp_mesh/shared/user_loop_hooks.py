@@ -124,18 +124,16 @@ def signal_lifespan_ready(app) -> None:
         except Exception as e:
             # Race: another caller completed it between our ``done()``
             # check and ``set_result``. Harmless.
-            logger.debug(
-                "signal_lifespan_ready: future already completed (%s)", e
-            )
+            logger.debug("signal_lifespan_ready: future already completed (%s)", e)
 
 
 def schedule_on_user_loop(
     app,
-    user_loop: "asyncio.AbstractEventLoop",
+    user_loop: asyncio.AbstractEventLoop,
     coro_factory: Callable[[], Awaitable[None]],
     *,
     name: str = "user-loop-task",
-) -> "Future | None":
+) -> Future | None:
     """Schedule ``coro_factory()`` on ``user_loop`` and register the
     resulting future with ``app.state`` so the lifespan wrapper can
     cancel it on shutdown.
@@ -154,9 +152,7 @@ def schedule_on_user_loop(
         fut = _asyncio.run_coroutine_threadsafe(coro, user_loop)
     except Exception as e:
         coro.close()
-        logger.warning(
-            "Failed to schedule user-loop task %r: %s", name, e
-        )
+        logger.warning("Failed to schedule user-loop task %r: %s", name, e)
         return None
 
     try:

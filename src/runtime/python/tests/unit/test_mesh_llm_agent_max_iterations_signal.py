@@ -17,6 +17,7 @@ terminal no-tool-calls message and the consumer exited normally on iter 1).
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
 from _mcp_mesh.engine.llm_config import LLMConfig
 from _mcp_mesh.engine.llm_errors import MaxIterationsError
 from _mcp_mesh.engine.llm_stop_reason import encode_chunk, encode_end

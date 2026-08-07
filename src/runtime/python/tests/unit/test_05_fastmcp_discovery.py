@@ -667,12 +667,12 @@ class TestCriticalFailureDetection:
 
         # Verify tool objects still have .fn and .parameters
         extracted_tool = list(info["tools"].values())[0]
-        assert hasattr(
-            extracted_tool, "fn"
-        ), "BREAKING CHANGE DETECTED: FastMCP tool objects no longer have '.fn' attribute."
-        assert hasattr(
-            extracted_tool, "parameters"
-        ), "BREAKING CHANGE DETECTED: FastMCP tool objects no longer have '.parameters' attribute."
+        assert hasattr(extracted_tool, "fn"), (
+            "BREAKING CHANGE DETECTED: FastMCP tool objects no longer have '.fn' attribute."
+        )
+        assert hasattr(extracted_tool, "parameters"), (
+            "BREAKING CHANGE DETECTED: FastMCP tool objects no longer have '.parameters' attribute."
+        )
 
     def test_canary_required_attributes(self, step):
         """

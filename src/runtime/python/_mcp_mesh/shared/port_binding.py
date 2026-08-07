@@ -61,8 +61,7 @@ def get_server_startup_timeout() -> float:
         return SERVER_STARTUP_TIMEOUT_DEFAULT_SECONDS
     if timeout <= 0:
         logger.warning(
-            "MCP_MESH_SERVER_STARTUP_TIMEOUT must be > 0 (got %s); "
-            "using default %.0fs",
+            "MCP_MESH_SERVER_STARTUP_TIMEOUT must be > 0 (got %s); using default %.0fs",
             value,
             SERVER_STARTUP_TIMEOUT_DEFAULT_SECONDS,
         )
@@ -89,9 +88,7 @@ def _bind(host: str, port: int) -> socket.socket:
     return sock
 
 
-def bind_server_socket_with_fallback(
-    host: str, port: int
-) -> tuple[socket.socket, int]:
+def bind_server_socket_with_fallback(host: str, port: int) -> tuple[socket.socket, int]:
     """Bind a server socket, falling back to an OS-assigned port on conflict.
 
     Args:

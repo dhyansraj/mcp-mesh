@@ -264,9 +264,7 @@ class TestImmediateServerStartupGate:
         finally:
             release.set()
 
-    def test_slow_lifespan_within_budget_upgrades_record_to_running(
-        self, monkeypatch
-    ):
+    def test_slow_lifespan_within_budget_upgrades_record_to_running(self, monkeypatch):
         """Slow-but-healthy startup: ``started`` flips late but within the
         budget. The bound record must be discoverable (status "starting")
         WHILE the lifespan is still starting — that is what stops the
@@ -297,9 +295,7 @@ class TestImmediateServerStartupGate:
             time.sleep(0.4)
             record = DecoratorRegistry.get_immediate_uvicorn_server()
             if record is not None:
-                mid_startup_record.update(
-                    {"present": True, "status": record["status"]}
-                )
+                mid_startup_record.update({"present": True, "status": record["status"]})
 
         watcher = threading.Thread(target=sample_mid_startup, daemon=True)
         watcher.start()
@@ -341,8 +337,7 @@ class TestServerStartupTimeout:
         for bad in ("not-a-number", "0", "-3"):
             monkeypatch.setenv("MCP_MESH_SERVER_STARTUP_TIMEOUT", bad)
             assert (
-                get_server_startup_timeout()
-                == SERVER_STARTUP_TIMEOUT_DEFAULT_SECONDS
+                get_server_startup_timeout() == SERVER_STARTUP_TIMEOUT_DEFAULT_SECONDS
             )
 
 
@@ -398,12 +393,12 @@ class TestUvicornServesOnFallbackSocket:
 
         # Same flow as mesh/decorators._start_uvicorn_immediately:
         # pre-bind with fallback, then hand uvicorn the bound socket.
-        sock, actual_port = bind_server_socket_with_fallback(
-            BIND_HOST, occupied_port
-        )
+        sock, actual_port = bind_server_socket_with_fallback(BIND_HOST, occupied_port)
         assert actual_port != occupied_port
 
-        config = uvicorn.Config(app, host=BIND_HOST, port=actual_port, log_level="error")
+        config = uvicorn.Config(
+            app, host=BIND_HOST, port=actual_port, log_level="error"
+        )
         server = uvicorn.Server(config)
         thread = threading.Thread(
             target=lambda: server.run(sockets=[sock]), daemon=True

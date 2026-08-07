@@ -209,9 +209,7 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                                                     }
                                                     if filtered:
                                                         # Merge with HTTP-captured headers (HTTP takes precedence)
-                                                        existing = (
-                                                            TraceContext.get_propagated_headers()
-                                                        )
+                                                        existing = TraceContext.get_propagated_headers()
                                                         if existing:
                                                             merged = dict(filtered)
                                                             merged.update(existing)
@@ -1049,12 +1047,15 @@ def tool(
                     "(e.g., (OSError, ConnectionError))"
                 )
             for exc_cls in retry_on:
-                if not (isinstance(exc_cls, type) and issubclass(exc_cls, BaseException)):
+                if not (
+                    isinstance(exc_cls, type) and issubclass(exc_cls, BaseException)
+                ):
                     raise ValueError(
-                        f"retry_on entries must be exception classes; "
-                        f"got {exc_cls!r}"
+                        f"retry_on entries must be exception classes; got {exc_cls!r}"
                     )
-                if issubclass(exc_cls, (KeyboardInterrupt, SystemExit)) or issubclass(exc_cls, asyncio.CancelledError):
+                if issubclass(exc_cls, (KeyboardInterrupt, SystemExit)) or issubclass(
+                    exc_cls, asyncio.CancelledError
+                ):
                     raise ValueError(
                         f"retry_on must not include control-flow exceptions "
                         f"(KeyboardInterrupt, SystemExit, asyncio.CancelledError); "
@@ -1161,7 +1162,10 @@ def tool(
                     expected_type = dep.get("expected_type")
                     match_mode = dep.get("match_mode")
 
-                    if match_mode is not None and match_mode not in ("subset", "strict"):
+                    if match_mode is not None and match_mode not in (
+                        "subset",
+                        "strict",
+                    ):
                         raise ValueError(
                             "dependency match_mode must be 'subset' or 'strict'"
                         )
@@ -1286,8 +1290,7 @@ def tool(
         import inspect as _inspect
 
         if view_slots and not (
-            asyncio.iscoroutinefunction(target)
-            or _inspect.isasyncgenfunction(target)
+            asyncio.iscoroutinefunction(target) or _inspect.isasyncgenfunction(target)
         ):
             _vnames = [v["param_name"] for v in view_slots]
             raise ValueError(
@@ -2136,9 +2139,7 @@ def route(
             # entry registered above before propagating so the registry
             # does not keep a half-registered route when the raise does
             # not kill the process.
-            DecoratorRegistry.unregister_custom_decorator(
-                "mesh_route", target.__name__
-            )
+            DecoratorRegistry.unregister_custom_decorator("mesh_route", target.__name__)
             raise
         except Exception as e:
             # Log but don't fail - graceful degradation
@@ -2245,11 +2246,11 @@ def a2a(
     def decorator(target: T) -> T:
         # Validate path (REQUIRED, must start with /)
         if not isinstance(path, str) or not path:
-            raise ValueError("path is required for @mesh.a2a and must be a non-empty string")
-        if not path.startswith("/"):
             raise ValueError(
-                f"@mesh.a2a path must start with '/' (got {path!r})"
+                "path is required for @mesh.a2a and must be a non-empty string"
             )
+        if not path.startswith("/"):
+            raise ValueError(f"@mesh.a2a path must start with '/' (got {path!r})")
 
         # Validate auth — v1 scope only allows "bearer" or None.
         if auth is not None:
@@ -2272,7 +2273,10 @@ def a2a(
             raise ValueError("skill_name must be a string or None")
 
         # Validate input/output modes
-        for field_name, value in (("input_modes", input_modes), ("output_modes", output_modes)):
+        for field_name, value in (
+            ("input_modes", input_modes),
+            ("output_modes", output_modes),
+        ):
             if value is not None:
                 if not isinstance(value, list):
                     raise ValueError(f"{field_name} must be a list of strings")
@@ -2758,7 +2762,11 @@ def _resolve_pending_consumer_self_tags(agent_name: str) -> None:
             if consumer_meta.get("consumer_name") == _MESH_CONSUMER_SELF_SENTINEL:
                 consumer_meta["consumer_name"] = agent_name
 
-        registry_tags = decorated.metadata.get("tags") if isinstance(decorated.metadata, dict) else None
+        registry_tags = (
+            decorated.metadata.get("tags")
+            if isinstance(decorated.metadata, dict)
+            else None
+        )
         if isinstance(registry_tags, list):
             _swap(registry_tags)
 
@@ -3204,9 +3212,7 @@ def llm(
         try:
             llm_stream_type = detect_stream_type(func)
         except ValueError as e:
-            raise ValueError(
-                f"@mesh.llm '{func.__name__}': {e}"
-            ) from None
+            raise ValueError(f"@mesh.llm '{func.__name__}': {e}") from None
 
         # Issue #1085: response_model takes precedence as the LLM-emitted/validated
         # schema. When omitted, fall back to the return annotation (back-compat).
@@ -3229,7 +3235,8 @@ def llm(
                     from pydantic import BaseModel
 
                     if not (
-                        inspect.isclass(output_type) and issubclass(output_type, BaseModel)
+                        inspect.isclass(output_type)
+                        and issubclass(output_type, BaseModel)
                     ):
                         warnings.warn(
                             f"@mesh.llm tool '{func.__name__}': the resolved LLM response schema {output_type} "

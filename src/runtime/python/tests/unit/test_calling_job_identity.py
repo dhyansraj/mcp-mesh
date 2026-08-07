@@ -20,8 +20,7 @@ import pytest
 import mesh
 from _mcp_mesh.engine.claim_dispatcher import PythonClaimDispatcher
 from _mcp_mesh.engine.job_context import CallingJob, calling_job
-from _mcp_mesh.tracing.context import matches_propagate_header
-from _mcp_mesh.tracing.context import TraceContext
+from _mcp_mesh.tracing.context import TraceContext, matches_propagate_header
 
 
 class TestAllowlist:
@@ -182,9 +181,7 @@ class TestClaimHandlerSeesNoCallingJob:
             registry_url="http://r:8000",
             handler=handler,
         )
-        await d._dispatch(
-            {"id": "job-self", "submitted_payload": {}, "claim_epoch": 4}
-        )
+        await d._dispatch({"id": "job-self", "submitted_payload": {}, "claim_epoch": 4})
         # The claim dispatcher seeds the dispatch pair (job context)…
         assert seen["headers"].get("x-mesh-job-id") == "job-self"
         # …but calling_job() reads the calling-* pair → None here.

@@ -121,8 +121,7 @@ class _MockMessage:
         #      falsy error does not disqualify a bare answer.)
         if isinstance(content, dict):
             logger.debug(
-                "Provider sent structured (dict) content; "
-                "normalizing to a JSON string"
+                "Provider sent structured (dict) content; normalizing to a JSON string"
             )
             content = _dumps_safe(content)
         elif (
@@ -130,8 +129,7 @@ class _MockMessage:
             and "content" not in message_dict
             and "role" not in message_dict
             and not (
-                message_dict.keys()
-                & {"tool_calls", "_mesh_usage", "_mesh_stop_reason"}
+                message_dict.keys() & {"tool_calls", "_mesh_usage", "_mesh_stop_reason"}
             )
             and not message_dict.get("error")
         ):
@@ -235,12 +233,12 @@ class MeshLlmAgent:
         config: LLMConfig,
         filtered_tools: list[dict[str, Any]],
         output_type: type[BaseModel] | type[str],
-        tool_proxies: Optional[dict[str, Any]] = None,
-        template_path: Optional[str] = None,
-        context_value: Optional[Any] = None,
-        provider_proxy: Optional[Any] = None,
-        vendor: Optional[str] = None,
-        default_model_params: Optional[dict[str, Any]] = None,
+        tool_proxies: dict[str, Any] | None = None,
+        template_path: str | None = None,
+        context_value: Any | None = None,
+        provider_proxy: Any | None = None,
+        vendor: str | None = None,
+        default_model_params: dict[str, Any] | None = None,
         parallel_tool_calls: bool = False,
     ):
         """
@@ -284,7 +282,7 @@ class MeshLlmAgent:
         # Template rendering support (Phase 3)
         self._template_path = template_path
         self._context_value = context_value
-        self._template: Optional[Any] = None  # Cached template object
+        self._template: Any | None = None  # Cached template object
 
         # Load template if path provided
         if template_path:
@@ -466,7 +464,7 @@ class MeshLlmAgent:
             # Auto first, runtime overwrites (runtime wins on conflicts)
             return {**auto_context, **runtime_dict}
 
-    def _render_system_prompt(self, effective_context: Optional[dict] = None) -> str:
+    def _render_system_prompt(self, effective_context: dict | None = None) -> str:
         """
         Render system prompt from template or return literal.
 
@@ -984,9 +982,7 @@ class MeshLlmAgent:
         # Agentic loop
         while iteration_count < self.max_iterations:
             iteration_count += 1
-            logger.debug(
-                f"🔄 Iteration {iteration_count}/{self.max_iterations}..."
-            )
+            logger.debug(f"🔄 Iteration {iteration_count}/{self.max_iterations}...")
 
             try:
                 # Mesh-delegated call to upstream @mesh.llm_provider
@@ -1321,7 +1317,7 @@ class MeshLlmAgent:
         return resolved
 
     def _parse_response(
-        self, content: Optional[str], raw_response: Optional[Any] = None
+        self, content: str | None, raw_response: Any | None = None
     ) -> Any:
         """
         Parse LLM response into output type.
@@ -1368,7 +1364,7 @@ class MeshLlmAgent:
         return ResponseParser.parse(content, self.output_type)
 
     @staticmethod
-    def _raw_response_snippet(raw_response: Optional[Any]) -> str:
+    def _raw_response_snippet(raw_response: Any | None) -> str:
         """Truncated repr (~500 chars) of the raw provider message for diagnostics.
 
         Prefers the original wire dict (``_MockMessage._raw``) so non-answer keys
@@ -1447,9 +1443,9 @@ class MeshLlmAgent:
                 # this attr to anything but bytes / None).
                 sig = getattr(tc, "_thought_signature", None)
                 if isinstance(sig, (bytes, bytearray)) and sig:
-                    slot["_gemini_thought_signature"] = _base64.b64encode(
-                        sig
-                    ).decode("ascii")
+                    slot["_gemini_thought_signature"] = _base64.b64encode(sig).decode(
+                        "ascii"
+                    )
         return [tc for tc in merged.values() if tc["id"] is not None]
 
     async def _stream_mesh_delegated(
@@ -1497,9 +1493,7 @@ class MeshLlmAgent:
             ) from e
 
         effective_tools = (
-            self._enrich_tools_with_endpoints()
-            if self._tool_schemas
-            else None
+            self._enrich_tools_with_endpoints() if self._tool_schemas else None
         )
 
         # Mesh delegation: extract model_params to send to provider. Mirrors
@@ -1661,10 +1655,14 @@ class MeshLlmAgent:
         if isinstance(result, str):
             try:
                 parsed = json.loads(result)
-                message_dict = parsed if isinstance(parsed, dict) else {
-                    "role": "assistant",
-                    "content": result,
-                }
+                message_dict = (
+                    parsed
+                    if isinstance(parsed, dict)
+                    else {
+                        "role": "assistant",
+                        "content": result,
+                    }
+                )
             except (json.JSONDecodeError, TypeError):
                 message_dict = {"role": "assistant", "content": result}
         elif isinstance(result, dict):
@@ -1758,9 +1756,7 @@ class MeshLlmAgent:
 
     @staticmethod
     def _join_text_from_chunks(chunks: list[Any]) -> str:
-        return "".join(
-            MeshLlmAgent._extract_text_from_chunk(c) for c in chunks
-        )
+        return "".join(MeshLlmAgent._extract_text_from_chunk(c) for c in chunks)
 
     @staticmethod
     def _extract_usage_from_chunks(chunks: list[Any]) -> dict[str, int] | None:

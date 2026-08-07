@@ -19,11 +19,12 @@ rich one and ``response_parser.ResponseParseError`` is a back-compat alias.
 import json
 
 import pytest
+from pydantic import BaseModel
+
 from _mcp_mesh.engine import llm_errors, response_parser
 from _mcp_mesh.engine.llm_config import LLMConfig
-from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent, _MockMessage, _dumps_safe
+from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent, _dumps_safe, _MockMessage
 from _mcp_mesh.engine.response_parser import ResponseParser
-from pydantic import BaseModel
 
 
 class StrictModel(BaseModel):
@@ -96,9 +97,7 @@ class TestMockMessageContentRecovery:
         assert msg.content == "hello"
 
     def test_dict_content_serialized_to_json_string(self):
-        msg = _MockMessage(
-            {"role": "assistant", "content": {"count": 5, "name": "x"}}
-        )
+        msg = _MockMessage({"role": "assistant", "content": {"count": 5, "name": "x"}})
         assert msg.content == json.dumps({"count": 5, "name": "x"})
 
     def test_bare_map_without_content_or_role_serialized_whole(self):

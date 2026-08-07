@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 
 def warn_unsupported_kwarg_once(
@@ -194,8 +195,7 @@ def translate_max_tokens_for_restricted(
     if params.get("max_completion_tokens") is None:
         params["max_completion_tokens"] = value
         logger.warning(
-            "OpenAI model %s rejects max_tokens; using "
-            "max_completion_tokens instead",
+            "OpenAI model %s rejects max_tokens; using max_completion_tokens instead",
             model,
         )
     else:
@@ -242,8 +242,7 @@ def resolve_request_timeout(
     if timeout_value is not None:
         if request_timeout is not None:
             logger.debug(
-                "%s: dropped request_timeout=%ss "
-                "(caller-supplied timeout=%ss wins)",
+                "%s: dropped request_timeout=%ss (caller-supplied timeout=%ss wins)",
                 adapter_label,
                 request_timeout,
                 timeout_value,

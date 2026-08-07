@@ -67,6 +67,6 @@ class APIPipeline(MeshPipeline):
 
         # Log the pipeline strategy
         self.logger.info(
-            f"🌐 [DEBUG] API Pipeline initialized: dependency injection for @mesh.route decorators"
+            "🌐 [DEBUG] API Pipeline initialized: dependency injection for @mesh.route decorators"
         )
         self.logger.debug(f"📋 Pipeline steps: {[step.name for step in steps]}")

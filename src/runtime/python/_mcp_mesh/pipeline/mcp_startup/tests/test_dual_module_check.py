@@ -36,12 +36,14 @@ async def test_dual_module_collision_triggers_os_exit(caplog):
         "main.dispatch_llm_participant:dep_0",
     ]
 
-    with caplog.at_level(logging.ERROR), patch(
-        "_mcp_mesh.pipeline.mcp_startup.dual_module_check.get_global_injector",
-        return_value=fake_injector,
-    ), patch(
-        "_mcp_mesh.pipeline.mcp_startup.dual_module_check.os._exit"
-    ) as mock_exit:
+    with (
+        caplog.at_level(logging.ERROR),
+        patch(
+            "_mcp_mesh.pipeline.mcp_startup.dual_module_check.get_global_injector",
+            return_value=fake_injector,
+        ),
+        patch("_mcp_mesh.pipeline.mcp_startup.dual_module_check.os._exit") as mock_exit,
+    ):
         await step.execute({})
 
     mock_exit.assert_called_once_with(1)
@@ -52,7 +54,8 @@ async def test_dual_module_collision_triggers_os_exit(caplog):
     framed_records = [
         r
         for r in caplog.records
-        if r.levelno == logging.ERROR and "Detected duplicate tool registrations" in r.message
+        if r.levelno == logging.ERROR
+        and "Detected duplicate tool registrations" in r.message
     ]
     assert len(framed_records) == 1
     framed_msg = framed_records[0].message
@@ -74,12 +77,13 @@ async def test_clean_registry_returns_success_without_exiting():
         "__main__.solo:dep_0",
     ]
 
-    with patch(
-        "_mcp_mesh.pipeline.mcp_startup.dual_module_check.get_global_injector",
-        return_value=fake_injector,
-    ), patch(
-        "_mcp_mesh.pipeline.mcp_startup.dual_module_check.os._exit"
-    ) as mock_exit:
+    with (
+        patch(
+            "_mcp_mesh.pipeline.mcp_startup.dual_module_check.get_global_injector",
+            return_value=fake_injector,
+        ),
+        patch("_mcp_mesh.pipeline.mcp_startup.dual_module_check.os._exit") as mock_exit,
+    ):
         result = await step.execute({})
 
     mock_exit.assert_not_called()

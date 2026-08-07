@@ -116,9 +116,7 @@ class JobsCancelRouteStep(PipelineStep):
             # top-level list is the exact answer. Widening it to every served
             # path would turn it into a user-collision check with no good
             # outcome: skipping leaves MeshJob cancellation silently dead.
-            existing_paths = {
-                getattr(r, "path", None) for r in app.router.routes
-            }
+            existing_paths = {getattr(r, "path", None) for r in app.router.routes}
             if route.path not in existing_paths:
                 app.router.routes.insert(0, route)
                 self.logger.debug(

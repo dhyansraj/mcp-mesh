@@ -144,11 +144,19 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=1.0.0",
     "pytest-cov>=6.0.0",
-    "black>=25.0.0",
-    "ruff>=0.11.0",
+    # Pinned compatible-release, NOT floor-only. `ruff format --check` is now a
+    # hard gate in the lint-and-format CI job, so the formatter's output is part
+    # of the merge criteria: with `>=` a ruff release could turn every open PR
+    # red without a single repo change. The lint rules move too — UP038 was
+    # removed outright, and UP045 was split out of the still-ignored UP007,
+    # which is what forced the repo-wide Optional[...] sweep. `~=` still lets
+    # patch releases (0.16.x) through, and the stable formatter style does not
+    # move within a minor. Bumping the minor is its own reviewed diff, run
+    # alongside a `ruff format` pass. Must stay identical to the pin in
+    # src/runtime/python/pyproject.toml.
+    "ruff~=0.16.1",
     "mypy>=1.16.0",
     "pre-commit>=4.0.0",
-    "isort>=6.0.0",
     "bandit[toml]>=1.7.0",
     # The unit suite covers the LiteLLM long-tail path (tests/unit/
     # test_provider_agentic_loop_*.py patch ``litellm.acompletion`` directly),
@@ -254,24 +262,6 @@ include = [
     "/LICENSE"
 ]
 
-[tool.black]
-line-length = 88
-target-version = ['py311']
-include = '\.pyi?$'
-extend-exclude = '''
-/(
-  # directories
-  \.eggs
-  | \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | build
-  | dist
-)/
-'''
-
 [tool.ruff]
 target-version = "py311"
 line-length = 88
@@ -287,11 +277,10 @@ select = [
     "UP", # pyupgrade
 ]
 ignore = [
-    "E501",  # line too long, handled by black
+    "E501",  # line too long, handled by the formatter
     "B008",  # do not perform function calls in argument defaults
     "C901",  # too complex
     "UP007", # Use X | Y for type annotations (Python 3.10+ syntax)
-    "UP038", # Use X | Y in isinstance calls
     "F401",  # imported but unused
     "F841",  # local variable assigned but never used
     "C416",  # unnecessary list comprehension

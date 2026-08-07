@@ -105,7 +105,7 @@ def _agent_name(default: str = "mcp-mesh-gateway") -> str:
         return default
 
 
-def _find_route(app: Any, path: str) -> Optional[Any]:
+def _find_route(app: Any, path: str) -> Any | None:
     """Return the first route ``app`` serves at ``path``, or None.
 
     Path-level, not method-level: an application that owns ``/health`` owns

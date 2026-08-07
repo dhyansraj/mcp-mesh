@@ -78,9 +78,7 @@ class JobsClaimWorkersStep(PipelineStep):
         agent_id = context.get("agent_id")
         if not registry_url:
             result.status = PipelineStatus.SKIPPED
-            result.message = (
-                "Claim workers skipped: no registry_url configured"
-            )
+            result.message = "Claim workers skipped: no registry_url configured"
             self.logger.info("⚠️ %s", result.message)
             return result
         if not agent_id or agent_id == "unknown":

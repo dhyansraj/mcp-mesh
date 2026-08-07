@@ -20,9 +20,10 @@ from __future__ import annotations
 
 from typing import Any
 
-import mesh
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+import mesh
 from mesh.types import McpMeshTool
 
 

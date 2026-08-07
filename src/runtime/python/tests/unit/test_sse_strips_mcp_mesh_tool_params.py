@@ -211,9 +211,7 @@ class TestSseEndToEndPydanticBody:
         client = TestClient(app)
         response = client.post("/api/chat", json={"prompt": "hello"})
         if response.status_code != 200:
-            pytest.fail(
-                f"expected 200, got {response.status_code}: {response.text!r}"
-            )
+            pytest.fail(f"expected 200, got {response.status_code}: {response.text!r}")
         assert response.headers["content-type"].startswith("text/event-stream")
         body = response.text
         assert "data: hello\n\n" in body

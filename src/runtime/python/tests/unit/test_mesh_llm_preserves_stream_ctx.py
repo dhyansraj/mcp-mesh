@@ -119,7 +119,10 @@ class TestMeshLlmPreservesStreamCtx:
         and dry-run paths never hit ``stream()``.
         """
 
-        @mesh.llm(provider={"capability": "llm", "tags": ["claude"]}, model="anthropic/claude-sonnet-4-5")
+        @mesh.llm(
+            provider={"capability": "llm", "tags": ["claude"]},
+            model="anthropic/claude-sonnet-4-5",
+        )
         @mesh.tool(capability="chat-stream-output-type-test")
         async def chat(
             prompt: str,
@@ -128,16 +131,17 @@ class TestMeshLlmPreservesStreamCtx:
             yield prompt
 
         agents = DecoratorRegistry.get_mesh_llm_agents()
-        chat_agents = [
-            a for a in agents.values() if a.function.__name__ == "chat"
-        ]
+        chat_agents = [a for a in agents.values() if a.function.__name__ == "chat"]
         assert len(chat_agents) == 1
         assert chat_agents[0].output_type is str
 
     def test_mesh_llm_only_stream_str_normalizes_output_type_to_str(self):
         """Same normalization without a ``@mesh.tool`` layer underneath."""
 
-        @mesh.llm(provider={"capability": "llm", "tags": ["claude"]}, model="anthropic/claude-sonnet-4-5")
+        @mesh.llm(
+            provider={"capability": "llm", "tags": ["claude"]},
+            model="anthropic/claude-sonnet-4-5",
+        )
         async def chat(
             prompt: str,
             llm: mesh.MeshLlmAgent = None,
@@ -145,9 +149,7 @@ class TestMeshLlmPreservesStreamCtx:
             yield prompt
 
         agents = DecoratorRegistry.get_mesh_llm_agents()
-        chat_agents = [
-            a for a in agents.values() if a.function.__name__ == "chat"
-        ]
+        chat_agents = [a for a in agents.values() if a.function.__name__ == "chat"]
         assert len(chat_agents) == 1
         assert chat_agents[0].output_type is str
 
@@ -158,7 +160,10 @@ class TestMeshLlmPreservesStreamCtx:
         class Reply(BaseModel):
             text: str
 
-        @mesh.llm(provider={"capability": "llm", "tags": ["claude"]}, model="anthropic/claude-sonnet-4-5")
+        @mesh.llm(
+            provider={"capability": "llm", "tags": ["claude"]},
+            model="anthropic/claude-sonnet-4-5",
+        )
         async def chat(
             prompt: str,
             llm: mesh.MeshLlmAgent = None,
@@ -166,8 +171,6 @@ class TestMeshLlmPreservesStreamCtx:
             return Reply(text=prompt)
 
         agents = DecoratorRegistry.get_mesh_llm_agents()
-        chat_agents = [
-            a for a in agents.values() if a.function.__name__ == "chat"
-        ]
+        chat_agents = [a for a in agents.values() if a.function.__name__ == "chat"]
         assert len(chat_agents) == 1
         assert chat_agents[0].output_type is Reply

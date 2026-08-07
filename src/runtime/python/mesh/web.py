@@ -23,7 +23,7 @@ class MediaUpload:
 
 
 async def save_upload(
-    upload: "UploadFile",
+    upload: UploadFile,
     filename: str | None = None,
     mime_type: str | None = None,
 ) -> str:
@@ -45,7 +45,7 @@ async def save_upload(
 
 
 async def save_upload_result(
-    upload: "UploadFile",
+    upload: UploadFile,
     filename: str | None = None,
     mime_type: str | None = None,
 ) -> MediaUpload:

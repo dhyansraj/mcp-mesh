@@ -21,12 +21,13 @@ import json
 import os
 from unittest.mock import patch
 
-import mesh
 import pytest
-from _mcp_mesh.engine import settle
-from _mcp_mesh.engine.dependency_injector import DependencyInjector
-from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
 from fastmcp.exceptions import ToolError
+
+import mesh
+from _mcp_mesh.engine import settle
+from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+from _mcp_mesh.engine.dependency_injector import DependencyInjector
 
 
 def _clear():

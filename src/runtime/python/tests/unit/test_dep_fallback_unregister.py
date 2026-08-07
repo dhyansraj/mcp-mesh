@@ -14,6 +14,7 @@ DecoratorRegistry metadata, mirroring the registration fallback.
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
 from _mcp_mesh.pipeline.mcp_heartbeat import rust_heartbeat
 

@@ -14,9 +14,11 @@ Uses Rust core for registry communication, dependency resolution, and
 deregistration — same pattern as ``api_heartbeat``.
 """
 
-from .a2a_lifespan_integration import (a2a_heartbeat_lifespan_task,
-                                        create_a2a_lifespan_handler,
-                                        integrate_a2a_heartbeat_with_fastapi)
+from .a2a_lifespan_integration import (
+    a2a_heartbeat_lifespan_task,
+    create_a2a_lifespan_handler,
+    integrate_a2a_heartbeat_with_fastapi,
+)
 from .rust_a2a_heartbeat import rust_a2a_heartbeat_task
 
 __all__ = [

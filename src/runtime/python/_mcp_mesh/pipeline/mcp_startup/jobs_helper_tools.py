@@ -65,9 +65,7 @@ def _make_helper_tools(registry_url: str) -> dict[str, Any]:
         is the capability (presigned-URL semantics, ~122-bit UUID).
         """
         if _JobProxy is None:
-            raise RuntimeError(
-                "__mesh_job_status: mcp_mesh_core.JobProxy unavailable"
-            )
+            raise RuntimeError("__mesh_job_status: mcp_mesh_core.JobProxy unavailable")
         proxy = _JobProxy(job_id, registry_url)
         return await proxy.status()
 
@@ -81,9 +79,7 @@ def _make_helper_tools(registry_url: str) -> dict[str, Any]:
         until ``status`` is ``completed`` / ``failed`` / ``cancelled``.
         """
         if _JobProxy is None:
-            raise RuntimeError(
-                "__mesh_job_result: mcp_mesh_core.JobProxy unavailable"
-            )
+            raise RuntimeError("__mesh_job_result: mcp_mesh_core.JobProxy unavailable")
         proxy = _JobProxy(job_id, registry_url)
         snapshot = await proxy.status()
         return {
@@ -93,7 +89,7 @@ def _make_helper_tools(registry_url: str) -> dict[str, Any]:
         }
 
     async def __mesh_job_cancel(
-        job_id: str, reason: Optional[str] = None
+        job_id: str, reason: str | None = None
     ) -> dict[str, Any]:
         """Request cancellation for ``job_id``. The registry forwards
         the signal to the owner replica when alive.
@@ -103,9 +99,7 @@ def _make_helper_tools(registry_url: str) -> dict[str, Any]:
         (registry returns success).
         """
         if _JobProxy is None:
-            raise RuntimeError(
-                "__mesh_job_cancel: mcp_mesh_core.JobProxy unavailable"
-            )
+            raise RuntimeError("__mesh_job_cancel: mcp_mesh_core.JobProxy unavailable")
         proxy = _JobProxy(job_id, registry_url)
         await proxy.cancel(reason)
         return {"ok": True, "job_id": job_id}
@@ -201,7 +195,9 @@ class JobsHelperToolsStep(PipelineStep):
         servers = context.get("fastmcp_servers", {}) or {}
         if not servers:
             result.status = PipelineStatus.SKIPPED
-            result.message = "MeshJob helper tools skipped: no FastMCP servers discovered"
+            result.message = (
+                "MeshJob helper tools skipped: no FastMCP servers discovered"
+            )
             self.logger.info("⚠️ %s", result.message)
             return result
 
@@ -272,9 +268,7 @@ class JobsHelperToolsStep(PipelineStep):
             and not registered[name].metadata.get("framework_internal")
         ]
 
-    def _register_helpers_in_decorator_registry(
-        self, helpers: dict[str, Any]
-    ) -> None:
+    def _register_helpers_in_decorator_registry(self, helpers: dict[str, Any]) -> None:
         """Publish each helper as a ``@mesh.tool`` entry so the heartbeat
         preparation step picks them up as capabilities the registry
         knows about (#bug 5).
@@ -338,8 +332,7 @@ class JobsHelperToolsStep(PipelineStep):
                 raise
             except Exception as e:
                 self.logger.warning(
-                    "jobs_helper_tools: failed to register %s in "
-                    "DecoratorRegistry: %s",
+                    "jobs_helper_tools: failed to register %s in DecoratorRegistry: %s",
                     tool_name,
                     e,
                 )

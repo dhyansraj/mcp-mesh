@@ -7,6 +7,7 @@ Separated from MeshLlmAgent for better testability and reusability.
 
 import json
 import logging
+import types
 import typing
 from typing import Any, TypeVar, Union
 
@@ -171,7 +172,12 @@ class ResponseParser:
         origin = typing.get_origin(annotation)
         if origin is list:
             return True
-        if origin is Union:
+        # ``Optional[list[str]]`` has origin ``typing.Union``; the PEP 604
+        # spelling ``list[str] | None`` has origin ``types.UnionType``, which
+        # is a *different* object on <3.14. Both must be recognised or the
+        # leniency silently depends on how the user spelled the annotation.
+        # Same dual test as ``mesh._service._unwrap_optional``.
+        if origin is Union or isinstance(annotation, types.UnionType):
             return any(
                 ResponseParser._is_list_annotation(arg)
                 for arg in typing.get_args(annotation)
@@ -267,9 +273,8 @@ class ResponseParser:
             if isinstance(response_data, dict) and len(response_data) == 1:
                 sole_key = next(iter(response_data))
                 sole_value = response_data[sole_key]
-                if (
-                    sole_key not in output_type.model_fields
-                    and isinstance(sole_value, dict)
+                if sole_key not in output_type.model_fields and isinstance(
+                    sole_value, dict
                 ):
                     # The sole value's keys should plausibly match the output_type.
                     # Don't unwrap if they don't — preserves error fidelity for
@@ -281,9 +286,8 @@ class ResponseParser:
                         if field.is_required()
                     }
                     inner_keys = set(sole_value.keys())
-                    if (
-                        required_field_names.issubset(inner_keys)
-                        or inner_keys.issubset(model_field_names)
+                    if required_field_names.issubset(inner_keys) or inner_keys.issubset(
+                        model_field_names
                     ):
                         logger.debug(
                             f"📦 Unwrapping single-key envelope '{sole_key}' "

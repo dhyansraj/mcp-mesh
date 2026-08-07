@@ -25,7 +25,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # MCP heartbeat path (rust_heartbeat.py)
 # ---------------------------------------------------------------------------
@@ -64,11 +63,14 @@ class TestMcpHeartbeatProducerKwargs:
         injector.register_dependency = AsyncMock()
         injector.unregister_dependency = AsyncMock()
 
-        with patch(
-            "_mcp_mesh.engine.dependency_injector.get_global_injector",
-            return_value=injector,
-        ), patch(
-            "_mcp_mesh.engine.unified_mcp_proxy.EnhancedUnifiedMCPProxy", FakeProxy
+        with (
+            patch(
+                "_mcp_mesh.engine.dependency_injector.get_global_injector",
+                return_value=injector,
+            ),
+            patch(
+                "_mcp_mesh.engine.unified_mcp_proxy.EnhancedUnifiedMCPProxy", FakeProxy
+            ),
         ):
             await rust_heartbeat._handle_dependency_change(
                 capability="chat",
@@ -120,11 +122,14 @@ class TestMcpHeartbeatProducerKwargs:
         injector = MagicMock()
         injector.register_dependency = AsyncMock()
 
-        with patch(
-            "_mcp_mesh.engine.dependency_injector.get_global_injector",
-            return_value=injector,
-        ), patch(
-            "_mcp_mesh.engine.unified_mcp_proxy.EnhancedUnifiedMCPProxy", FakeProxy
+        with (
+            patch(
+                "_mcp_mesh.engine.dependency_injector.get_global_injector",
+                return_value=injector,
+            ),
+            patch(
+                "_mcp_mesh.engine.unified_mcp_proxy.EnhancedUnifiedMCPProxy", FakeProxy
+            ),
         ):
             await rust_heartbeat._handle_dependency_change(
                 capability="chat",
@@ -168,11 +173,15 @@ class TestMcpHeartbeatProducerKwargs:
         injector = MagicMock()
         injector.register_dependency = AsyncMock()
 
-        with caplog.at_level("WARNING"), patch(
-            "_mcp_mesh.engine.dependency_injector.get_global_injector",
-            return_value=injector,
-        ), patch(
-            "_mcp_mesh.engine.unified_mcp_proxy.EnhancedUnifiedMCPProxy", FakeProxy
+        with (
+            caplog.at_level("WARNING"),
+            patch(
+                "_mcp_mesh.engine.dependency_injector.get_global_injector",
+                return_value=injector,
+            ),
+            patch(
+                "_mcp_mesh.engine.unified_mcp_proxy.EnhancedUnifiedMCPProxy", FakeProxy
+            ),
         ):
             await rust_heartbeat._handle_dependency_change(
                 capability="chat",
@@ -258,11 +267,14 @@ class TestMcpHeartbeatCapabilityFallbackProducerKwargs:
         injector.register_dependency = AsyncMock()
         injector.unregister_dependency = AsyncMock()
 
-        with patch(
-            "_mcp_mesh.engine.dependency_injector.get_global_injector",
-            return_value=injector,
-        ), patch(
-            "_mcp_mesh.engine.unified_mcp_proxy.EnhancedUnifiedMCPProxy", FakeProxy
+        with (
+            patch(
+                "_mcp_mesh.engine.dependency_injector.get_global_injector",
+                return_value=injector,
+            ),
+            patch(
+                "_mcp_mesh.engine.unified_mcp_proxy.EnhancedUnifiedMCPProxy", FakeProxy
+            ),
         ):
             # Note: no requesting_function / dep_index — forces capability fallback.
             await rust_heartbeat._handle_dependency_change(
@@ -318,11 +330,14 @@ class TestMcpHeartbeatCapabilityFallbackProducerKwargs:
         injector = MagicMock()
         injector.register_dependency = AsyncMock()
 
-        with patch(
-            "_mcp_mesh.engine.dependency_injector.get_global_injector",
-            return_value=injector,
-        ), patch(
-            "_mcp_mesh.engine.unified_mcp_proxy.EnhancedUnifiedMCPProxy", FakeProxy
+        with (
+            patch(
+                "_mcp_mesh.engine.dependency_injector.get_global_injector",
+                return_value=injector,
+            ),
+            patch(
+                "_mcp_mesh.engine.unified_mcp_proxy.EnhancedUnifiedMCPProxy", FakeProxy
+            ),
         ):
             await rust_heartbeat._handle_dependency_change(
                 capability="chat",

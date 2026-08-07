@@ -179,9 +179,7 @@ def wrap_lifespan_for_user_loop(user_lifespan: Callable) -> Callable:
             task = loop.create_task(cm.__aenter__(), context=startup_ctx)
             return await task
 
-        startup_fut = asyncio.run_coroutine_threadsafe(
-            _enter_on_user_loop(), user_loop
-        )
+        startup_fut = asyncio.run_coroutine_threadsafe(_enter_on_user_loop(), user_loop)
         try:
             cm_state = await asyncio.wrap_future(startup_fut)
         except BaseException as exc:

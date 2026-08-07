@@ -41,7 +41,6 @@ pytest.importorskip(
 
 from _mcp_mesh.engine.native_clients import anthropic_native
 
-
 # ---------------------------------------------------------------------------
 # is_available()
 # ---------------------------------------------------------------------------
@@ -530,7 +529,9 @@ class TestBackendSelection:
         bedrock_cls.return_value = bedrock_instance
 
         # Also patch AsyncAnthropic to ensure it's NOT used for bedrock.
-        direct_cls = MagicMock(side_effect=AssertionError("direct client used for bedrock"))
+        direct_cls = MagicMock(
+            side_effect=AssertionError("direct client used for bedrock")
+        )
 
         with (
             patch("anthropic.AsyncAnthropic", direct_cls),
@@ -586,10 +587,7 @@ class TestBackendSelection:
         assert ctor_kwargs["api_key"] == "dapi-token"
         assert "databricks.com" in ctor_kwargs["base_url"]
         # Model id keeps "anthropic." prefix (only "databricks/" stripped).
-        assert (
-            create_mock.call_args.kwargs["model"]
-            == "anthropic.claude-3-5-sonnet"
-        )
+        assert create_mock.call_args.kwargs["model"] == "anthropic.claude-3-5-sonnet"
 
     @pytest.mark.asyncio
     async def test_lazy_client_construction_per_call(self):
@@ -757,9 +755,7 @@ class TestCompleteStream:
             _stream_event(
                 "content_block_delta",
                 index=0,
-                delta=SimpleNamespace(
-                    type="input_json_delta", partial_json='"NYC"}'
-                ),
+                delta=SimpleNamespace(type="input_json_delta", partial_json='"NYC"}'),
             ),
             _stream_event("message_stop"),
         ]
@@ -834,9 +830,7 @@ class TestSyntheticToolPassThrough:
             _stream_event(
                 "content_block_delta",
                 index=0,
-                delta=SimpleNamespace(
-                    type="input_json_delta", partial_json='"42"}'
-                ),
+                delta=SimpleNamespace(type="input_json_delta", partial_json='"42"}'),
             ),
             _stream_event("message_stop"),
         ]
@@ -1051,7 +1045,8 @@ class TestUnsupportedKwargWarn:
         warn_msgs = [
             r.getMessage()
             for r in caplog.records
-            if r.levelname == "WARNING" and "dropping unsupported kwarg" in r.getMessage()
+            if r.levelname == "WARNING"
+            and "dropping unsupported kwarg" in r.getMessage()
         ]
         assert warn_msgs == [], f"Unexpected WARN(s) for known kwargs: {warn_msgs}"
 
@@ -1084,12 +1079,8 @@ class TestSharedHttpxClient:
         against it."""
         cls_mock = MagicMock(return_value=MagicMock())
         with patch("anthropic.AsyncAnthropic", cls_mock):
-            anthropic_native._build_client(
-                "anthropic/claude-sonnet-4-5", "sk-1", None
-            )
-            anthropic_native._build_client(
-                "anthropic/claude-sonnet-4-5", "sk-2", None
-            )
+            anthropic_native._build_client("anthropic/claude-sonnet-4-5", "sk-1", None)
+            anthropic_native._build_client("anthropic/claude-sonnet-4-5", "sk-2", None)
 
         assert cls_mock.call_count == 2
         first_http = cls_mock.call_args_list[0].kwargs["http_client"]
@@ -1120,12 +1111,8 @@ class TestSharedHttpxClient:
         ``AsyncAnthropic`` wrapper so the rotated key is honored."""
         cls_mock = MagicMock(side_effect=lambda **kw: MagicMock())
         with patch("anthropic.AsyncAnthropic", cls_mock):
-            anthropic_native._build_client(
-                "anthropic/claude-sonnet-4-5", "sk-A", None
-            )
-            anthropic_native._build_client(
-                "anthropic/claude-sonnet-4-5", "sk-B", None
-            )
+            anthropic_native._build_client("anthropic/claude-sonnet-4-5", "sk-A", None)
+            anthropic_native._build_client("anthropic/claude-sonnet-4-5", "sk-B", None)
 
         assert cls_mock.call_count == 2
         first_kwargs = cls_mock.call_args_list[0].kwargs
@@ -1707,7 +1694,7 @@ class TestStreamInterruptionUsage:
         assert len(usage_chunks) == 1, (
             "expected one best-effort usage chunk emitted from finally before "
             "the exception propagated; got: "
-            f"{[ (c.usage and (c.usage.prompt_tokens, c.usage.completion_tokens)) for c in chunks ]}"
+            f"{[(c.usage and (c.usage.prompt_tokens, c.usage.completion_tokens)) for c in chunks]}"
         )
         u = usage_chunks[0].usage
         assert u.prompt_tokens == 33, (
@@ -1745,9 +1732,9 @@ class TestBedrockKwargs:
                 )
 
         warn_msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
-        assert any(
-            "Bedrock backend ignores api_key" in m for m in warn_msgs
-        ), f"Expected Bedrock api_key WARN; got: {warn_msgs}"
+        assert any("Bedrock backend ignores api_key" in m for m in warn_msgs), (
+            f"Expected Bedrock api_key WARN; got: {warn_msgs}"
+        )
 
     @pytest.mark.asyncio
     async def test_base_url_forwarded_to_bedrock(self):
@@ -1871,8 +1858,7 @@ class TestUnsupportedKwargDedupe:
         warn_msgs = [
             r.getMessage()
             for r in caplog.records
-            if r.levelname == "WARNING"
-            and "parallel_tool_calls" in r.getMessage()
+            if r.levelname == "WARNING" and "parallel_tool_calls" in r.getMessage()
         ]
         assert len(warn_msgs) == 1, (
             f"expected exactly one WARN; got {len(warn_msgs)}: {warn_msgs}"
@@ -1889,7 +1875,8 @@ class TestUnsupportedKwargDedupe:
         warn_msgs = [
             r.getMessage()
             for r in caplog.records
-            if r.levelname == "WARNING" and "dropping unsupported kwarg" in r.getMessage()
+            if r.levelname == "WARNING"
+            and "dropping unsupported kwarg" in r.getMessage()
         ]
         # Three distinct keys → three WARNs total.
         assert len(warn_msgs) == 3
@@ -1989,7 +1976,9 @@ class TestSamplingParamGating:
 
     def test_drop_emits_warn_naming_each_key(self, caplog):
         with caplog.at_level("WARNING", logger=anthropic_native.logger.name):
-            self._build("anthropic/claude-opus-4-8", temperature=0.7, top_p=0.9, top_k=40)
+            self._build(
+                "anthropic/claude-opus-4-8", temperature=0.7, top_p=0.9, top_k=40
+            )
         warn_msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
         assert any("temperature" in m for m in warn_msgs)
         assert any("top_p" in m for m in warn_msgs)

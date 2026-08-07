@@ -19,16 +19,17 @@ import asyncio
 import json
 from unittest.mock import AsyncMock, patch
 
-import mesh
 import pytest
+from fastmcp import Client, FastMCP
+from fastmcp.exceptions import ToolError
+
+import mesh
 from _mcp_mesh.engine.superseded import (
     CLAIM_SUPERSEDED_MARKER,
     SupersededError,
     parse_superseded_envelope,
 )
 from _mcp_mesh.engine.unified_mcp_proxy import UnifiedMCPProxy
-from fastmcp import Client, FastMCP
-from fastmcp.exceptions import ToolError
 
 
 class _FakeContent:
@@ -220,9 +221,7 @@ def _rpc_iserror_envelope(detail=None):
             "id": 1,
             "result": {
                 "isError": True,
-                "content": [
-                    {"type": "text", "text": json.dumps(envelope)}
-                ],
+                "content": [{"type": "text", "text": json.dumps(envelope)}],
             },
         }
     )
@@ -242,11 +241,12 @@ class TestPrimaryTransportEndToEnd:
         fake_client = _FakeHttpxClient(_rpc_iserror_envelope("stale epoch 3"))
         fastmcp_factory = AsyncMock()  # the FALLBACK path — must NOT be entered
 
-        with patch(
-            "_mcp_mesh.engine.unified_mcp_proxy._get_httpx_client_sync",
-            return_value=fake_client,
-        ), patch.object(
-            proxy, "_get_or_create_fastmcp_client", fastmcp_factory
+        with (
+            patch(
+                "_mcp_mesh.engine.unified_mcp_proxy._get_httpx_client_sync",
+                return_value=fake_client,
+            ),
+            patch.object(proxy, "_get_or_create_fastmcp_client", fastmcp_factory),
         ):
             with pytest.raises(SupersededError) as excinfo:
                 asyncio.run(proxy.call_tool("mutate", {}))
@@ -274,11 +274,12 @@ class TestPrimaryTransportEndToEnd:
         fake_client = _FakeHttpxClient(rpc)
         fastmcp_factory = AsyncMock()
 
-        with patch(
-            "_mcp_mesh.engine.unified_mcp_proxy._get_httpx_client_sync",
-            return_value=fake_client,
-        ), patch.object(
-            proxy, "_get_or_create_fastmcp_client", fastmcp_factory
+        with (
+            patch(
+                "_mcp_mesh.engine.unified_mcp_proxy._get_httpx_client_sync",
+                return_value=fake_client,
+            ),
+            patch.object(proxy, "_get_or_create_fastmcp_client", fastmcp_factory),
         ):
             with pytest.raises(RuntimeError) as excinfo:
                 asyncio.run(proxy.call_tool("mutate", {}))

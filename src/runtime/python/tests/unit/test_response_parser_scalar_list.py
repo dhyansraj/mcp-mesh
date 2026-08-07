@@ -8,7 +8,7 @@ single-value-as-array drift before Pydantic validation. This is a no-op for
 well-shaped (strict) output where the value is already a list.
 """
 
-from typing import List, Optional
+from typing import Optional
 
 from pydantic import BaseModel
 
@@ -17,11 +17,25 @@ from _mcp_mesh.engine.response_parser import ResponseParser
 
 class Analysis(BaseModel):
     summary: str
-    insights: List[str]
+    insights: list[str]
 
 
 class OptionalListModel(BaseModel):
-    tags: Optional[List[str]] = None
+    """PEP 604 spelling of the optional list field."""
+
+    tags: list[str] | None = None
+
+
+class LegacyOptionalListModel(BaseModel):
+    """``typing.Optional`` spelling of the same field.
+
+    Kept alongside ``OptionalListModel`` on purpose: the two produce
+    *different* runtime objects (``types.UnionType`` vs ``typing.Union``) and
+    the coercion must recognise both. Coverage of only one spelling let the
+    other regress silently.
+    """
+
+    tags: Optional[list[str]] = None  # noqa: UP045
 
 
 class TestResponseParserScalarList:
@@ -52,9 +66,15 @@ class TestResponseParserScalarList:
         assert parsed.summary == "ok"
 
     def test_optional_list_scalar_coerced(self):
-        """Optional[List[str]] also coerces a scalar to a single-element list."""
+        """``list[str] | None`` coerces a scalar to a single-element list."""
         data = {"tags": "urgent"}
         parsed = ResponseParser.parse(data, OptionalListModel)
+        assert parsed.tags == ["urgent"]
+
+    def test_legacy_optional_list_scalar_coerced(self):
+        """``Optional[list[str]]`` coerces identically to the PEP 604 spelling."""
+        data = {"tags": "urgent"}
+        parsed = ResponseParser.parse(data, LegacyOptionalListModel)
         assert parsed.tags == ["urgent"]
 
     def test_optional_list_none_unchanged(self):

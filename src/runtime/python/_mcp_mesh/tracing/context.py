@@ -88,13 +88,15 @@ def set_llm_metadata(
     output_tokens: int = 0,
 ) -> None:
     """Set LLM metadata in context for ExecutionTracer to pick up."""
-    _llm_metadata.set({
-        "llm_model": model,
-        "llm_provider": provider,
-        "llm_input_tokens": input_tokens,
-        "llm_output_tokens": output_tokens,
-        "llm_total_tokens": input_tokens + output_tokens,
-    })
+    _llm_metadata.set(
+        {
+            "llm_model": model,
+            "llm_provider": provider,
+            "llm_input_tokens": input_tokens,
+            "llm_output_tokens": output_tokens,
+            "llm_total_tokens": input_tokens + output_tokens,
+        }
+    )
 
 
 def clear_llm_metadata() -> None:

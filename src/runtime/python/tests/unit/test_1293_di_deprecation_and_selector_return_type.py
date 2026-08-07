@@ -11,10 +11,10 @@ Item 2 — @mesh.selector schema-matching ``expected_type`` defaults to the stub
 import logging
 import os
 
-import mesh
 import pytest
 from pydantic import BaseModel
 
+import mesh
 from _mcp_mesh.engine import settle
 from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
 from _mcp_mesh.engine.dependency_injector import analyze_injection_strategy
@@ -56,7 +56,9 @@ class TestUntypedConsumerDeprecationWarning:
             result = analyze_injection_strategy(greet, ["some_dep"])
 
         assert result == [0]  # injection still happens
-        assert "Untyped single-parameter injection is DEPRECATED as of v3" in caplog.text
+        assert (
+            "Untyped single-parameter injection is DEPRECATED as of v3" in caplog.text
+        )
         assert "dep: McpMeshTool = None" in caplog.text
 
     def test_zero_dependency_single_param_no_warning_still_injects(self, caplog):
@@ -114,9 +116,7 @@ class TestSelectorReturnTypeDerivation:
     def test_explicit_expected_type_overrides_return(self):
         @mesh.service
         class View:
-            @mesh.selector(
-                "hr.employee", match_mode="subset", expected_type=Widget
-            )
+            @mesh.selector("hr.employee", match_mode="subset", expected_type=Widget)
             async def get(self, args: dict) -> Employee: ...
 
         b = _binding(View, "get")
@@ -178,7 +178,7 @@ class TestSelectorReturnTypeDerivation:
         @mesh.service
         class View:
             @mesh.selector("hr.employee", match_mode="subset")
-            async def maybe(self, args: dict) -> Optional[Employee]: ...
+            async def maybe(self, args: dict) -> Employee | None: ...
 
         b = _binding(View, "maybe")
         # Unwrapped to the concrete model, not stored as Optional[...].

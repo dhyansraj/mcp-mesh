@@ -53,7 +53,7 @@ _MESH_PROGRESS_CTX_PARAM = "_mesh_progress_ctx"
 # Cached convention for ctx.report_progress; resolved lazily per FastMCP
 # version. Newer FastMCP exposes a ``message`` kwarg; older builds only accept
 # ``(progress, total)`` positionally with a third positional ``message``.
-_REPORT_PROGRESS_CONVENTION: Optional[str] = None
+_REPORT_PROGRESS_CONVENTION: str | None = None
 
 
 def _resolve_report_progress_convention(report_progress: Callable) -> str:
@@ -154,7 +154,12 @@ def _build_stream_signature(func: Callable) -> inspect.Signature:
         _MESH_PROGRESS_CTX_PARAM,
         kind=inspect.Parameter.KEYWORD_ONLY,
         default=None,
-        annotation=Optional[Context],
+        # Deliberately ``Optional[...]`` and not ``Context | None``: this is a
+        # runtime *value* handed to inspect.Parameter, not an annotation. The
+        # two compare equal but are different objects (typing._UnionGenericAlias
+        # vs types.UnionType), and this signature is consumed by FastMCP /
+        # Pydantic schema generation.
+        annotation=Optional[Context],  # noqa: UP045
     )
     return base.replace(parameters=params + [ctx_param])
 
@@ -165,9 +170,9 @@ def _make_stream_wrapper(
     dependencies: list[str],
     get_dependency_fn: Callable[[str], Any | None],
     log: logging.Logger,
-    settle_keys: Optional[list] = None,
-    settle_params: Optional[list] = None,
-    view_slots: Optional[list] = None,
+    settle_keys: list | None = None,
+    settle_params: list | None = None,
+    view_slots: list | None = None,
 ) -> Callable:
     """Build a wrapper that drives an async-iterator tool over MCP progress.
 
@@ -254,9 +259,7 @@ def _make_stream_wrapper(
                 try:
                     await aclose()
                 except Exception as e:
-                    log.debug(
-                        f"stream wrapper: aclose() failed during cancel: {e}"
-                    )
+                    log.debug(f"stream wrapper: aclose() failed during cancel: {e}")
             raise
 
         result = "".join(chunks)
@@ -341,9 +344,7 @@ def _build_clean_signature(func: Any) -> inspect.Signature | None:
     except (TypeError, ValueError):
         return None
     clean_params = [
-        param
-        for name, param in sig.parameters.items()
-        if name not in injectable_names
+        param for name, param in sig.parameters.items() if name not in injectable_names
     ]
     return sig.replace(parameters=clean_params)
 
@@ -370,7 +371,7 @@ def _describe_skipped_params(func: Callable, params: list[inspect.Parameter]) ->
 
     from .signature_analyzer import _get_original_func, _is_mesh_tool_type
 
-    hints: Optional[dict[str, Any]] = None
+    hints: dict[str, Any] | None = None
     try:
         hints = get_type_hints(_get_original_func(func))
     except Exception:
@@ -400,9 +401,7 @@ def _describe_skipped_params(func: Callable, params: list[inspect.Parameter]) ->
                 parts.append(f"'{p.name}' (McpMeshTool)")
             else:
                 ann_name = getattr(resolved, "__name__", None) or str(resolved)
-                parts.append(
-                    f"'{p.name}' (annotated as {ann_name}, not McpMeshTool)"
-                )
+                parts.append(f"'{p.name}' (annotated as {ann_name}, not McpMeshTool)")
     return ", ".join(parts)
 
 
@@ -419,7 +418,7 @@ def _format_selected_pairings(
     raising — these strings feed diagnostics that must never crash dispatch.
     """
     pairs = []
-    for i, (dep, pos) in enumerate(zip(dependencies, eligible_positions)):
+    for i, (dep, pos) in enumerate(zip(dependencies, eligible_positions, strict=False)):
         name = param_names[pos] if pos < len(param_names) else f"<arg {pos}>"
         pairs.append(f"dependencies[{i}] '{dep}' → parameter '{name}'")
     return ", ".join(pairs) if pairs else "nothing (no dependencies declared)"
@@ -431,7 +430,7 @@ def _format_unfilled_slots_message(
     dependencies: list[str],
     param_names: list[str],
     tp: str = "",
-    unfilled_param_names: Optional[list[str]] = None,
+    unfilled_param_names: list[str] | None = None,
 ) -> str:
     """Build the "more eligible slots than dependencies" diagnostic text.
 
@@ -447,7 +446,7 @@ def _format_unfilled_slots_message(
     kwargs exist yet).
     """
     if unfilled_param_names is None:
-        untouched_positions = eligible_positions[len(dependencies):]
+        untouched_positions = eligible_positions[len(dependencies) :]
         unfilled_param_names = [
             param_names[pos] if pos < len(param_names) else f"<arg {pos}>"
             for pos in untouched_positions
@@ -538,7 +537,7 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
     # (not just presence) is kept so diagnostics can name the dep→param
     # pairings positional pairing selects.
     has_mesh_job_param = False
-    mesh_job_index: Optional[int] = None
+    mesh_job_index: int | None = None
     try:
         from .signature_analyzer import analyze_mesh_job_signature
 
@@ -655,11 +654,7 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
                 # dropped because no parameter is annotation-eligible.
                 # Raises under MCP_MESH_STRICT_DI.
                 example_param = next(
-                    (
-                        p.name
-                        for p in params
-                        if p.annotation is inspect.Parameter.empty
-                    ),
+                    (p.name for p in params if p.annotation is inspect.Parameter.empty),
                     params[0].name,
                 )
                 warn_or_raise(
@@ -727,7 +722,7 @@ def _prepare_injection_kwargs(
     injected_deps_array: list,
     get_dependency_fn: Callable[[str], Any | None],
     log: logging.Logger,
-    view_slots: Optional[list] = None,
+    view_slots: list | None = None,
 ) -> tuple[dict, int]:
     """Prepare kwargs with injected dependencies and LLM agent.
 
@@ -824,7 +819,7 @@ def _prepare_injection_kwargs(
             # the message builder bounds-guards regardless.
             genuinely_unfilled = [
                 params[pos] if pos < len(params) else f"<arg {pos}>"
-                for pos in eligible_positions[len(dependencies):]
+                for pos in eligible_positions[len(dependencies) :]
                 if not (
                     pos < len(params)
                     and params[pos] in final_kwargs
@@ -844,8 +839,7 @@ def _prepare_injection_kwargs(
             # The message construction must never crash dispatch regardless
             # of wrapper/original signature shape.
             log.debug(
-                f"{tp}untouched-positional diagnostic skipped for "
-                f"{func.__name__}: {e}"
+                f"{tp}untouched-positional diagnostic skipped for {func.__name__}: {e}"
             )
         if unfilled_message is not None:
             log.warning(unfilled_message)
@@ -855,9 +849,9 @@ def _prepare_injection_kwargs(
 
     # MeshJobSubmitter construction needs the registry URL + agent_id;
     # resolve lazily on first MeshJob slot so non-job tools pay nothing.
-    _submitter_ctx: Optional[tuple[Optional[str], str]] = None
+    _submitter_ctx: tuple[str | None, str] | None = None
 
-    def _resolve_submitter_ctx() -> tuple[Optional[str], str]:
+    def _resolve_submitter_ctx() -> tuple[str | None, str]:
         nonlocal _submitter_ctx
         if _submitter_ctx is not None:
             return _submitter_ctx
@@ -1023,12 +1017,12 @@ def _prepare_injection_kwargs(
 
 def _first_unavailable_required(
     func_id: str,
-    route_required_caps: list[Optional[str]],
+    route_required_caps: list[str | None],
     injected_deps_array: list,
     get_dependency_fn: Callable[[str], Any | None],
-    kwargs: Optional[dict] = None,
-    settle_params: Optional[list] = None,
-) -> Optional[str]:
+    kwargs: dict | None = None,
+    settle_params: list | None = None,
+) -> str | None:
     """Return the capability of the first unavailable required route dep.
 
     Issue #1249 perimeter check. For each dependency slot flagged required
@@ -1097,9 +1091,9 @@ class DependencyInjector:
         self._function_registry: weakref.WeakValueDictionary = (
             weakref.WeakValueDictionary()
         )
-        self._dependency_mapping: dict[str, set[str]] = (
-            {}
-        )  # dep_name -> set of function_ids
+        self._dependency_mapping: dict[
+            str, set[str]
+        ] = {}  # dep_name -> set of function_ids
         # Last-applied resolution signature per dependency key (issue #1314).
         # The Rust core re-emits ``dependency_available`` for believed-delivered
         # edges on an independent wall-clock tick to self-heal dropped applies.
@@ -1384,9 +1378,9 @@ class DependencyInjector:
         self,
         func: Callable,
         dependencies: list[str],
-        route_required_caps: Optional[list[Optional[str]]] = None,
-        tool_required_caps: Optional[list[Optional[str]]] = None,
-        view_slots: Optional[list] = None,
+        route_required_caps: list[str | None] | None = None,
+        tool_required_caps: list[str | None] | None = None,
+        view_slots: list | None = None,
     ) -> Callable:
         """
         Create in-place dependency injection by modifying the original function.
@@ -1423,14 +1417,14 @@ class DependencyInjector:
 
         # Normalize to a plain list so the closures below can test truthiness
         # cheaply; None (the @mesh.tool case) short-circuits the whole check.
-        _route_required_caps: list[Optional[str]] = list(route_required_caps or [])
+        _route_required_caps: list[str | None] = list(route_required_caps or [])
         _has_route_required = any(c is not None for c in _route_required_caps)
         # Issue #1273: @mesh.tool required-dep slots (index-aligned with
         # ``dependencies``). The MeshJob-paired slot is nulled out below once
         # ``mesh_job_index`` is known — its slot holds a locally-built
         # submitter, never a resolved proxy, so gating on it would refuse
         # every call (mirrors the claim dispatcher's mesh_job_dep_index skip).
-        _tool_required_caps: list[Optional[str]] = list(tool_required_caps or [])
+        _tool_required_caps: list[str | None] = list(tool_required_caps or [])
 
         # RFC #1280: ``dependencies`` is the FULL edge list — explicit deps
         # first, then each @mesh.service view's method edges (name-sorted)
@@ -1478,7 +1472,7 @@ class DependencyInjector:
         # never runs, the MeshJob auto-injection block never fires, and
         # consumer-side jobs silently lose their submitter (#bug 1).
         has_mesh_job_param = False
-        mesh_job_index: Optional[int] = None
+        mesh_job_index: int | None = None
         try:
             from .signature_analyzer import analyze_mesh_job_signature
 
@@ -1514,8 +1508,8 @@ class DependencyInjector:
             )
         except (TypeError, ValueError):
             _settle_param_names = []
-        settle_keys: list[Optional[str]] = [None] * len(dependencies)
-        settle_params: list[Optional[str]] = [None] * len(dependencies)
+        settle_keys: list[str | None] = [None] * len(dependencies)
+        settle_params: list[str | None] = [None] * len(dependencies)
         for _i, _pos in enumerate(settle_eligible):
             if _i >= len(dependencies):
                 break
@@ -1821,9 +1815,7 @@ class DependencyInjector:
 
                 # Issue #1273 direct-dispatch guard (no-op for @mesh.route and
                 # for tools with no required dep). Raises ToolError → isError.
-                _tool_required_refusal(
-                    dependency_wrapper._mesh_injected_deps, kwargs
-                )
+                _tool_required_refusal(dependency_wrapper._mesh_injected_deps, kwargs)
 
                 from ..tracing.execution_tracer import ExecutionTracer
                 from .job_dispatch import maybe_dispatch_as_job
@@ -1892,9 +1884,7 @@ class DependencyInjector:
 
                 # Issue #1273 direct-dispatch guard (sync variant). Raises
                 # ToolError → isError when a required tool dep is unresolved.
-                _tool_required_refusal(
-                    dependency_wrapper._mesh_injected_deps, kwargs
-                )
+                _tool_required_refusal(dependency_wrapper._mesh_injected_deps, kwargs)
 
                 from ..tracing.execution_tracer import ExecutionTracer
 
@@ -1934,9 +1924,7 @@ class DependencyInjector:
                     # — wake any settling call waiting on this dependency
                     # AFTER the array slot is set so the woken call re-reads
                     # a real proxy.
-                    get_settle_state().mark_resolved(
-                        f"{func_id}:dep_{dep_index}"
-                    )
+                    get_settle_state().mark_resolved(f"{func_id}:dep_{dep_index}")
                 if instance is None:
                     wrapper_logger.debug(
                         f"Removed dependency at index {dep_index} from {func_id}"

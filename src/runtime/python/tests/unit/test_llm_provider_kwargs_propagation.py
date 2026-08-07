@@ -21,7 +21,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # rust_heartbeat._handle_llm_provider_update — parses provider_info.kwargs
 # and forwards it through ``injector.process_llm_providers``.
@@ -49,12 +48,15 @@ class TestLlmProviderUpdateForwardsKwargs:
         injector.register_dependency = AsyncMock()
         injector.process_llm_providers = MagicMock()
 
-        with patch(
-            "_mcp_mesh.engine.dependency_injector.get_global_injector",
-            return_value=injector,
-        ), patch(
-            "_mcp_mesh.engine.unified_mcp_proxy.EnhancedUnifiedMCPProxy",
-            MagicMock(),
+        with (
+            patch(
+                "_mcp_mesh.engine.dependency_injector.get_global_injector",
+                return_value=injector,
+            ),
+            patch(
+                "_mcp_mesh.engine.unified_mcp_proxy.EnhancedUnifiedMCPProxy",
+                MagicMock(),
+            ),
         ):
             await rust_heartbeat._handle_llm_provider_update(
                 provider_info=provider_info,
@@ -90,12 +92,15 @@ class TestLlmProviderUpdateForwardsKwargs:
         injector.register_dependency = AsyncMock()
         injector.process_llm_providers = MagicMock()
 
-        with patch(
-            "_mcp_mesh.engine.dependency_injector.get_global_injector",
-            return_value=injector,
-        ), patch(
-            "_mcp_mesh.engine.unified_mcp_proxy.EnhancedUnifiedMCPProxy",
-            MagicMock(),
+        with (
+            patch(
+                "_mcp_mesh.engine.dependency_injector.get_global_injector",
+                return_value=injector,
+            ),
+            patch(
+                "_mcp_mesh.engine.unified_mcp_proxy.EnhancedUnifiedMCPProxy",
+                MagicMock(),
+            ),
         ):
             await rust_heartbeat._handle_llm_provider_update(
                 provider_info=provider_info,
@@ -125,12 +130,16 @@ class TestLlmProviderUpdateForwardsKwargs:
         injector.register_dependency = AsyncMock()
         injector.process_llm_providers = MagicMock()
 
-        with caplog.at_level("WARNING"), patch(
-            "_mcp_mesh.engine.dependency_injector.get_global_injector",
-            return_value=injector,
-        ), patch(
-            "_mcp_mesh.engine.unified_mcp_proxy.EnhancedUnifiedMCPProxy",
-            MagicMock(),
+        with (
+            caplog.at_level("WARNING"),
+            patch(
+                "_mcp_mesh.engine.dependency_injector.get_global_injector",
+                return_value=injector,
+            ),
+            patch(
+                "_mcp_mesh.engine.unified_mcp_proxy.EnhancedUnifiedMCPProxy",
+                MagicMock(),
+            ),
         ):
             await rust_heartbeat._handle_llm_provider_update(
                 provider_info=provider_info,
@@ -163,12 +172,15 @@ class TestLlmProviderUpdateForwardsKwargs:
         injector.register_dependency = AsyncMock()
         injector.process_llm_providers = MagicMock()
 
-        with patch(
-            "_mcp_mesh.engine.dependency_injector.get_global_injector",
-            return_value=injector,
-        ), patch(
-            "_mcp_mesh.engine.unified_mcp_proxy.EnhancedUnifiedMCPProxy",
-            MagicMock(),
+        with (
+            patch(
+                "_mcp_mesh.engine.dependency_injector.get_global_injector",
+                return_value=injector,
+            ),
+            patch(
+                "_mcp_mesh.engine.unified_mcp_proxy.EnhancedUnifiedMCPProxy",
+                MagicMock(),
+            ),
         ):
             await rust_heartbeat._handle_llm_provider_update(
                 provider_info=provider_info,

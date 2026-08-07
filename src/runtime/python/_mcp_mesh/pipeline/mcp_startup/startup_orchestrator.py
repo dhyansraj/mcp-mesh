@@ -198,7 +198,6 @@ class DebounceCoordinator:
             return
 
         try:
-
             self.logger.info(
                 f"🚀 Debounce delay ({self.delay_seconds}s) complete, processing all decorators"
             )
@@ -354,8 +353,8 @@ class DebounceCoordinator:
 
                         bind_host = binding_config.get("bind_host", "0.0.0.0")
                         bind_port = binding_config.get("bind_port", 8080)
-                        bound_socket, actual_port = (
-                            bind_server_socket_with_fallback(bind_host, bind_port)
+                        bound_socket, actual_port = bind_server_socket_with_fallback(
+                            bind_host, bind_port
                         )
                         binding_config["bind_port"] = actual_port
                         # The heartbeat reads this to register the ACTUAL

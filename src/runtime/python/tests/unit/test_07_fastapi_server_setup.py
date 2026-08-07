@@ -10,9 +10,9 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 # Import the classes under test
-from _mcp_mesh.pipeline.mcp_startup.fastapiserver_setup import \
-    FastAPIServerSetupStep
+from _mcp_mesh.pipeline.mcp_startup.fastapiserver_setup import FastAPIServerSetupStep
 from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
 
 
@@ -431,7 +431,6 @@ class TestExecuteScenarios:
                 return_value={"external_host": "localhost", "external_endpoint": None},
             ),
         ):
-
             result = await step.execute(mock_context_minimal)
 
             assert result.status == PipelineStatus.SUCCESS
@@ -470,7 +469,6 @@ class TestExecuteScenarios:
             ),
             patch.object(step, "_integrate_mcp_wrapper") as mock_integrate,
         ):
-
             result = await step.execute(mock_context_with_servers)
 
             assert result.status == PipelineStatus.SUCCESS

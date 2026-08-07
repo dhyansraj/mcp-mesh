@@ -23,7 +23,6 @@ from _mcp_mesh.engine._structured_output_helpers import (
     schema_to_synthetic_tool,
 )
 
-
 # ---------------------------------------------------------------------------
 # schema_to_synthetic_tool
 # ---------------------------------------------------------------------------

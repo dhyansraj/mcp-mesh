@@ -10,7 +10,7 @@ import json
 import logging
 import time
 from datetime import datetime, timedelta
-from typing import Dict, Optional, Set
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class SessionManager:
     """Manages session affinity for stateful capabilities."""
 
-    def __init__(self, redis_url: Optional[str] = None, ttl_hours: int = 24):
+    def __init__(self, redis_url: str | None = None, ttl_hours: int = 24):
         self.redis_url = redis_url
         self.session_ttl = timedelta(hours=ttl_hours)
 
@@ -57,9 +57,7 @@ class SessionManager:
         else:
             logger.info("🧠 Using in-memory session storage (no Redis configured)")
 
-    async def get_session_agent(
-        self, session_id: str, capability: str
-    ) -> Optional[str]:
+    async def get_session_agent(self, session_id: str, capability: str) -> str | None:
         """Get the agent ID that should handle this session."""
         session_key = f"session:{session_id}:{capability}"
 
@@ -156,9 +154,9 @@ class SessionManager:
 
         # Update local storage
         if session_key in self._local_sessions:
-            self._local_sessions[session_key][
-                "last_accessed"
-            ] = datetime.now().isoformat()
+            self._local_sessions[session_key]["last_accessed"] = (
+                datetime.now().isoformat()
+            )
             logger.debug(f"🔄 Session access updated locally: {session_id}")
             return True
 
@@ -258,10 +256,10 @@ class SessionManager:
 
 
 # Global session manager instance
-_session_manager: Optional[SessionManager] = None
+_session_manager: SessionManager | None = None
 
 
-async def get_session_manager(redis_url: Optional[str] = None) -> SessionManager:
+async def get_session_manager(redis_url: str | None = None) -> SessionManager:
     """Get or create the global session manager."""
     global _session_manager
 

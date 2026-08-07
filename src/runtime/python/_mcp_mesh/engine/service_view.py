@@ -21,7 +21,8 @@ import asyncio
 import inspect
 import json
 import logging
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,9 @@ class MeshServiceFacade:
         return proxy
 
     def _count_available(self) -> int:
-        return sum(1 for m in self._methods if self._resolve(m["dep_index"]) is not None)
+        return sum(
+            1 for m in self._methods if self._resolve(m["dep_index"]) is not None
+        )
 
     # -- floor --------------------------------------------------------------
 
@@ -144,7 +147,7 @@ class MeshServiceFacade:
         method_name = m["method_name"]
         view_name = self._view_name
 
-        async def _call(args: Optional[dict] = None, **kwargs):
+        async def _call(args: dict | None = None, **kwargs):
             await self._enforce_floor()
             proxy = self._resolve(m["dep_index"])
             if proxy is None:

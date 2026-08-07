@@ -32,9 +32,10 @@ import pytest
 
 FOREIGN_HOST = "some-service.namespace:8080"
 
-_HTTP_APP_ACCEPTS_OVERRIDE = "host_origin_protection" in inspect.signature(
-    __import__("fastmcp").FastMCP.http_app
-).parameters
+_HTTP_APP_ACCEPTS_OVERRIDE = (
+    "host_origin_protection"
+    in inspect.signature(__import__("fastmcp").FastMCP.http_app).parameters
+)
 
 
 def _build_app(protection):

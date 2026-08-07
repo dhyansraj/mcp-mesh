@@ -40,9 +40,11 @@ from .._structured_output_helpers import (
     _ANTHROPIC_OUTPUT_SCHEMA_REJECTED_KEYS,
     append_synthetic_system_instruction,
     build_synthetic_tool_choice,
-    filter_anthropic_output_schema as _filter_anthropic_output_schema,
     is_synthetic_tool_in_list,
     schema_to_synthetic_tool,
+)
+from .._structured_output_helpers import (
+    filter_anthropic_output_schema as _filter_anthropic_output_schema,
 )
 from ._native_client_helpers import (
     SAMPLING_PARAM_KEYS,
@@ -121,9 +123,9 @@ def _build_httpx_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
         timeout=httpx.Timeout(
             connect=10.0,  # connection establishment
-            read=600.0,    # body read — LLM responses can be slow
-            write=30.0,    # request body write
-            pool=5.0,      # waiting for free connection from pool
+            read=600.0,  # body read — LLM responses can be slow
+            write=30.0,  # request body write
+            pool=5.0,  # waiting for free connection from pool
         ),
         limits=httpx.Limits(
             max_keepalive_connections=20,
@@ -690,9 +692,7 @@ def _convert_messages_to_anthropic(
         out.append(
             {
                 "role": role,
-                "content": _translate_content_list_to_anthropic(
-                    msg.get("content", "")
-                ),
+                "content": _translate_content_list_to_anthropic(msg.get("content", "")),
             }
         )
     return out
@@ -954,9 +954,7 @@ def _build_create_kwargs(
                     # covers the content-block-list / prompt-cache shape
                     # upstream).
                     if isinstance(system_value, str) or system_value is None:
-                        system_value = append_synthetic_system_instruction(
-                            system_value
-                        )
+                        system_value = append_synthetic_system_instruction(system_value)
                     else:
                         logger.debug(
                             "Native Anthropic adapter: skipped system-"
@@ -1197,9 +1195,7 @@ async def complete_stream(
                         yield _StreamChunk(delta=_Delta(), model=model_id)
                     msg_usage = getattr(msg_obj, "usage", None) if msg_obj else None
                     if msg_usage is not None:
-                        last_input_tokens = (
-                            getattr(msg_usage, "input_tokens", 0) or 0
-                        )
+                        last_input_tokens = getattr(msg_usage, "input_tokens", 0) or 0
                     continue
 
                 if event_type == "content_block_start":
@@ -1222,9 +1218,7 @@ async def complete_stream(
                 if event_type == "content_block_delta":
                     delta_obj = getattr(event, "delta", None)
                     idx = getattr(event, "index", 0)
-                    delta_type = (
-                        getattr(delta_obj, "type", None) if delta_obj else None
-                    )
+                    delta_type = getattr(delta_obj, "type", None) if delta_obj else None
                     if delta_type == "text_delta":
                         text = getattr(delta_obj, "text", "") or ""
                         if text:
@@ -1251,9 +1245,7 @@ async def complete_stream(
                     # emitted at message_stop via get_final_message().usage.
                     usage_obj = getattr(event, "usage", None)
                     if usage_obj is not None:
-                        last_output_tokens = (
-                            getattr(usage_obj, "output_tokens", 0) or 0
-                        )
+                        last_output_tokens = getattr(usage_obj, "output_tokens", 0) or 0
                     continue
 
                 if event_type == "message_stop":
@@ -1269,11 +1261,8 @@ async def complete_stream(
                     final_usage = getattr(final_msg, "usage", None)
                     if final_usage is not None:
                         usage = _Usage(
-                            prompt_tokens=getattr(final_usage, "input_tokens", 0)
-                            or 0,
-                            completion_tokens=getattr(
-                                final_usage, "output_tokens", 0
-                            )
+                            prompt_tokens=getattr(final_usage, "input_tokens", 0) or 0,
+                            completion_tokens=getattr(final_usage, "output_tokens", 0)
                             or 0,
                         )
                         yield _StreamChunk(

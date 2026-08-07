@@ -14,8 +14,15 @@ from pydantic import BaseModel, Field, field_validator
 from pydantic.types import NonNegativeInt, StrictStr
 
 
-class HealthStatusType(str, Enum):
-    """Health status enumeration."""
+class HealthStatusType(str, Enum):  # noqa: UP042
+    """Health status enumeration.
+
+    Not migrated to ``enum.StrEnum``: the two are not interchangeable.
+    ``str(HealthStatusType.HEALTHY)`` is ``"HealthStatusType.HEALTHY"`` here
+    but ``"healthy"`` under ``StrEnum``, so the swap would silently change
+    any interpolated/serialized value. That is a behaviour change, not a
+    style fix.
+    """
 
     HEALTHY = "healthy"
     DEGRADED = "degraded"

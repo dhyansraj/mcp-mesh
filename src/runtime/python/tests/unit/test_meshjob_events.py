@@ -29,7 +29,6 @@ from unittest import mock
 import pytest
 import pytest_asyncio
 
-
 # ===========================================================================
 # mesh.jobs — typed errors
 # ===========================================================================
@@ -117,9 +116,7 @@ class TestPostEventHelper:
     registry URL and forwards a ``send_event`` call."""
 
     @pytest.mark.asyncio
-    async def test_constructs_proxy_with_registry_url_and_forwards(
-        self, monkeypatch
-    ):
+    async def test_constructs_proxy_with_registry_url_and_forwards(self, monkeypatch):
         from mesh import jobs as mesh_jobs
 
         monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
@@ -250,9 +247,7 @@ class TestPostEventHelper:
         assert type(exc.value) is RuntimeError  # noqa: E721
 
     @pytest.mark.asyncio
-    async def test_proxy_is_cached_per_registry_url_and_job_id(
-        self, monkeypatch
-    ):
+    async def test_proxy_is_cached_per_registry_url_and_job_id(self, monkeypatch):
         """W5 (review #1032): two `post_event` calls against the same
         ``(registry_url, job_id)`` MUST share a single underlying
         ``JobProxy`` instance. Pre-W5 each call constructed a fresh
@@ -376,9 +371,7 @@ class TestSubscribeEvents:
     until the caller breaks out of the loop."""
 
     @pytest.mark.asyncio
-    async def test_subscribe_events_yields_events_until_break(
-        self, monkeypatch
-    ):
+    async def test_subscribe_events_yields_events_until_break(self, monkeypatch):
         """A subscriber yields every event the fake ``list_events`` returns
         across multiple batches, in order, until the caller breaks."""
         from mesh import jobs as mesh_jobs
@@ -412,9 +405,7 @@ class TestSubscribeEvents:
 
         observed: list[dict[str, Any]] = []
         with mock.patch("mcp_mesh_core.JobProxy", _FakeProxy, create=True):
-            async for event in mesh_jobs.subscribe_events(
-                "j1", long_poll_secs=0.0
-            ):
+            async for event in mesh_jobs.subscribe_events("j1", long_poll_secs=0.0):
                 observed.append(event)
                 if len(observed) == 3:
                     break
@@ -427,9 +418,7 @@ class TestSubscribeEvents:
         assert observed[2]["payload"] == {"n": 3}
 
     @pytest.mark.asyncio
-    async def test_subscribe_events_advances_cursor_between_calls(
-        self, monkeypatch
-    ):
+    async def test_subscribe_events_advances_cursor_between_calls(self, monkeypatch):
         """The cursor passed to the SECOND ``list_events`` call must be
         the seq of the last yielded event — proves the iterator advances
         its watermark internally between batches."""
@@ -463,9 +452,7 @@ class TestSubscribeEvents:
 
         observed: list[int] = []
         with mock.patch("mcp_mesh_core.JobProxy", _FakeProxy, create=True):
-            async for event in mesh_jobs.subscribe_events(
-                "j1", long_poll_secs=0.0
-            ):
+            async for event in mesh_jobs.subscribe_events("j1", long_poll_secs=0.0):
                 observed.append(event["seq"])
                 if len(observed) == 3:
                     break
@@ -517,9 +504,7 @@ class TestSubscribeEvents:
         )
 
     @pytest.mark.asyncio
-    async def test_subscribe_events_propagates_job_not_found(
-        self, monkeypatch
-    ):
+    async def test_subscribe_events_propagates_job_not_found(self, monkeypatch):
         """When ``list_events`` raises a JobNotFound-shaped RuntimeError
         (registry reaped the job row), the iterator must surface it as
         the typed :class:`JobNotFoundError` so callers can ``except``
@@ -543,9 +528,7 @@ class TestSubscribeEvents:
                     pass  # pragma: no cover - iterator raises on first call
 
     @pytest.mark.asyncio
-    async def test_mesh_jobs_subscribe_events_uses_cached_proxy(
-        self, monkeypatch
-    ):
+    async def test_mesh_jobs_subscribe_events_uses_cached_proxy(self, monkeypatch):
         """``subscribe_events`` reuses the same module-level
         ``(registry_url, job_id)`` proxy cache as ``post_event``. Two
         sequential subscriptions to the same job must construct ONE
@@ -570,13 +553,9 @@ class TestSubscribeEvents:
                 ], 1
 
         with mock.patch("mcp_mesh_core.JobProxy", _CountingFake, create=True):
-            async for _ in mesh_jobs.subscribe_events(
-                "j-cached", long_poll_secs=0.0
-            ):
+            async for _ in mesh_jobs.subscribe_events("j-cached", long_poll_secs=0.0):
                 break
-            async for _ in mesh_jobs.subscribe_events(
-                "j-cached", long_poll_secs=0.0
-            ):
+            async for _ in mesh_jobs.subscribe_events("j-cached", long_poll_secs=0.0):
                 break
 
         # Two iterations, ONE proxy construction — the cache hit on the
@@ -589,9 +568,7 @@ class TestSubscribeEvents:
         )
 
     @pytest.mark.asyncio
-    async def test_subscribe_events_forwards_none_long_poll_secs(
-        self, monkeypatch
-    ):
+    async def test_subscribe_events_forwards_none_long_poll_secs(self, monkeypatch):
         """``long_poll_secs=None`` MUST pass through verbatim to the pyo3
         binding so the Rust side treats it as "single immediate read"
         (no ``wait`` query param sent). Pre-fix the signature typed this
@@ -610,14 +587,10 @@ class TestSubscribeEvents:
                 self, _after: int, _types: Any, wait: Any
             ) -> tuple[list[dict[str, Any]], int]:
                 wait_args.append(wait)
-                return [
-                    {"job_id": "j1", "seq": 1, "type": "x", "payload": None}
-                ], 1
+                return [{"job_id": "j1", "seq": 1, "type": "x", "payload": None}], 1
 
         with mock.patch("mcp_mesh_core.JobProxy", _FakeProxy, create=True):
-            async for _ in mesh_jobs.subscribe_events(
-                "j1", long_poll_secs=None
-            ):
+            async for _ in mesh_jobs.subscribe_events("j1", long_poll_secs=None):
                 break
 
         assert wait_args[0] is None, (
@@ -646,9 +619,7 @@ class TestSubscribeEvents:
 
         with mock.patch("mcp_mesh_core.JobProxy", _FakeProxy, create=True):
             with pytest.raises(RuntimeError) as exc:
-                async for _ in mesh_jobs.subscribe_events(
-                    "j1", long_poll_secs=0.0
-                ):
+                async for _ in mesh_jobs.subscribe_events("j1", long_poll_secs=0.0):
                     pass  # pragma: no cover - iterator raises on first event
         assert "seq" in str(exc.value)
 
@@ -674,9 +645,7 @@ class TestSubscribeEvents:
 
         with mock.patch("mcp_mesh_core.JobProxy", _FakeProxy, create=True):
             with pytest.raises(RuntimeError) as exc:
-                async for _ in mesh_jobs.subscribe_events(
-                    "j1", long_poll_secs=0.0
-                ):
+                async for _ in mesh_jobs.subscribe_events("j1", long_poll_secs=0.0):
                     pass  # pragma: no cover - iterator raises on first event
         assert "seq" in str(exc.value)
 
@@ -693,9 +662,7 @@ class TestCancelFacade:
     ``post_event`` dispatch + error-translation pattern."""
 
     @pytest.mark.asyncio
-    async def test_constructs_proxy_with_registry_url_and_forwards(
-        self, monkeypatch
-    ):
+    async def test_constructs_proxy_with_registry_url_and_forwards(self, monkeypatch):
         from mesh import jobs as mesh_jobs
 
         monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
@@ -1035,6 +1002,7 @@ class TestSharedProxyCache:
 def _native_core_has_events() -> bool:
     try:
         import mcp_mesh_core
+
         return hasattr(mcp_mesh_core.JobController, "recv_event") and hasattr(
             mcp_mesh_core.JobProxy, "send_event"
         )
@@ -1053,7 +1021,9 @@ async def fake_registry():
     """
     from aiohttp import web
 
-    state: dict[str, dict[str, Any]] = {}  # job_id -> {"events": [...], "signal": asyncio.Event(), "terminal": bool}
+    state: dict[
+        str, dict[str, Any]
+    ] = {}  # job_id -> {"events": [...], "signal": asyncio.Event(), "terminal": bool}
 
     def _slot(job_id: str) -> dict[str, Any]:
         if job_id not in state:
@@ -1068,9 +1038,7 @@ async def fake_registry():
         job_id = request.match_info["job_id"]
         slot = _slot(job_id)
         if slot["terminal"]:
-            return web.json_response(
-                {"error": "job is terminal"}, status=409
-            )
+            return web.json_response({"error": "job is terminal"}, status=409)
         body = await request.json()
         ev_type = body["type"]
         payload = body.get("payload")
@@ -1120,12 +1088,10 @@ async def fake_registry():
             try:
                 await asyncio.wait_for(slot["signal"].wait(), timeout=wait_secs)
                 events = _collect()
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 events = []
         next_after = events[-1]["seq"] if events else after
-        return web.json_response(
-            {"events": events, "next_after": next_after}
-        )
+        return web.json_response({"events": events, "next_after": next_after})
 
     app = web.Application()
     app.router.add_post("/jobs/{job_id}/events", post_events)
@@ -1178,9 +1144,7 @@ class TestEventInjectionEndToEnd:
         # test fail fast rather than hang. Use ``ensure_future`` rather
         # than ``create_task`` because the pyo3-async helper returns a
         # Future (not a coroutine).
-        recv_task = asyncio.ensure_future(
-            controller.recv_event(timeout_secs=2.0)
-        )
+        recv_task = asyncio.ensure_future(controller.recv_event(timeout_secs=2.0))
 
         # Yield once + sleep so recv_task has registered its long-poll
         # before we post.
@@ -1189,9 +1153,7 @@ class TestEventInjectionEndToEnd:
         # Consumer posts via the public helper (Phase C surface).
         from mesh import jobs as mesh_jobs
 
-        receipt = await mesh_jobs.post_event(
-            job_id, "test_event", {"x": 42}
-        )
+        receipt = await mesh_jobs.post_event(job_id, "test_event", {"x": 42})
         assert receipt["job_id"] == job_id
         assert receipt["seq"] == 1
         assert receipt["created_at"] > 0
@@ -1204,9 +1166,7 @@ class TestEventInjectionEndToEnd:
         assert event["type"] == "test_event"
         assert event["payload"] == {"x": 42}
 
-    async def test_recv_event_filter_by_type(
-        self, fake_registry, monkeypatch
-    ):
+    async def test_recv_event_filter_by_type(self, fake_registry, monkeypatch):
         """``recv_event(types=['user_input'])`` skips events whose type
         doesn't match — verified by posting a noise event first, then
         the desired one, and checking the producer wakes on the second."""
@@ -1220,9 +1180,7 @@ class TestEventInjectionEndToEnd:
         # Producer waits specifically for 'user_input'. ``ensure_future``
         # because pyo3-async returns a Future, not a coroutine.
         recv_task = asyncio.ensure_future(
-            controller.recv_event(
-                types=["user_input"], timeout_secs=2.0
-            )
+            controller.recv_event(types=["user_input"], timeout_secs=2.0)
         )
         await asyncio.sleep(0.05)
 
@@ -1239,9 +1197,7 @@ class TestEventInjectionEndToEnd:
         assert event["payload"] == {"text": "hello"}
         assert event["seq"] == 2  # seq=1 was the noise event
 
-    async def test_recv_event_returns_none_on_timeout(
-        self, fake_registry, monkeypatch
-    ):
+    async def test_recv_event_returns_none_on_timeout(self, fake_registry, monkeypatch):
         """When no event arrives within ``timeout_secs``, the call
         returns ``None`` (NOT raise) — the contract documented on the
         ``MeshJob`` Protocol."""

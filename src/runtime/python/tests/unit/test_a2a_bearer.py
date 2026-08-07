@@ -22,7 +22,6 @@ import pytest
 
 from mesh._a2a_consumer import A2ABearer
 
-
 # ---------------------------------------------------------------------------
 # Mutual exclusion + blank-rejection at construction
 # ---------------------------------------------------------------------------

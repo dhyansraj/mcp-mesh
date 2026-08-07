@@ -80,11 +80,16 @@ PLATFORM="linux/amd64"
 # The extras worth locking are the ones that ship behaviour. [litellm] is in
 # because CI installs it (via [dev]) and because litellm has already shipped two
 # releases bad enough to earn `!=` markers in the manifest. The dev tooling
-# (pytest/black/ruff/mypy) is deliberately NOT locked: it is never shipped to a
-# user, its drift fails loudly in CI rather than silently in production, and
-# locking it would churn this file on every ruff release. [anthropic-bedrock]
-# and [kubernetes] are out for the same reason plus one more — boto3 publishes
-# most weekdays, so the lock would be stale the day after it was written.
+# (pytest/ruff/mypy/bandit) is deliberately NOT locked here: it is never shipped
+# to a user, and locking it would churn this file on every tool release. Where a
+# tool's drift would produce a FALSE failure rather than a real one, the bound
+# belongs in the manifest instead — ruff is pinned `~=0.16.1` there because
+# `ruff format --check` now hard-fails the aggregate gate, so a formatter style
+# change upstream would turn every PR red with no repo change. The rest stay
+# unbounded: their drift surfaces real problems, and CI is the right place for
+# it to surface. [anthropic-bedrock] and [kubernetes] are out for the same
+# reason plus one more — boto3 publishes most weekdays, so the lock would be
+# stale the day after it was written.
 EXTRAS=(--extra litellm)
 
 UPGRADE=""

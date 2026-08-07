@@ -161,8 +161,8 @@ class SimpleShutdownCoordinator:
 
     def __init__(self):
         self._shutdown_requested = False
-        self._registry_url: Optional[str] = None
-        self._agent_id: Optional[str] = None
+        self._registry_url: str | None = None
+        self._agent_id: str | None = None
         self._shutdown_complete = False  # Flag to prevent race conditions
         # Uvicorn Server handles (lazily registered by mesh/decorators.py
         # and startup_orchestrator). Signal handlers flip

@@ -28,9 +28,9 @@ import threading
 import time
 from unittest.mock import MagicMock
 
-import mesh
 import pytest
 
+import mesh
 from _mcp_mesh.engine import settle
 from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
 from _mcp_mesh.engine.settle import get_settle_state
@@ -136,17 +136,13 @@ class TestDeclarationAndResolution:
 class TestSyncInjectionPath:
     """Plain ``def`` committee-agent shape — blocking wait on a worker thread."""
 
-    def test_waits_and_succeeds_when_provider_resolves_mid_call(
-        self, monkeypatch
-    ):
+    def test_waits_and_succeeds_when_provider_resolves_mid_call(self, monkeypatch):
         _set_budget(monkeypatch, "10")
         seen: list = []
         wrapper = _make_sync_consumer("settle1456-sync-wait", seen)
         agent = MagicMock(name="agent")
 
-        timer = threading.Timer(
-            0.2, lambda: wrapper._mesh_update_llm_agent(agent)
-        )
+        timer = threading.Timer(0.2, lambda: wrapper._mesh_update_llm_agent(agent))
         timer.start()
         start = time.monotonic()
         result = wrapper(prompt="plan my trip")
@@ -162,9 +158,7 @@ class TestSyncInjectionPath:
         assert elapsed < 5.0
         assert get_settle_state().wait_count >= 1
 
-    def test_never_resolves_expires_at_budget_and_injects_none(
-        self, monkeypatch
-    ):
+    def test_never_resolves_expires_at_budget_and_injects_none(self, monkeypatch):
         _set_budget(monkeypatch, "0.4")
         seen: list = []
         wrapper = _make_sync_consumer("settle1456-sync-expire", seen)
@@ -197,9 +191,7 @@ class TestAsyncInjectionPath:
         # Resolve from ANOTHER thread — the real heartbeat delivers
         # resolutions off the serving loop, so this exercises the
         # call_soon_threadsafe mirror rather than a same-loop shortcut.
-        timer = threading.Timer(
-            0.2, lambda: wrapper._mesh_update_llm_agent(agent)
-        )
+        timer = threading.Timer(0.2, lambda: wrapper._mesh_update_llm_agent(agent))
         timer.start()
         start = time.monotonic()
         result = await wrapper(prompt="plan my trip")
@@ -219,9 +211,7 @@ class TestAsyncInjectionPath:
         wrapper = _make_async_consumer("settle1456-async-noexec", seen)
         agent = MagicMock(name="agent")
 
-        timer = threading.Timer(
-            0.2, lambda: wrapper._mesh_update_llm_agent(agent)
-        )
+        timer = threading.Timer(0.2, lambda: wrapper._mesh_update_llm_agent(agent))
         timer.start()
         monkeypatch.setattr(
             asyncio,
@@ -239,9 +229,7 @@ class TestAsyncInjectionPath:
         assert seen == [agent]
 
     @pytest.mark.asyncio
-    async def test_never_resolves_expires_at_budget_and_injects_none(
-        self, monkeypatch
-    ):
+    async def test_never_resolves_expires_at_budget_and_injects_none(self, monkeypatch):
         _set_budget(monkeypatch, "0.4")
         seen: list = []
         wrapper = _make_async_consumer("settle1456-async-expire", seen)
@@ -276,9 +264,7 @@ class TestSettleKeyIsolation:
         # ...but distinct settle keys.
         assert a._mesh_llm_settle_key != b._mesh_llm_settle_key
 
-    def test_other_consumers_resolution_does_not_wake_this_waiter(
-        self, monkeypatch
-    ):
+    def test_other_consumers_resolution_does_not_wake_this_waiter(self, monkeypatch):
         _set_budget(monkeypatch, "1.0")
         seen_a: list = []
         seen_b: list = []

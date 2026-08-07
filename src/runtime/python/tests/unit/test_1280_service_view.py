@@ -22,10 +22,10 @@ import json
 import os
 import time
 
-import mesh
 import pytest
 from fastmcp.exceptions import ToolError
 
+import mesh
 from _mcp_mesh.engine import settle
 from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
 from _mcp_mesh.engine.signature_analyzer import (
@@ -197,7 +197,7 @@ class TestViewDetectionAndExpansion:
     def test_optional_view_annotation_detected(self):
         from typing import Optional
 
-        async def tool(req: dict, media: Optional[MediaService] = None):
+        async def tool(req: dict, media: MediaService | None = None):
             pass
 
         views = analyze_service_view_params(tool)
@@ -221,7 +221,9 @@ class TestViewDetectionAndExpansion:
         async def tool(x: "TotallyMissingType"):  # noqa: F821
             pass
 
-        with caplog.at_level(logging.WARNING, logger="_mcp_mesh.engine.signature_analyzer"):
+        with caplog.at_level(
+            logging.WARNING, logger="_mcp_mesh.engine.signature_analyzer"
+        ):
             views = analyze_service_view_params(tool)
         assert views == []
         assert not any(
@@ -237,12 +239,16 @@ class TestViewDetectionAndExpansion:
         async def tool(bad: "TotallyMissingType", view: OptionalView = None):  # noqa: F821
             pass
 
-        with caplog.at_level(logging.WARNING, logger="_mcp_mesh.engine.signature_analyzer"):
+        with caplog.at_level(
+            logging.WARNING, logger="_mcp_mesh.engine.signature_analyzer"
+        ):
             views = analyze_service_view_params(tool)
         # View recovered despite the sibling's unresolvable annotation.
         assert [name for _pos, name, _meta in views] == ["view"]
-        assert any("view" in r.message and "recovered" in r.message.lower()
-                   for r in caplog.records)
+        assert any(
+            "view" in r.message and "recovered" in r.message.lower()
+            for r in caplog.records
+        )
 
 
 # ===========================================================================
@@ -680,7 +686,9 @@ class TestValidationBootFails:
                 @mesh.selector("")
                 async def m(self, args: dict) -> dict: ...
 
-        assert "blank" in str(exc.value).lower() or "capability" in str(exc.value).lower()
+        assert (
+            "blank" in str(exc.value).lower() or "capability" in str(exc.value).lower()
+        )
 
     def test_min_available_exceeds_method_count_raises(self):
         with pytest.raises(ValueError) as exc:

@@ -149,9 +149,7 @@ async def test_many_concurrent_requests_isolate_correctly():
             "required": [f"field_{i}"],
         }
         type_name = f"Type{i}"
-        model_params = {
-            "messages": [{"role": "system", "content": f"You are #{i}."}]
-        }
+        model_params = {"messages": [{"role": "system", "content": f"You are #{i}."}]}
         handler.apply_structured_output(schema, type_name, model_params)
         # Multiple awaits to give the scheduler many opportunities to
         # interleave with sibling tasks.

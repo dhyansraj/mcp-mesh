@@ -15,7 +15,6 @@ from typing import Optional
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Imports under test — kept inside the test file so a typo or broken export
 # fails fast as a test failure rather than silently masking the regression.
@@ -26,7 +25,6 @@ from _mcp_mesh.engine.signature_analyzer import (
 )
 from mesh import MeshJob
 from mesh.types import McpMeshTool, MeshLlmAgent
-
 
 # ===========================================================================
 # Contract scenarios 1-5 (must mirror across all three SDK test seams)
@@ -74,9 +72,9 @@ class TestResolverContractScenarios:
         """
 
         async def plan_trip(
-            user_id: str,                       # pos 0 — user arg
-            weather_lookup: McpMeshTool = None, # pos 1 — MeshTool[0]
-            job: MeshJob = None,                # pos 2 — MeshJob (orthogonal)
+            user_id: str,  # pos 0 — user arg
+            weather_lookup: McpMeshTool = None,  # pos 1 — MeshTool[0]
+            job: MeshJob = None,  # pos 2 — MeshJob (orthogonal)
             flight_search: McpMeshTool = None,  # pos 3 — MeshTool[1]
         ):
             pass
@@ -161,7 +159,7 @@ class TestResolverEdgeCases:
     def test_optional_mesh_job_classifies_as_mesh_job(self):
         """``Optional[MeshJob]`` must classify as MeshJob (not user arg)."""
 
-        async def fn(a: str, job: Optional[MeshJob] = None):
+        async def fn(a: str, job: MeshJob | None = None):
             pass
 
         result = analyze_mesh_job_signature(fn)
@@ -297,6 +295,7 @@ class TestTaskTrueDecorator:
         import mesh
 
         with pytest.raises(ValueError) as exc_info:
+
             @mesh.tool(capability="bad", task=True)
             def sync_task(x: int) -> int:
                 return x
@@ -320,6 +319,7 @@ class TestTaskTrueDecorator:
         import mesh
 
         with pytest.raises(ValueError) as exc_info:
+
             @mesh.tool(capability="x", task="yes")  # type: ignore[arg-type]
             async def x():
                 pass
@@ -350,6 +350,7 @@ class TestDecorationTimeMultiMeshJobError:
         import mesh
 
         with pytest.raises(ValueError) as exc_info:
+
             @mesh.tool(
                 capability="bad_consumer",
                 dependencies=["other_job"],

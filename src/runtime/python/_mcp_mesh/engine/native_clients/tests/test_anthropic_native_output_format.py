@@ -31,7 +31,6 @@ from _mcp_mesh.engine._structured_output_helpers import (
 )
 from _mcp_mesh.engine.native_clients import anthropic_native
 
-
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
 # ---------------------------------------------------------------------------
@@ -618,9 +617,9 @@ class TestNativeOutputConfigRouting:
         assert tags_schema["type"] == "array"
         assert tags_schema["items"] == {"type": "string"}
         # Original caller dict not mutated (caller may reuse it).
-        assert (
-            schema_with_limits["properties"]["tags"]["minItems"] == 1
-        ), "Original schema was mutated; filter must be non-destructive."
+        assert schema_with_limits["properties"]["tags"]["minItems"] == 1, (
+            "Original schema was mutated; filter must be non-destructive."
+        )
 
     @pytest.mark.asyncio
     async def test_output_config_does_not_warn(self, caplog):

@@ -10,6 +10,7 @@ import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 from _mcp_mesh.engine.dependency_injector import DependencyInjector
 
 
@@ -32,7 +33,8 @@ class TestDuplicateCapabilities:
             return_value=[1, 2],  # Both time_v1 and time_v2 positions
         ):
             wrapper = injector.create_injection_wrapper(
-                test_func, ["time_service", "time_service"]  # Same capability name!
+                test_func,
+                ["time_service", "time_service"],  # Same capability name!
             )
 
         # Verify wrapper created with array-based storage

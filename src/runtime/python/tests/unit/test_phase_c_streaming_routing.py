@@ -46,7 +46,6 @@ from mesh.helpers import (
     _maybe_run_synthetic_fallback,
 )
 
-
 SYNTHETIC_TOOL_NAME = "__mesh_format_response"
 
 

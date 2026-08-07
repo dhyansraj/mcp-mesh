@@ -281,9 +281,7 @@ async def resolve_resource_links_for_tool_message(
     return text_only
 
 
-async def resolve_media_as_user_message(
-    tool_result: Any, vendor: str
-) -> dict | None:
+async def resolve_media_as_user_message(tool_result: Any, vendor: str) -> dict | None:
     """Return a user message containing resolved images from a tool result.
 
     For vendors that do NOT support images in tool messages (OpenAI, Gemini),
@@ -327,7 +325,6 @@ def _has_resource_link(tool_result: Any) -> bool:
         if tool_result.get("type") == "multi_content":
             items = tool_result.get("items") or tool_result.get("content") or []
             return any(
-                isinstance(i, dict) and i.get("type") == "resource_link"
-                for i in items
+                isinstance(i, dict) and i.get("type") == "resource_link" for i in items
             )
     return False

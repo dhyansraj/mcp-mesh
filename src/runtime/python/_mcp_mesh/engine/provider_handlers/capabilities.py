@@ -23,15 +23,19 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from functools import lru_cache
-from importlib.metadata import PackageNotFoundError, version as _pkg_version
+from functools import cache, lru_cache
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 
 # SDK floors for the strong server-side structured-output primitives.
 # These mirror the dependency floors in ``pyproject.toml``; the resolver
 # degrades gracefully to the next-best native mode when an installed SDK is
 # below its floor (e.g. a constrained install that pins an older SDK).
 _ANTHROPIC_OUTPUT_CONFIG_FLOOR = (0, 77)  # anthropic >= 0.77 → output_config
-_GEMINI_RESPONSE_JSON_SCHEMA_FLOOR = (1, 22)  # google-genai >= 1.22 → response_json_schema
+_GEMINI_RESPONSE_JSON_SCHEMA_FLOOR = (
+    1,
+    22,
+)  # google-genai >= 1.22 → response_json_schema
 
 
 # Matches a leading ``gemini-<major>`` token in a LiteLLM-style model id, after
@@ -55,7 +59,7 @@ def _gemini_major(model: str | None) -> int | None:
     return int(m.group(1)) if m else None
 
 
-@lru_cache(maxsize=None)
+@cache
 def _sdk_version(dist: str) -> str | None:
     """Return the installed version string for ``dist`` or ``None``.
 

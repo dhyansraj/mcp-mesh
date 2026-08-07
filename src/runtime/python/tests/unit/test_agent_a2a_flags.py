@@ -38,6 +38,7 @@ def _import_build_agent_spec():
 
 def _make_consumer_tool():
     """Return a fake mesh-tool wrapper that mimics @mesh.a2a_consumer's bridge."""
+
     def _fn():
         return None
 
@@ -55,6 +56,7 @@ def _make_consumer_tool():
 
 def _make_plain_tool():
     """Return a fake mesh-tool wrapper with no consumer marker."""
+
     def _fn():
         return None
 
@@ -65,9 +67,9 @@ def _make_plain_tool():
     "has_consumer,has_producer,expected_producer,expected_consumer",
     [
         (False, False, False, False),  # plain MCP agent — neither
-        (False, True, True, False),    # producer-only (@mesh.a2a / mount)
-        (True, False, False, True),    # consumer-only (@mesh.a2a_consumer)
-        (True, True, True, True),      # bridge — both
+        (False, True, True, False),  # producer-only (@mesh.a2a / mount)
+        (True, False, False, True),  # consumer-only (@mesh.a2a_consumer)
+        (True, True, True, True),  # bridge — both
     ],
 )
 def test_build_agent_spec_emits_a2a_flags(
@@ -124,12 +126,8 @@ def test_build_agent_spec_emits_a2a_flags(
             "_mcp_mesh.pipeline.mcp_heartbeat.rust_heartbeat._build_a2a_surfaces_for_rust",
             return_value=fake_surfaces,
         ),
-        patch.object(
-            DecoratorRegistry, "get_mesh_tools", return_value=fake_tools
-        ),
-        patch.object(
-            DecoratorRegistry, "get_mesh_llm_agents", return_value={}
-        ),
+        patch.object(DecoratorRegistry, "get_mesh_tools", return_value=fake_tools),
+        patch.object(DecoratorRegistry, "get_mesh_llm_agents", return_value={}),
     ):
         _build_agent_spec(context)
 

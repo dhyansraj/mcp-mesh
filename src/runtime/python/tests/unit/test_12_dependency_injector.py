@@ -14,10 +14,13 @@ from typing import Any
 from unittest.mock import MagicMock, call, patch
 
 import pytest
+
 # Import the classes under test
-from _mcp_mesh.engine.dependency_injector import (DependencyInjector,
-                                                  analyze_injection_strategy,
-                                                  get_global_injector)
+from _mcp_mesh.engine.dependency_injector import (
+    DependencyInjector,
+    analyze_injection_strategy,
+    get_global_injector,
+)
 
 
 class TestAnalyzeInjectionStrategy:
@@ -919,6 +922,7 @@ class TestUnifiedPositionalInjection:
         we can assert each slot receives exactly the right value type.
         """
         import logging as _log
+
         from _mcp_mesh.engine.dependency_injector import _prepare_injection_kwargs
         from _mcp_mesh.engine.signature_analyzer import get_mesh_agent_positions
 
@@ -939,14 +943,14 @@ class TestUnifiedPositionalInjection:
         """The exact #1075 shape: MeshJob dep listed FIRST in deps[],
         McpMeshTool dep second. Each param must receive the RIGHT slot
         type — submitter into MeshJob, proxy into McpMeshTool."""
+        from _mcp_mesh.engine.mesh_job_submitter import MeshJobSubmitter
         from mesh import MeshJob
         from mesh.types import McpMeshTool
-        from _mcp_mesh.engine.mesh_job_submitter import MeshJobSubmitter
 
         async def consumer(
             user_id: str,
-            job: MeshJob = None,         # sig pos 1 → dep_index 0
-            tool: McpMeshTool = None,    # sig pos 2 → dep_index 1
+            job: MeshJob = None,  # sig pos 1 → dep_index 0
+            tool: McpMeshTool = None,  # sig pos 2 → dep_index 1
         ):
             return (user_id, job, tool)
 
@@ -967,14 +971,14 @@ class TestUnifiedPositionalInjection:
         """Reversed order: McpMeshTool first, MeshJob second. Same
         per-slot type assertion — confirms the binding is positional,
         not type-prioritised."""
+        from _mcp_mesh.engine.mesh_job_submitter import MeshJobSubmitter
         from mesh import MeshJob
         from mesh.types import McpMeshTool
-        from _mcp_mesh.engine.mesh_job_submitter import MeshJobSubmitter
 
         async def consumer(
             user_id: str,
-            tool: McpMeshTool = None,   # sig pos 1 → dep_index 0
-            job: MeshJob = None,        # sig pos 2 → dep_index 1
+            tool: McpMeshTool = None,  # sig pos 1 → dep_index 0
+            job: MeshJob = None,  # sig pos 2 → dep_index 1
         ):
             return (user_id, tool, job)
 
@@ -1015,21 +1019,21 @@ class TestUnifiedPositionalInjection:
         )
 
         assert final_kwargs["dep0"] is proxy_a
-        assert final_kwargs["dep1"] is None   # No shifting
+        assert final_kwargs["dep1"] is None  # No shifting
         assert final_kwargs["dep2"] is proxy_c
 
     def test_unresolved_mixed_mesh_tool_with_mesh_job(self):
         """MeshJob + McpMeshTool; the McpMeshTool dep is unresolved.
         MeshJob still gets its submitter (registry URL set, name
         free-form), McpMeshTool param stays ``None``."""
+        from _mcp_mesh.engine.mesh_job_submitter import MeshJobSubmitter
         from mesh import MeshJob
         from mesh.types import McpMeshTool
-        from _mcp_mesh.engine.mesh_job_submitter import MeshJobSubmitter
 
         async def consumer(
             a: str,
-            job: MeshJob = None,        # sig pos 1 → dep_index 0
-            tool: McpMeshTool = None,   # sig pos 2 → dep_index 1
+            job: MeshJob = None,  # sig pos 1 → dep_index 0
+            tool: McpMeshTool = None,  # sig pos 2 → dep_index 1
         ):
             return (job, tool)
 
@@ -1049,8 +1053,8 @@ class TestUnifiedPositionalInjection:
         positional binding only. A param named ``workflow`` paired with
         dependency capability ``run_my_thing`` MUST receive a
         MeshJobSubmitter with ``capability='run_my_thing'``."""
-        from mesh import MeshJob
         from _mcp_mesh.engine.mesh_job_submitter import MeshJobSubmitter
+        from mesh import MeshJob
 
         async def consumer(
             user_id: str,
@@ -1074,9 +1078,7 @@ class TestUnifiedPositionalInjection:
         unification."""
         from mesh.types import McpMeshTool
 
-        async def fan_out(
-            a: str, dep0: McpMeshTool = None, dep1: McpMeshTool = None
-        ):
+        async def fan_out(a: str, dep0: McpMeshTool = None, dep1: McpMeshTool = None):
             return (dep0, dep1)
 
         proxy0 = MagicMock(name="proxy0")
@@ -1096,9 +1098,10 @@ class TestUnifiedPositionalInjection:
         value for a MeshJob param (e.g. a fake), the framework MUST NOT
         overwrite it with a MeshJobSubmitter."""
         import logging as _log
-        from mesh import MeshJob
+
         from _mcp_mesh.engine.dependency_injector import _prepare_injection_kwargs
         from _mcp_mesh.engine.signature_analyzer import get_mesh_agent_positions
+        from mesh import MeshJob
 
         async def consumer(a: str, job: MeshJob = None):
             return job
@@ -1158,14 +1161,16 @@ class TestUnifiedPositionalInjection:
         original-derived position (IndexError). With zero declared
         dependencies the diagnostic always runs for such handlers.
         """
-        from functools import wraps as _wraps
         import inspect as _inspect
+        from functools import wraps as _wraps
 
         from mesh import MeshJob
 
         # Original func: (user_id, sections, _a2a, job) — _a2a is the
         # consumer-injected client; job is the MeshJob at ORIGINAL pos 3.
-        async def original(user_id: str, sections: list, _a2a=None, job: MeshJob = None):
+        async def original(
+            user_id: str, sections: list, _a2a=None, job: MeshJob = None
+        ):
             return (user_id, sections, _a2a, job)
 
         # Mimic the @mesh.a2a_consumer bridge: @wraps sets __wrapped__ to
@@ -1348,8 +1353,8 @@ class TestHiddenWrapperParamFunctionalInjection:
         """`(_a2a, job: MeshJob)` with one dependency: the MeshJob position
         (1, original view) exceeded the 1-param wrapper view pre-fix →
         IndexError on every invocation. Must inject a MeshJobSubmitter."""
-        from mesh import MeshJob
         from _mcp_mesh.engine.mesh_job_submitter import MeshJobSubmitter
+        from mesh import MeshJob
 
         async def original(_a2a=None, job: MeshJob = None):
             return (_a2a, job)
@@ -1399,8 +1404,9 @@ class TestHiddenWrapperParamFunctionalInjection:
         log a warning and skip that one injection — no crash, and other
         deps still inject into their own positional slots."""
         import logging as _log
-        from mesh.types import McpMeshTool
+
         from _mcp_mesh.engine.dependency_injector import _prepare_injection_kwargs
+        from mesh.types import McpMeshTool
 
         async def f(a: str, db: McpMeshTool = None):
             return db
@@ -1524,9 +1530,7 @@ class TestPrescriptiveDiagnosticsAndStrictDI:
         assert "declaration order" in text
         assert "dep_0: McpMeshTool = None" in text  # copy-pasteable fix
 
-    def test_multi_param_untyped_warning_names_selection_skips_and_fix(
-        self, caplog
-    ):
+    def test_multi_param_untyped_warning_names_selection_skips_and_fix(self, caplog):
         """Multi-param, none typed: the warning names each skipped
         parameter WITH its reason (untyped / wrong annotation), states
         what declaration-order pairing would select, and gives the fix."""
@@ -1545,9 +1549,7 @@ class TestPrescriptiveDiagnosticsAndStrictDI:
         assert "'beta' (annotated as str, not McpMeshTool)" in text
         assert "'gamma' (untyped)" in text
         # (a) what positional pairing WOULD select, declaration order
-        assert (
-            "'cap_a' would go to the first McpMeshTool-typed parameter" in text
-        )
+        assert "'cap_a' would go to the first McpMeshTool-typed parameter" in text
         assert "parameter names are never matched" in text
         # (c) copy-pasteable fix
         assert "alpha: McpMeshTool = None" in text
@@ -1578,9 +1580,7 @@ class TestPrescriptiveDiagnosticsAndStrictDI:
         names the selected pairs, the parameters left None, and the fix."""
         from mesh.types import McpMeshTool
 
-        async def f(
-            a: str, dep0: McpMeshTool = None, dep1: McpMeshTool = None
-        ):
+        async def f(a: str, dep0: McpMeshTool = None, dep1: McpMeshTool = None):
             return (dep0, dep1)
 
         with caplog.at_level(logging.WARNING):
@@ -1605,9 +1605,7 @@ class TestPrescriptiveDiagnosticsAndStrictDI:
             return db
 
         with caplog.at_level(logging.WARNING):
-            final_kwargs, count = self._prep(
-                f, ["cap0", "cap1"], mesh_positions=[1, 7]
-            )
+            final_kwargs, count = self._prep(f, ["cap0", "cap1"], mesh_positions=[1, 7])
 
         assert count == 1
         text = caplog.text
@@ -1626,7 +1624,9 @@ class TestPrescriptiveDiagnosticsAndStrictDI:
         def f(a: str, db: McpMeshTool = None):
             pass
 
-        is_valid, message = validate_mesh_dependencies(f, [{"capability": "c0"}, {"capability": "c1"}])
+        is_valid, message = validate_mesh_dependencies(
+            f, [{"capability": "c0"}, {"capability": "c1"}]
+        )
 
         assert is_valid is False
         assert "Each typed slot needs a corresponding dependency" in message
@@ -1650,9 +1650,7 @@ class TestPrescriptiveDiagnosticsAndStrictDI:
         with caplog.at_level(logging.WARNING):
             analyze_injection_strategy(no_params, ["dep1"])
         warning_text = next(
-            r.message
-            for r in caplog.records
-            if "has no parameters" in r.message
+            r.message for r in caplog.records if "has no parameters" in r.message
         )
 
         self._enable_strict(monkeypatch)
@@ -1661,9 +1659,7 @@ class TestPrescriptiveDiagnosticsAndStrictDI:
 
         assert str(exc_info.value) == warning_text
 
-    def test_strict_multi_param_untyped_raises_same_text(
-        self, caplog, monkeypatch
-    ):
+    def test_strict_multi_param_untyped_raises_same_text(self, caplog, monkeypatch):
         from _mcp_mesh.engine.strict_di import StrictDIError
 
         def multi(alpha, beta: str, gamma):
@@ -1719,9 +1715,7 @@ class TestPrescriptiveDiagnosticsAndStrictDI:
         startup."""
         from mesh.types import McpMeshTool
 
-        async def f(
-            a: str, dep0: McpMeshTool = None, dep1: McpMeshTool = None
-        ):
+        async def f(a: str, dep0: McpMeshTool = None, dep1: McpMeshTool = None):
             return (dep0, dep1)
 
         self._enable_strict(monkeypatch)
@@ -1788,8 +1782,8 @@ class TestPrescriptiveDiagnosticsAndStrictDI:
         ``MCP_MESH_STRICT_DI``. 'N/N deps resolved' is registry
         provider-matching, not slot injection, so this silent-None must be
         surfaced."""
-        from mesh.types import MeshJob
         from _mcp_mesh.engine.strict_di import StrictDIError
+        from mesh.types import MeshJob
 
         # The unwired condition: capability declared (so the MeshJob branch
         # is reached) but no registry URL to construct the submitter.
@@ -1823,9 +1817,7 @@ class TestPrescriptiveDiagnosticsAndStrictDI:
             self._prep(submit, ["run_workflow"])
         assert expected in str(exc_info.value)
 
-    def test_strict_untyped_single_param_zero_deps_does_not_raise(
-        self, monkeypatch
-    ):
+    def test_strict_untyped_single_param_zero_deps_does_not_raise(self, monkeypatch):
         """A plain zero-dependency single-param tool ('def greet(name)')
         has NO typed eligible slot — the heuristic slot must not trip the
         decoration-time strict check, or every such tool would fail under
@@ -1864,18 +1856,14 @@ class TestPrescriptiveDiagnosticsAndStrictDI:
         # Strict: the count-based check must not fire before the
         # caller-supplied accounting — no raise either.
         self._enable_strict(monkeypatch)
-        final_kwargs, count = self._prep(
-            f, ["cap0"], kwargs={"a": "x", "dep1": fake}
-        )
+        final_kwargs, count = self._prep(f, ["cap0"], kwargs={"a": "x", "dep1": fake})
         assert final_kwargs["dep1"] is fake
 
     # ------------------------------------------------------------------
     # Skip reasons resolve hints the same way eligibility does
     # ------------------------------------------------------------------
 
-    def test_skip_reason_string_annotation_hint_failure_is_explicit(
-        self, caplog
-    ):
+    def test_skip_reason_string_annotation_hint_failure_is_explicit(self, caplog):
         """A valid-looking `db: "McpMeshTool"` whose name cannot be
         resolved (TYPE_CHECKING-only import) made eligibility fall back to
         "no eligible parameters"; the skip reason must report that
@@ -1928,9 +1916,7 @@ class TestPrescriptiveDiagnosticsAndStrictDI:
         # other than McpMeshTool — the hints never resolved.
         assert "not McpMeshTool" not in text
 
-    def test_string_annotation_that_resolves_is_eligible_no_skip_warning(
-        self, caplog
-    ):
+    def test_string_annotation_that_resolves_is_eligible_no_skip_warning(self, caplog):
         """Parity check: when the string annotation DOES resolve, the
         parameter is eligible and no skip diagnostic fires at all."""
         from mesh.types import McpMeshTool
@@ -1961,9 +1947,7 @@ class TestPrescriptiveDiagnosticsAndStrictDI:
         with pytest.raises(StrictDIError, match="out of bounds"):
             self._prep(f, ["cap0", "cap1"], mesh_positions=[1, 7])
 
-    def test_strict_validate_mesh_dependencies_raises_same_text(
-        self, monkeypatch
-    ):
+    def test_strict_validate_mesh_dependencies_raises_same_text(self, monkeypatch):
         from _mcp_mesh.engine.signature_analyzer import validate_mesh_dependencies
         from _mcp_mesh.engine.strict_di import StrictDIError
         from mesh.types import McpMeshTool
@@ -2082,9 +2066,7 @@ class TestStrictDIDecorationFailureRegistryCleanup:
         monkeypatch.setenv("MCP_MESH_STRICT_DI", "true")
         strict_di._reset_strict_di_cache()
 
-    def test_strict_tool_decoration_failure_leaves_no_registry_entry(
-        self, monkeypatch
-    ):
+    def test_strict_tool_decoration_failure_leaves_no_registry_entry(self, monkeypatch):
         import mesh
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
         from _mcp_mesh.engine.strict_di import StrictDIError
@@ -2114,13 +2096,9 @@ class TestStrictDIDecorationFailureRegistryCleanup:
             def no_params_route():
                 pass
 
-        assert "no_params_route" not in DecoratorRegistry.get_all_by_type(
-            "mesh_route"
-        )
+        assert "no_params_route" not in DecoratorRegistry.get_all_by_type("mesh_route")
 
-    def test_strict_a2a_decoration_failure_leaves_no_registry_entry(
-        self, monkeypatch
-    ):
+    def test_strict_a2a_decoration_failure_leaves_no_registry_entry(self, monkeypatch):
         import mesh
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
         from _mcp_mesh.engine.strict_di import StrictDIError

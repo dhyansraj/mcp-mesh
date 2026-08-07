@@ -20,15 +20,15 @@ import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from _mcp_mesh.engine.llm_config import LLMConfig
 from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 from mesh.helpers import (
-    DEFAULT_MAX_ITERATIONS,
     _MAX_ITERATIONS_UNSET,
+    DEFAULT_MAX_ITERATIONS,
     _resolve_max_iterations,
     _sanitize_max_iterations,
 )
-
 
 # ---------------------------------------------------------------------------
 # Sanitization / resolution (parity with TS sanitizeMaxIterations)
@@ -372,9 +372,7 @@ class TestProviderResolution:
 
     @pytest.mark.asyncio
     async def test_forwarded_value_is_honoured(self, monkeypatch):
-        captured = await self._run(
-            monkeypatch, {"max_iterations": 3}, env="8"
-        )
+        captured = await self._run(monkeypatch, {"max_iterations": 3}, env="8")
         assert captured["max_iterations"] == 3
         # ...and never reaches the vendor call params.
         assert "max_iterations" not in captured["model_params"]
@@ -396,9 +394,7 @@ class TestProviderResolution:
         assert captured["max_iterations"] == DEFAULT_MAX_ITERATIONS
 
     @pytest.mark.asyncio
-    async def test_key_never_reaches_litellm_on_legacy_no_tools_path(
-        self, monkeypatch
-    ):
+    async def test_key_never_reaches_litellm_on_legacy_no_tools_path(self, monkeypatch):
         """No tool endpoints → single litellm call. The consumer-only key must
         not appear in completion args (vendor APIs reject unknown params)."""
         monkeypatch.setenv("MCP_MESH_NATIVE_LLM", "0")

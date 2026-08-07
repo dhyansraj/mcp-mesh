@@ -25,16 +25,16 @@ class LLMConfig:
     @mesh.llm_provider to bind against.
     """
 
-    provider: Optional[dict[str, Any]] = None
+    provider: dict[str, Any] | None = None
     """LLM provider filter (mesh delegation).
        Format: {"capability": "llm", "tags": ["+claude"], "version": ">=1.0.0"}"""
 
-    model: Optional[str] = None
+    model: str | None = None
     """Optional model override sent to the provider (e.g., "anthropic/claude-haiku-4").
        When set, the consumer requests this specific model from the provider; otherwise
        the provider uses its decorator-time default."""
 
-    max_iterations: Optional[int] = None
+    max_iterations: int | None = None
     """Maximum iterations for the agentic loop.
 
        ``None`` means "not explicitly configured" (issue #1356): the consumer's
@@ -43,10 +43,10 @@ class LLMConfig:
        applies. Any non-None value is treated as an explicit user setting and IS
        forwarded on the wire."""
 
-    system_prompt: Optional[str] = None
+    system_prompt: str | None = None
     """Optional system prompt to prepend to all interactions"""
 
-    output_mode: Optional[str] = None
+    output_mode: str | None = None
     """Output mode override: 'strict', 'hint', or 'text'. If None, auto-detected by handler."""
 
     @property

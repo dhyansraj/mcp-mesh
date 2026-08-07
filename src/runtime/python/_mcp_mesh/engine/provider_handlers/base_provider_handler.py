@@ -10,7 +10,8 @@ import logging
 import os
 import threading
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any, Optional
 
 import mcp_mesh_core
 from pydantic import BaseModel
@@ -84,13 +85,17 @@ def resolve_hint_fallback_timeout(default: int = _DEFAULT_HINT_FALLBACK_TIMEOUT)
     except (TypeError, ValueError):
         logger.warning(
             "%s=%r is not an integer; using default %ss",
-            source, raw, default,
+            source,
+            raw,
+            default,
         )
         return default
     if value <= 0:
         logger.warning(
             "%s=%r must be positive; using default %ss",
-            source, raw, default,
+            source,
+            raw,
+            default,
         )
         return default
     return value
@@ -173,7 +178,7 @@ def render_dispatch_status_log(
 # ============================================================================
 
 
-def has_media_params(tool_schemas: Optional[list[dict[str, Any]]]) -> bool:
+def has_media_params(tool_schemas: list[dict[str, Any]] | None) -> bool:
     """
     Check if any tool schema contains x-media-type properties.
 
@@ -199,11 +204,11 @@ _VALID_OUTPUT_MODES = ("strict", "hint", "text")
 
 
 def normalize_output_mode_override(
-    output_mode: Optional[str],
+    output_mode: str | None,
     *,
     vendor_label: str,
     handler_logger: logging.Logger,
-) -> Optional[str]:
+) -> str | None:
     """Validate a consumer-supplied ``output_mode`` override.
 
     Returns the override lower-cased when it is one of ``strict`` / ``hint`` /
@@ -338,7 +343,7 @@ class BaseProviderHandler(ABC):
     def prepare_request(
         self,
         messages: list[dict[str, Any]],
-        tools: Optional[list[dict[str, Any]]],
+        tools: list[dict[str, Any]] | None,
         output_type: type[BaseModel],
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -368,7 +373,7 @@ class BaseProviderHandler(ABC):
     def format_system_prompt(
         self,
         base_prompt: str,
-        tool_schemas: Optional[list[dict[str, Any]]],
+        tool_schemas: list[dict[str, Any]] | None,
         output_type: type[BaseModel],
     ) -> str:
         """
@@ -414,12 +419,12 @@ class BaseProviderHandler(ABC):
     def apply_structured_output(
         self,
         output_schema: dict[str, Any],
-        output_type_name: Optional[str],
+        output_type_name: str | None,
         model_params: dict[str, Any],
         *,
         streaming: bool = False,
-        model: Optional[str] = None,
-        output_mode: Optional[str] = None,
+        model: str | None = None,
+        output_mode: str | None = None,
     ) -> dict[str, Any]:
         """
         Apply vendor-specific structured output handling to model params.
@@ -542,10 +547,10 @@ class BaseProviderHandler(ABC):
         self,
         model_params: dict[str, Any],
         sanitized_schema: dict[str, Any],
-        output_type_name: Optional[str],
+        output_type_name: str | None,
         *,
         support_content_blocks: bool,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger | None = None,
     ) -> dict[str, Any]:
         """Inject the OUTPUT FORMAT HINT block into the first system message.
 

@@ -9,6 +9,13 @@ Covers ``detect_stream_type`` (P1 of issue #645):
 
 from __future__ import annotations
 
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterable,
+    AsyncIterator,
+    Awaitable,
+    Coroutine,
+)
 from collections.abc import AsyncGenerator as AbcAsyncGenerator
 from collections.abc import AsyncIterable as AbcAsyncIterable
 from collections.abc import AsyncIterator as AbcAsyncIterator
@@ -16,11 +23,6 @@ from collections.abc import Awaitable as AbcAwaitable
 from collections.abc import Coroutine as AbcCoroutine
 from typing import (
     Any,
-    AsyncGenerator,
-    AsyncIterable,
-    AsyncIterator,
-    Awaitable,
-    Coroutine,
 )
 
 import pytest
@@ -82,32 +84,27 @@ class TestDetectsTextStream:
         # An async function returning an async iterator. This is the shape a
         # type checker sees on `async def f() -> Stream[str]: yield ...` once
         # the typing layer wraps the user's annotation.
-        async def chat(prompt: str) -> Awaitable[AsyncIterator[str]]:
-            ...
+        async def chat(prompt: str) -> Awaitable[AsyncIterator[str]]: ...
 
         assert detect_stream_type(chat) == "text"
 
     def test_coroutine_wrapping_async_iterator_str(self):
-        async def chat(prompt: str) -> Coroutine[Any, Any, AsyncIterator[str]]:
-            ...
+        async def chat(prompt: str) -> Coroutine[Any, Any, AsyncIterator[str]]: ...
 
         assert detect_stream_type(chat) == "text"
 
     def test_coroutine_abc_wrapping_async_iterator(self):
-        async def chat(prompt: str) -> AbcCoroutine[Any, Any, AsyncIterator[str]]:
-            ...
+        async def chat(prompt: str) -> AbcCoroutine[Any, Any, AsyncIterator[str]]: ...
 
         assert detect_stream_type(chat) == "text"
 
     def test_awaitable_abc_wrapping_async_iterator(self):
-        async def chat(prompt: str) -> AbcAwaitable[AsyncIterator[str]]:
-            ...
+        async def chat(prompt: str) -> AbcAwaitable[AsyncIterator[str]]: ...
 
         assert detect_stream_type(chat) == "text"
 
     def test_sync_function_returning_async_iterator(self):
-        def chat(prompt: str) -> AsyncIterator[str]:
-            ...
+        def chat(prompt: str) -> AsyncIterator[str]: ...
 
         assert detect_stream_type(chat) == "text"
 
@@ -140,14 +137,12 @@ class TestNonStreamingReturnsNone:
         assert detect_stream_type(None) is None
 
     def test_awaitable_str_only(self):
-        async def chat(prompt: str) -> Awaitable[str]:
-            ...
+        async def chat(prompt: str) -> Awaitable[str]: ...
 
         assert detect_stream_type(chat) is None
 
     def test_coroutine_returning_str(self):
-        async def chat(prompt: str) -> Coroutine[Any, Any, str]:
-            ...
+        async def chat(prompt: str) -> Coroutine[Any, Any, str]: ...
 
         assert detect_stream_type(chat) is None
 

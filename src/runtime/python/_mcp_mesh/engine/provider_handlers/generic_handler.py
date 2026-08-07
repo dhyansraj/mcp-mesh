@@ -54,7 +54,7 @@ class GenericHandler(BaseProviderHandler):
     def prepare_request(
         self,
         messages: list[dict[str, Any]],
-        tools: Optional[list[dict[str, Any]]],
+        tools: list[dict[str, Any]] | None,
         output_type: type[BaseModel],
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -93,7 +93,7 @@ class GenericHandler(BaseProviderHandler):
     def format_system_prompt(
         self,
         base_prompt: str,
-        tool_schemas: Optional[list[dict[str, Any]]],
+        tool_schemas: list[dict[str, Any]] | None,
         output_type: type,
     ) -> str:
         """
@@ -153,12 +153,12 @@ class GenericHandler(BaseProviderHandler):
     def apply_structured_output(
         self,
         output_schema: dict[str, Any],
-        output_type_name: Optional[str],
+        output_type_name: str | None,
         model_params: dict[str, Any],
         *,
         streaming: bool = False,
-        model: Optional[str] = None,
-        output_mode: Optional[str] = None,
+        model: str | None = None,
+        output_mode: str | None = None,
     ) -> dict[str, Any]:
         """
         Apply structured output for generic vendors.

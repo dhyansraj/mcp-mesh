@@ -220,7 +220,9 @@ class TestRunStartupCheck:
         assert errors == ["no key"]
 
     def test_degraded_fails_there_is_no_partial_credit(self):
-        passed, _, errors = asyncio.run(run_startup_check(lambda: {"status": "degraded"}))
+        passed, _, errors = asyncio.run(
+            run_startup_check(lambda: {"status": "degraded"})
+        )
         assert passed is False
         assert errors == ["Startup check reported 'degraded'"]
 
@@ -406,7 +408,9 @@ class TestProviderEndpoint:
         declared_startup_check(boom)
         assert TestClient(immediate_app).get(STARTUPZ_PATH).status_code == 503
 
-    @pytest.mark.parametrize("check,expected", [(lambda: True, 200), (lambda: False, 503)])
+    @pytest.mark.parametrize(
+        "check,expected", [(lambda: True, 200), (lambda: False, 503)]
+    )
     def test_head_matches_get(
         self, immediate_app, declared_startup_check, check, expected
     ):
@@ -461,7 +465,9 @@ class TestGatewayEndpoint:
         assert response.json()["started"] is False
         assert response.json()["errors"]
 
-    def test_throwing_check_answers_503_not_500(self, declared_startup_check, runtime_up):
+    def test_throwing_check_answers_503_not_500(
+        self, declared_startup_check, runtime_up
+    ):
         async def boom():
             raise RuntimeError("MODEL_ENDPOINT is not set")
 
@@ -471,8 +477,12 @@ class TestGatewayEndpoint:
         assert response.status_code == 503
         assert "MODEL_ENDPOINT is not set" in response.json()["errors"][0]
 
-    @pytest.mark.parametrize("check,expected", [(lambda: True, 200), (lambda: False, 503)])
-    def test_head_matches_get(self, declared_startup_check, runtime_up, check, expected):
+    @pytest.mark.parametrize(
+        "check,expected", [(lambda: True, 200), (lambda: False, 503)]
+    )
+    def test_head_matches_get(
+        self, declared_startup_check, runtime_up, check, expected
+    ):
         declared_startup_check(check)
         app = _gateway_app()
         client = TestClient(app)

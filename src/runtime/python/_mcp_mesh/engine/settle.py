@@ -74,7 +74,7 @@ SETTLE_TIMEOUT_DEFAULT_SECONDS = 20.0
 # Cached per-process resolution of MCP_MESH_SETTLE_TIMEOUT (mirrors the
 # cached-global convention of ``is_strict_di_enabled``). The settle window
 # is a process-level posture, not a per-call toggle.
-_SETTLE_TIMEOUT: Optional[float] = None
+_SETTLE_TIMEOUT: float | None = None
 
 
 def get_settle_timeout() -> float:
@@ -99,8 +99,7 @@ def get_settle_timeout() -> float:
             timeout = SETTLE_TIMEOUT_DEFAULT_SECONDS
         if timeout < 0:
             logger.warning(
-                "MCP_MESH_SETTLE_TIMEOUT must be >= 0 (got %s); "
-                "using default %.0fs",
+                "MCP_MESH_SETTLE_TIMEOUT must be >= 0 (got %s); using default %.0fs",
                 value,
                 SETTLE_TIMEOUT_DEFAULT_SECONDS,
             )
@@ -124,7 +123,7 @@ class SettleState:
 
     def __init__(self) -> None:
         # Anchored lazily by the first register_declared call.
-        self._start: Optional[float] = None
+        self._start: float | None = None
         self._lock = threading.Lock()
         self._declared: set[str] = set()
         self._resolved: set[str] = set()
@@ -270,9 +269,7 @@ class SettleState:
                 self._events[dep_key] = event
             return event
 
-    def _log_wait(
-        self, capability: str, remaining: float, log: logging.Logger
-    ) -> None:
+    def _log_wait(self, capability: str, remaining: float, log: logging.Logger) -> None:
         """One INFO line per capability per process; later waits DEBUG."""
         if capability not in self._logged_waits:
             self._logged_waits.add(capability)
@@ -288,9 +285,7 @@ class SettleState:
                 capability,
             )
 
-    def wait_for(
-        self, dep_key: str, capability: str, log: logging.Logger
-    ) -> None:
+    def wait_for(self, dep_key: str, capability: str, log: logging.Logger) -> None:
         """Block (current thread) until ``dep_key`` resolves or the budget ends.
 
         MUST only be called off the event loop — sync tool wrappers run on
@@ -330,16 +325,14 @@ class SettleState:
         with self._lock:
             if dep_key in self._resolved or dep_key in self._retired:
                 return
-            self._async_waiters.setdefault(dep_key, []).append(
-                (loop, async_event)
-            )
+            self._async_waiters.setdefault(dep_key, []).append((loop, async_event))
         self._log_wait(capability, remaining, log)
         self.wait_count += 1
         try:
             # On timeout we simply proceed — same None-injection contract
             # as the sync path.
             await asyncio.wait_for(async_event.wait(), remaining)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
         finally:
             with self._lock:
@@ -376,12 +369,12 @@ def _capability_of(dep: object) -> str:
 
 
 def collect_pending_settle_deps(
-    settle_keys: Optional[list],
+    settle_keys: list | None,
     dependencies: list,
     injected_deps_array: list,
     get_dependency_fn,
-    call_kwargs: Optional[dict] = None,
-    settle_params: Optional[list] = None,
+    call_kwargs: dict | None = None,
+    settle_params: list | None = None,
 ) -> list[tuple[str, str]]:
     """Declared-but-unresolved deps the wrapper is about to inject.
 
@@ -430,9 +423,7 @@ def collect_pending_settle_deps(
     return pending
 
 
-def wait_for_settle_sync(
-    pending: list[tuple[str, str]], log: logging.Logger
-) -> None:
+def wait_for_settle_sync(pending: list[tuple[str, str]], log: logging.Logger) -> None:
     """Blocking settle wait for sync wrappers (worker-thread dispatch).
 
     Waits each pending dependency in turn; the per-wait budget is the

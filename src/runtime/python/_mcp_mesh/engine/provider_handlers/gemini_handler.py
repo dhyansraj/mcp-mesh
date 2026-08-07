@@ -104,6 +104,7 @@ def _gemini_sdk_version() -> str:
     """Probe the installed google-genai SDK version for the dispatch-status log."""
     try:
         import google.genai as genai
+
         return getattr(genai, "__version__", "<unknown>")
     except Exception:
         return "<import-failed>"
@@ -473,9 +474,7 @@ class GeminiHandler(BaseProviderHandler):
             model,
             output_is_basemodel=True,
             has_tools=True,  # mesh delegation always attaches tools
-            gemini_native_structured_tools=(
-                _gemini_native_structured_tools_enabled()
-            ),
+            gemini_native_structured_tools=(_gemini_native_structured_tools_enabled()),
         )
 
         # Override resolution. "strict" demands the native server-enforced
@@ -510,9 +509,7 @@ class GeminiHandler(BaseProviderHandler):
             # but emits ``response_json_schema``, NOT the legacy
             # ``response_schema`` translation documented to infinite-loop with
             # tools). Tools are left untouched in model_params.
-            strict_schema = make_schema_strict(
-                sanitized_schema, add_all_required=True
-            )
+            strict_schema = make_schema_strict(sanitized_schema, add_all_required=True)
             model_params["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {

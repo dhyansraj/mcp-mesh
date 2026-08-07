@@ -5,14 +5,15 @@ Tests the collection of decorators from DecoratorRegistry and context population
 for subsequent pipeline steps. Focus on pure unit testing without external dependencies.
 """
 
-from typing import Any, Dict
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 from _mcp_mesh.engine.decorator_registry import DecoratedFunction
+
 # Import the classes under test
-from _mcp_mesh.pipeline.mcp_startup.decorator_collection import \
-    DecoratorCollectionStep
+from _mcp_mesh.pipeline.mcp_startup.decorator_collection import DecoratorCollectionStep
 from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
 
 

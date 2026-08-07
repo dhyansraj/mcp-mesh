@@ -6,10 +6,11 @@ for subsequent pipeline steps. Focus on configuration resolution without duplica
 agent ID generation tests from test_01.
 """
 
-from typing import Any, Dict
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 # Import the classes under test
 from _mcp_mesh.pipeline.mcp_startup.configuration import ConfigurationStep
 from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus

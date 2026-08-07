@@ -21,10 +21,13 @@ repos:
         exclude: '^src/runtime/core/src/tls\.rs$'
       - id: mixed-line-ending
 
-  # Python formatters (black, isort, ruff, mypy, bandit) removed from
-  # pre-commit to avoid commit loops from conflicting auto-fixes.
-  # TODO: Re-enable CI lint jobs (currently disabled with if: false) or
-  # add a single ruff hook once black/isort/ruff config is consolidated.
+  # Python formatters (black, isort, ruff, mypy, bandit) are deliberately not
+  # pre-commit hooks: conflicting auto-fixes caused commit loops. Linting and
+  # formatting are now consolidated on ruff alone (black and isort are gone),
+  # enforced in CI by the lint-and-format job, which runs `ruff check` +
+  # `ruff format --check` over `_mcp_mesh mesh tests` — every Python package
+  # under src/runtime/python, the shipped `mesh` public API included. Nothing
+  # outside that directory (scripts/, tools/, examples/) is linted anywhere.
 
   - repo: https://github.com/hadolint/hadolint
     rev: v2.13.1-beta

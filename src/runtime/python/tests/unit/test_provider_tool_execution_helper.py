@@ -18,13 +18,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import mesh.helpers as _mesh_helpers
 from mesh.helpers import (
     _TOOL_IMAGE_UNSUPPORTED_VENDORS,
     _execute_tool_calls_for_iteration,
     _warn_native_dispatch_unknown_vendor_once,
 )
-import mesh.helpers as _mesh_helpers
-
 
 # ---------------------------------------------------------------------------
 # Mock helpers
@@ -139,9 +138,7 @@ class TestSequentialAndParallelDispatch:
         """parallel=True with len(tool_calls)==1 falls through to the sequential
         branch — there is no benefit to ``asyncio.gather`` for a single call,
         and the original loop made the same micro-optimization."""
-        message = _make_message_mock(
-            [_make_tool_call_mock("call_1", "echo", "{}")]
-        )
+        message = _make_message_mock([_make_tool_call_mock("call_1", "echo", "{}")])
         tool_endpoints = {"echo": "http://localhost:9000"}
 
         proxy_instance = MagicMock()
@@ -208,10 +205,14 @@ class TestVendorImageHandling:
         link_patch, resolve_patch = self._patch_resolver(
             has_image=True, parts=[image_part]
         )
-        with patch(
-            "_mcp_mesh.engine.unified_mcp_proxy.UnifiedMCPProxy",
-            return_value=proxy_instance,
-        ), link_patch, resolve_patch:
+        with (
+            patch(
+                "_mcp_mesh.engine.unified_mcp_proxy.UnifiedMCPProxy",
+                return_value=proxy_instance,
+            ),
+            link_patch,
+            resolve_patch,
+        ):
             tool_messages, images = await _execute_tool_calls_for_iteration(
                 message=message,
                 tool_endpoints=tool_endpoints,
@@ -253,10 +254,14 @@ class TestVendorImageHandling:
         link_patch, resolve_patch = self._patch_resolver(
             has_image=True, parts=resolved_parts
         )
-        with patch(
-            "_mcp_mesh.engine.unified_mcp_proxy.UnifiedMCPProxy",
-            return_value=proxy_instance,
-        ), link_patch, resolve_patch:
+        with (
+            patch(
+                "_mcp_mesh.engine.unified_mcp_proxy.UnifiedMCPProxy",
+                return_value=proxy_instance,
+            ),
+            link_patch,
+            resolve_patch,
+        ):
             tool_messages, images = await _execute_tool_calls_for_iteration(
                 message=message,
                 tool_endpoints=tool_endpoints,
@@ -288,9 +293,7 @@ class TestErrorPaths:
         )
         tool_endpoints: dict[str, str] = {}  # no endpoint registered
 
-        with patch(
-            "_mcp_mesh.engine.unified_mcp_proxy.UnifiedMCPProxy"
-        ) as proxy_cls:
+        with patch("_mcp_mesh.engine.unified_mcp_proxy.UnifiedMCPProxy") as proxy_cls:
             tool_messages, images = await _execute_tool_calls_for_iteration(
                 message=message,
                 tool_endpoints=tool_endpoints,
@@ -350,18 +353,20 @@ class TestNativeDispatchResolverVendor:
         tool_endpoints = {"screenshot": "http://localhost:9000"}
 
         proxy_instance = MagicMock()
-        proxy_instance.call_tool = AsyncMock(
-            return_value={"resource_link": True}
-        )
+        proxy_instance.call_tool = AsyncMock(return_value={"resource_link": True})
 
         link_patch, resolve_patch, resolve_mock = self._patch_resolver(
             parts=[{"type": "text", "text": "ok"}]
         )
 
-        with patch(
-            "_mcp_mesh.engine.unified_mcp_proxy.UnifiedMCPProxy",
-            return_value=proxy_instance,
-        ), link_patch, resolve_patch:
+        with (
+            patch(
+                "_mcp_mesh.engine.unified_mcp_proxy.UnifiedMCPProxy",
+                return_value=proxy_instance,
+            ),
+            link_patch,
+            resolve_patch,
+        ):
             await _execute_tool_calls_for_iteration(
                 message=message,
                 tool_endpoints=tool_endpoints,
@@ -391,18 +396,20 @@ class TestNativeDispatchResolverVendor:
         tool_endpoints = {"screenshot": "http://localhost:9000"}
 
         proxy_instance = MagicMock()
-        proxy_instance.call_tool = AsyncMock(
-            return_value={"resource_link": True}
-        )
+        proxy_instance.call_tool = AsyncMock(return_value={"resource_link": True})
 
         link_patch, resolve_patch, resolve_mock = self._patch_resolver(
             parts=[{"type": "text", "text": "ok"}]
         )
 
-        with patch(
-            "_mcp_mesh.engine.unified_mcp_proxy.UnifiedMCPProxy",
-            return_value=proxy_instance,
-        ), link_patch, resolve_patch:
+        with (
+            patch(
+                "_mcp_mesh.engine.unified_mcp_proxy.UnifiedMCPProxy",
+                return_value=proxy_instance,
+            ),
+            link_patch,
+            resolve_patch,
+        ):
             await _execute_tool_calls_for_iteration(
                 message=message,
                 tool_endpoints=tool_endpoints,
@@ -432,18 +439,20 @@ class TestNativeDispatchResolverVendor:
         tool_endpoints = {"screenshot": "http://localhost:9000"}
 
         proxy_instance = MagicMock()
-        proxy_instance.call_tool = AsyncMock(
-            return_value={"resource_link": True}
-        )
+        proxy_instance.call_tool = AsyncMock(return_value={"resource_link": True})
 
         link_patch, resolve_patch, resolve_mock = self._patch_resolver(
             parts=[{"type": "text", "text": "ok"}]
         )
 
-        with patch(
-            "_mcp_mesh.engine.unified_mcp_proxy.UnifiedMCPProxy",
-            return_value=proxy_instance,
-        ), link_patch, resolve_patch:
+        with (
+            patch(
+                "_mcp_mesh.engine.unified_mcp_proxy.UnifiedMCPProxy",
+                return_value=proxy_instance,
+            ),
+            link_patch,
+            resolve_patch,
+        ):
             await _execute_tool_calls_for_iteration(
                 message=message,
                 tool_endpoints=tool_endpoints,
@@ -468,18 +477,20 @@ class TestNativeDispatchResolverVendor:
         tool_endpoints = {"screenshot": "http://localhost:9000"}
 
         proxy_instance = MagicMock()
-        proxy_instance.call_tool = AsyncMock(
-            return_value={"resource_link": True}
-        )
+        proxy_instance.call_tool = AsyncMock(return_value={"resource_link": True})
 
         link_patch, resolve_patch, resolve_mock = self._patch_resolver(
             parts=[{"type": "text", "text": "ok"}]
         )
 
-        with patch(
-            "_mcp_mesh.engine.unified_mcp_proxy.UnifiedMCPProxy",
-            return_value=proxy_instance,
-        ), link_patch, resolve_patch:
+        with (
+            patch(
+                "_mcp_mesh.engine.unified_mcp_proxy.UnifiedMCPProxy",
+                return_value=proxy_instance,
+            ),
+            link_patch,
+            resolve_patch,
+        ):
             # Note: no has_native_dispatch kwarg -> default False.
             await _execute_tool_calls_for_iteration(
                 message=message,
@@ -503,18 +514,20 @@ class TestNativeDispatchResolverVendor:
         tool_endpoints = {"screenshot": "http://localhost:9000"}
 
         proxy_instance = MagicMock()
-        proxy_instance.call_tool = AsyncMock(
-            return_value={"resource_link": True}
-        )
+        proxy_instance.call_tool = AsyncMock(return_value={"resource_link": True})
 
         link_patch, resolve_patch, resolve_mock = self._patch_resolver(
             parts=[{"type": "text", "text": "ok"}]
         )
 
-        with patch(
-            "_mcp_mesh.engine.unified_mcp_proxy.UnifiedMCPProxy",
-            return_value=proxy_instance,
-        ), link_patch, resolve_patch:
+        with (
+            patch(
+                "_mcp_mesh.engine.unified_mcp_proxy.UnifiedMCPProxy",
+                return_value=proxy_instance,
+            ),
+            link_patch,
+            resolve_patch,
+        ):
             await _execute_tool_calls_for_iteration(
                 message=message,
                 tool_endpoints=tool_endpoints,
@@ -588,8 +601,7 @@ class TestUnknownNativeVendorWarn:
         warn_msgs = [
             r.getMessage()
             for r in caplog.records
-            if r.levelname == "WARNING"
-            and "_VENDOR_FORMATTERS" in r.getMessage()
+            if r.levelname == "WARNING" and "_VENDOR_FORMATTERS" in r.getMessage()
         ]
         # Three distinct vendors → three WARNs total.
         assert len(warn_msgs) == 3
@@ -611,20 +623,19 @@ class TestUnknownNativeVendorWarn:
         tool_endpoints = {"screenshot": "http://localhost:9000"}
 
         proxy_instance = MagicMock()
-        proxy_instance.call_tool = AsyncMock(
-            return_value={"resource_link": True}
-        )
+        proxy_instance.call_tool = AsyncMock(return_value={"resource_link": True})
 
         resolve_mock = AsyncMock(return_value=[{"type": "text", "text": "ok"}])
 
-        with patch(
-            "_mcp_mesh.engine.unified_mcp_proxy.UnifiedMCPProxy",
-            return_value=proxy_instance,
-        ), patch(
-            "_mcp_mesh.media.resolver._has_resource_link", return_value=True
-        ), patch(
-            "_mcp_mesh.media.resolver.resolve_resource_links", new=resolve_mock
-        ), caplog.at_level("WARNING", logger=_mesh_helpers.logger.name):
+        with (
+            patch(
+                "_mcp_mesh.engine.unified_mcp_proxy.UnifiedMCPProxy",
+                return_value=proxy_instance,
+            ),
+            patch("_mcp_mesh.media.resolver._has_resource_link", return_value=True),
+            patch("_mcp_mesh.media.resolver.resolve_resource_links", new=resolve_mock),
+            caplog.at_level("WARNING", logger=_mesh_helpers.logger.name),
+        ):
             await _execute_tool_calls_for_iteration(
                 message=message,
                 tool_endpoints=tool_endpoints,
@@ -645,6 +656,5 @@ class TestUnknownNativeVendorWarn:
             if r.levelname == "WARNING" and "cohere" in r.getMessage()
         ]
         assert len(warn_msgs) == 1, (
-            f"expected one WARN about unknown native vendor 'cohere'; "
-            f"got: {warn_msgs}"
+            f"expected one WARN about unknown native vendor 'cohere'; got: {warn_msgs}"
         )

@@ -21,7 +21,6 @@ from _mcp_mesh.engine.native_clients._native_client_helpers import (
     translate_max_tokens_for_restricted,
 )
 
-
 # ---------------------------------------------------------------------------
 # Classifier truth table
 # ---------------------------------------------------------------------------

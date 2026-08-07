@@ -43,9 +43,10 @@ from _mcp_mesh.pipeline.api_startup.route_integration import (
 # parameters like `request: Request` and `dep: McpMeshTool`.
 from ._route_sse_gateway_handlers import (
     chat_single_fn as _gw_chat_single_fn,
+)
+from ._route_sse_gateway_handlers import (
     chat_two_fn_outer as _gw_chat_two_fn_outer,
 )
-
 
 # ---------------------------------------------------------------------------
 # _resolve_user_function
@@ -141,10 +142,7 @@ class TestBuildSseEndpointBasics:
         body = await _drain(response)
 
         assert body == (
-            "data: chunk1\n\n"
-            "data: chunk2\n\n"
-            "data: chunk3\n\n"
-            "data: [DONE]\n\n"
+            "data: chunk1\n\ndata: chunk2\n\ndata: chunk3\n\ndata: [DONE]\n\n"
         )
 
     @pytest.mark.asyncio
@@ -310,7 +308,9 @@ class TestRouteIntegrationStreamDetection:
 
         # The route's endpoint is now the SSE wrapper
         sse_endpoint = next(
-            r.endpoint for r in app.router.routes if getattr(r, "path", "") == "/api/chat"
+            r.endpoint
+            for r in app.router.routes
+            if getattr(r, "path", "") == "/api/chat"
         )
         assert getattr(sse_endpoint, "_mesh_is_sse_endpoint", False) is True
 
@@ -404,10 +404,7 @@ class TestSseEndpointEndToEnd:
             body = response.read().decode("utf-8")
 
         assert body == (
-            "data: chunk1\n\n"
-            "data: chunk2\n\n"
-            "data: chunk3\n\n"
-            "data: [DONE]\n\n"
+            "data: chunk1\n\ndata: chunk2\n\ndata: chunk3\n\ndata: [DONE]\n\n"
         )
 
     def test_test_client_receives_event_error_on_exception(self):
@@ -461,11 +458,7 @@ class TestSseEndpointEndToEnd:
             assert response.headers["content-type"].startswith("text/event-stream")
             body = response.read().decode("utf-8")
 
-        assert body == (
-            "data: alpha\n\n"
-            "data: beta\n\n"
-            "data: [DONE]\n\n"
-        )
+        assert body == ("data: alpha\n\ndata: beta\n\ndata: [DONE]\n\n")
 
 
 # ---------------------------------------------------------------------------
@@ -544,12 +537,7 @@ class TestSseGatewayShape:
 
         response = await sse_endpoint(request=_FakeReq())
         body = await _drain(response)
-        assert body == (
-            "data: alpha\n\n"
-            "data: beta\n\n"
-            "data: gamma\n\n"
-            "data: [DONE]\n\n"
-        )
+        assert body == ("data: alpha\n\ndata: beta\n\ndata: gamma\n\ndata: [DONE]\n\n")
         assert fake_dep.last_kwargs == {"text": "hello"}
 
     @pytest.mark.filterwarnings("ignore::ResourceWarning")
@@ -667,20 +655,13 @@ class TestSseGatewayShape:
         app_ok.post("/api/chat")(sse_endpoint_ok)
 
         client_ok = TestClient(app_ok)
-        with client_ok.stream(
-            "POST", "/api/chat", json={"text": "hello"}
-        ) as response:
+        with client_ok.stream("POST", "/api/chat", json={"text": "hello"}) as response:
             assert response.status_code == 200
             assert response.headers.get("content-type", "").startswith(
                 "text/event-stream"
             )
             body = response.read().decode("utf-8")
-        assert body == (
-            "data: alpha\n\n"
-            "data: beta\n\n"
-            "data: gamma\n\n"
-            "data: [DONE]\n\n"
-        )
+        assert body == ("data: alpha\n\ndata: beta\n\ndata: gamma\n\ndata: [DONE]\n\n")
 
         # Error path — dep is None: outer raises HTTPException up-front,
         # before any StreamingResponse is constructed, so FastAPI returns
@@ -972,9 +953,7 @@ class TestRouteRebuildFailureIsLoud:
         app.post("/api/chat", response_model=None)(chat)
         return app, chat
 
-    def test_rebuild_failure_raises_instead_of_reporting_integrated(
-        self, monkeypatch
-    ):
+    def test_rebuild_failure_raises_instead_of_reporting_integrated(self, monkeypatch):
         app, chat = self._app_with_stream_route()
 
         def _boom(route, wrapped_handler):
