@@ -132,7 +132,11 @@ class ToolSchemaBuilder:
         input_schema = getattr(tool, "input_schema", None)
 
         # Enrich description with media parameter info
-        if input_schema and isinstance(input_schema, dict) and "properties" in input_schema:
+        if (
+            input_schema
+            and isinstance(input_schema, dict)
+            and "properties" in input_schema
+        ):
             media_params = []
             for prop_name, prop_schema in input_schema["properties"].items():
                 if isinstance(prop_schema, dict) and "x-media-type" in prop_schema:

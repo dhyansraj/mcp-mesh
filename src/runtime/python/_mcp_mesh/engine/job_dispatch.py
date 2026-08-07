@@ -35,7 +35,8 @@ import asyncio
 import json
 import logging
 import os
-from typing import Any, Awaitable, Callable, Optional
+from collections.abc import Awaitable, Callable
+from typing import Any, Optional
 
 from .job_context import CURRENT_JOB, JobContextSnapshot
 
@@ -65,9 +66,7 @@ _HDR_CLAIM_EPOCH = "x-mesh-claim-epoch"
 _HDR_RECV_CURSOR = "x-mesh-recv-cursor"
 
 
-def _read_job_headers() -> (
-    tuple[Optional[str], Optional[float], Optional[int], Optional[dict]]
-):
+def _read_job_headers() -> tuple[str | None, float | None, int | None, dict | None]:
     """Pull ``X-Mesh-Job-Id`` / ``X-Mesh-Timeout`` / ``X-Mesh-Claim-Epoch`` /
     ``X-Mesh-Recv-Cursor`` from the propagated-headers contextvar populated by
     the MCP session middleware (or seeded by the claim dispatcher).
@@ -95,7 +94,7 @@ def _read_job_headers() -> (
         return None, None, None, None
 
     timeout_raw = headers.get(_HDR_TIMEOUT)
-    deadline_secs: Optional[float] = None
+    deadline_secs: float | None = None
     if timeout_raw:
         try:
             deadline_secs = float(timeout_raw)
@@ -110,7 +109,7 @@ def _read_job_headers() -> (
             deadline_secs = None
 
     claim_epoch_raw = headers.get(_HDR_CLAIM_EPOCH)
-    claim_epoch: Optional[int] = None
+    claim_epoch: int | None = None
     if claim_epoch_raw is not None and claim_epoch_raw != "":
         try:
             parsed = int(claim_epoch_raw)
@@ -141,7 +140,7 @@ def _read_job_headers() -> (
     # guarantees construction never throws on a bad registry cursor. A Python
     # ``bool`` is an ``int`` subclass but a seq is never a bool, so exclude it.
     recv_cursor_raw = headers.get(_HDR_RECV_CURSOR)
-    recv_cursor: Optional[dict] = None
+    recv_cursor: dict | None = None
     if recv_cursor_raw is not None and recv_cursor_raw.strip() != "":
         try:
             parsed_cursor = json.loads(recv_cursor_raw)
@@ -149,17 +148,14 @@ def _read_job_headers() -> (
                 filtered = {
                     k: v
                     for k, v in parsed_cursor.items()
-                    if isinstance(v, int)
-                    and not isinstance(v, bool)
-                    and v >= 0
+                    if isinstance(v, int) and not isinstance(v, bool) and v >= 0
                 }
                 # Empty after filtering (nothing survived) ⇒ None ⇒ replay-from-0
                 # with a working controller, never a lost controller.
                 recv_cursor = filtered or None
             else:
                 logger.warning(
-                    "job_dispatch: ignoring %s header — expected a JSON "
-                    "object, got %r",
+                    "job_dispatch: ignoring %s header — expected a JSON object, got %r",
                     _HDR_RECV_CURSOR,
                     parsed_cursor,
                 )
@@ -175,7 +171,7 @@ def _read_job_headers() -> (
     return job_id, deadline_secs, claim_epoch, recv_cursor
 
 
-def _resolve_runtime_identity() -> tuple[Optional[str], Optional[str]]:
+def _resolve_runtime_identity() -> tuple[str | None, str | None]:
     """Resolve ``(registry_url, instance_id)`` for constructing a
     JobController. Both are needed:
 
@@ -204,7 +200,7 @@ def _resolve_runtime_identity() -> tuple[Optional[str], Optional[str]]:
     ``None``.
     """
     registry_url = os.environ.get("MCP_MESH_REGISTRY_URL")
-    instance_id: Optional[str] = None
+    instance_id: str | None = None
     try:
         from .decorator_registry import DecoratorRegistry
 
@@ -239,7 +235,7 @@ def is_task_tool(func: Any) -> bool:
     return bool(meta.get("task"))
 
 
-def _read_tool_metadata(func: Any) -> Optional[dict]:
+def _read_tool_metadata(func: Any) -> dict | None:
     """Resolve the @mesh.tool metadata dict from ``func``, following the
     wrapper chain (``_mesh_original_func``) so wrapped DI/isolation
     layers don't hide the decorator's intent.
@@ -288,7 +284,7 @@ def get_resume_cursor(func: Any) -> bool:
     return bool(meta.get("resume_cursor"))
 
 
-def get_mesh_job_param_name(func: Any) -> Optional[str]:
+def get_mesh_job_param_name(func: Any) -> str | None:
     """Return the function's ``MeshJob`` parameter name, or ``None`` if
     the function does not declare one.
 
@@ -404,9 +400,7 @@ async def maybe_dispatch_as_job(
                 initial_cursors=recv_cursor,
             )
         else:
-            controller = PyJobController(
-                job_id, instance_id, registry_url, claim_epoch
-            )
+            controller = PyJobController(job_id, instance_id, registry_url, claim_epoch)
     except Exception as e:
         logger.warning(
             "job_dispatch: failed to construct JobController for job=%s "
@@ -483,9 +477,7 @@ async def maybe_dispatch_as_job(
                 # ``ensure_future`` so we accept either shape (the
                 # Python-side fallback in some test mocks may return a
                 # coroutine instead).
-                cancel_watcher = asyncio.ensure_future(
-                    _await_job_cancel(job_id)
-                )
+                cancel_watcher = asyncio.ensure_future(_await_job_cancel(job_id))
                 done, pending = await asyncio.wait(
                     {user_task, cancel_watcher},
                     return_when=asyncio.FIRST_COMPLETED,
@@ -602,8 +594,7 @@ async def maybe_dispatch_as_job(
                         )
                     except Exception as fail_err:
                         logger.debug(
-                            "job_dispatch: fallback fail() also failed for "
-                            "job=%s: %s",
+                            "job_dispatch: fallback fail() also failed for job=%s: %s",
                             job_id,
                             fail_err,
                         )
@@ -630,7 +621,9 @@ async def maybe_dispatch_as_job(
             # bytes. The framework owns this auto-call so it can be
             # opinionated; users wanting a structured terminal payload
             # call ``await job.complete(...)`` explicitly.
-            await controller.complete(result if _is_json_safe(result) else {"value": str(result)})
+            await controller.complete(
+                result if _is_json_safe(result) else {"value": str(result)}
+            )
             logger.debug(
                 "job_dispatch: auto-completed job=%s with handler return value",
                 job_id,

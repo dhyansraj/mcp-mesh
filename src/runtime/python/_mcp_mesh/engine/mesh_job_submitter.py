@@ -108,9 +108,9 @@ class MeshJobSubmitter:
     async def submit(
         self,
         *,
-        max_duration: Optional[int] = None,
-        max_retries: Optional[int] = None,
-        total_deadline: Optional[datetime] = None,
+        max_duration: int | None = None,
+        max_retries: int | None = None,
+        total_deadline: datetime | None = None,
         **payload: Any,
     ) -> Any:
         """Submit a new job on the bound capability and return a
@@ -155,7 +155,7 @@ class MeshJobSubmitter:
 
         # Normalise total_deadline → Unix epoch int (the schema column is
         # INTEGER per MESHJOB_DESIGN.org "Schema").
-        total_deadline_epoch: Optional[int] = None
+        total_deadline_epoch: int | None = None
         if total_deadline is not None:
             try:
                 total_deadline_epoch = int(total_deadline.timestamp())
@@ -179,7 +179,7 @@ class MeshJobSubmitter:
         # 503). 4xx / NotFound / Conflict propagate immediately — they
         # won't self-heal in 5 seconds. Submit failures are user-facing
         # so we keep the window small (3 attempts, max ~6.2s total).
-        last_exc: Optional[BaseException] = None
+        last_exc: BaseException | None = None
         for attempt in range(1, _SUBMIT_MAX_ATTEMPTS + 1):
             try:
                 proxy = await submit_job(

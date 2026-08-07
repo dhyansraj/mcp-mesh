@@ -59,7 +59,10 @@ class TestMeshLlmDecoratorBasics:
     def test_decorator_accepts_dict_filter(self):
         """Test decorator with dict filter (capability + tags)."""
 
-        @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document", "tags": ["pdf", "advanced"]})
+        @mesh.llm(
+            provider={"capability": "llm"},
+            filter={"capability": "document", "tags": ["pdf", "advanced"]},
+        )
         def analyze(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
             return llm(message)
 
@@ -77,7 +80,7 @@ class TestMeshLlmDecoratorBasics:
                 {"capability": "document", "tags": ["pdf"]},
                 "web_search",
                 {"capability": "database", "tags": ["postgres"]},
-            ]
+            ],
         )
         def analyze(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
             return llm(message)
@@ -143,7 +146,11 @@ class TestMeshLlmDecoratorConfiguration:
     def test_decorator_custom_model(self):
         """Test decorator with custom model."""
 
-        @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document"}, model="claude-3-5-sonnet-20241022")
+        @mesh.llm(
+            provider={"capability": "llm"},
+            filter={"capability": "document"},
+            model="claude-3-5-sonnet-20241022",
+        )
         def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
             return llm(message)
 
@@ -154,7 +161,11 @@ class TestMeshLlmDecoratorConfiguration:
     def test_decorator_custom_max_iterations(self):
         """Test decorator with custom max_iterations."""
 
-        @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document"}, max_iterations=20)
+        @mesh.llm(
+            provider={"capability": "llm"},
+            filter={"capability": "document"},
+            max_iterations=20,
+        )
         def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
             return llm(message)
 
@@ -364,7 +375,11 @@ class TestMeshLlmDecoratorFilterMode:
     def test_filter_mode_all(self):
         """Test filter_mode='all'."""
 
-        @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document"}, filter_mode="all")
+        @mesh.llm(
+            provider={"capability": "llm"},
+            filter={"capability": "document"},
+            filter_mode="all",
+        )
         def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
             return llm(message)
 
@@ -375,7 +390,11 @@ class TestMeshLlmDecoratorFilterMode:
     def test_filter_mode_best_match(self):
         """Test filter_mode='best_match'."""
 
-        @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document"}, filter_mode="best_match")
+        @mesh.llm(
+            provider={"capability": "llm"},
+            filter={"capability": "document"},
+            filter_mode="best_match",
+        )
         def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
             return llm(message)
 
@@ -386,7 +405,11 @@ class TestMeshLlmDecoratorFilterMode:
     def test_filter_mode_wildcard(self):
         """Test filter_mode='*' (wildcard)."""
 
-        @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document"}, filter_mode="*")
+        @mesh.llm(
+            provider={"capability": "llm"},
+            filter={"capability": "document"},
+            filter_mode="*",
+        )
         def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
             return llm(message)
 

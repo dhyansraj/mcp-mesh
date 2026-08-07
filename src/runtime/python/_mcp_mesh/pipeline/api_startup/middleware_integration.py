@@ -7,7 +7,7 @@ agents and FastAPI apps without requiring user intervention.
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any
 
 from ..shared import PipelineResult, PipelineStatus, PipelineStep
 
@@ -143,8 +143,7 @@ class TracingMiddlewareIntegrationStep(PipelineStep):
             app_title: Human-readable app title for logging
         """
         try:
-            from ....tracing.fastapi_tracing_middleware import \
-                FastAPITracingMiddleware
+            from ....tracing.fastapi_tracing_middleware import FastAPITracingMiddleware
 
             # Add the dedicated FastAPI tracing middleware
             app.add_middleware(FastAPITracingMiddleware, logger_instance=self.logger)

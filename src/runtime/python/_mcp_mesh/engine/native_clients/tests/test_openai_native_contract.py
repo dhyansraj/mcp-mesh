@@ -28,13 +28,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-pytest.importorskip(
-    "openai", reason="native OpenAI adapter requires the openai SDK"
-)
+pytest.importorskip("openai", reason="native OpenAI adapter requires the openai SDK")
 
 from _mcp_mesh.engine.llm_errors import LLMRefusedError
 from _mcp_mesh.engine.native_clients import openai_native
-
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -212,8 +209,7 @@ class TestNGreaterThanOneWarn:
         warns = [
             r.getMessage()
             for r in caplog.records
-            if r.levelname == "WARNING"
-            and "n_greater_than_1" in r.getMessage()
+            if r.levelname == "WARNING" and "n_greater_than_1" in r.getMessage()
         ]
         assert warns == []
 
@@ -232,8 +228,7 @@ class TestNGreaterThanOneWarn:
         warns = [
             r.getMessage()
             for r in caplog.records
-            if r.levelname == "WARNING"
-            and "n_greater_than_1" in r.getMessage()
+            if r.levelname == "WARNING" and "n_greater_than_1" in r.getMessage()
         ]
         assert warns == []
 
@@ -264,8 +259,7 @@ class TestNGreaterThanOneWarn:
         warns = [
             r.getMessage()
             for r in caplog.records
-            if r.levelname == "WARNING"
-            and "n_greater_than_1" in r.getMessage()
+            if r.levelname == "WARNING" and "n_greater_than_1" in r.getMessage()
         ]
         assert len(warns) == 1, (
             f"expected exactly one WARN for n>1; got {len(warns)}: {warns}"
@@ -456,9 +450,7 @@ class TestLiveRefusalIntegration:
         pytest.skip(
             "OpenAI did not refuse on this prompt; refusal-detection live "
             "coverage skipped (model may have softened or rerouted to "
-            "content). content={!r}".format(
-                (content or "")[:200]
-            )
+            "content). content={!r}".format((content or "")[:200])
         )
 
 
@@ -508,19 +500,19 @@ _LIVE_WEATHER_TOOL = [
 def _solid_red_png_data_uri(size: int = 512) -> str:
     """A solid-red (#FF0000) PNG as a base64 data URI, generated in-process.
 
-    Deliberately NOT a committed binary fixture. The shape is exactly what
-    mesh's own emitter produces — ``_mcp_mesh.media.resolver._format_for_openai``
-    builds ``data:<mime>;base64,<data>`` — so the live probe exercises the real
-    upstream payload rather than a hand-written URL. Pure stdlib (zlib+struct);
-    no Pillow dependency.
+        Deliberately NOT a committed binary fixture. The shape is exactly what
+        mesh's own emitter produces — ``_mcp_mesh.media.resolver._format_for_openai``
+        builds ``data:<mime>;base64,<data>`` — so the live probe exercises the real
+        upstream payload rather than a hand-written URL. Pure stdlib (zlib+struct);
+        no Pillow dependency.
 
-512px rather than a handful of pixels, for two measured reasons. (1) OpenAI's
-    vision pipeline rescales and re-encodes the input; on an 8x8 source the hue
-    shifted enough that gpt-5.6-terra described pure #FF0000 as "orange".
-    (2) gpt-5-family models bill images as 32x32 patches, so a small image
-    contributes only a handful of input tokens — too weak a signal for the
-    token-delta assertion below. 512px ≈ 256 patches, an unmistakable delta.
-    A solid colour compresses to ~1KB regardless of dimensions.
+    512px rather than a handful of pixels, for two measured reasons. (1) OpenAI's
+        vision pipeline rescales and re-encodes the input; on an 8x8 source the hue
+        shifted enough that gpt-5.6-terra described pure #FF0000 as "orange".
+        (2) gpt-5-family models bill images as 32x32 patches, so a small image
+        contributes only a handful of input tokens — too weak a signal for the
+        token-delta assertion below. 512px ≈ 256 patches, an unmistakable delta.
+        A solid colour compresses to ~1KB regardless of dimensions.
     """
     import base64
     import struct
@@ -703,9 +695,9 @@ class TestLiveResponsesStreamingIntegration:
         # DISCRIMINATOR 2 — shape-only, independent of token counts: native
         # streaming NEVER carries content and usage on the same chunk, whereas
         # the buffered fallback packed content + usage + finish_reason into one.
-        assert not any(
-            _chunk_text(c) and c.usage is not None for c in turn2
-        ), "a chunk carried both content and usage — buffered-blob shape"
+        assert not any(_chunk_text(c) and c.usage is not None for c in turn2), (
+            "a chunk carried both content and usage — buffered-blob shape"
+        )
 
         # Terminal markers: usage last, non-zero, clean finish.
         assert turn2[-1].usage is not None, "no terminal usage chunk on turn 2"

@@ -14,6 +14,7 @@ import logging
 from fractions import Fraction
 
 import pytest
+
 from _mcp_mesh.shared.health_check_manager import (
     DEFAULT_HEALTH_CHECK_TTL_SECONDS,
     HEALTH_CHECK_TTL_ENV,

@@ -25,6 +25,13 @@ from __future__ import annotations
 import inspect
 import logging
 from collections.abc import (
+    AsyncGenerator,
+    AsyncIterable,
+    AsyncIterator,
+    Awaitable,
+    Coroutine,
+)
+from collections.abc import (
     AsyncGenerator as AbcAsyncGenerator,
 )
 from collections.abc import (
@@ -41,11 +48,6 @@ from collections.abc import (
 )
 from typing import (
     Any,
-    AsyncGenerator,
-    AsyncIterable,
-    AsyncIterator,
-    Awaitable,
-    Coroutine,
     get_args,
     get_origin,
     get_type_hints,
@@ -161,11 +163,7 @@ def detect_stream_type(fn: Any) -> str | None:
     # [T]). Treat as non-streaming rather than raising — the type doesn't
     # express a contract we can fulfil. The wrapper falls back to the
     # default non-streaming code path.
-    if (
-        inner is inspect.Signature.empty
-        or inner is Any
-        or inner in _STREAM_ORIGINS
-    ):
+    if inner is inspect.Signature.empty or inner is Any or inner in _STREAM_ORIGINS:
         logger.debug(
             "detect_stream_type: untyped/unparameterized async iterator on %s; "
             "treating as non-streaming",

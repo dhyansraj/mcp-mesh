@@ -126,9 +126,7 @@ class ExecutionTracer:
                 f"Failed to setup execution logging for {self.function_name}: {e}"
             )
 
-    def _finalize_metadata(
-        self, result: Any, success: bool, error: str | None
-    ) -> bool:
+    def _finalize_metadata(self, result: Any, success: bool, error: str | None) -> bool:
         """Populate execution_metadata with end-of-call results.
 
         Shared by the sync ``end_execution`` and the async
@@ -273,9 +271,7 @@ class ExecutionTracer:
 
             async def _publish() -> None:
                 try:
-                    await publish_trace_with_fallback_async(
-                        trace_snapshot, self.logger
-                    )
+                    await publish_trace_with_fallback_async(trace_snapshot, self.logger)
                 except Exception:
                     # Never let a fire-and-forget telemetry task crash the loop.
                     pass

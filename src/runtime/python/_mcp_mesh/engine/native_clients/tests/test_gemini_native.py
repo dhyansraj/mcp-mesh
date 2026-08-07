@@ -37,7 +37,6 @@ pytest.importorskip(
 
 from _mcp_mesh.engine.native_clients import gemini_native
 
-
 # ---------------------------------------------------------------------------
 # is_available()
 # ---------------------------------------------------------------------------
@@ -247,18 +246,14 @@ class TestBuildClient:
         monkeypatch.setattr(
             gemini_native,
             "_derive_vertex_project_from_adc",
-            lambda: pytest.fail(
-                "ADC derive must not be called when env var is set"
-            ),
+            lambda: pytest.fail("ADC derive must not be called when env var is set"),
         )
         cls_mock = MagicMock(return_value=MagicMock())
         monkeypatch.setattr("google.genai.Client", cls_mock)
         gemini_native._build_client("vertex_ai/gemini-2.5-flash", None, None)
         assert cls_mock.call_args.kwargs["project"] == "explicit-env-project"
 
-    def test_derive_vertex_project_calls_google_auth_default(
-        self, monkeypatch
-    ):
+    def test_derive_vertex_project_calls_google_auth_default(self, monkeypatch):
         """The derive helper calls google.auth.default() and returns the
         second tuple element (the resolved default project)."""
         import google.auth as _ga
@@ -266,10 +261,7 @@ class TestBuildClient:
         monkeypatch.setattr(
             _ga, "default", lambda: (MagicMock(), "auth-default-project")
         )
-        assert (
-            gemini_native._derive_vertex_project_from_adc()
-            == "auth-default-project"
-        )
+        assert gemini_native._derive_vertex_project_from_adc() == "auth-default-project"
 
     def test_derive_vertex_project_returns_none_when_auth_unavailable(
         self, monkeypatch
@@ -288,9 +280,7 @@ class TestBuildClient:
         with patch("builtins.__import__", side_effect=_fake_import):
             assert gemini_native._derive_vertex_project_from_adc() is None
 
-    def test_derive_vertex_project_returns_none_when_default_raises(
-        self, monkeypatch
-    ):
+    def test_derive_vertex_project_returns_none_when_default_raises(self, monkeypatch):
         """ADC has many failure modes (no creds, no metadata server, etc.).
         The helper swallows them and returns None so the caller surfaces
         the explicit-env-var error message."""
@@ -316,9 +306,7 @@ class TestBuildClient:
         kwargs = cls_mock.call_args.kwargs
         assert "api_key" not in kwargs
         # And a one-time WARN should fire so users see the misuse.
-        assert any(
-            "vertex_ai backend" in r.getMessage() for r in caplog.records
-        )
+        assert any("vertex_ai backend" in r.getMessage() for r in caplog.records)
 
     def test_base_url_forwarded_to_http_options(self, monkeypatch):
         """A non-None base_url must be forwarded into HttpOptions so callers
@@ -709,10 +697,7 @@ class TestSanitizeGeminiParametersSchema:
         assert "title" not in out["properties"]["address"]["properties"]["street"]
         # Structural fields preserved:
         assert out["properties"]["address"]["type"] == "object"
-        assert (
-            out["properties"]["address"]["properties"]["street"]["type"]
-            == "string"
-        )
+        assert out["properties"]["address"]["properties"]["street"]["type"] == "string"
 
     def test_recursive_strips_array_items(self):
         """Array ``items`` schemas are recursively sanitized too."""
@@ -933,9 +918,7 @@ class TestBuildCreateKwargs:
         )
         assert out["model"] == "gemini-2.5-flash"
         # System message NOT in contents.
-        assert all(
-            m.get("role") != "system" for m in out["contents"]
-        ), out["contents"]
+        assert all(m.get("role") != "system" for m in out["contents"]), out["contents"]
         # System surfaced in config.systemInstruction.
         assert out["config"]["system_instruction"] == "You are helpful."
         # Tools wrapped under functionDeclarations.
@@ -961,9 +944,7 @@ class TestBuildCreateKwargs:
         )
         assert out["config"]["system_instruction"] == "Be brief."
         # Contents has only the user message.
-        assert out["contents"] == [
-            {"role": "user", "parts": [{"text": "Hi"}]}
-        ]
+        assert out["contents"] == [{"role": "user", "parts": [{"text": "Hi"}]}]
 
     def test_max_tokens_explicit_none_is_dropped(self):
         out = gemini_native._build_create_kwargs(
@@ -1120,14 +1101,9 @@ class TestBuildCreateKwargs:
         # Not set on config → SDK default applies (defensive choice over raise).
         assert out["config"].get("thinking_config") is None
         # Warning surfaces both the kwarg name and the unexpected type name.
-        warnings = [
-            r.getMessage()
-            for r in caplog.records
-            if r.levelname == "WARNING"
-        ]
+        warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
         assert any(
-            "thinking_config" in m and expected_type_name in m
-            for m in warnings
+            "thinking_config" in m and expected_type_name in m for m in warnings
         ), warnings
 
     def test_response_format_json_schema_translates(self):
@@ -1327,8 +1303,7 @@ class TestBuildCreateKwargs:
         )
         # Marker not warned, not present in returned kwargs/config.
         assert all(
-            not k.startswith("_mesh_")
-            for k in gemini_native._logged_unsupported_kwargs
+            not k.startswith("_mesh_") for k in gemini_native._logged_unsupported_kwargs
         )
         assert "_mesh_gemini_response_json_schema" not in out
         assert "_mesh_gemini_response_json_schema" not in out["config"]
@@ -1368,8 +1343,7 @@ class TestBuildCreateKwargs:
         )
         # No WARN logged for the _mesh_ keys.
         assert all(
-            not k.startswith("_mesh_")
-            for k in gemini_native._logged_unsupported_kwargs
+            not k.startswith("_mesh_") for k in gemini_native._logged_unsupported_kwargs
         )
 
 
@@ -1394,9 +1368,7 @@ class TestUnsupportedKwargWarn:
                 },
                 model="gemini/gemini-2.5-flash",
             )
-        warn_msgs = [
-            r.getMessage() for r in caplog.records if r.levelname == "WARNING"
-        ]
+        warn_msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
         assert any(
             "some_litellm_only_knob" in m and "dropping unsupported kwarg" in m
             for m in warn_msgs
@@ -1423,7 +1395,8 @@ class TestUnsupportedKwargWarn:
         warns = [
             r.getMessage()
             for r in caplog.records
-            if r.levelname == "WARNING" and "dropping unsupported kwarg" in r.getMessage()
+            if r.levelname == "WARNING"
+            and "dropping unsupported kwarg" in r.getMessage()
         ]
         assert len(warns) == 3
 
@@ -1445,9 +1418,7 @@ class TestUnsupportedKwargWarn:
         # Not forwarded into the SDK config.
         assert "candidate_count" not in out["config"]
         # WARN must mention candidate_count (single-completion contract surface).
-        warn_msgs = [
-            r.getMessage() for r in caplog.records if r.levelname == "WARNING"
-        ]
+        warn_msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
         assert any(
             "candidate_count" in m and "dropping unsupported kwarg" in m
             for m in warn_msgs
@@ -1476,9 +1447,7 @@ def _make_gemini_response(
         parts.append(
             SimpleNamespace(
                 text=None,
-                function_call=SimpleNamespace(
-                    name=fc["name"], args=fc.get("args", {})
-                ),
+                function_call=SimpleNamespace(name=fc["name"], args=fc.get("args", {})),
             )
         )
     content = SimpleNamespace(parts=parts, role="model")
@@ -1693,9 +1662,7 @@ def _make_stream_chunk(
     if parts or finish_reason:
         candidates.append(
             SimpleNamespace(
-                content=SimpleNamespace(parts=parts, role="model")
-                if parts
-                else None,
+                content=SimpleNamespace(parts=parts, role="model") if parts else None,
                 finish_reason=fr_obj,
                 index=0,
             )
@@ -1721,9 +1688,7 @@ def _patched_streaming_genai(chunks, *, monkeypatch):
     fake_stream = _FakeAsyncStream(chunks)
     instance.aio = MagicMock()
     instance.aio.models = MagicMock()
-    instance.aio.models.generate_content_stream = AsyncMock(
-        return_value=fake_stream
-    )
+    instance.aio.models.generate_content_stream = AsyncMock(return_value=fake_stream)
     cls_mock = MagicMock(return_value=instance)
     monkeypatch.setattr("google.genai.Client", cls_mock)
     return cls_mock, instance
@@ -1770,9 +1735,7 @@ class TestCompleteStream:
         assert usage_chunks[0].usage.completion_tokens == 4
 
     @pytest.mark.asyncio
-    async def test_function_call_stream_emits_synthesized_id(
-        self, monkeypatch
-    ):
+    async def test_function_call_stream_emits_synthesized_id(self, monkeypatch):
         chunks_in = [
             _make_stream_chunk(
                 function_call={
@@ -1797,10 +1760,7 @@ class TestCompleteStream:
             chunks.append(c)
 
         # Find the chunk containing the tool_call delta.
-        tc_chunks = [
-            c for c in chunks
-            if c.choices and c.choices[0].delta.tool_calls
-        ]
+        tc_chunks = [c for c in chunks if c.choices and c.choices[0].delta.tool_calls]
         assert len(tc_chunks) == 1
         tc_delta = tc_chunks[0].choices[0].delta.tool_calls[0]
         assert tc_delta.id == "gemini_call_0"
@@ -1808,9 +1768,7 @@ class TestCompleteStream:
         assert json.loads(tc_delta.function.arguments) == {"city": "NYC"}
 
     @pytest.mark.asyncio
-    async def test_no_usage_chunk_when_stream_yields_no_usage(
-        self, monkeypatch
-    ):
+    async def test_no_usage_chunk_when_stream_yields_no_usage(self, monkeypatch):
         """If the stream ends without ever yielding usage_metadata, the
         finally block has nothing to fall back on (counters are 0) and
         must NOT emit a misleading 0-token usage chunk."""
@@ -1832,9 +1790,7 @@ class TestCompleteStream:
         assert usage_chunks == []
 
     @pytest.mark.asyncio
-    async def test_emits_best_effort_usage_when_stream_raises(
-        self, monkeypatch
-    ):
+    async def test_emits_best_effort_usage_when_stream_raises(self, monkeypatch):
         """If the stream raises AFTER usage was observed and successfully
         yielded to the consumer, the finally block must NOT re-emit
         (final_usage_emitted is True)."""
@@ -1924,8 +1880,7 @@ class TestCompleteStream:
         # The final-finish chunk has no parts but must still be tagged
         # tool_calls because a prior chunk emitted a function_call.
         finish_chunks = [
-            c for c in chunks
-            if c.choices and c.choices[0].finish_reason is not None
+            c for c in chunks if c.choices and c.choices[0].finish_reason is not None
         ]
         assert len(finish_chunks) == 1
         assert finish_chunks[0].choices[0].finish_reason == "tool_calls"
@@ -1944,9 +1899,7 @@ class TestSharedHttpxClient:
         gemini_native._reset_shared_httpx_client()
 
     @pytest.mark.asyncio
-    async def test_shared_httpx_client_reused_within_same_loop(
-        self, monkeypatch
-    ):
+    async def test_shared_httpx_client_reused_within_same_loop(self, monkeypatch):
         """Two ``_build_client`` calls on the same event loop must reuse
         the same httpx pool — connection-pool reuse within a loop is the
         whole reason we cache."""
@@ -1962,8 +1915,12 @@ class TestSharedHttpxClient:
 
         await _do_two_builds()
 
-        first_http = cls_mock.call_args_list[0].kwargs["http_options"].httpx_async_client
-        second_http = cls_mock.call_args_list[1].kwargs["http_options"].httpx_async_client
+        first_http = (
+            cls_mock.call_args_list[0].kwargs["http_options"].httpx_async_client
+        )
+        second_http = (
+            cls_mock.call_args_list[1].kwargs["http_options"].httpx_async_client
+        )
         assert first_http is second_http
 
     def test_per_loop_httpx_pool_isolates_event_loops(self, monkeypatch):
@@ -2119,9 +2076,7 @@ def _make_gemini_response_with_signature(
         parts.append(
             SimpleNamespace(
                 text=None,
-                function_call=SimpleNamespace(
-                    name=fc["name"], args=fc.get("args", {})
-                ),
+                function_call=SimpleNamespace(name=fc["name"], args=fc.get("args", {})),
                 thought_signature=sig,
             )
         )

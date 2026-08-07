@@ -10,12 +10,19 @@ import logging
 
 from ..shared import TracePublisherInitStep
 from ..shared.mesh_pipeline import MeshPipeline
-from . import (ConfigurationStep, DecoratorCollectionStep,
-               DualModuleCheckStep, FastAPIServerSetupStep,
-               FastMCPServerDiscoveryStep, HeartbeatLoopStep,
-               HeartbeatPreparationStep, JobsCancelRouteStep,
-               JobsClaimWorkersStep, JobsHelperToolsStep,
-               MediaStoreValidationStep)
+from . import (
+    ConfigurationStep,
+    DecoratorCollectionStep,
+    DualModuleCheckStep,
+    FastAPIServerSetupStep,
+    FastMCPServerDiscoveryStep,
+    HeartbeatLoopStep,
+    HeartbeatPreparationStep,
+    JobsCancelRouteStep,
+    JobsClaimWorkersStep,
+    JobsHelperToolsStep,
+    MediaStoreValidationStep,
+)
 from .server_discovery import ServerDiscoveryStep
 
 logger = logging.getLogger(__name__)

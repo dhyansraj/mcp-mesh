@@ -16,6 +16,7 @@ import time
 from unittest import mock
 
 import pytest
+
 from _mcp_mesh.engine import claim_dispatcher as claim_dispatcher_module
 from _mcp_mesh.engine.claim_dispatcher import (
     _MAX_CONCURRENT_DISPATCHES,
@@ -135,9 +136,7 @@ class TestStopDrainsInflightDispatch:
         """Post-cancel wait is bounded: a handler that swallows
         CancelledError must not hang stop() forever — the task is logged
         and abandoned after _STOP_CANCEL_WAIT_SECS."""
-        monkeypatch.setattr(
-            claim_dispatcher_module, "_STOP_CANCEL_WAIT_SECS", 0.2
-        )
+        monkeypatch.setattr(claim_dispatcher_module, "_STOP_CANCEL_WAIT_SECS", 0.2)
 
         started = asyncio.Event()
         release = asyncio.Event()

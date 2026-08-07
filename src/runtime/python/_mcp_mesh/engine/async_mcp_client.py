@@ -22,7 +22,7 @@ class AsyncMCPClient:
 
     # Class-level connection pool (shared across instances for same endpoint)
     _client_pool: ClassVar[dict[str, "httpx.AsyncClient"]] = {}
-    _pool_lock: ClassVar[Optional[asyncio.Lock]] = None
+    _pool_lock: ClassVar[asyncio.Lock | None] = None
 
     # Default connection limits for pooling
     DEFAULT_MAX_CONNECTIONS = 100

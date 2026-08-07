@@ -865,12 +865,9 @@ class RouteIntegrationStep(PipelineStep):
 
         init_params = [
             name
-            for name, param in inspect.signature(
-                APIRoute.__init__
-            ).parameters.items()
+            for name, param in inspect.signature(APIRoute.__init__).parameters.items()
             if name not in ("self", "path", "endpoint")
-            and param.kind
-            in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY)
+            and param.kind in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY)
         ]
         kwargs = {
             name: getattr(route, name) for name in init_params if hasattr(route, name)

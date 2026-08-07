@@ -40,7 +40,6 @@ from _mcp_mesh.engine._structured_output_helpers import (
 )
 from _mcp_mesh.engine.native_clients import anthropic_native
 
-
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
 # ---------------------------------------------------------------------------
@@ -108,9 +107,7 @@ def test_synthetic_path_model_is_not_native_capable():
     """Guard for the whole module: if ``_SYNTHETIC_PATH_MODEL`` ever lands on
     the native ``output_config`` allow-list, every test below would silently
     stop covering the synthetic-tool path."""
-    assert not anthropic_native._supports_native_output_format(
-        _SYNTHETIC_PATH_MODEL
-    )
+    assert not anthropic_native._supports_native_output_format(_SYNTHETIC_PATH_MODEL)
 
 
 class TestResponseFormatTranslation:

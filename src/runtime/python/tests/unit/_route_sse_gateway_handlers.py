@@ -18,9 +18,7 @@ import mesh
 from mesh.types import McpMeshTool
 
 
-async def chat_single_fn(
-    request: Request, dep: McpMeshTool = None
-) -> mesh.Stream[str]:
+async def chat_single_fn(request: Request, dep: McpMeshTool = None) -> mesh.Stream[str]:
     """Single-function user-natural shape under test (issue #1037).
 
     Combines: async-gen body, ``Stream[str]`` return, ``Request`` parameter,
@@ -40,9 +38,7 @@ async def _stream_helper(dep, body):
         yield chunk
 
 
-async def chat_two_fn_outer(
-    request: Request, dep: McpMeshTool = None
-):
+async def chat_two_fn_outer(request: Request, dep: McpMeshTool = None):
     """Canonical two-function shape: validate + parse up-front in a plain
     coroutine, then RETURN an async-iter helper that does the actual
     streaming. The outer coroutine can ``raise HTTPException`` cleanly

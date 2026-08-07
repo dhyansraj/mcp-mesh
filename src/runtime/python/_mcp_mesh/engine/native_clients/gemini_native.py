@@ -131,9 +131,9 @@ def _build_httpx_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
         timeout=httpx.Timeout(
             connect=10.0,  # connection establishment
-            read=600.0,    # body read — LLM responses can be slow
-            write=30.0,    # request body write
-            pool=5.0,      # waiting for free connection from pool
+            read=600.0,  # body read — LLM responses can be slow
+            write=30.0,  # request body write
+            pool=5.0,  # waiting for free connection from pool
         ),
         limits=httpx.Limits(
             max_keepalive_connections=20,
@@ -399,9 +399,9 @@ def _strip_prefix(model: str) -> str:
     ``vertex_ai/gemini-2.5-flash`` → ``gemini-2.5-flash``
     """
     if model.startswith(_GEMINI_PREFIX):
-        return model[len(_GEMINI_PREFIX):]
+        return model[len(_GEMINI_PREFIX) :]
     if model.startswith(_VERTEX_PREFIX):
-        return model[len(_VERTEX_PREFIX):]
+        return model[len(_VERTEX_PREFIX) :]
     return model
 
 
@@ -783,9 +783,7 @@ def _convert_messages_to_gemini(
                 args_raw = fn.get("arguments", "{}")
                 try:
                     parsed_args = (
-                        json.loads(args_raw)
-                        if isinstance(args_raw, str)
-                        else args_raw
+                        json.loads(args_raw) if isinstance(args_raw, str) else args_raw
                     )
                 except (json.JSONDecodeError, ValueError):
                     parsed_args = {}
@@ -857,36 +855,38 @@ def _convert_messages_to_gemini(
 # (Gemini supports a documented subset of OpenAPI 3.0 Schema; the closed list
 # of accepted fields is below. LiteLLM's Gemini adapter performs the
 # equivalent translation internally; native dispatch must do the same.)
-_GEMINI_SCHEMA_KEYS = frozenset({
-    "type",
-    "format",
-    "description",
-    "nullable",
-    "enum",
-    "properties",
-    "required",
-    "items",
-    "minimum",
-    "maximum",
-    "minItems",
-    "maxItems",
-    "minLength",
-    "maxLength",
-    "pattern",
-    "default",
-    "example",
-    "anyOf",
-    "allOf",
-    "oneOf",
-    # Gemini-specific OpenAPI extension to control output property ordering;
-    # not currently emitted by mesh's Pydantic generator but accepted by the
-    # API and may appear in user-supplied schemas — whitelist for forward
-    # compatibility.
-    "propertyOrdering",
-    # NOTABLY ABSENT (rejected by Gemini): additionalProperties, $schema,
-    # title, $ref, definitions, $defs, propertyNames, patternProperties,
-    # exclusiveMinimum, exclusiveMaximum, multipleOf, const, not, contains.
-})
+_GEMINI_SCHEMA_KEYS = frozenset(
+    {
+        "type",
+        "format",
+        "description",
+        "nullable",
+        "enum",
+        "properties",
+        "required",
+        "items",
+        "minimum",
+        "maximum",
+        "minItems",
+        "maxItems",
+        "minLength",
+        "maxLength",
+        "pattern",
+        "default",
+        "example",
+        "anyOf",
+        "allOf",
+        "oneOf",
+        # Gemini-specific OpenAPI extension to control output property ordering;
+        # not currently emitted by mesh's Pydantic generator but accepted by the
+        # API and may appear in user-supplied schemas — whitelist for forward
+        # compatibility.
+        "propertyOrdering",
+        # NOTABLY ABSENT (rejected by Gemini): additionalProperties, $schema,
+        # title, $ref, definitions, $defs, propertyNames, patternProperties,
+        # exclusiveMinimum, exclusiveMaximum, multipleOf, const, not, contains.
+    }
+)
 
 
 def _sanitize_gemini_parameters_schema(schema: Any) -> Any:
@@ -1052,59 +1052,63 @@ def _convert_tool_choice(tool_choice: Any) -> dict[str, Any] | None:
 # Kwargs we know how to translate / forward; anything outside this set
 # (and not in _GEMINI_HANDLED_KWARGS) triggers a once-per-key WARN so the
 # next litellm-only knob we forget shows up early.
-_GEMINI_PASSTHROUGH_KWARGS = frozenset({
-    "messages",
-    "tools",
-    "tool_choice",
-    "max_tokens",
-    "max_completion_tokens",
-    "temperature",
-    "top_p",
-    "top_k",
-    "stop",
-    "seed",
-    "response_format",
-    "response_mime_type",
-    "response_schema",
-    "presence_penalty",
-    "frequency_penalty",
-    # Gemini 2.5+ thinking-mode budget control. Translated below into a
-    # ``google.genai.types.ThinkingConfig`` and attached to ``config``.
-    # Accepts either a dict (e.g. ``{"thinking_budget": 0}``) or an already-
-    # built ``ThinkingConfig`` instance. Default (absent) → SDK chooses
-    # — current behavior is unchanged for callers that don't set it.
-    "thinking_config",
-    # Escape-hatch / transport kwargs translated to a per-call HttpOptions
-    # override below (HttpOptions.timeout / .headers / .extra_body). They're
-    # consumed — not forwarded as-is — so they belong in the passthrough set
-    # so the WARN filter doesn't flag them as "dropped".
-    "timeout",
-    "request_timeout",
-    "extra_headers",
-    "extra_body",
-    # NOTABLY ABSENT: ``candidate_count``. Mesh's contract is single-completion
-    # (anthropic_native + openai_native both implicitly assume n=1) and the
-    # Gemini response/stream adapters here only consume ``candidates[0]``.
-    # Forwarding ``candidate_count > 1`` would silently drop additional
-    # candidates. Letting the kwarg fall through to the WARN path gives
-    # callers a loud signal that mesh doesn't support multi-candidate output
-    # instead of silently returning 1 of N.
-    #
-    # ALSO ABSENT: ``extra_query``. ``HttpOptions`` has no per-call query-
-    # string override field; URL-level query forwarding would need to be set
-    # on the underlying httpx client (which we share process-wide). Letting
-    # the kwarg WARN through gives diagnostic surface for callers debugging
-    # cross-vendor passthrough.
-})
+_GEMINI_PASSTHROUGH_KWARGS = frozenset(
+    {
+        "messages",
+        "tools",
+        "tool_choice",
+        "max_tokens",
+        "max_completion_tokens",
+        "temperature",
+        "top_p",
+        "top_k",
+        "stop",
+        "seed",
+        "response_format",
+        "response_mime_type",
+        "response_schema",
+        "presence_penalty",
+        "frequency_penalty",
+        # Gemini 2.5+ thinking-mode budget control. Translated below into a
+        # ``google.genai.types.ThinkingConfig`` and attached to ``config``.
+        # Accepts either a dict (e.g. ``{"thinking_budget": 0}``) or an already-
+        # built ``ThinkingConfig`` instance. Default (absent) → SDK chooses
+        # — current behavior is unchanged for callers that don't set it.
+        "thinking_config",
+        # Escape-hatch / transport kwargs translated to a per-call HttpOptions
+        # override below (HttpOptions.timeout / .headers / .extra_body). They're
+        # consumed — not forwarded as-is — so they belong in the passthrough set
+        # so the WARN filter doesn't flag them as "dropped".
+        "timeout",
+        "request_timeout",
+        "extra_headers",
+        "extra_body",
+        # NOTABLY ABSENT: ``candidate_count``. Mesh's contract is single-completion
+        # (anthropic_native + openai_native both implicitly assume n=1) and the
+        # Gemini response/stream adapters here only consume ``candidates[0]``.
+        # Forwarding ``candidate_count > 1`` would silently drop additional
+        # candidates. Letting the kwarg fall through to the WARN path gives
+        # callers a loud signal that mesh doesn't support multi-candidate output
+        # instead of silently returning 1 of N.
+        #
+        # ALSO ABSENT: ``extra_query``. ``HttpOptions`` has no per-call query-
+        # string override field; URL-level query forwarding would need to be set
+        # on the underlying httpx client (which we share process-wide). Letting
+        # the kwarg WARN through gives diagnostic surface for callers debugging
+        # cross-vendor passthrough.
+    }
+)
 
 # Keys explicitly handled (consumed or routed) inside this adapter — the
 # WARN filter must not flag these as "dropped".
-_GEMINI_HANDLED_KWARGS = frozenset({
-    "model",
-    "api_key",
-    "base_url",
-    "stream",
-})
+_GEMINI_HANDLED_KWARGS = frozenset(
+    {
+        "model",
+        "api_key",
+        "base_url",
+        "stream",
+    }
+)
 
 
 def _resolve_thinking_config_exclusion(thinking_config: Any) -> Any:
@@ -1372,9 +1376,7 @@ def _build_create_kwargs(
 
     extra_headers = request_params.get("extra_headers")
     if isinstance(extra_headers, dict) and extra_headers:
-        per_call_http["headers"] = {
-            str(k): str(v) for k, v in extra_headers.items()
-        }
+        per_call_http["headers"] = {str(k): str(v) for k, v in extra_headers.items()}
 
     extra_body = request_params.get("extra_body")
     if isinstance(extra_body, dict) and extra_body:
@@ -1434,13 +1436,15 @@ _FINISH_REASON_MAP = {
 # reason reaches the @mesh.llm consumer instead of collapsing into an empty
 # ``_Message.content`` shape (which then trips Pydantic with an opaque
 # validation error — the refusal-text-leak class).
-_SAFETY_BLOCK_FINISH_REASONS = frozenset({
-    "SAFETY",
-    "RECITATION",
-    "BLOCKLIST",
-    "PROHIBITED_CONTENT",
-    "SPII",
-})
+_SAFETY_BLOCK_FINISH_REASONS = frozenset(
+    {
+        "SAFETY",
+        "RECITATION",
+        "BLOCKLIST",
+        "PROHIBITED_CONTENT",
+        "SPII",
+    }
+)
 
 
 def _normalize_finish_reason(raw: Any, has_tool_calls: bool) -> str:
@@ -1495,9 +1499,8 @@ def _adapt_response(raw: Any, *, model: str) -> _Response:
     prompt_feedback = getattr(raw, "prompt_feedback", None)
     if prompt_feedback is not None:
         raw_block_reason = getattr(prompt_feedback, "block_reason", None)
-        block_name = (
-            getattr(raw_block_reason, "name", None)
-            or str(raw_block_reason or "")
+        block_name = getattr(raw_block_reason, "name", None) or str(
+            raw_block_reason or ""
         )
         if "." in block_name:
             block_name = block_name.rsplit(".", 1)[-1]
@@ -1506,9 +1509,7 @@ def _adapt_response(raw: Any, *, model: str) -> _Response:
         if block_name and block_name != "BLOCKED_REASON_UNSPECIFIED":
             from _mcp_mesh.engine.llm_errors import LLMRefusedError
 
-            block_message = (
-                getattr(prompt_feedback, "block_reason_message", None) or ""
-            )
+            block_message = getattr(prompt_feedback, "block_reason_message", None) or ""
             if not block_message:
                 block_message = f"prompt blocked by Gemini policy ({block_name})"
 
@@ -1516,7 +1517,9 @@ def _adapt_response(raw: Any, *, model: str) -> _Response:
             logger.info(
                 "Native Gemini adapter: prompt blocked "
                 "(model=%s, block_reason=%s, message=%r)",
-                response_model, block_name, block_message,
+                response_model,
+                block_name,
+                block_message,
             )
             raise LLMRefusedError(
                 block_message,
@@ -1540,20 +1543,18 @@ def _adapt_response(raw: Any, *, model: str) -> _Response:
         if finish_name in _SAFETY_BLOCK_FINISH_REASONS:
             from _mcp_mesh.engine.llm_errors import LLMRefusedError
 
-            finish_message = (
-                getattr(first_candidate, "finish_message", None) or ""
-            )
+            finish_message = getattr(first_candidate, "finish_message", None) or ""
             ratings = getattr(first_candidate, "safety_ratings", None) or []
+
             def _is_blocking(r: Any) -> bool:
                 if getattr(r, "blocked", False):
                     return True
                 p = getattr(r, "probability_score", None)
                 return isinstance(p, (int, float)) and p >= 0.7
+
             blocking = [r for r in ratings if _is_blocking(r)]
             if not finish_message and blocking:
-                cats = ", ".join(
-                    str(getattr(r, "category", "?")) for r in blocking
-                )
+                cats = ", ".join(str(getattr(r, "category", "?")) for r in blocking)
                 finish_message = f"blocked by safety filter ({cats})"
             if not finish_message:
                 finish_message = f"blocked by Gemini policy ({finish_name})"
@@ -1562,7 +1563,9 @@ def _adapt_response(raw: Any, *, model: str) -> _Response:
             logger.info(
                 "Native Gemini adapter: response blocked "
                 "(model=%s, finish_reason=%s, message=%r)",
-                response_model, finish_name, finish_message,
+                response_model,
+                finish_name,
+                finish_message,
             )
             raise LLMRefusedError(
                 finish_message,
@@ -1714,9 +1717,7 @@ def _adapt_stream_chunk(
         # chunk emitted one OR any prior chunk did (counter > 0).
         finish_reason = _normalize_finish_reason(
             raw_finish_reason,
-            has_tool_calls=(
-                bool(tool_call_deltas) or tool_call_index_state[0] > 0
-            ),
+            has_tool_calls=(bool(tool_call_deltas) or tool_call_index_state[0] > 0),
         )
 
     usage_obj = getattr(raw_chunk, "usage_metadata", None)

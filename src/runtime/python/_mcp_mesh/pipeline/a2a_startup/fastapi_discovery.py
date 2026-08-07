@@ -104,9 +104,7 @@ class A2AFastAPIDiscoveryStep(PipelineStep):
 
             if not filtered_apps:
                 result.status = PipelineStatus.FAILED
-                result.message = (
-                    "No FastAPI app hosts any @mesh.a2a surface route"
-                )
+                result.message = "No FastAPI app hosts any @mesh.a2a surface route"
                 result.add_error(
                     "Discovered FastAPI app(s) but none had a route matching "
                     "the @mesh.a2a / mesh.a2a.mount path(s) — did mount() run "

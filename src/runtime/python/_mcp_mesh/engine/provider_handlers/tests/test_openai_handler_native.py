@@ -31,7 +31,6 @@ pytest.importorskip(
 from _mcp_mesh.engine.provider_handlers import openai_handler as openai_handler_module
 from _mcp_mesh.engine.provider_handlers.openai_handler import OpenAIHandler
 
-
 # ---------------------------------------------------------------------------
 # has_native() gating
 # ---------------------------------------------------------------------------
@@ -280,9 +279,7 @@ class TestDispatchStatusLog:
         assert "disabled" in status_records[0].message
         assert "MCP_MESH_NATIVE_LLM=0" in status_records[0].message
 
-    def test_logs_disabled_when_sdk_missing(
-        self, caplog, _reset_dispatch_status_log
-    ):
+    def test_logs_disabled_when_sdk_missing(self, caplog, _reset_dispatch_status_log):
         handler = OpenAIHandler()
         assert "MCP_MESH_NATIVE_LLM" not in os.environ
 
@@ -307,9 +304,7 @@ class TestDispatchStatusLog:
         assert "openai SDK not installed" in status_records[0].message
         assert "mcp-mesh[openai]" in status_records[0].message
 
-    def test_log_fires_only_once_across_calls(
-        self, caplog, _reset_dispatch_status_log
-    ):
+    def test_log_fires_only_once_across_calls(self, caplog, _reset_dispatch_status_log):
         """Second call to has_native() must NOT re-emit the dispatch-status log
         — the one-time guard is the whole point of the helper."""
         handler = OpenAIHandler()

@@ -16,9 +16,9 @@ These tests cover the Python side of the fix:
 """
 
 import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import _mcp_mesh.pipeline.mcp_heartbeat.rust_heartbeat as rh
 
@@ -67,9 +67,7 @@ async def test_pull_skips_none_dispatches_events_and_breaks_on_shutdown():
     with (
         patch.object(rh, "_get_rust_core", return_value=core),
         patch.object(rh, "_build_agent_spec", return_value=MagicMock()),
-        patch.object(
-            rh, "_start_claim_dispatchers_on_heartbeat_loop", return_value=[]
-        ),
+        patch.object(rh, "_start_claim_dispatchers_on_heartbeat_loop", return_value=[]),
         patch.object(rh, "_handle_mesh_event", handle_event),
         patch(
             "_mcp_mesh.shared.simple_shutdown.should_stop_heartbeat",
@@ -104,9 +102,7 @@ async def test_shutdown_signal_terminates_loop_promptly():
     with (
         patch.object(rh, "_get_rust_core", return_value=core),
         patch.object(rh, "_build_agent_spec", return_value=MagicMock()),
-        patch.object(
-            rh, "_start_claim_dispatchers_on_heartbeat_loop", return_value=[]
-        ),
+        patch.object(rh, "_start_claim_dispatchers_on_heartbeat_loop", return_value=[]),
         patch.object(rh, "_handle_mesh_event", handle_event),
         patch(
             "_mcp_mesh.shared.simple_shutdown.should_stop_heartbeat",

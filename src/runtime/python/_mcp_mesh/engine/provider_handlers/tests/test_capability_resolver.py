@@ -214,9 +214,7 @@ class TestAnthropicResolver:
     def test_output_config_selected_when_floor_met(self, monkeypatch):
         """Conforming install (anthropic >= 0.77) still selects OUTPUT_CONFIG."""
 
-        monkeypatch.setattr(
-            caps_mod, "_sdk_at_least", lambda dist, floor: True
-        )
+        monkeypatch.setattr(caps_mod, "_sdk_at_least", lambda dist, floor: True)
         caps = resolve_capabilities(
             "anthropic",
             "anthropic/claude-opus-4-1",
@@ -231,9 +229,7 @@ class TestOpenAIResolver:
     """Reproduce ``OpenAIHandler.prepare_request`` selection (universal)."""
 
     def test_str_output_is_text(self):
-        caps = resolve_capabilities(
-            "openai", None, output_is_basemodel=False
-        )
+        caps = resolve_capabilities("openai", None, output_is_basemodel=False)
         assert caps.structured_output == StructuredOutputMode.TEXT
 
     @pytest.mark.parametrize("has_tools", [False, True])
@@ -266,9 +262,7 @@ class TestServerEnforcementMetadata:
         assert caps.server_enforced is False
         assert caps.recovery == RECOVERY_RESPONSE_FORMAT_RETRY
 
-    def test_output_config_is_server_enforced_no_recovery(
-        self, _anthropic_floor_met
-    ):
+    def test_output_config_is_server_enforced_no_recovery(self, _anthropic_floor_met):
         caps = resolve_capabilities(
             "anthropic",
             "anthropic/claude-sonnet-4-5",
@@ -281,9 +275,7 @@ class TestServerEnforcementMetadata:
         assert caps.recovery == RECOVERY_NONE
 
     def test_response_format_strict_is_server_enforced_no_recovery(self):
-        caps = resolve_capabilities(
-            "openai", None, output_is_basemodel=True
-        )
+        caps = resolve_capabilities("openai", None, output_is_basemodel=True)
         assert caps.structured_output == StructuredOutputMode.RESPONSE_FORMAT_STRICT
         assert caps.server_enforced is True
         assert caps.recovery == RECOVERY_NONE
@@ -339,9 +331,7 @@ class TestGeminiResolver:
         left at its resolver default, Gemini 3.x + tools stays on PROSE_HINT —
         this pins the resolver signature default, not the runtime contract
         (covered by TestGeminiNativeStructuredToolsGate)."""
-        monkeypatch.setattr(
-            caps_mod, "_sdk_at_least", lambda dist, floor: True
-        )
+        monkeypatch.setattr(caps_mod, "_sdk_at_least", lambda dist, floor: True)
         caps = resolve_capabilities(
             "gemini",
             "gemini/gemini-3-pro-preview",
@@ -457,9 +447,7 @@ class TestGeminiNativeStructuredToolsGate:
         )
         assert caps.structured_output == StructuredOutputMode.PROSE_HINT
 
-    def test_flag_on_gemini3_NO_tools_is_response_format_strict(
-        self, _genai_floor_met
-    ):
+    def test_flag_on_gemini3_NO_tools_is_response_format_strict(self, _genai_floor_met):
         """No-tools path is unaffected by the gate — still RESPONSE_FORMAT_STRICT
         (the no-tools branch never reaches the gated check)."""
         caps = resolve_capabilities(
@@ -526,15 +514,11 @@ class TestVersionHelpers:
         assert caps_mod._parse_version(raw) == expected
 
     def test_sdk_at_least_uninstalled_is_false(self, monkeypatch):
-        monkeypatch.setattr(
-            caps_mod, "_sdk_version", lambda dist: None
-        )
+        monkeypatch.setattr(caps_mod, "_sdk_version", lambda dist: None)
         assert caps_mod._sdk_at_least("nonexistent-pkg", (1, 0)) is False
 
     def test_sdk_at_least_compares_tuples(self, monkeypatch):
-        monkeypatch.setattr(
-            caps_mod, "_sdk_version", lambda dist: "1.22.0"
-        )
+        monkeypatch.setattr(caps_mod, "_sdk_version", lambda dist: "1.22.0")
         assert caps_mod._sdk_at_least("google-genai", (1, 22)) is True
         assert caps_mod._sdk_at_least("google-genai", (1, 23)) is False
         assert caps_mod._sdk_at_least("google-genai", (1, 0)) is True
@@ -544,14 +528,10 @@ class TestGenericResolver:
     """Reproduce ``GenericHandler`` prose-only behavior."""
 
     def test_str_output_is_text(self):
-        caps = resolve_capabilities(
-            "cohere", None, output_is_basemodel=False
-        )
+        caps = resolve_capabilities("cohere", None, output_is_basemodel=False)
         assert caps.structured_output == StructuredOutputMode.TEXT
 
     @pytest.mark.parametrize("vendor", ["cohere", "together", "unknown", "ollama"])
     def test_basemodel_is_prose_hint(self, vendor):
-        caps = resolve_capabilities(
-            vendor, None, output_is_basemodel=True
-        )
+        caps = resolve_capabilities(vendor, None, output_is_basemodel=True)
         assert caps.structured_output == StructuredOutputMode.PROSE_HINT

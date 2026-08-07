@@ -48,8 +48,9 @@ to precisely the old flat iteration — no version branching anywhere.
 """
 
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Iterator, Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -78,12 +79,12 @@ class RouteRef:
     path: str
     methods: list[str]
     endpoint: Any
-    container: Optional[list]
-    index: Optional[int]
+    container: list | None
+    index: int | None
     included: bool
 
 
-def _included_routes(entry: Any) -> Optional[list]:
+def _included_routes(entry: Any) -> list | None:
     """Return the mutable route list an ``include_router()`` entry owns.
 
     ``None`` for anything that is not such an entry — plain routes, and
@@ -96,7 +97,7 @@ def _included_routes(entry: Any) -> Optional[list]:
     return routes if isinstance(routes, list) else None
 
 
-def _effective_contexts(entry: Any) -> Optional[list]:
+def _effective_contexts(entry: Any) -> list | None:
     """FastAPI's own view of what an ``include_router()`` entry serves.
 
     Each context carries the composed path/methods for one route plus

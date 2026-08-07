@@ -23,6 +23,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from _mcp_mesh.engine.llm_stop_reason import parse_stream_frame
 
 
@@ -81,7 +82,9 @@ def _message(content: str | None, tool_calls: list | None = None) -> MagicMock:
     return m
 
 
-def _response(message: MagicMock, prompt_tokens: int = 5, completion_tokens: int = 3) -> MagicMock:
+def _response(
+    message: MagicMock, prompt_tokens: int = 5, completion_tokens: int = 3
+) -> MagicMock:
     resp = MagicMock()
     choice = MagicMock()
     choice.message = message
@@ -147,16 +150,11 @@ class TestInjectSyntheticFormatTool:
                 completion_args=completion_args,
             )
 
-        warn_msgs = [
-            r.getMessage() for r in caplog.records if r.levelname == "WARNING"
-        ]
+        warn_msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
         assert any(
-            "Synthetic format injection overriding caller-supplied tool_choice"
-            in m
+            "Synthetic format injection overriding caller-supplied tool_choice" in m
             for m in warn_msgs
-        ), (
-            f"Expected override-warning; got: {warn_msgs}"
-        )
+        ), f"Expected override-warning; got: {warn_msgs}"
         # The override should still happen — WARN documents it, doesn't undo it.
         assert completion_args["tool_choice"] == "auto"
 
@@ -175,9 +173,7 @@ class TestInjectSyntheticFormatTool:
                 completion_args=completion_args,
             )
 
-        warn_msgs = [
-            r.getMessage() for r in caplog.records if r.levelname == "WARNING"
-        ]
+        warn_msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
         assert not any(
             "Synthetic format injection overriding" in m for m in warn_msgs
         ), f"Did not expect override-warning; got: {warn_msgs}"
@@ -202,9 +198,7 @@ class TestInjectSyntheticFormatTool:
                 completion_args=completion_args,
             )
 
-        warn_msgs = [
-            r.getMessage() for r in caplog.records if r.levelname == "WARNING"
-        ]
+        warn_msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
         assert not any(
             "Synthetic format injection overriding" in m for m in warn_msgs
         ), f"None should not trip the override warning; got: {warn_msgs}"
@@ -236,9 +230,7 @@ class TestInjectSyntheticFormatTool:
                 completion_args=completion_args,
             )
 
-        warn_msgs = [
-            r.getMessage() for r in caplog.records if r.levelname == "WARNING"
-        ]
+        warn_msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
         assert not any(
             "Synthetic format injection overriding" in m for m in warn_msgs
         ), (
@@ -323,13 +315,27 @@ class TestBufferedLoopSyntheticRecognition:
             ],
         )
 
-        with patch(
-            "asyncio.to_thread",
-            new=AsyncMock(side_effect=[_response(real_msg), _response(synth_msg)]),
-        ), patch(
-            "mesh.helpers._execute_tool_calls_for_iteration",
-            new=AsyncMock(return_value=([{"role": "tool", "tool_call_id": "call_real", "content": "sunny"}], [])),
-        ) as mock_exec:
+        with (
+            patch(
+                "asyncio.to_thread",
+                new=AsyncMock(side_effect=[_response(real_msg), _response(synth_msg)]),
+            ),
+            patch(
+                "mesh.helpers._execute_tool_calls_for_iteration",
+                new=AsyncMock(
+                    return_value=(
+                        [
+                            {
+                                "role": "tool",
+                                "tool_call_id": "call_real",
+                                "content": "sunny",
+                            }
+                        ],
+                        [],
+                    )
+                ),
+            ) as mock_exec,
+        ):
             result = await _provider_agentic_loop(
                 effective_model="anthropic/claude-sonnet-4-5",
                 messages=[{"role": "user", "content": "Weather in SF?"}],
@@ -367,11 +373,12 @@ class TestBufferedLoopSyntheticRecognition:
             ],
         )
 
-        with patch(
-            "asyncio.to_thread", new=AsyncMock(return_value=_response(msg))
-        ), patch(
-            "mesh.helpers._execute_tool_calls_for_iteration", new=AsyncMock()
-        ) as mock_exec:
+        with (
+            patch("asyncio.to_thread", new=AsyncMock(return_value=_response(msg))),
+            patch(
+                "mesh.helpers._execute_tool_calls_for_iteration", new=AsyncMock()
+            ) as mock_exec,
+        ):
             result = await _provider_agentic_loop(
                 effective_model="anthropic/claude-sonnet-4-5",
                 messages=[{"role": "user", "content": "Q?"}],
@@ -405,7 +412,9 @@ class TestBufferedLoopSyntheticRecognition:
             tool_calls=[_tool_call("t", SYNTHETIC_TOOL_NAME, '{"answer":"hi"}')],
         )
 
-        with patch("asyncio.to_thread", new=AsyncMock(return_value=_response(msg))) as mock_call:
+        with patch(
+            "asyncio.to_thread", new=AsyncMock(return_value=_response(msg))
+        ) as mock_call:
             await _provider_agentic_loop(
                 effective_model="anthropic/claude-sonnet-4-5",
                 messages=[{"role": "user", "content": "Q?"}],
@@ -445,7 +454,9 @@ class TestBufferedLoopSyntheticRecognition:
             tool_calls=[_tool_call("t", SYNTHETIC_TOOL_NAME, '{"answer":"hi"}')],
         )
 
-        with patch("asyncio.to_thread", new=AsyncMock(return_value=_response(msg))) as mock_call:
+        with patch(
+            "asyncio.to_thread", new=AsyncMock(return_value=_response(msg))
+        ) as mock_call:
             await _provider_agentic_loop(
                 effective_model="anthropic/claude-sonnet-4-5",
                 messages=[{"role": "user", "content": "Q?"}],
@@ -477,15 +488,23 @@ class TestBufferedLoopSyntheticRecognition:
         # Every iteration returns a real tool call (model never signals done).
         real_msg = _message(
             content=None,
-            tool_calls=[_tool_call("call_real", "get_weather", '{}')],
+            tool_calls=[_tool_call("call_real", "get_weather", "{}")],
         )
 
-        with patch(
-            "asyncio.to_thread",
-            new=AsyncMock(return_value=_response(real_msg)),
-        ), patch(
-            "mesh.helpers._execute_tool_calls_for_iteration",
-            new=AsyncMock(return_value=([{"role": "tool", "tool_call_id": "call_real", "content": "x"}], [])),
+        with (
+            patch(
+                "asyncio.to_thread",
+                new=AsyncMock(return_value=_response(real_msg)),
+            ),
+            patch(
+                "mesh.helpers._execute_tool_calls_for_iteration",
+                new=AsyncMock(
+                    return_value=(
+                        [{"role": "tool", "tool_call_id": "call_real", "content": "x"}],
+                        [],
+                    )
+                ),
+            ),
         ):
             result = await _provider_agentic_loop(
                 effective_model="anthropic/claude-sonnet-4-5",
@@ -673,15 +692,24 @@ class TestStreamingLoopSyntheticRecognition:
             _chunk(tool_calls=[_tc_delta(index=0, arguments='{"answer":"sunny"}')]),
             _chunk(usage={"prompt_tokens": 5, "completion_tokens": 3}),
         ]
-        with patch("litellm.acompletion", new=AsyncMock()) as mock_ac, patch(
-            "mesh.helpers._execute_tool_calls_for_iteration",
-            new=AsyncMock(
-                return_value=(
-                    [{"role": "tool", "tool_call_id": "call_real", "content": "sunny"}],
-                    [],
-                )
-            ),
-        ) as mock_exec:
+        with (
+            patch("litellm.acompletion", new=AsyncMock()) as mock_ac,
+            patch(
+                "mesh.helpers._execute_tool_calls_for_iteration",
+                new=AsyncMock(
+                    return_value=(
+                        [
+                            {
+                                "role": "tool",
+                                "tool_call_id": "call_real",
+                                "content": "sunny",
+                            }
+                        ],
+                        [],
+                    )
+                ),
+            ) as mock_exec,
+        ):
             mock_ac.side_effect = [_FakeStream(first), _FakeStream(second)]
 
             collected: list[str] = []
@@ -799,12 +827,13 @@ class TestSyntheticEnvelopeContentIsString:
             tool_calls=[_tool_call("toolu_1", SYNTHETIC_TOOL_NAME, "{}")],
         )
 
-        with patch(
-            "asyncio.to_thread", new=AsyncMock(return_value=_response(msg))
-        ), patch(
-            # Force the (hypothetical) dict shape to exercise the coercion.
-            "mesh.helpers._extract_synthetic_format_arguments",
-            return_value=({"answer": "42"}, "toolu_1"),
+        with (
+            patch("asyncio.to_thread", new=AsyncMock(return_value=_response(msg))),
+            patch(
+                # Force the (hypothetical) dict shape to exercise the coercion.
+                "mesh.helpers._extract_synthetic_format_arguments",
+                return_value=({"answer": "42"}, "toolu_1"),
+            ),
         ):
             result = await _provider_agentic_loop(
                 effective_model="anthropic/claude-sonnet-4-5",

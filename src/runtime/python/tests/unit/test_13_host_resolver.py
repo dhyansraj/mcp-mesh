@@ -9,6 +9,7 @@ functions rather than Python's socket module.
 from unittest.mock import patch
 
 import mcp_mesh_core
+
 from _mcp_mesh.shared.host_resolver import HostResolver
 
 

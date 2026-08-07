@@ -20,7 +20,7 @@ misconfiguration before the agent starts serving traffic.
 
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 
 def detect_dual_module_registration(

@@ -30,7 +30,7 @@ tags/version/dependencies. Declare each tool explicitly with
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -78,10 +78,10 @@ class ServiceMethodBinding:
     method_name: str
     capability: str
     tags: list = field(default_factory=list)
-    version: Optional[str] = None
+    version: str | None = None
     required: bool = False
     expected_type: Any = None
-    match_mode: Optional[str] = None
+    match_mode: str | None = None
 
 
 @dataclass(frozen=True)
@@ -105,17 +105,19 @@ def _validate_capability_segmented(capability: str, context: str) -> None:
     try:
         AgentCapability(name=capability)
     except ValidationError as e:
-        raise ValueError(f"{context}: invalid capability name '{capability}' — {e}") from None
+        raise ValueError(
+            f"{context}: invalid capability name '{capability}' — {e}"
+        ) from None
 
 
 def selector(
-    capability: Optional[str] = None,
+    capability: str | None = None,
     *,
-    tags: Optional[list] = None,
-    version: Optional[str] = None,
+    tags: list | None = None,
+    version: str | None = None,
     required: bool = False,
     expected_type: Any = None,
-    match_mode: Optional[str] = None,
+    match_mode: str | None = None,
 ):
     """Bind a service-view method to a single capability (RFC #1280).
 

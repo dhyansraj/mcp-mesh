@@ -37,7 +37,8 @@ from __future__ import annotations
 import asyncio
 import os
 from collections import OrderedDict
-from typing import Any, AsyncIterator, Optional
+from collections.abc import AsyncIterator
+from typing import Any
 
 __all__ = [
     "JobNotFoundError",
@@ -91,7 +92,7 @@ def _proxy_cache_max() -> int:
     return value if value > 0 else _PROXY_CACHE_DEFAULT_MAX
 
 
-_proxy_cache: "OrderedDict[tuple[str, str], Any]" = OrderedDict()
+_proxy_cache: OrderedDict[tuple[str, str], Any] = OrderedDict()
 _proxy_cache_lock = asyncio.Lock()
 
 
@@ -229,7 +230,7 @@ def _resolve_registry_url() -> str:
 async def post_event(
     job_id: str,
     event_type: str,
-    payload: Optional[dict] = None,
+    payload: dict | None = None,
 ) -> dict:
     """Post an event to a running job by ID.
 
@@ -293,9 +294,9 @@ async def post_event(
 
 async def subscribe_events(
     job_id: str,
-    types: Optional[list[str]] = None,
+    types: list[str] | None = None,
     after: int = 0,
-    long_poll_secs: Optional[float] = 30.0,
+    long_poll_secs: float | None = 30.0,
 ) -> AsyncIterator[dict]:
     """Subscribe to events posted to a running job by ID.
 
@@ -349,9 +350,7 @@ async def subscribe_events(
     cursor = after
     while True:
         try:
-            events, next_after = await proxy.list_events(
-                cursor, types, long_poll_secs
-            )
+            events, next_after = await proxy.list_events(cursor, types, long_poll_secs)
         except RuntimeError as exc:
             translated = _translate_job_error(exc)
             if translated is exc:
@@ -396,7 +395,7 @@ async def subscribe_events(
 # user code and break the DDDI contract.
 
 
-async def cancel(job_id: str, reason: Optional[str] = None) -> None:
+async def cancel(job_id: str, reason: str | None = None) -> None:
     """Cancel a running job by ID.
 
     Convenience helper for callers that hold a ``job_id`` but do not have
@@ -506,7 +505,7 @@ async def status(job_id: str) -> dict:
         raise translated from exc
 
 
-async def wait(job_id: str, timeout_secs: Optional[float] = None) -> Any:
+async def wait(job_id: str, timeout_secs: float | None = None) -> Any:
     """Wait for a job to complete and return its result.
 
     Convenience helper for callers that hold a ``job_id`` but do not

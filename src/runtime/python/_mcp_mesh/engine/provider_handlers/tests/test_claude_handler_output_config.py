@@ -123,9 +123,7 @@ class TestApplyStructuredOutputOutputConfig:
     ):
         """Opus 4.1+ takes the same branch as Sonnet 4.5+."""
         handler = ClaudeHandler()
-        params: dict = {
-            "messages": [{"role": "system", "content": "S"}]
-        }
+        params: dict = {"messages": [{"role": "system", "content": "S"}]}
         result = handler.apply_structured_output(
             _trip_schema(), "Trip", params, model=model
         )
@@ -149,9 +147,7 @@ class TestApplyStructuredOutputOutputConfig:
         """#1342: Haiku 4.5 accepts ``output_config.format``, so it takes the
         native branch — NOT the synthetic-tool fallback used by Haiku 3.x."""
         handler = ClaudeHandler()
-        params: dict = {
-            "messages": [{"role": "system", "content": "S"}]
-        }
+        params: dict = {"messages": [{"role": "system", "content": "S"}]}
         result = handler.apply_structured_output(
             _trip_schema(), "Trip", params, model=model
         )
@@ -288,9 +284,7 @@ class TestApplyNativeOutputConfigStrictification:
             },
             "required": ["destination"],
         }
-        params: dict = {
-            "messages": [{"role": "system", "content": "S"}]
-        }
+        params: dict = {"messages": [{"role": "system", "content": "S"}]}
         result = handler.apply_structured_output(
             schema, "Trip", params, model="anthropic/claude-sonnet-4-6"
         )
@@ -306,8 +300,7 @@ class TestApplyNativeOutputConfigStrictification:
         sentinel_schema = result["_mesh_output_config_schema"]
         assert sentinel_schema["additionalProperties"] is False
         assert (
-            sentinel_schema["properties"]["itinerary"]["additionalProperties"]
-            is False
+            sentinel_schema["properties"]["itinerary"]["additionalProperties"] is False
         )
 
     def test_apply_native_output_config_preserves_required_list(self, _native_on):
@@ -327,9 +320,7 @@ class TestApplyNativeOutputConfigStrictification:
             # Only one of three properties required.
             "required": ["destination"],
         }
-        params: dict = {
-            "messages": [{"role": "system", "content": "S"}]
-        }
+        params: dict = {"messages": [{"role": "system", "content": "S"}]}
         result = handler.apply_structured_output(
             schema, "Trip", params, model="anthropic/claude-sonnet-4-6"
         )
@@ -338,9 +329,7 @@ class TestApplyNativeOutputConfigStrictification:
         # ``required`` preserved as-is — NOT expanded to all property keys.
         assert rf_schema["required"] == ["destination"]
 
-    def test_apply_native_output_config_captured_schema_matches_wire(
-        self, _native_on
-    ):
+    def test_apply_native_output_config_captured_schema_matches_wire(self, _native_on):
         """Regression guard for PR #1013 review WARNING 3.
 
         The captured ``_mesh_output_config_schema`` must match the on-wire
@@ -363,9 +352,7 @@ class TestApplyNativeOutputConfigStrictification:
             },
             "required": ["tags"],
         }
-        params: dict = {
-            "messages": [{"role": "system", "content": "S"}]
-        }
+        params: dict = {"messages": [{"role": "system", "content": "S"}]}
         result = handler.apply_structured_output(
             schema, "Tagged", params, model="anthropic/claude-sonnet-4-6"
         )
@@ -379,9 +366,9 @@ class TestApplyNativeOutputConfigStrictification:
 
         # And the response_format payload (what literally goes on the wire)
         # must agree.
-        rf_tags = result["response_format"]["json_schema"]["schema"][
-            "properties"
-        ]["tags"]
+        rf_tags = result["response_format"]["json_schema"]["schema"]["properties"][
+            "tags"
+        ]
         assert "maxItems" not in rf_tags
         assert "minItems" not in rf_tags
 
@@ -407,18 +394,13 @@ class TestApplyStructuredOutputLegacyModelsFallThroughToSynthetic:
         NOT be stamped.
         """
         handler = ClaudeHandler()
-        params: dict = {
-            "messages": [{"role": "system", "content": "S"}]
-        }
+        params: dict = {"messages": [{"role": "system", "content": "S"}]}
         result = handler.apply_structured_output(
             _trip_schema(), "Trip", params, model=model
         )
 
         # Synthetic-tool sentinels present.
-        assert (
-            result["_mesh_synthetic_format_tool_name"]
-            == SYNTHETIC_FORMAT_TOOL_NAME
-        )
+        assert result["_mesh_synthetic_format_tool_name"] == SYNTHETIC_FORMAT_TOOL_NAME
         assert "_mesh_synthetic_format_tool" in result
         # output_config mode NOT set.
         assert "_mesh_output_config_mode" not in result
@@ -445,9 +427,7 @@ class TestApplyStructuredOutputStreamingRoutingPreserved:
         the HINT path — synthetic-tool injection emits a single discrete
         tool_use block, defeating the point of streaming."""
         handler = ClaudeHandler()
-        params: dict = {
-            "messages": [{"role": "system", "content": "S"}]
-        }
+        params: dict = {"messages": [{"role": "system", "content": "S"}]}
         result = handler.apply_structured_output(
             _trip_schema(), "Trip", params, streaming=True, model=model
         )
@@ -465,9 +445,7 @@ class TestApplyStructuredOutputStreamingRoutingPreserved:
         """``has_native()`` False — even a capable model on the LiteLLM path
         streams via HINT (no native output_config primitive available)."""
         handler = ClaudeHandler()
-        params: dict = {
-            "messages": [{"role": "system", "content": "S"}]
-        }
+        params: dict = {"messages": [{"role": "system", "content": "S"}]}
         result = handler.apply_structured_output(
             _trip_schema(),
             "Trip",
@@ -479,17 +457,13 @@ class TestApplyStructuredOutputStreamingRoutingPreserved:
         assert result["_mesh_hint_mode"] is True
         assert "_mesh_output_config_mode" not in result
 
-    def test_buffered_haiku_without_native_falls_through_to_hint(
-        self, _native_off
-    ):
+    def test_buffered_haiku_without_native_falls_through_to_hint(self, _native_off):
         """When the native SDK is unavailable, the output_config branch is
         not eligible — fall through to the existing HINT-mode path. (Haiku
         on LiteLLM path: HINT mode.)
         """
         handler = ClaudeHandler()
-        params: dict = {
-            "messages": [{"role": "system", "content": "S"}]
-        }
+        params: dict = {"messages": [{"role": "system", "content": "S"}]}
         result = handler.apply_structured_output(
             _trip_schema(),
             "Trip",
@@ -508,9 +482,7 @@ class TestApplyStructuredOutputStreamingRoutingPreserved:
     ):
         """``has_native()`` False — even Sonnet 4.6 falls through to HINT mode."""
         handler = ClaudeHandler()
-        params: dict = {
-            "messages": [{"role": "system", "content": "S"}]
-        }
+        params: dict = {"messages": [{"role": "system", "content": "S"}]}
         result = handler.apply_structured_output(
             _trip_schema(),
             "Trip",
@@ -527,14 +499,9 @@ class TestApplyStructuredOutputStreamingRoutingPreserved:
         synthetic-tool path (the existing behavior for the native + buffered
         combo)."""
         handler = ClaudeHandler()
-        params: dict = {
-            "messages": [{"role": "system", "content": "S"}]
-        }
+        params: dict = {"messages": [{"role": "system", "content": "S"}]}
         # No model kwarg.
         result = handler.apply_structured_output(_trip_schema(), "Trip", params)
 
-        assert (
-            result["_mesh_synthetic_format_tool_name"]
-            == SYNTHETIC_FORMAT_TOOL_NAME
-        )
+        assert result["_mesh_synthetic_format_tool_name"] == SYNTHETIC_FORMAT_TOOL_NAME
         assert "_mesh_output_config_mode" not in result

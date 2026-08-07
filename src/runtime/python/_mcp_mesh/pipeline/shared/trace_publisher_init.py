@@ -43,12 +43,16 @@ class TracePublisherInitStep(PipelineStep):
             # startup event loop (health/ready endpoints) stays responsive
             # while a down Redis is being probed. init never raises.
             await asyncio.to_thread(init_trace_publisher_at_startup)
-            result.message = "Trace publisher initialized (or skipped: tracing disabled)"
+            result.message = (
+                "Trace publisher initialized (or skipped: tracing disabled)"
+            )
             self.logger.debug("Trace publisher startup init complete")
         except Exception as e:
             # Belt-and-suspenders: init_trace_publisher_at_startup already
             # swallows its own errors, but never let this step fail startup.
             result.message = f"Trace publisher init skipped ({e})"
-            self.logger.warning("Trace publisher startup init error (continuing): %s", e)
+            self.logger.warning(
+                "Trace publisher startup init error (continuing): %s", e
+            )
 
         return result

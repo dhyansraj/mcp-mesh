@@ -55,7 +55,7 @@ class SupersededError(ToolError):
     it IS a ToolError, ``except ToolError`` still catches it too.
     """
 
-    def __init__(self, detail: Optional[str] = None):
+    def __init__(self, detail: str | None = None):
         self.detail = detail
         envelope: dict[str, Any] = {"error": CLAIM_SUPERSEDED_MARKER}
         if detail is not None:
@@ -65,7 +65,7 @@ class SupersededError(ToolError):
         super().__init__(json.dumps(envelope, separators=(",", ":")))
 
 
-def parse_superseded_envelope(error_text: str) -> Optional[SupersededError]:
+def parse_superseded_envelope(error_text: str) -> SupersededError | None:
     """Return a :class:`SupersededError` if ``error_text`` is the reserved
     supersession envelope, else ``None``.
 

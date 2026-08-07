@@ -7,6 +7,7 @@ Tests schema extraction from FastMCP tools for LLM integration (Phase 2).
 from unittest.mock import MagicMock
 
 import pytest
+
 from _mcp_mesh.engine.decorator_registry import DecoratedFunction
 from _mcp_mesh.utils.fastmcp_schema_extractor import FastMCPSchemaExtractor
 
@@ -343,8 +344,9 @@ class TestMeshContextModelDetection:
 
     def test_detect_mesh_context_model_parameter(self):
         """Test: Detect parameter with MeshContextModel type hint."""
-        from mesh import MeshContextModel
         from pydantic import Field
+
+        from mesh import MeshContextModel
 
         class AnalysisContext(MeshContextModel):
             domain: str = Field(description="Analysis domain")
@@ -383,8 +385,9 @@ class TestMeshContextModelDetection:
 
     def test_detect_mesh_context_model_subclass(self):
         """Test: Detect parameter with MeshContextModel subclass."""
-        from mesh import MeshContextModel
         from pydantic import Field
+
+        from mesh import MeshContextModel
 
         class BaseContext(MeshContextModel):
             user_name: str = Field(description="Name of user")
@@ -441,8 +444,9 @@ class TestMeshContextModelDetection:
 
     def test_handle_multiple_parameters_mixed(self):
         """Test: Handle multiple parameters (some context, some regular)."""
-        from mesh import MeshContextModel
         from pydantic import Field
+
+        from mesh import MeshContextModel
 
         class ChatContext(MeshContextModel):
             domain: str = Field(description="Chat domain")
@@ -478,13 +482,14 @@ class TestMeshContextModelDetection:
         """Test: Handle optional MeshContextModel (| None)."""
         from typing import Optional
 
-        from mesh import MeshContextModel
         from pydantic import Field
+
+        from mesh import MeshContextModel
 
         class AnalysisContext(MeshContextModel):
             domain: str = Field(description="Analysis domain")
 
-        def analyze(query: str, ctx: Optional[AnalysisContext] = None):
+        def analyze(query: str, ctx: AnalysisContext | None = None):
             pass
 
         mock_tool = MagicMock()
@@ -512,8 +517,9 @@ class TestFieldDescriptionExtraction:
 
     def test_extract_simple_field_descriptions(self):
         """Test: Extract Field description for simple fields."""
-        from mesh import MeshContextModel
         from pydantic import Field
+
+        from mesh import MeshContextModel
 
         class SimpleContext(MeshContextModel):
             name: str = Field(description="User name")
@@ -539,8 +545,9 @@ class TestFieldDescriptionExtraction:
 
     def test_extract_optional_fields_with_defaults(self):
         """Test: Extract Field description for optional fields with defaults."""
-        from mesh import MeshContextModel
         from pydantic import Field
+
+        from mesh import MeshContextModel
 
         class ConfigContext(MeshContextModel):
             timeout: int = Field(default=30, description="Timeout in seconds")
@@ -566,8 +573,9 @@ class TestFieldDescriptionExtraction:
 
     def test_extract_complex_types(self):
         """Test: Extract Field description for complex types (list, dict)."""
-        from mesh import MeshContextModel
         from pydantic import Field
+
+        from mesh import MeshContextModel
 
         class ComplexContext(MeshContextModel):
             tags: list[str] = Field(description="List of tags")
@@ -593,8 +601,9 @@ class TestFieldDescriptionExtraction:
 
     def test_extract_nested_mesh_context_model(self):
         """Test: Extract Field description for nested MeshContextModel."""
-        from mesh import MeshContextModel
         from pydantic import Field
+
+        from mesh import MeshContextModel
 
         class UserInfo(MeshContextModel):
             name: str = Field(description="User name")
@@ -663,8 +672,9 @@ class TestFieldDescriptionExtraction:
 
     def test_preserve_non_mesh_context_params(self):
         """Test: Preserve original schema for non-MeshContextModel params."""
-        from mesh import MeshContextModel
         from pydantic import Field
+
+        from mesh import MeshContextModel
 
         class AnalysisContext(MeshContextModel):
             domain: str = Field(description="Analysis domain")
@@ -698,8 +708,9 @@ class TestEnhancedSchemaGeneration:
 
     def test_enhanced_schema_includes_descriptions(self):
         """Test: Enhanced schema includes MeshContextModel field descriptions."""
-        from mesh import MeshContextModel
         from pydantic import Field
+
+        from mesh import MeshContextModel
 
         class AnalysisContext(MeshContextModel):
             domain: str = Field(description="Analysis domain: infrastructure, security")
@@ -742,8 +753,9 @@ class TestEnhancedSchemaGeneration:
 
     def test_enhanced_schema_includes_defaults(self):
         """Test: Enhanced schema includes default values."""
-        from mesh import MeshContextModel
         from pydantic import Field
+
+        from mesh import MeshContextModel
 
         class ConfigContext(MeshContextModel):
             timeout: int = Field(default=60, description="Timeout in seconds")
@@ -767,8 +779,9 @@ class TestEnhancedSchemaGeneration:
 
     def test_enhanced_schema_marks_context_param(self):
         """Test: Enhanced schema marks context params with description."""
-        from mesh import MeshContextModel
         from pydantic import Field
+
+        from mesh import MeshContextModel
 
         class ChatContext(MeshContextModel):
             domain: str = Field(description="Chat domain")
@@ -798,8 +811,9 @@ class TestEnhancedSchemaGeneration:
 
     def test_enhanced_schema_preserves_all_fields(self):
         """Test: Enhanced schema preserves all original fields."""
-        from mesh import MeshContextModel
         from pydantic import Field
+
+        from mesh import MeshContextModel
 
         class AnalysisContext(MeshContextModel):
             domain: str = Field(description="Analysis domain")
@@ -831,8 +845,9 @@ class TestEnhancedSchemaGeneration:
 
     def test_schema_filtering_still_works(self):
         """Test: Schema filtering still works (dependency params removed)."""
-        from mesh import MeshContextModel, MeshLlmAgent
         from pydantic import Field
+
+        from mesh import MeshContextModel, MeshLlmAgent
 
         class AnalysisContext(MeshContextModel):
             domain: str = Field(description="Analysis domain")
@@ -861,8 +876,9 @@ class TestEnhancedSchemaGeneration:
 
     def test_complete_schema_is_valid_json_schema(self):
         """Test: Complete schema sent to registry is valid JSON Schema."""
-        from mesh import MeshContextModel
         from pydantic import Field
+
+        from mesh import MeshContextModel
 
         class AnalysisContext(MeshContextModel):
             domain: str = Field(description="Analysis domain")
@@ -894,3 +910,124 @@ class TestEnhancedSchemaGeneration:
         for prop_name, prop_schema in result["properties"].items():
             assert isinstance(prop_schema, dict)
             assert "type" in prop_schema or "$ref" in prop_schema  # Valid JSON Schema
+
+
+class TestMediaParamOptionalSpellings:
+    """MediaParam detection must not depend on how the optional was spelled.
+
+    ``Optional[X]`` carries origin ``typing.Union`` while the PEP 604 spelling
+    ``X | None`` carries origin ``types.UnionType`` — two different objects on
+    Python < 3.14. ``_find_media_param_info`` tests for both, so neither
+    spelling can silently lose its media metadata.
+    """
+
+    def test_find_media_param_info_typing_optional(self):
+        """Optional[Annotated[str, _MediaParamInfo]] is recognised."""
+        from typing import Annotated, Optional
+
+        from mesh.types import _MediaParamInfo
+
+        # The legacy spelling is the point of the test — do not modernise.
+        hint = Optional[Annotated[str, _MediaParamInfo("image/*")]]  # noqa: UP045
+
+        info = FastMCPSchemaExtractor._find_media_param_info(hint)
+
+        assert info is not None
+        assert info.media_type == "image/*"
+
+    def test_find_media_param_info_pep604_optional(self):
+        """Annotated[str, _MediaParamInfo] | None is recognised."""
+        import types
+        from typing import Annotated, Union, get_origin
+
+        from mesh.types import _MediaParamInfo
+
+        hint = Annotated[str, _MediaParamInfo("image/*")] | None
+        # Measured premise: a union with an ``Annotated`` arm is normalised to
+        # ``typing.Union`` on 3.11-3.13 (``_AnnotatedAlias.__or__`` intercepts),
+        # so this spelling reaches the ``origin is Union`` arm today. Asserted
+        # so the day CPython changes that, this test says why.
+        assert get_origin(hint) is Union
+        assert not isinstance(hint, types.UnionType)
+
+        info = FastMCPSchemaExtractor._find_media_param_info(hint)
+
+        assert info is not None
+        assert info.media_type == "image/*"
+
+    def test_find_media_param_info_true_uniontype_hint(self):
+        """A genuine types.UnionType hint is traversed, not skipped.
+
+        ``list[str] | None`` really is ``types.UnionType`` (no ``Annotated``
+        arm to normalise it away), which is the shape the ``isinstance``
+        arm exists for. It carries no media marker, so the answer is None —
+        the point is that the branch is entered rather than short-circuited.
+        """
+        import types
+        from typing import Union, get_origin
+
+        hint = list[str] | None
+        assert isinstance(hint, types.UnionType)
+        assert get_origin(hint) is not Union
+
+        assert FastMCPSchemaExtractor._find_media_param_info(hint) is None
+
+    def test_enhance_schema_pep604_optional_media_param(self):
+        """End-to-end: x-media-type is added for a PEP 604 optional media param."""
+        from typing import Annotated
+
+        from mesh.types import _MediaParamInfo
+
+        def analyze(
+            question: str,
+            image: Annotated[str, _MediaParamInfo("image/*")] | None = None,
+        ):
+            pass
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string"},
+                "image": {"type": "string"},
+            },
+        }
+
+        result = FastMCPSchemaExtractor.enhance_schema_with_media_params(
+            schema, analyze
+        )
+
+        assert result["properties"]["image"]["x-media-type"] == "image/*"
+        assert (
+            "accepts media URI: image/*" in result["properties"]["image"]["description"]
+        )
+        assert "x-media-type" not in result["properties"]["question"]
+
+    def test_enhance_schema_typing_optional_media_param(self):
+        """End-to-end: the typing.Optional spelling behaves identically."""
+        from typing import Annotated, Optional
+
+        from mesh.types import _MediaParamInfo
+
+        def analyze(
+            question: str,
+            # The legacy spelling is the point of the test — do not modernise.
+            image: Optional[  # noqa: UP045
+                Annotated[str, _MediaParamInfo("image/*")]
+            ] = None,
+        ):
+            pass
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string"},
+                "image": {"type": "string"},
+            },
+        }
+
+        result = FastMCPSchemaExtractor.enhance_schema_with_media_params(
+            schema, analyze
+        )
+
+        assert result["properties"]["image"]["x-media-type"] == "image/*"
+        assert "x-media-type" not in result["properties"]["question"]

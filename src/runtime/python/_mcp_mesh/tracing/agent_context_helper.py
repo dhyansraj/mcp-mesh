@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class AgentContextHelper:
     """Helper class to retrieve agent runtime context for tracing."""
 
-    _cached_context: Optional[dict[str, Any]] = None
+    _cached_context: dict[str, Any] | None = None
 
     @classmethod
     def get_agent_context(cls) -> dict[str, Any]:

@@ -21,7 +21,7 @@ class MaxIterationsError(Exception):
         self,
         iteration_count: int,
         max_allowed: int,
-        function_id: Optional[str] = None,
+        function_id: str | None = None,
     ):
         self.iteration_count = iteration_count
         self.max_allowed = max_allowed
@@ -51,7 +51,7 @@ class LLMAPIError(Exception):
         provider: str,
         model: str,
         original_error: Exception,
-        status_code: Optional[int] = None,
+        status_code: int | None = None,
     ):
         self.provider = provider
         self.model = model
@@ -103,7 +103,7 @@ class ResponseParseError(Exception):
         self,
         raw_content: str,
         expected_schema: str,
-        validation_errors: Optional[str] = None,
+        validation_errors: str | None = None,
     ):
         self.raw_content = raw_content[:500]  # Truncate for logging
         self.expected_schema = expected_schema
@@ -142,8 +142,8 @@ class LLMRefusedError(Exception):
         refusal_text: str,
         *,
         vendor: str,
-        model: Optional[str] = None,
-        category: Optional[str] = None,
+        model: str | None = None,
+        category: str | None = None,
     ):
         self.refusal_text = refusal_text
         self.vendor = vendor

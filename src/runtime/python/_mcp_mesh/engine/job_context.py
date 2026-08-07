@@ -70,12 +70,12 @@ class JobContextSnapshot:
     """
 
     job_id: str
-    deadline_secs_remaining: Optional[float] = None
-    claim_epoch: Optional[int] = None
+    deadline_secs_remaining: float | None = None
+    claim_epoch: int | None = None
 
 
-CURRENT_JOB: contextvars.ContextVar[Optional[JobContextSnapshot]] = (
-    contextvars.ContextVar("mesh_current_job", default=None)
+CURRENT_JOB: contextvars.ContextVar[JobContextSnapshot | None] = contextvars.ContextVar(
+    "mesh_current_job", default=None
 )
 """Active ``JobContextSnapshot`` on the current task, or ``None``.
 
@@ -86,7 +86,7 @@ without crossing FFI. When neither side is active, the value is
 """
 
 
-def current_job() -> Optional[JobContextSnapshot]:
+def current_job() -> JobContextSnapshot | None:
     """Return the active job snapshot for the current task, or ``None``.
 
     Safe to call from any context — never raises. Returns ``None`` outside
@@ -121,10 +121,10 @@ class CallingJob:
     """
 
     job_id: str
-    claim_epoch: Optional[int] = None
+    claim_epoch: int | None = None
 
 
-def calling_job() -> Optional[CallingJob]:
+def calling_job() -> CallingJob | None:
     """Return the identity of the job that made the current inbound call,
     or ``None`` when the call did not originate from a job handler
     (issue #1263).
@@ -148,7 +148,7 @@ def calling_job() -> Optional[CallingJob]:
     job_id = headers.get(_HDR_CALLING_JOB_ID)
     if not job_id:
         return None
-    claim_epoch: Optional[int] = None
+    claim_epoch: int | None = None
     raw_epoch = headers.get(_HDR_CALLING_CLAIM_EPOCH)
     if raw_epoch is not None:
         try:
@@ -160,7 +160,7 @@ def calling_job() -> Optional[CallingJob]:
     return CallingJob(job_id=job_id, claim_epoch=claim_epoch)
 
 
-def remaining_seconds() -> Optional[float]:
+def remaining_seconds() -> float | None:
     """Seconds remaining on the active job's deadline, or ``None``.
 
     Returns ``None`` if no job is active, or if the active job has no

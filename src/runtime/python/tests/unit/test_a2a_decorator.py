@@ -175,7 +175,10 @@ class TestA2AMountHelper:
             req = {
                 "jsonrpc": "2.0",
                 "method": "tasks/send",
-                "params": {"id": "t-lookup-1", "message": {"role": "user", "parts": []}},
+                "params": {
+                    "id": "t-lookup-1",
+                    "message": {"role": "user", "parts": []},
+                },
                 "id": "req-1",
             }
             r = client.post("/agents/lookup", json=req)
@@ -278,7 +281,10 @@ class TestA2AMountHelper:
                 json={
                     "jsonrpc": "2.0",
                     "method": "tasks/send",
-                    "params": {"id": "t-sec-1", "message": {"role": "user", "parts": []}},
+                    "params": {
+                        "id": "t-sec-1",
+                        "message": {"role": "user", "parts": []},
+                    },
                     "id": 1,
                 },
             )
@@ -416,11 +422,14 @@ class TestHeartbeatPreparationWithSurfaces:
         # _build_a2a_surfaces now delegates to engine.a2a_surfaces; patch
         # both the local DecoratorRegistry symbol (used for tools/config)
         # and the engine-level one (used by collect_a2a_surfaces).
-        with patch(
-            "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
-        ) as mock_registry, patch(
-            "_mcp_mesh.engine.a2a_surfaces.DecoratorRegistry"
-        ) as mock_surfaces_registry:
+        with (
+            patch(
+                "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
+            ) as mock_registry,
+            patch(
+                "_mcp_mesh.engine.a2a_surfaces.DecoratorRegistry"
+            ) as mock_surfaces_registry,
+        ):
             mock_registry.get_mesh_tools.return_value = {}
             mock_registry.get_mesh_llm_agents.return_value = {}
             mock_registry.get_resolved_agent_config.return_value = agent_config
@@ -463,11 +472,14 @@ class TestHeartbeatPreparationWithSurfaces:
         step = HeartbeatPreparationStep()
         # See note in test_no_a2a_keeps_mcp_agent_type: surfaces collection
         # now lives in engine.a2a_surfaces, so patch both registries.
-        with patch(
-            "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
-        ) as mock_registry, patch(
-            "_mcp_mesh.engine.a2a_surfaces.DecoratorRegistry"
-        ) as mock_surfaces_registry:
+        with (
+            patch(
+                "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
+            ) as mock_registry,
+            patch(
+                "_mcp_mesh.engine.a2a_surfaces.DecoratorRegistry"
+            ) as mock_surfaces_registry,
+        ):
             mock_registry.get_mesh_tools.return_value = {}
             mock_registry.get_mesh_llm_agents.return_value = {}
             mock_registry.get_resolved_agent_config.return_value = agent_config
@@ -509,8 +521,7 @@ class TestA2APublicUrlCache:
             assert get_cached_public_url(path, skill) is None
             update_public_url_cache(path, skill, "https://agents.acme.com" + path)
             assert (
-                get_cached_public_url(path, skill)
-                == "https://agents.acme.com" + path
+                get_cached_public_url(path, skill) == "https://agents.acme.com" + path
             )
             # Empty/None clears the entry.
             update_public_url_cache(path, skill, None)
@@ -1031,9 +1042,7 @@ class TestA2ALongRunningTasksLifecycle:
         envelope = r.json()
         assert envelope["error"]["code"] == -32602
 
-    def test_tasks_cancel_swallows_proxy_cancel_exception(
-        self, patch_is_job_proxy
-    ):
+    def test_tasks_cancel_swallows_proxy_cancel_exception(self, patch_is_job_proxy):
         # Registry may have already terminated the job by the time the
         # client cancels — proxy.cancel() raising should NOT bubble up
         # as a JSON-RPC error.
@@ -1083,7 +1092,7 @@ def _parse_sse_events(body: str) -> list[dict]:
         if not chunk or chunk.startswith(":"):
             continue
         if chunk.startswith("data:"):
-            payload = chunk[len("data:"):].strip()
+            payload = chunk[len("data:") :].strip()
             if payload:
                 import json as _j
 
@@ -1177,7 +1186,9 @@ class TestA2ASseStreaming:
         evt = events[0]
         assert evt["result"]["status"]["state"] == "failed"
         assert evt["result"]["final"] is True
-        assert "boom in handler" in evt["result"]["status"]["message"]["parts"][0]["text"]
+        assert (
+            "boom in handler" in evt["result"]["status"]["message"]["parts"][0]["text"]
+        )
 
     def test_sse_long_running_emits_initial_working_then_terminal(
         self, patch_is_job_proxy, monkeypatch
@@ -1223,17 +1234,15 @@ class TestA2ASseStreaming:
 
         assert events[1]["result"]["status"]["state"] == "working"
         assert events[1]["result"]["metadata"]["progress"] == 0.5
-        assert (
-            events[1]["result"]["status"]["message"]["parts"][0]["text"] == "halfway"
-        )
+        assert events[1]["result"]["status"]["message"]["parts"][0]["text"] == "halfway"
 
         # Artifact event has no ``status`` key but does have ``artifact``.
         assert "artifact" in events[2]["result"]
         import json as _j
 
-        assert _j.loads(
-            events[2]["result"]["artifact"]["parts"][0]["text"]
-        ) == {"final": "value"}
+        assert _j.loads(events[2]["result"]["artifact"]["parts"][0]["text"]) == {
+            "final": "value"
+        }
 
         assert events[3]["result"]["status"]["state"] == "completed"
         assert events[3]["result"]["final"] is True

@@ -35,12 +35,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-pytest.importorskip(
-    "openai", reason="native OpenAI adapter requires the openai SDK"
-)
+pytest.importorskip("openai", reason="native OpenAI adapter requires the openai SDK")
 
 from _mcp_mesh.engine.native_clients import openai_native
-
 
 # ---------------------------------------------------------------------------
 # is_available()
@@ -552,12 +549,8 @@ class TestCompleteResponseShape:
             parsed={"answer": "42"},
         )
         choice = SimpleNamespace(index=0, message=message, finish_reason="stop")
-        usage = SimpleNamespace(
-            prompt_tokens=1, completion_tokens=1, total_tokens=2
-        )
-        api_resp = SimpleNamespace(
-            choices=[choice], usage=usage, model="gpt-4o-mini"
-        )
+        usage = SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        api_resp = SimpleNamespace(choices=[choice], usage=usage, model="gpt-4o-mini")
         cls_mock, _, _ = _patched_async_openai(api_resp)
         with patch("openai.AsyncOpenAI", cls_mock):
             response = await openai_native.complete(
@@ -588,15 +581,9 @@ class TestCompleteResponseShape:
             ],
             parsed={"answer": "42"},
         )
-        choice = SimpleNamespace(
-            index=0, message=message, finish_reason="tool_calls"
-        )
-        usage = SimpleNamespace(
-            prompt_tokens=1, completion_tokens=1, total_tokens=2
-        )
-        api_resp = SimpleNamespace(
-            choices=[choice], usage=usage, model="gpt-4o-mini"
-        )
+        choice = SimpleNamespace(index=0, message=message, finish_reason="tool_calls")
+        usage = SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        api_resp = SimpleNamespace(choices=[choice], usage=usage, model="gpt-4o-mini")
         cls_mock, _, _ = _patched_async_openai(api_resp)
         with patch("openai.AsyncOpenAI", cls_mock):
             response = await openai_native.complete(
@@ -620,12 +607,8 @@ class TestCompleteResponseShape:
             parsed={"answer": "42"},
         )
         choice = SimpleNamespace(index=0, message=message, finish_reason="stop")
-        usage = SimpleNamespace(
-            prompt_tokens=1, completion_tokens=1, total_tokens=2
-        )
-        api_resp = SimpleNamespace(
-            choices=[choice], usage=usage, model="gpt-4o-mini"
-        )
+        usage = SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        api_resp = SimpleNamespace(choices=[choice], usage=usage, model="gpt-4o-mini")
         cls_mock, _, _ = _patched_async_openai(api_resp)
         with patch("openai.AsyncOpenAI", cls_mock):
             response = await openai_native.complete(
@@ -809,7 +792,9 @@ def _make_stream_chunk(
         )
 
     return SimpleNamespace(
-        choices=[choice] if (content is not None or tool_call is not None or finish_reason is not None) else [],
+        choices=[choice]
+        if (content is not None or tool_call is not None or finish_reason is not None)
+        else [],
         usage=usage_obj,
         model=model,
     )
@@ -887,12 +872,8 @@ class TestCompleteStream:
                 },
                 model="gpt-4o-mini",
             ),
-            _make_stream_chunk(
-                tool_call={"index": 0, "arguments": '{"city": '}
-            ),
-            _make_stream_chunk(
-                tool_call={"index": 0, "arguments": '"NYC"}'}
-            ),
+            _make_stream_chunk(tool_call={"index": 0, "arguments": '{"city": '}),
+            _make_stream_chunk(tool_call={"index": 0, "arguments": '"NYC"}'}),
             _make_stream_chunk(finish_reason="tool_calls"),
             _make_stream_chunk(
                 usage={"prompt_tokens": 10, "completion_tokens": 20},
@@ -930,7 +911,10 @@ class TestCompleteStream:
         """The adapter MUST set ``stream_options.include_usage=True`` so the
         final chunk carries the authoritative usage tally — without it
         OpenAI omits the usage chunk and telemetry records 0 tokens."""
-        chunks_in = [_make_stream_chunk(content="hi"), _make_stream_chunk(finish_reason="stop")]
+        chunks_in = [
+            _make_stream_chunk(content="hi"),
+            _make_stream_chunk(finish_reason="stop"),
+        ]
         cls_mock, instance = _patched_streaming_openai(chunks_in)
 
         with patch("openai.AsyncOpenAI", cls_mock):
@@ -952,7 +936,10 @@ class TestCompleteStream:
     async def test_merges_caller_supplied_stream_options(self):
         """If the caller passed their own stream_options, the adapter must
         MERGE (not clobber) them with include_usage=True."""
-        chunks_in = [_make_stream_chunk(content="hi"), _make_stream_chunk(finish_reason="stop")]
+        chunks_in = [
+            _make_stream_chunk(content="hi"),
+            _make_stream_chunk(finish_reason="stop"),
+        ]
         cls_mock, instance = _patched_streaming_openai(chunks_in)
 
         with patch("openai.AsyncOpenAI", cls_mock):
@@ -1221,12 +1208,9 @@ class TestUnsupportedKwargWarn:
                     api_key="sk-test",
                 )
 
-        warn_msgs = [
-            r.getMessage() for r in caplog.records if r.levelname == "WARNING"
-        ]
+        warn_msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
         assert any(
-            "aws_region" in m and "dropping unsupported kwarg" in m
-            for m in warn_msgs
+            "aws_region" in m and "dropping unsupported kwarg" in m for m in warn_msgs
         ), f"Expected WARN about aws_region; got: {warn_msgs}"
 
     @pytest.mark.asyncio
@@ -1318,12 +1302,8 @@ class TestSharedHttpxClient:
         against it."""
         cls_mock = MagicMock(return_value=MagicMock())
         with patch("openai.AsyncOpenAI", cls_mock):
-            openai_native._build_client(
-                "openai/gpt-4o-mini", "sk-1", None
-            )
-            openai_native._build_client(
-                "openai/gpt-4o-mini", "sk-2", None
-            )
+            openai_native._build_client("openai/gpt-4o-mini", "sk-1", None)
+            openai_native._build_client("openai/gpt-4o-mini", "sk-2", None)
 
         assert cls_mock.call_count == 2
         first_http = cls_mock.call_args_list[0].kwargs["http_client"]
@@ -1354,12 +1334,8 @@ class TestSharedHttpxClient:
         ``AsyncOpenAI`` wrapper so the rotated key is honored."""
         cls_mock = MagicMock(side_effect=lambda **kw: MagicMock())
         with patch("openai.AsyncOpenAI", cls_mock):
-            openai_native._build_client(
-                "openai/gpt-4o-mini", "sk-A", None
-            )
-            openai_native._build_client(
-                "openai/gpt-4o-mini", "sk-B", None
-            )
+            openai_native._build_client("openai/gpt-4o-mini", "sk-A", None)
+            openai_native._build_client("openai/gpt-4o-mini", "sk-B", None)
 
         assert cls_mock.call_count == 2
         first_kwargs = cls_mock.call_args_list[0].kwargs
@@ -1597,12 +1573,12 @@ class TestOpenAiWantsResponsesApi:
     @pytest.mark.parametrize(
         "model,has_tools,expected",
         [
-            ("gpt-5.6-terra", True, True),        # reasoning + tools → Responses
-            ("gpt-5.6-terra", False, False),      # reasoning, no tools → chat
-            ("gpt-5.6-chat", True, False),        # chat variant → chat
-            ("o3-mini", True, True),              # o-series + tools → Responses
-            ("gpt-4o", True, False),              # non-reasoning → chat
-            ("openai/gpt-5.6-terra", True, True), # vendor-prefixed reasoning
+            ("gpt-5.6-terra", True, True),  # reasoning + tools → Responses
+            ("gpt-5.6-terra", False, False),  # reasoning, no tools → chat
+            ("gpt-5.6-chat", True, False),  # chat variant → chat
+            ("o3-mini", True, True),  # o-series + tools → Responses
+            ("gpt-4o", True, False),  # non-reasoning → chat
+            ("openai/gpt-5.6-terra", True, True),  # vendor-prefixed reasoning
         ],
     )
     def test_routing_table(self, model, has_tools, expected):
@@ -1610,16 +1586,13 @@ class TestOpenAiWantsResponsesApi:
         if has_tools:
             request_params["tools"] = self._TOOLS
         assert (
-            openai_native._openai_wants_responses_api(model, request_params)
-            is expected
+            openai_native._openai_wants_responses_api(model, request_params) is expected
         )
 
     def test_empty_tools_list_stays_on_chat(self):
         # An empty tools list is falsy — no 400 risk, stay on chat.completions.
         assert (
-            openai_native._openai_wants_responses_api(
-                "gpt-5.6-terra", {"tools": []}
-            )
+            openai_native._openai_wants_responses_api("gpt-5.6-terra", {"tools": []})
             is False
         )
 
@@ -1643,8 +1616,7 @@ class TestOpenAiWantsResponsesApi:
         if effort is not None:
             params["reasoning_effort"] = effort
         assert (
-            openai_native._openai_wants_responses_api("gpt-5.6-terra", params)
-            is True
+            openai_native._openai_wants_responses_api("gpt-5.6-terra", params) is True
         )
 
 
@@ -2055,9 +2027,7 @@ class TestAdaptResponsesResponse:
             output=[
                 {
                     "type": "message",
-                    "content": [
-                        {"type": "output_text", "text": '{"answer": 42}'}
-                    ],
+                    "content": [{"type": "output_text", "text": '{"answer": 42}'}],
                 }
             ]
         )
@@ -2167,9 +2137,7 @@ class TestAdaptResponsesFinishReason:
         with caplog.at_level(logging.DEBUG, logger=openai_native.logger.name):
             resp = openai_native._adapt_responses_response(raw)
         assert resp.choices[0].finish_reason == "stop"
-        assert any(
-            "non-completed status" in r.getMessage() for r in caplog.records
-        )
+        assert any("non-completed status" in r.getMessage() for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------

@@ -25,15 +25,14 @@ import mesh
 from _mcp_mesh.engine.decorator_registry import DecoratedFunction, DecoratorRegistry
 from mesh._a2a_consumer import (
     _ACTIVE_CLIENTS,
-    _atexit_close_active_clients,
     A2AClient,
     A2AStream,
+    _atexit_close_active_clients,
 )
 from mesh.decorators import (
     _MESH_CONSUMER_SELF_SENTINEL,
     _resolve_pending_consumer_self_tags,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fix 1 — per-loop httpx.AsyncClient caching
@@ -209,9 +208,7 @@ def _clean_tools():
     DecoratorRegistry._mesh_tools.update(snapshot)
 
 
-def _register_consumer_tool(
-    *, name: str, pending: bool, consumer_name: str
-) -> None:
+def _register_consumer_tool(*, name: str, pending: bool, consumer_name: str) -> None:
     """Helper: register a fake @mesh.a2a_consumer-shaped tool in the
     DecoratorRegistry. ``pending`` controls whether the resolution flag
     is set (True = waiting for @mesh.agent), ``consumer_name`` controls
@@ -268,9 +265,7 @@ def test_resolve_pending_silent_when_no_consumers_at_all(_clean_tools, caplog):
     with caplog.at_level(logging.WARNING, logger="mesh.decorators"):
         _resolve_pending_consumer_self_tags("agent-x")
 
-    assert not any(
-        "first @mesh.agent wins" in r.getMessage() for r in caplog.records
-    )
+    assert not any("first @mesh.agent wins" in r.getMessage() for r in caplog.records)
 
 
 def test_resolve_pending_does_substitute_when_pending(_clean_tools, caplog):
@@ -295,15 +290,10 @@ def test_resolve_pending_does_substitute_when_pending(_clean_tools, caplog):
     assert fn._mesh_a2a_consumer_metadata["consumer_name"] == "agent-1"
     assert fn._mesh_a2a_consumer_metadata["tags"] == ["agent-1"]
     assert fn._mesh_tool_metadata["tags"] == ["agent-1"]
-    assert (
-        DecoratorRegistry._mesh_tools["tool_pending"].metadata["tags"]
-        == ["agent-1"]
-    )
+    assert DecoratorRegistry._mesh_tools["tool_pending"].metadata["tags"] == ["agent-1"]
     assert fn._mesh_a2a_consumer_pending_self_tag is False
     assert fn._mesh_a2a_consumer_self_resolved is True
-    assert not any(
-        "first @mesh.agent wins" in r.getMessage() for r in caplog.records
-    )
+    assert not any("first @mesh.agent wins" in r.getMessage() for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------

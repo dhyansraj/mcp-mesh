@@ -29,9 +29,9 @@ class MeshPipeline:
         self.steps: list[PipelineStep] = []
         self.logger = logging.getLogger(f"{__name__}.{name}")
         self.context: dict[str, Any] = {}
-        self._last_context: dict[str, Any] = (
-            {}
-        )  # Store final context for graceful shutdown
+        self._last_context: dict[
+            str, Any
+        ] = {}  # Store final context for graceful shutdown
 
     def add_step(self, step: PipelineStep) -> None:
         """Add a step to the pipeline."""
@@ -73,7 +73,6 @@ class MeshPipeline:
                 self.logger.info(f"📋 Step {step_num}/{len(self.steps)}: {step.name}")
 
                 try:
-
                     # Execute the step with current context
                     step_result = await step.execute(self.context)
                     executed_steps += 1
@@ -167,7 +166,7 @@ class MeshPipeline:
 
         return overall_result
 
-    def get_step(self, name: str) -> Optional[PipelineStep]:
+    def get_step(self, name: str) -> PipelineStep | None:
         """Get a step by name."""
         for step in self.steps:
             if step.name == name:

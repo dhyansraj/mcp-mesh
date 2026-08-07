@@ -81,9 +81,7 @@ class TestMeshLlmResponseModel:
             filter={"capability": "document"},
             response_model=SmallModel,
         )
-        async def chat(
-            message: str, llm: mesh.MeshLlmAgent = None
-        ) -> mesh.Stream[str]:
+        async def chat(message: str, llm: mesh.MeshLlmAgent = None) -> mesh.Stream[str]:
             yield message
 
         llm_agents = DecoratorRegistry.get_mesh_llm_agents()

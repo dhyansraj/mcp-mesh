@@ -27,9 +27,9 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
-import mesh
 import pytest
 
+import mesh
 from _mcp_mesh.engine import settle
 from _mcp_mesh.engine.dependency_injector import DependencyInjector
 from _mcp_mesh.engine.settle import (
@@ -125,9 +125,7 @@ class TestSettleWait:
         assert elapsed >= 0.2  # actually waited toward the budget
 
     @pytest.mark.asyncio
-    async def test_settled_by_window_expiry_never_waits_again(
-        self, monkeypatch
-    ):
+    async def test_settled_by_window_expiry_never_waits_again(self, monkeypatch):
         """(c) Window expired → latch is permanent; calls never wait."""
         _set_budget(monkeypatch, "0.1")
         injector = DependencyInjector()
@@ -270,9 +268,7 @@ class TestSettleWait:
             _reset_strict_di_cache()
 
     @pytest.mark.asyncio
-    async def test_steady_state_never_touches_wait_primitives(
-        self, monkeypatch
-    ):
+    async def test_steady_state_never_touches_wait_primitives(self, monkeypatch):
         """(h) Once settled, the call path performs only the latch check —
         the per-dependency event primitives are never touched."""
         _set_budget(monkeypatch, "10")
@@ -284,11 +280,10 @@ class TestSettleWait:
         assert state.is_settled()
         baseline_wait_count = state.wait_count
 
-        with patch.object(
-            state, "_event_for", wraps=state._event_for
-        ) as event_spy, patch.object(
-            state, "wait_for", wraps=state.wait_for
-        ) as wait_spy:
+        with (
+            patch.object(state, "_event_for", wraps=state._event_for) as event_spy,
+            patch.object(state, "wait_for", wraps=state.wait_for) as wait_spy,
+        ):
             for _ in range(3):
                 await wrapper()
 
@@ -363,9 +358,7 @@ class TestSettleWait:
         assert get_settle_state().wait_count == 0
 
     @pytest.mark.asyncio
-    async def test_async_wait_is_loop_native_and_thread_woken(
-        self, monkeypatch
-    ):
+    async def test_async_wait_is_loop_native_and_thread_woken(self, monkeypatch):
         """Async graced waits use loop-native asyncio.Event mirrors set via
         call_soon_threadsafe — no executor is touched, and a resolution
         arriving on a FOREIGN thread (the real heartbeat shape) wakes the
@@ -376,9 +369,7 @@ class TestSettleWait:
         proxy = MagicMock(name="proxy")
 
         # Resolution fires from a plain thread, not the event loop.
-        timer = threading.Timer(
-            0.2, lambda: wrapper._mesh_update_dependency(0, proxy)
-        )
+        timer = threading.Timer(0.2, lambda: wrapper._mesh_update_dependency(0, proxy))
         timer.start()
 
         with patch.object(

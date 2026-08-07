@@ -291,6 +291,7 @@ class MeshLlmAgentInjector(BaseInjector):
         # validates shape, but if a caller hand-builds provider_data with
         # a non-mapping value here we coerce to {} rather than raising.
         from collections.abc import Mapping
+
         _raw_provider_kwargs = provider_data.get("kwargs")
         if _raw_provider_kwargs and not isinstance(_raw_provider_kwargs, Mapping):
             logger.warning(

@@ -272,10 +272,9 @@ class TestMaybeDispatchAsJob:
                 seen["with_job_async_epoch"] = claim_epoch
                 return await awaitable
 
-            with mock.patch(
-                "mcp_mesh_core.JobController", _FakeController, create=True
-            ), mock.patch(
-                "mcp_mesh_core.with_job_async", _passthrough, create=True
+            with (
+                mock.patch("mcp_mesh_core.JobController", _FakeController, create=True),
+                mock.patch("mcp_mesh_core.with_job_async", _passthrough, create=True),
             ):
                 await maybe_dispatch_as_job(fn, invoke, {"user": "alice"})
 
@@ -311,10 +310,9 @@ class TestMaybeDispatchAsJob:
                 seen["with_job_async_epoch"] = claim_epoch
                 return await awaitable
 
-            with mock.patch(
-                "mcp_mesh_core.JobController", _FakeController, create=True
-            ), mock.patch(
-                "mcp_mesh_core.with_job_async", _passthrough, create=True
+            with (
+                mock.patch("mcp_mesh_core.JobController", _FakeController, create=True),
+                mock.patch("mcp_mesh_core.with_job_async", _passthrough, create=True),
             ):
                 await maybe_dispatch_as_job(fn, invoke, {"user": "alice"})
 
@@ -348,6 +346,7 @@ class TestMaybeDispatchAsJob:
             return "ok"
 
         try:
+
             class _FakeController:
                 def __init__(self, *a, **kw):
                     pass
@@ -358,9 +357,7 @@ class TestMaybeDispatchAsJob:
             with mock.patch(
                 "mcp_mesh_core.JobController", _FakeController, create=True
             ):
-                with mock.patch(
-                    "mcp_mesh_core.with_job_async", _pass, create=True
-                ):
+                with mock.patch("mcp_mesh_core.with_job_async", _pass, create=True):
                     await maybe_dispatch_as_job(fn, invoke, {})
 
             assert observed["snap"] is not None
@@ -418,9 +415,7 @@ class TestMaybeDispatchAsJob:
             with mock.patch(
                 "mcp_mesh_core.JobController", _FakeController, create=True
             ):
-                with mock.patch(
-                    "mcp_mesh_core.with_job_async", _pass, create=True
-                ):
+                with mock.patch("mcp_mesh_core.with_job_async", _pass, create=True):
                     out = await maybe_dispatch_as_job(fn, invoke, {"user": "x"})
             assert out == {"answer": 42}
             assert completions == [{"answer": 42}], (
@@ -473,9 +468,7 @@ class TestMaybeDispatchAsJob:
             with mock.patch(
                 "mcp_mesh_core.JobController", _FakeController, create=True
             ):
-                with mock.patch(
-                    "mcp_mesh_core.with_job_async", _pass, create=True
-                ):
+                with mock.patch("mcp_mesh_core.with_job_async", _pass, create=True):
                     await maybe_dispatch_as_job(fn, invoke, {"user": "x"})
             assert completions == [{"explicit": True}], (
                 "no double-flush — only the explicit complete call should land"
@@ -545,9 +538,7 @@ class TestRetryOnDispatch:
             with mock.patch(
                 "mcp_mesh_core.JobController", _FakeController, create=True
             ):
-                with mock.patch(
-                    "mcp_mesh_core.with_job_async", _pass, create=True
-                ):
+                with mock.patch("mcp_mesh_core.with_job_async", _pass, create=True):
                     out = await maybe_dispatch_as_job(fn, invoke, {"user": "x"})
             # Exception suppressed → wrapper returned cleanly.
             assert out is None
@@ -556,9 +547,7 @@ class TestRetryOnDispatch:
             )
             assert "OSError" in release_calls[0]
             assert "connection refused" in release_calls[0]
-            assert fail_calls == [], (
-                "fail() must NOT be called when retry_on matches"
-            )
+            assert fail_calls == [], "fail() must NOT be called when retry_on matches"
         finally:
             TraceContext.set_propagated_headers({})
             fn._mesh_tool_metadata = {"task": True}
@@ -611,9 +600,7 @@ class TestRetryOnDispatch:
             with mock.patch(
                 "mcp_mesh_core.JobController", _FakeController, create=True
             ):
-                with mock.patch(
-                    "mcp_mesh_core.with_job_async", _pass, create=True
-                ):
+                with mock.patch("mcp_mesh_core.with_job_async", _pass, create=True):
                     with pytest.raises(ValueError, match="not transient"):
                         await maybe_dispatch_as_job(fn, invoke, {"user": "x"})
             assert release_calls == [], (
@@ -669,9 +656,7 @@ class TestRetryOnDispatch:
             with mock.patch(
                 "mcp_mesh_core.JobController", _FakeController, create=True
             ):
-                with mock.patch(
-                    "mcp_mesh_core.with_job_async", _pass, create=True
-                ):
+                with mock.patch("mcp_mesh_core.with_job_async", _pass, create=True):
                     out = await maybe_dispatch_as_job(fn, invoke, {"user": "x"})
             # Exception suppressed; fail() called as fallback.
             assert out is None
@@ -731,9 +716,7 @@ class TestRetryOnDispatch:
             with mock.patch(
                 "mcp_mesh_core.JobController", _FakeController, create=True
             ):
-                with mock.patch(
-                    "mcp_mesh_core.with_job_async", _pass, create=True
-                ):
+                with mock.patch("mcp_mesh_core.with_job_async", _pass, create=True):
                     with pytest.raises(OSError):
                         await maybe_dispatch_as_job(fn, invoke, {"user": "x"})
             # No retry_on → default behaviour: exception propagates,
@@ -896,26 +879,22 @@ class TestMeshJobSubmitter:
             total_deadline,
         ):
             captured.update(
-                dict(
-                    registry_url=registry_url,
-                    capability=capability,
-                    payload=payload,
-                    submitted_by=submitted_by,
-                    owner=owner,
-                    max_dur=max_dur,
-                    max_retries=max_retries,
-                    total_deadline=total_deadline,
-                )
+                {
+                    "registry_url": registry_url,
+                    "capability": capability,
+                    "payload": payload,
+                    "submitted_by": submitted_by,
+                    "owner": owner,
+                    "max_dur": max_dur,
+                    "max_retries": max_retries,
+                    "total_deadline": total_deadline,
+                }
             )
             return mock.sentinel.proxy
 
         with mock.patch("mcp_mesh_core.submit_job", fake_submit_job, create=True):
-            s = MeshJobSubmitter(
-                "generate_report", "consumer-1", "http://reg:9999"
-            )
-            proxy = await s.submit(
-                user_id="abc", sections=["a", "b"], max_duration=60
-            )
+            s = MeshJobSubmitter("generate_report", "consumer-1", "http://reg:9999")
+            proxy = await s.submit(user_id="abc", sections=["a", "b"], max_duration=60)
 
         assert proxy is mock.sentinel.proxy
         assert captured["capability"] == "generate_report"
@@ -953,14 +932,10 @@ class TestMeshJobSubmitter:
             attempts["n"] += 1
             if attempts["n"] < 3:
                 # Mirror the Rust BackendError::Network message shape.
-                raise RuntimeError(
-                    "backend error: network error: connection refused"
-                )
+                raise RuntimeError("backend error: network error: connection refused")
             return mock.sentinel.proxy
 
-        with mock.patch(
-            "mcp_mesh_core.submit_job", flaky_submit_job, create=True
-        ):
+        with mock.patch("mcp_mesh_core.submit_job", flaky_submit_job, create=True):
             s = MeshJobSubmitter("cap", "agent", "http://r")
             proxy = await s.submit()
 
@@ -1238,9 +1213,7 @@ class TestPythonClaimDispatcher:
         async def handler(**kw):
             pass
 
-        d = PythonClaimDispatcher(
-            "cap", "inst", "http://nowhere", handler
-        )
+        d = PythonClaimDispatcher("cap", "inst", "http://nowhere", handler)
 
         # Patch _claim_once to always return [] (empty list) so the loop
         # never dispatches. Stop after a brief moment.
@@ -1280,9 +1253,7 @@ class TestPythonClaimDispatcher:
             idx["i"] += 1
             return v
 
-        d = PythonClaimDispatcher(
-            "cap", "inst", "http://r", handler
-        )
+        d = PythonClaimDispatcher("cap", "inst", "http://r", handler)
         d._claim_once = fake_claim_once  # type: ignore[assignment]
 
         d.start()
@@ -1569,9 +1540,7 @@ class TestDiscoverTaskHandlers:
         # Patch DecoratorRegistry.get_mesh_tools to return only non-task tools.
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
 
-        with mock.patch.object(
-            DecoratorRegistry, "get_mesh_tools", return_value={}
-        ):
+        with mock.patch.object(DecoratorRegistry, "get_mesh_tools", return_value={}):
             ds = discover_task_handlers("inst", "http://r")
         assert ds == []
 
@@ -1597,9 +1566,7 @@ class TestDiscoverTaskHandlers:
                 {"capability": "regular", "task": False},
             ),
         }
-        with mock.patch.object(
-            DecoratorRegistry, "get_mesh_tools", return_value=tools
-        ):
+        with mock.patch.object(DecoratorRegistry, "get_mesh_tools", return_value=tools):
             ds = discover_task_handlers("inst-id", "http://r")
         # Only the task=True tool yields a dispatcher.
         assert len(ds) == 1
@@ -1628,9 +1595,7 @@ class TestDiscoverTaskHandlers:
 
 class TestConsumerSideMeshJobInjection:
     @pytest.mark.asyncio
-    async def test_full_di_path_used_when_only_meshjob_param_present(
-        self, monkeypatch
-    ):
+    async def test_full_di_path_used_when_only_meshjob_param_present(self, monkeypatch):
         """A function with no McpMeshTool params but a MeshJob param MUST
         route through the FULL DI path so ``_prepare_injection_kwargs``
         runs and the MeshJobSubmitter auto-injection block fires.
@@ -1658,9 +1623,7 @@ class TestConsumerSideMeshJobInjection:
         assert result["submitter"].registry_url == "http://reg:9999"
 
     @pytest.mark.asyncio
-    async def test_explicit_meshjob_arg_overrides_auto_injection(
-        self, monkeypatch
-    ):
+    async def test_explicit_meshjob_arg_overrides_auto_injection(self, monkeypatch):
         """Test contract: passing an explicit MeshJob in kwargs (e.g. a
         fake from a test) preserves it instead of overwriting with the
         framework's submitter."""
@@ -1803,12 +1766,11 @@ class TestRetryOnExcludedFromHeartbeatKwargs:
             "dependencies",
             "retry_on",
         }
-        kwargs_data = {
-            k: v for k, v in metadata.items() if k not in standard_fields
-        }
+        kwargs_data = {k: v for k, v in metadata.items() if k not in standard_fields}
         assert "retry_on" not in kwargs_data
         # And the survivor is JSON-safe.
         import json as _json
+
         _json.dumps(kwargs_data)
 
     def test_decorator_stamps_retry_on_as_class_tuple(self):

@@ -8,6 +8,7 @@ concurrent async requests with different parameters.
 This module wraps the shared state in contextvars.ContextVar so each async
 context (asyncio.Task, contextvars.copy_context, etc.) sees its own value.
 """
+
 from __future__ import annotations
 
 import contextvars
@@ -16,14 +17,10 @@ from typing import Any
 # Per-async-context output-schema state. Set by apply_structured_output (and
 # any other writer such as prepare_request); read by format_system_prompt.
 _current_output_schema: contextvars.ContextVar[dict[str, Any] | None] = (
-    contextvars.ContextVar(
-        "mesh_handler_current_output_schema", default=None
-    )
+    contextvars.ContextVar("mesh_handler_current_output_schema", default=None)
 )
-_current_output_type_name: contextvars.ContextVar[str | None] = (
-    contextvars.ContextVar(
-        "mesh_handler_current_output_type_name", default=None
-    )
+_current_output_type_name: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "mesh_handler_current_output_type_name", default=None
 )
 
 

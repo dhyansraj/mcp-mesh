@@ -7,9 +7,10 @@ Tests context parameter detection for Phase 2 (TDD approach).
 from typing import Optional
 
 import pytest
+from pydantic import Field
+
 from _mcp_mesh.engine.signature_analyzer import get_context_parameter_name
 from mesh import MeshContextModel, MeshLlmAgent
-from pydantic import Field
 
 
 class ChatContext(MeshContextModel):
@@ -180,7 +181,7 @@ class TestTypeHintDetection:
         """Test: Optional[MeshContextModel] detected."""
 
         def analyze(
-            query: str, ctx: Optional[AnalysisContext] = None, llm: MeshLlmAgent = None
+            query: str, ctx: AnalysisContext | None = None, llm: MeshLlmAgent = None
         ):
             pass
 

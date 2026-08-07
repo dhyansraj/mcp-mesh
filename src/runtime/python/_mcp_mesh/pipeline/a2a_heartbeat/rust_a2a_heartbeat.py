@@ -47,7 +47,9 @@ def _get_rust_core():
     return _rust_core
 
 
-def _build_a2a_agent_spec(context: dict[str, Any], service_id: Optional[str] = None) -> Any:
+def _build_a2a_agent_spec(
+    context: dict[str, Any], service_id: str | None = None
+) -> Any:
     """
     Build AgentSpec from A2A service context.
 
@@ -168,27 +170,27 @@ def _build_a2a_agent_spec(context: dict[str, Any], service_id: Optional[str] = N
 
     surfaces_json = json.dumps(a2a_surfaces) if a2a_surfaces else None
 
-    spec_kwargs: dict[str, Any] = dict(
-        name=base_name,
-        registry_url=registry_url,
-        version=version,
-        description="",
-        http_port=http_port,
-        http_host=http_host,
-        namespace=namespace,
-        agent_type="a2a",
-        tools=tools if tools else None,
-        llm_agents=None,
-        heartbeat_interval=heartbeat_interval,
-        agent_id=service_id,
+    spec_kwargs: dict[str, Any] = {
+        "name": base_name,
+        "registry_url": registry_url,
+        "version": version,
+        "description": "",
+        "http_port": http_port,
+        "http_host": http_host,
+        "namespace": namespace,
+        "agent_type": "a2a",
+        "tools": tools if tools else None,
+        "llm_agents": None,
+        "heartbeat_interval": heartbeat_interval,
+        "agent_id": service_id,
         # Issue #972: this pipeline only fires for agents bootstrapped via
         # the A2A surface path (no @mesh.agent / @mesh.tool decorators), so
         # producer is true iff we have at least one surface to publish.
         # Consumer is always false here — consumer-side bridges live on
         # @mesh.tool wrappers that ship through the mcp_heartbeat path.
-        a2a_producer=bool(a2a_surfaces),
-        a2a_consumer=False,
-    )
+        "a2a_producer": bool(a2a_surfaces),
+        "a2a_consumer": False,
+    }
     if surfaces_json is not None:
         spec_kwargs["surfaces"] = surfaces_json
 
@@ -253,9 +255,7 @@ async def _handle_a2a_mesh_event(event: Any, context: dict[str, Any]) -> None:
         )
 
     elif event_type == "llm_tools_updated":
-        logger.debug(
-            f"LLM tools update for A2A service (ignored): {event.function_id}"
-        )
+        logger.debug(f"LLM tools update for A2A service (ignored): {event.function_id}")
 
     elif event_type == "health_check_due":
         logger.debug("Health check due for A2A service (not implemented yet)")
@@ -272,12 +272,12 @@ async def _handle_a2a_mesh_event(event: Any, context: dict[str, Any]) -> None:
 
 async def _handle_a2a_dependency_change(
     capability: str,
-    endpoint: Optional[str],
-    function_name: Optional[str],
-    agent_id: Optional[str],
+    endpoint: str | None,
+    function_name: str | None,
+    agent_id: str | None,
     available: bool,
     context: dict[str, Any],
-    producer_kwargs: Optional[str] = None,
+    producer_kwargs: str | None = None,
 ) -> None:
     """
     Handle dependency availability change for A2A services.
@@ -359,9 +359,7 @@ async def _handle_a2a_dependency_change(
                 wrapper_func = mesh_tools.get(function_name)
 
                 if wrapper_func:
-                    proxy = SelfDependencyProxy(
-                        wrapper_func.function, function_name
-                    )
+                    proxy = SelfDependencyProxy(wrapper_func.function, function_name)
                     logger.debug(
                         f"Created SelfDependencyProxy for A2A surface '{func_id}' "
                         f"dependency '{capability}'"

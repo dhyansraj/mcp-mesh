@@ -503,9 +503,9 @@ async def test_jobs_helper_does_not_clobber_a_user_tool_of_the_same_name():
         "the contested helper must not be registered on the FastMCP server — "
         "that is what makes the user's tool unreachable"
     )
-    assert {"__mesh_job_result", "__mesh_job_cancel"} <= set(
-        registered_on_fastmcp
-    ), "the other two helpers are uncontested and must still register"
+    assert {"__mesh_job_result", "__mesh_job_cancel"} <= set(registered_on_fastmcp), (
+        "the other two helpers are uncontested and must still register"
+    )
 
     # The user's tool still owns the name in the heartbeat catalog.
     surviving = DecoratorRegistry.get_mesh_tools()["__mesh_job_status"]

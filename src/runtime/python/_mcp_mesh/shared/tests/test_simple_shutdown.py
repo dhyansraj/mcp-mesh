@@ -71,9 +71,7 @@ class TestRegisterUvicornServer:
     def test_module_level_function_delegates_to_global_coordinator(self):
         # The module-level helper just forwards to the global singleton.
         mock_server = SimpleNamespace(should_exit=False)
-        previous = list(
-            simple_shutdown._simple_shutdown_coordinator._uvicorn_servers
-        )
+        previous = list(simple_shutdown._simple_shutdown_coordinator._uvicorn_servers)
         try:
             simple_shutdown.register_uvicorn_server(mock_server)
             assert (
@@ -106,9 +104,7 @@ class TestSignalHandlerRequestsUvicornShutdown:
         assert mock_server.should_exit is True
         assert coordinator.is_shutdown_requested() is True
 
-    def test_handler_also_handles_sigint(
-        self, coordinator, restore_signal_handlers
-    ):
+    def test_handler_also_handles_sigint(self, coordinator, restore_signal_handlers):
         mock_server = SimpleNamespace(should_exit=False)
         coordinator.register_uvicorn_server(mock_server)
         coordinator.install_signal_handlers()

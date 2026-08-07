@@ -112,9 +112,9 @@ def _build_httpx_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
         timeout=httpx.Timeout(
             connect=10.0,  # connection establishment
-            read=600.0,    # body read — LLM responses can be slow
-            write=30.0,    # request body write
-            pool=5.0,      # waiting for free connection from pool
+            read=600.0,  # body read — LLM responses can be slow
+            write=30.0,  # request body write
+            pool=5.0,  # waiting for free connection from pool
         ),
         limits=httpx.Limits(
             max_keepalive_connections=20,
@@ -314,7 +314,9 @@ class _StreamToolCallDelta:
         # Subsequent argument fragments carry id=None and type=None — match
         # that pattern so the merger's "set if non-None" logic works
         # correctly.
-        self.type = type if type is not None else ("function" if id is not None else None)
+        self.type = (
+            type if type is not None else ("function" if id is not None else None)
+        )
         self.function = _StreamFunctionDelta(name=name, arguments=arguments)
 
 
@@ -353,7 +355,7 @@ def _strip_prefix(model: str) -> str:
     ``openai/gpt-4o-mini`` → ``gpt-4o-mini``
     """
     if model.startswith(_OPENAI_PREFIX):
-        return model[len(_OPENAI_PREFIX):]
+        return model[len(_OPENAI_PREFIX) :]
     return model
 
 
@@ -405,44 +407,48 @@ def _build_client(
 # Anthropic, which lacks a native "none" semantics and requires us to
 # translate "auto"/"any"/"none" + the {"type": "function", ...} dict shape;
 # see anthropic_native._build_create_kwargs for that mapping).
-_OPENAI_PASSTHROUGH_KWARGS = frozenset({
-    "messages",
-    "tools",
-    "tool_choice",
-    "max_tokens",
-    "max_completion_tokens",
-    "temperature",
-    "top_p",
-    "n",
-    "stop",
-    "presence_penalty",
-    "frequency_penalty",
-    "logit_bias",
-    "user",
-    "seed",
-    "response_format",
-    "logprobs",
-    "top_logprobs",
-    "parallel_tool_calls",
-    "extra_headers",
-    "extra_query",
-    "extra_body",
-    "timeout",
-    # o1/o3 reasoning models:
-    "reasoning_effort",
-    # Streaming options (the adapter sets include_usage itself but a
-    # caller-provided stream_options is also forwarded after merge):
-    "stream_options",
-})
+_OPENAI_PASSTHROUGH_KWARGS = frozenset(
+    {
+        "messages",
+        "tools",
+        "tool_choice",
+        "max_tokens",
+        "max_completion_tokens",
+        "temperature",
+        "top_p",
+        "n",
+        "stop",
+        "presence_penalty",
+        "frequency_penalty",
+        "logit_bias",
+        "user",
+        "seed",
+        "response_format",
+        "logprobs",
+        "top_logprobs",
+        "parallel_tool_calls",
+        "extra_headers",
+        "extra_query",
+        "extra_body",
+        "timeout",
+        # o1/o3 reasoning models:
+        "reasoning_effort",
+        # Streaming options (the adapter sets include_usage itself but a
+        # caller-provided stream_options is also forwarded after merge):
+        "stream_options",
+    }
+)
 
 # Keys explicitly handled (consumed or routed) inside this adapter — the
 # WARN filter must not flag these as "dropped".
-_OPENAI_HANDLED_KWARGS = frozenset({
-    "model",
-    "api_key",
-    "base_url",
-    "stream",
-})
+_OPENAI_HANDLED_KWARGS = frozenset(
+    {
+        "model",
+        "api_key",
+        "base_url",
+        "stream",
+    }
+)
 
 
 def _build_create_kwargs(
@@ -576,33 +582,37 @@ def _openai_wants_responses_api(model: str, request_params: dict[str, Any]) -> b
 
 # Chat-completions kwargs the Responses builder consumes/translates itself —
 # the leftover-kwarg WARN must not flag these as "dropped".
-_OPENAI_RESPONSES_HANDLED_KWARGS = frozenset({
-    "messages",
-    "tools",
-    "tool_choice",
-    "reasoning_effort",
-    "response_format",
-    "max_completion_tokens",
-    "max_tokens",
-    "temperature",
-    "top_p",
-    "model",
-    "api_key",
-    "base_url",
-    "stream",
-    "stream_options",
-})
+_OPENAI_RESPONSES_HANDLED_KWARGS = frozenset(
+    {
+        "messages",
+        "tools",
+        "tool_choice",
+        "reasoning_effort",
+        "response_format",
+        "max_completion_tokens",
+        "max_tokens",
+        "temperature",
+        "top_p",
+        "model",
+        "api_key",
+        "base_url",
+        "stream",
+        "stream_options",
+    }
+)
 
 # Kwargs forwarded verbatim to responses.create (shapes are identical on both
 # endpoints).
-_OPENAI_RESPONSES_PASSTHROUGH_KWARGS = frozenset({
-    "parallel_tool_calls",
-    "user",
-    "metadata",
-    "extra_headers",
-    "extra_query",
-    "extra_body",
-})
+_OPENAI_RESPONSES_PASSTHROUGH_KWARGS = frozenset(
+    {
+        "parallel_tool_calls",
+        "user",
+        "metadata",
+        "extra_headers",
+        "extra_query",
+        "extra_body",
+    }
+)
 
 
 def _stringify_tool_output(content: Any) -> str:
@@ -626,7 +636,10 @@ def _translate_response_format_to_text(response_format: Any) -> dict[str, Any]:
     shapes (``{type:json_object}``, ``{type:text}``) pass through under
     ``format`` unchanged.
     """
-    if isinstance(response_format, dict) and response_format.get("type") == "json_schema":
+    if (
+        isinstance(response_format, dict)
+        and response_format.get("type") == "json_schema"
+    ):
         js = response_format.get("json_schema") or {}
         fmt: dict[str, Any] = {"type": "json_schema"}
         if js.get("name") is not None:
@@ -859,36 +872,44 @@ def _build_responses_kwargs(
             if isinstance(content, str):
                 instructions_parts.append(content)
             else:
-                input_items.append({
-                    "role": "system",
-                    "content": _translate_message_content(content, "system"),
-                })
+                input_items.append(
+                    {
+                        "role": "system",
+                        "content": _translate_message_content(content, "system"),
+                    }
+                )
             continue
         if role == "assistant":
             # A text turn and tool calls can co-occur — emit both.
             if content:
-                input_items.append({
-                    "role": "assistant",
-                    "content": _translate_message_content(content, "assistant"),
-                })
+                input_items.append(
+                    {
+                        "role": "assistant",
+                        "content": _translate_message_content(content, "assistant"),
+                    }
+                )
             for tc in msg.get("tool_calls") or []:
                 fn = tc.get("function") or {}
-                input_items.append({
-                    "type": "function_call",
-                    # chat ``tool_call.id`` → Responses ``call_id`` (exact).
-                    "call_id": tc.get("id"),
-                    "name": fn.get("name"),
-                    # Responses expects a string; coerce an explicit None → "".
-                    "arguments": fn.get("arguments") or "",
-                })
+                input_items.append(
+                    {
+                        "type": "function_call",
+                        # chat ``tool_call.id`` → Responses ``call_id`` (exact).
+                        "call_id": tc.get("id"),
+                        "name": fn.get("name"),
+                        # Responses expects a string; coerce an explicit None → "".
+                        "arguments": fn.get("arguments") or "",
+                    }
+                )
             continue
         if role == "tool":
-            input_items.append({
-                "type": "function_call_output",
-                # chat ``tool_call_id`` → Responses ``call_id`` (exact).
-                "call_id": msg.get("tool_call_id"),
-                "output": _stringify_tool_output(content),
-            })
+            input_items.append(
+                {
+                    "type": "function_call_output",
+                    # chat ``tool_call_id`` → Responses ``call_id`` (exact).
+                    "call_id": msg.get("tool_call_id"),
+                    "output": _stringify_tool_output(content),
+                }
+            )
             continue
         # user / any other role → passthrough input item.
         input_items.append(
@@ -906,12 +927,14 @@ def _build_responses_kwargs(
         for t in tools:
             if isinstance(t, dict) and t.get("type") == "function" and "function" in t:
                 fn = t["function"] or {}
-                flat_tools.append({
-                    "type": "function",
-                    "name": fn.get("name"),
-                    "description": fn.get("description"),
-                    "parameters": fn.get("parameters"),
-                })
+                flat_tools.append(
+                    {
+                        "type": "function",
+                        "name": fn.get("name"),
+                        "description": fn.get("description"),
+                        "parameters": fn.get("parameters"),
+                    }
+                )
             else:
                 flat_tools.append(t)
         responses_kwargs["tools"] = flat_tools
@@ -982,11 +1005,13 @@ def _build_responses_kwargs(
 # Semantic events that carry the finished ``Response`` — the only place the
 # Responses stream reports usage (there is no incremental usage, unlike
 # Anthropic's cumulative ``message_delta``).
-_RESPONSES_TERMINAL_EVENTS = frozenset({
-    "response.completed",
-    "response.incomplete",
-    "response.failed",
-})
+_RESPONSES_TERMINAL_EVENTS = frozenset(
+    {
+        "response.completed",
+        "response.incomplete",
+        "response.failed",
+    }
+)
 
 
 def _rget(obj: Any, key: str, default: Any = None) -> Any:
@@ -1302,7 +1327,9 @@ def _adapt_chunk(raw: Any) -> _StreamChunk:
                             type=getattr(tc, "type", None),
                             name=getattr(fn, "name", None) if fn is not None else None,
                             arguments=(
-                                getattr(fn, "arguments", None) if fn is not None else None
+                                getattr(fn, "arguments", None)
+                                if fn is not None
+                                else None
                             ),
                         )
                     )
@@ -1444,9 +1471,7 @@ async def complete_stream(
                 if etype == "response.output_text.delta":
                     text = _rget(event, "delta", "") or ""
                     if text:
-                        yield _StreamChunk(
-                            delta=_Delta(content=text), model=last_model
-                        )
+                        yield _StreamChunk(delta=_Delta(content=text), model=last_model)
                     continue
 
                 if etype == "response.output_item.added":

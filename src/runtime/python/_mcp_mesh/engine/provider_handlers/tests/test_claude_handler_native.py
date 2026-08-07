@@ -38,7 +38,6 @@ from _mcp_mesh.engine.provider_handlers.claude_handler import (
     ClaudeHandler,
 )
 
-
 # ---------------------------------------------------------------------------
 # has_native() gating
 # ---------------------------------------------------------------------------
@@ -243,9 +242,7 @@ class TestBaseHandlerDefault:
     @pytest.mark.asyncio
     async def test_complete_default_raises(self):
         with pytest.raises(NotImplementedError):
-            await _BareHandler().complete(
-                {"messages": []}, model="x/y", api_key=None
-            )
+            await _BareHandler().complete({"messages": []}, model="x/y", api_key=None)
 
     @pytest.mark.asyncio
     async def test_complete_stream_default_raises(self):
@@ -299,10 +296,7 @@ class TestApplyStructuredOutputNative:
         }
         result = handler.apply_structured_output(_trip_schema(), "Trip", params)
 
-        assert (
-            result["_mesh_synthetic_format_tool_name"]
-            == SYNTHETIC_FORMAT_TOOL_NAME
-        )
+        assert result["_mesh_synthetic_format_tool_name"] == SYNTHETIC_FORMAT_TOOL_NAME
         synth = result["_mesh_synthetic_format_tool"]
         assert synth["type"] == "function"
         assert synth["function"]["name"] == SYNTHETIC_FORMAT_TOOL_NAME
@@ -324,9 +318,7 @@ class TestApplyStructuredOutputNative:
         assert "_mesh_hint_mode" not in result
         assert "_mesh_hint_schema" not in result
 
-    def test_appends_must_call_tool_instruction_to_system_message(
-        self, _native_on
-    ):
+    def test_appends_must_call_tool_instruction_to_system_message(self, _native_on):
         handler = ClaudeHandler()
         original = "You are a travel planner."
         params: dict = {
@@ -451,9 +443,9 @@ class TestApplyStructuredOutputNative:
         for params in (params1, params2):
             blocks = params["messages"][0]["content"]
             instr_blocks = [
-                b for b in blocks
-                if isinstance(b, dict)
-                and "__mesh_format_response" in b.get("text", "")
+                b
+                for b in blocks
+                if isinstance(b, dict) and "__mesh_format_response" in b.get("text", "")
             ]
             assert len(instr_blocks) == 1, (
                 f"expected 1 instruction block; got {len(instr_blocks)}"
@@ -494,16 +486,13 @@ class TestApplyStructuredOutputNative:
         # system message.
         new_messages = params["messages"]
         assert id(new_messages) != original_messages_id, (
-            "model_params['messages'] should point to a NEW list, not the "
-            "caller's"
+            "model_params['messages'] should point to a NEW list, not the caller's"
         )
         assert "__mesh_format_response" in new_messages[0]["content"]
         # User message should pass through by reference (not duplicated).
         assert new_messages[1] is original_user
 
-    def test_does_not_mutate_caller_messages_list_when_no_system(
-        self, _native_on
-    ):
+    def test_does_not_mutate_caller_messages_list_when_no_system(self, _native_on):
         """Round-2 review (W#3): the no-system-message branch previously did
         ``messages.insert(0, synthesized)``, mutating the caller's list. With
         the round-2 fix, the caller's list must stay untouched and the
@@ -554,9 +543,7 @@ class TestApplyStructuredOutputStreamingRouting:
         default) MUST take the HINT path — synthetic-tool injection emits a
         single discrete tool_use block, defeating the point of streaming."""
         handler = ClaudeHandler()
-        params: dict = {
-            "messages": [{"role": "system", "content": "You are helpful."}]
-        }
+        params: dict = {"messages": [{"role": "system", "content": "You are helpful."}]}
         result = handler.apply_structured_output(
             _trip_schema(), "Trip", params, streaming=True
         )
@@ -576,15 +563,10 @@ class TestApplyStructuredOutputStreamingRouting:
         synthetic-tool injection. This guards against the routing accidentally
         flipping the buffered path."""
         handler = ClaudeHandler()
-        params: dict = {
-            "messages": [{"role": "system", "content": "You are helpful."}]
-        }
+        params: dict = {"messages": [{"role": "system", "content": "You are helpful."}]}
         result = handler.apply_structured_output(_trip_schema(), "Trip", params)
 
-        assert (
-            result["_mesh_synthetic_format_tool_name"]
-            == SYNTHETIC_FORMAT_TOOL_NAME
-        )
+        assert result["_mesh_synthetic_format_tool_name"] == SYNTHETIC_FORMAT_TOOL_NAME
         assert "_mesh_synthetic_format_tool" in result
         # HINT flags MUST NOT be present (those are streaming/LiteLLM-only).
         assert "_mesh_hint_mode" not in result
@@ -593,17 +575,12 @@ class TestApplyStructuredOutputStreamingRouting:
         """Calling with explicit ``streaming=False`` is identical to omitting
         the kwarg — the default preserves backwards compatibility."""
         handler = ClaudeHandler()
-        params: dict = {
-            "messages": [{"role": "system", "content": "You are helpful."}]
-        }
+        params: dict = {"messages": [{"role": "system", "content": "You are helpful."}]}
         result = handler.apply_structured_output(
             _trip_schema(), "Trip", params, streaming=False
         )
 
-        assert (
-            result["_mesh_synthetic_format_tool_name"]
-            == SYNTHETIC_FORMAT_TOOL_NAME
-        )
+        assert result["_mesh_synthetic_format_tool_name"] == SYNTHETIC_FORMAT_TOOL_NAME
 
     def test_streaming_hint_injects_schema_into_system_message(self, _native_on):
         """The streaming HINT path must inject the OUTPUT FORMAT block into
@@ -611,12 +588,8 @@ class TestApplyStructuredOutputStreamingRouting:
         on every request because the model never saw the schema."""
         handler = ClaudeHandler()
         original = "You are a travel planner."
-        params: dict = {
-            "messages": [{"role": "system", "content": original}]
-        }
-        handler.apply_structured_output(
-            _trip_schema(), "Trip", params, streaming=True
-        )
+        params: dict = {"messages": [{"role": "system", "content": original}]}
+        handler.apply_structured_output(_trip_schema(), "Trip", params, streaming=True)
 
         system_content = params["messages"][0]["content"]
         assert system_content.startswith(original)
@@ -645,9 +618,7 @@ class TestApplyStructuredOutputStreamingRouting:
             ]
         }
         # Must not raise TypeError on the list-content path.
-        handler.apply_structured_output(
-            _trip_schema(), "Trip", params, streaming=True
-        )
+        handler.apply_structured_output(_trip_schema(), "Trip", params, streaming=True)
 
         blocks = params["messages"][0]["content"]
         assert isinstance(blocks, list)
@@ -673,9 +644,7 @@ class TestApplyStructuredOutputLiteLLMUnchanged:
 
     def test_sets_hint_mode_flags_not_synthetic(self, _native_off):
         handler = ClaudeHandler()
-        params: dict = {
-            "messages": [{"role": "system", "content": "You are helpful."}]
-        }
+        params: dict = {"messages": [{"role": "system", "content": "You are helpful."}]}
         result = handler.apply_structured_output(_trip_schema(), "Trip", params)
 
         assert result["_mesh_hint_mode"] is True
@@ -693,9 +662,7 @@ class TestApplyStructuredOutputLiteLLMUnchanged:
         """
         handler = ClaudeHandler()
         monkeypatch.setenv("MCP_MESH_CLAUDE_FORCE_RESPONSE_FORMAT", "true")
-        params: dict = {
-            "messages": [{"role": "system", "content": "You are helpful."}]
-        }
+        params: dict = {"messages": [{"role": "system", "content": "You are helpful."}]}
         result = handler.apply_structured_output(_trip_schema(), "Trip", params)
 
         assert "response_format" in result
@@ -712,16 +679,11 @@ class TestApplyStructuredOutputLiteLLMUnchanged:
         """
         handler = ClaudeHandler()
         monkeypatch.setenv("MCP_MESH_CLAUDE_FORCE_RESPONSE_FORMAT", "true")
-        params: dict = {
-            "messages": [{"role": "system", "content": "S"}]
-        }
+        params: dict = {"messages": [{"role": "system", "content": "S"}]}
         result = handler.apply_structured_output(_trip_schema(), "Trip", params)
 
         assert "response_format" not in result
-        assert (
-            result["_mesh_synthetic_format_tool_name"]
-            == SYNTHETIC_FORMAT_TOOL_NAME
-        )
+        assert result["_mesh_synthetic_format_tool_name"] == SYNTHETIC_FORMAT_TOOL_NAME
 
 
 # ---------------------------------------------------------------------------
@@ -792,9 +754,7 @@ class TestDispatchStatusLog:
         assert "disabled" in status_records[0].message
         assert "MCP_MESH_NATIVE_LLM=0" in status_records[0].message
 
-    def test_logs_disabled_when_sdk_missing(
-        self, caplog, _reset_dispatch_status_log
-    ):
+    def test_logs_disabled_when_sdk_missing(self, caplog, _reset_dispatch_status_log):
         handler = ClaudeHandler()
         assert "MCP_MESH_NATIVE_LLM" not in os.environ
 
@@ -819,9 +779,7 @@ class TestDispatchStatusLog:
         assert "anthropic SDK not installed" in status_records[0].message
         assert "mcp-mesh[anthropic]" in status_records[0].message
 
-    def test_log_fires_only_once_across_calls(
-        self, caplog, _reset_dispatch_status_log
-    ):
+    def test_log_fires_only_once_across_calls(self, caplog, _reset_dispatch_status_log):
         """Second call to has_native() must NOT re-emit the dispatch-status log
         — the one-time guard is the whole point of the helper."""
         handler = ClaudeHandler()

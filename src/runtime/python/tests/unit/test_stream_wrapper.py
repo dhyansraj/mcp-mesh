@@ -22,8 +22,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from collections.abc import AsyncIterator
 from collections.abc import AsyncIterator as AbcAsyncIterator
-from typing import AsyncIterator, Optional
+from typing import Optional
 from unittest.mock import patch
 
 import pytest
@@ -39,7 +40,6 @@ from _mcp_mesh.engine.dependency_injector import (
     _make_stream_wrapper,
     _resolve_report_progress_convention,
 )
-
 
 # ---------------------------------------------------------------------------
 # Mock recorder for ctx.report_progress
@@ -138,7 +138,7 @@ class TestBuildStreamSignature:
         sig = _build_stream_signature(chat)
         ctx_param = sig.parameters[_MESH_PROGRESS_CTX_PARAM]
         # Annotation is ``Optional[Context]``.
-        assert ctx_param.annotation == Optional[Context]
+        assert ctx_param.annotation == Optional[Context]  # noqa: UP045
 
     def test_user_ctx_param_passes_through_unchanged(self):
         """A user function that declares its own ``ctx`` parameter (a common
@@ -332,9 +332,7 @@ class TestStreamWrapperCancellation:
 
         ctx = _SlowCtx()
 
-        task = asyncio.create_task(
-            wrapper("p", **{_MESH_PROGRESS_CTX_PARAM: ctx})
-        )
+        task = asyncio.create_task(wrapper("p", **{_MESH_PROGRESS_CTX_PARAM: ctx}))
         await asyncio.sleep(0.05)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):

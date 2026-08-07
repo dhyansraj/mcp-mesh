@@ -12,8 +12,9 @@ from typing import Any, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from _mcp_mesh.engine.llm_config import LLMConfig
 from pydantic import BaseModel, Field, ValidationError
+
+from _mcp_mesh.engine.llm_config import LLMConfig
 
 # Helper to get fixture paths - tests run from various directories
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
@@ -59,10 +60,11 @@ def make_tool_call_mock(id: str, name: str, arguments: str):
     return tool_call
 
 
-def make_test_config(provider: Optional[dict] = None,
-    model: Optional[str] = None,
+def make_test_config(
+    provider: dict | None = None,
+    model: str | None = None,
     max_iterations: int = 10,
-    system_prompt: Optional[str] = None,
+    system_prompt: str | None = None,
 ) -> LLMConfig:
     """Create LLMConfig for testing (mesh-delegated only).
 
@@ -71,7 +73,9 @@ def make_test_config(provider: Optional[dict] = None,
     capability/tag pair that matches what the integration suites use.
     """
     return LLMConfig(
-        provider=provider if provider is not None else {"capability": "llm", "tags": ["claude"]},
+        provider=provider
+        if provider is not None
+        else {"capability": "llm", "tags": ["claude"]},
         model=model,
         max_iterations=max_iterations,
         system_prompt=system_prompt,
@@ -86,7 +90,8 @@ class TestMeshLlmAgentInitialization:
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
         agent = MeshLlmAgent(
-            config=make_test_config(model="claude-3-5-sonnet-20241022",
+            config=make_test_config(
+                model="claude-3-5-sonnet-20241022",
                 max_iterations=10,
                 system_prompt="You are a helpful assistant.",
             ),
@@ -113,7 +118,8 @@ class TestMeshLlmAgentInitialization:
         tools = [mock_tool_proxy]
 
         agent = MeshLlmAgent(
-            config=make_test_config(model="claude-3-5-sonnet-20241022",
+            config=make_test_config(
+                model="claude-3-5-sonnet-20241022",
                 max_iterations=10,
             ),
             filtered_tools=tools,
@@ -128,7 +134,8 @@ class TestMeshLlmAgentInitialization:
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
         agent = MeshLlmAgent(
-            config=make_test_config(model="claude-3-5-sonnet-20241022",
+            config=make_test_config(
+                model="claude-3-5-sonnet-20241022",
                 max_iterations=10,
                 system_prompt="You are a helpful assistant.",
             ),
@@ -143,7 +150,8 @@ class TestMeshLlmAgentInitialization:
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
         agent = MeshLlmAgent(
-            config=make_test_config(model="claude-3-5-sonnet-20241022",
+            config=make_test_config(
+                model="claude-3-5-sonnet-20241022",
                 max_iterations=10,
                 system_prompt="Original prompt",
             ),
@@ -174,7 +182,7 @@ class AssistantContext(MeshContextModel):
     """Test assistant context model."""
 
     role: str = Field(description="Assistant role")
-    domain: Optional[str] = Field(default=None, description="Domain")
+    domain: str | None = Field(default=None, description="Domain")
     skills: list[str] = Field(default_factory=list, description="Skills")
 
 
@@ -243,8 +251,9 @@ class TestTemplateLoading:
 
     def test_load_template_syntax_error(self):
         """Test: Template with syntax error raises error."""
-        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
         from jinja2 import TemplateSyntaxError
+
+        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
         config = make_test_config()
         template_path = str(TEMPLATES_DIR / "syntax_error.jinja2")
@@ -532,8 +541,9 @@ class TestTemplateRendering:
 
     def test_render_template_missing_required_var_error(self):
         """Test: Template rendering fails when required var missing."""
-        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
         from jinja2 import UndefinedError
+
+        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
         config = make_test_config()
         template_path = str(TEMPLATES_DIR / "simple.jinja2")
@@ -643,8 +653,7 @@ class TestRuntimeContextInjection:
 
     def test_resolve_context_no_runtime_context_provided(self):
         """Test: When no runtime context provided, use auto-populated context."""
-        from _mcp_mesh.engine.mesh_llm_agent import (_CONTEXT_NOT_PROVIDED,
-                                                     MeshLlmAgent)
+        from _mcp_mesh.engine.mesh_llm_agent import _CONTEXT_NOT_PROVIDED, MeshLlmAgent
 
         config = make_test_config()
         auto_context = ChatContext(user_name="Alice", domain="Python")
@@ -837,7 +846,6 @@ class TestRuntimeContextInjection:
             vendor="anthropic",
         )
 
-
         # Call with runtime context that overrides domain
         response = await agent(
             "Test message",
@@ -879,7 +887,6 @@ class TestRuntimeContextInjection:
             provider_proxy=mock_provider_proxy,
             vendor="anthropic",
         )
-
 
         # Call with replace mode
         response = await agent(
@@ -925,7 +932,6 @@ class TestRuntimeContextInjection:
             vendor="anthropic",
         )
 
-
         # Call without context (backward compatible)
         response = await agent("Test message")
 
@@ -963,7 +969,6 @@ class TestRuntimeContextInjection:
             provider_proxy=mock_provider_proxy,
             vendor="anthropic",
         )
-
 
         # Call with prepend mode - auto should win
         response = await agent(
@@ -1526,7 +1531,8 @@ class TestBuildRequestParamsKwargCollision:
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
         agent = MeshLlmAgent(
-            config=make_test_config(model="claude-3-5-sonnet-20241022",
+            config=make_test_config(
+                model="claude-3-5-sonnet-20241022",
                 max_iterations=10,
             ),
             filtered_tools=[],
@@ -1558,9 +1564,7 @@ class TestBuildRequestParamsKwargCollision:
             "prepare_request",
             side_effect=fake_prepare_request,
         ):
-            params = agent._build_request_params(
-                [{"role": "user", "content": "hi"}]
-            )
+            params = agent._build_request_params([{"role": "user", "content": "hi"}])
 
         # Did not raise TypeError; reached the handler exactly once.
         assert captured["output_type"] is ChatResponse
@@ -1582,7 +1586,8 @@ class TestBuildRequestParamsKwargCollision:
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
         agent = MeshLlmAgent(
-            config=make_test_config(model="claude-3-5-sonnet-20241022",
+            config=make_test_config(
+                model="claude-3-5-sonnet-20241022",
                 max_iterations=10,
             ),
             filtered_tools=[],

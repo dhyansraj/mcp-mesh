@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, List
+from typing import Any
 
 from ...shared.server_discovery import ServerDiscoveryUtil
 from ..shared import PipelineResult, PipelineStatus, PipelineStep
@@ -91,8 +91,8 @@ class FastAPIAppDiscoveryStep(PipelineStep):
         return result
 
     def _map_routes_to_apps(
-        self, fastapi_apps: Dict[str, Dict[str, Any]], mesh_routes: Dict[str, Any]
-    ) -> Dict[str, Dict[str, Any]]:
+        self, fastapi_apps: dict[str, dict[str, Any]], mesh_routes: dict[str, Any]
+    ) -> dict[str, dict[str, Any]]:
         """
         Map @mesh.route decorated functions to their FastAPI applications.
 

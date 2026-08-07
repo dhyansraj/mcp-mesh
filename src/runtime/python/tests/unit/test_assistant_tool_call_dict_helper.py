@@ -60,9 +60,7 @@ class TestCanonicalFields:
     ``function.arguments``) round-trip exactly."""
 
     def test_basic_serialization(self):
-        tc = _make_tool_call(
-            tc_id="call_42", name="add", arguments='{"a": 1, "b": 2}'
-        )
+        tc = _make_tool_call(tc_id="call_42", name="add", arguments='{"a": 1, "b": 2}')
         out = _build_assistant_tool_call_dict(tc)
         assert out == {
             "id": "call_42",
@@ -178,10 +176,7 @@ class TestLegacyBranchSerialization:
         assert tc_dict["function"]["name"] == "get_weather"
         # Gemini sidecar present + decodes back to original bytes.
         assert "_gemini_thought_signature" in tc_dict
-        assert (
-            base64.b64decode(tc_dict["_gemini_thought_signature"])
-            == sig_bytes
-        )
+        assert base64.b64decode(tc_dict["_gemini_thought_signature"]) == sig_bytes
 
     def test_legacy_branch_non_gemini_no_sidecar(self):
         """Backward-compat: a non-Gemini tool_call (no ``_thought_signature``

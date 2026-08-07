@@ -5,7 +5,7 @@ MCP Mesh type definitions for dependency injection.
 import warnings
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Annotated, Any, Optional, Protocol, TypeAlias, TypeVar
+from typing import Annotated, Any, Protocol, TypeAlias, TypeVar
 
 _StreamT = TypeVar("_StreamT")
 Stream: TypeAlias = AsyncIterator[_StreamT]
@@ -66,7 +66,7 @@ def MediaParam(media_type: str = "*/*"):
     Returns:
         Annotated type that Pydantic treats as Optional[str] with media metadata.
     """
-    return Annotated[Optional[str], _MediaParamInfo(media_type)]
+    return Annotated[str | None, _MediaParamInfo(media_type)]
 
 
 class McpMeshTool(Protocol):
@@ -119,9 +119,9 @@ class McpMeshTool(Protocol):
 
     def __call__(
         self,
-        arguments: Optional[dict[str, Any]] = None,
+        arguments: dict[str, Any] | None = None,
         *,
-        headers: Optional[dict[str, str]] = None
+        headers: dict[str, str] | None = None,
     ) -> Any:
         """
         Call the bound remote function.
@@ -156,7 +156,7 @@ class McpMeshTool(Protocol):
         """List available prompts from remote agent."""
         ...
 
-    async def get_prompt(self, name: str, arguments: Optional[dict] = None) -> Any:
+    async def get_prompt(self, name: str, arguments: dict | None = None) -> Any:
         """Get prompt template from remote agent."""
         ...
 
@@ -657,8 +657,8 @@ class MeshLlmRequest:
     """
 
     messages: list[dict[str, Any]]  # Changed from Dict[str, str] to allow tool_calls
-    tools: Optional[list[dict]] = None
-    model_params: Optional[dict] = None
-    context: Optional[dict] = None
-    request_id: Optional[str] = None
-    caller_agent: Optional[str] = None
+    tools: list[dict] | None = None
+    model_params: dict | None = None
+    context: dict | None = None
+    request_id: str | None = None
+    caller_agent: str | None = None

@@ -27,6 +27,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from _mcp_mesh.engine.llm_stop_reason import (
     FRAME_CHUNK,
     FRAME_END,
@@ -344,9 +345,7 @@ def _chunk(content=None, usage=None, model=None):
 
 class TestStreamingToolYieldsChunks:
     @pytest.mark.asyncio
-    async def test_no_tools_path_streams_chunks_through_acompletion(
-        self, monkeypatch
-    ):
+    async def test_no_tools_path_streams_chunks_through_acompletion(self, monkeypatch):
         """Direct text-streaming when ``request.tools`` is empty.
 
         We exercise the underlying async generator function (resolved via

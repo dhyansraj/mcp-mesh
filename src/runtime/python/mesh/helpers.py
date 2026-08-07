@@ -139,9 +139,7 @@ def _hint_response_parses(content: str, schema: dict[str, Any]) -> bool:
         cleaned = content.strip()
         # Strip surrounding markdown code fences if present.
         # Handle both ```json\n...\n``` and ```\n...\n``` patterns.
-        cleaned = re.sub(
-            r"^```(?:json)?\s*\n?", "", cleaned, count=1
-        )
+        cleaned = re.sub(r"^```(?:json)?\s*\n?", "", cleaned, count=1)
         cleaned = re.sub(r"\n?```\s*$", "", cleaned, count=1)
         parsed = json.loads(cleaned)
     except (json.JSONDecodeError, ValueError):
@@ -204,7 +202,8 @@ def _warn_native_dispatch_unknown_vendor_once(vendor: str) -> None:
         "_VENDOR_FORMATTERS; falling back to OpenAI-shape blocks. "
         "Add a formatter to mesh.media.resolver._VENDOR_FORMATTERS to "
         "emit vendor-native shape on the native path.",
-        vendor, vendor,
+        vendor,
+        vendor,
     )
 
 
@@ -223,7 +222,9 @@ def _pop_mesh_hint_flags(
     hint_output_type_name)`` so callers can use them to drive the post-call
     fallback. Defaults preserve existing values across loop iterations.
     """
-    hint_mode_default, hint_schema_default, hint_timeout_default, hint_name_default = defaults
+    hint_mode_default, hint_schema_default, hint_timeout_default, hint_name_default = (
+        defaults
+    )
     hint_mode = bool(completion_args.pop("_mesh_hint_mode", hint_mode_default))
     hint_schema = completion_args.pop("_mesh_hint_schema", hint_schema_default)
     hint_fallback_timeout = completion_args.pop(
@@ -338,8 +339,7 @@ def _inject_synthetic_format_tool(
     real_tools = list(tools or [])
     synthetic_name = synthetic_tool.get("function", {}).get("name")
     already_injected = any(
-        isinstance(t, dict)
-        and t.get("function", {}).get("name") == synthetic_name
+        isinstance(t, dict) and t.get("function", {}).get("name") == synthetic_name
         for t in real_tools
     )
     prior_choice = completion_args.get("tool_choice")
@@ -354,9 +354,11 @@ def _inject_synthetic_format_tool(
     # both the no-tools→forced-synthetic decision and to ensure the helper
     # is idempotent when called with an already-augmented list.
     user_real_tools = [
-        t for t in real_tools
-        if not (isinstance(t, dict)
-                and t.get("function", {}).get("name") == synthetic_name)
+        t
+        for t in real_tools
+        if not (
+            isinstance(t, dict) and t.get("function", {}).get("name") == synthetic_name
+        )
     ]
     augmented = user_real_tools + [synthetic_tool]
     if not user_real_tools:
@@ -600,12 +602,12 @@ async def _run_response_format_retry(
     # ``claude-haiku-4-5`` and silently skips the native path.
     # (``ProviderHandlerRegistry`` is imported at module top.)
     fb_model = fallback_args.get("model")
-    fb_vendor = vendor if vendor else (
-        _extract_vendor_from_model(fb_model) if fb_model else None
+    fb_vendor = (
+        vendor
+        if vendor
+        else (_extract_vendor_from_model(fb_model) if fb_model else None)
     )
-    fb_handler = (
-        ProviderHandlerRegistry.get_handler(fb_vendor) if fb_vendor else None
-    )
+    fb_handler = ProviderHandlerRegistry.get_handler(fb_vendor) if fb_vendor else None
     if fb_handler is not None and fb_handler.has_native():
         fb_native_args = {
             k: v
@@ -622,9 +624,7 @@ async def _run_response_format_retry(
         # LiteLLM is optional (#1383) — resolve it only on the branch that
         # actually calls into it.
         litellm = _require_litellm(model=fb_model, vendor=fb_vendor)
-        fallback_response = await asyncio.to_thread(
-            litellm.completion, **fallback_args
-        )
+        fallback_response = await asyncio.to_thread(litellm.completion, **fallback_args)
     fb_message = fallback_response.choices[0].message
     # Native handlers return synthetic-tool args as tool_calls; LiteLLM unpacks
     # them to content. Lift here so callers see structured output regardless of
@@ -907,9 +907,7 @@ async def _maybe_retry_synthetic_on_validation_failure(
     tool_result_dict = {
         "role": "tool",
         "tool_call_id": bad_tool_use_id,
-        "content": json.dumps(
-            {"error": "schema validation failed", "is_error": True}
-        ),
+        "content": json.dumps({"error": "schema validation failed", "is_error": True}),
     }
     corrective_user_dict = {
         "role": "user",
@@ -988,9 +986,7 @@ async def _maybe_retry_synthetic_on_validation_failure(
             _litellm = litellm_module
             if _litellm is None:
                 _litellm = _require_litellm(model=effective_model, vendor=vendor)
-            retry_response = await asyncio.to_thread(
-                _litellm.completion, **retry_args
-            )
+            retry_response = await asyncio.to_thread(_litellm.completion, **retry_args)
     except Exception as retry_exc:  # noqa: BLE001 - any retry failure falls back
         effective_logger.warning(
             "[provider:retry] retry call raised %s: %s; falling back to "
@@ -1092,9 +1088,7 @@ def _extract_text_from_message_content(content: Any) -> str:
                 continue
             if isinstance(block, dict):
                 text_value = block.get("text", "")
-                text_parts.append(
-                    str(text_value) if text_value is not None else ""
-                )
+                text_parts.append(str(text_value) if text_value is not None else "")
             else:
                 try:
                     text_parts.append(str(block))
@@ -1286,22 +1280,14 @@ async def _execute_tool_calls_for_iteration(
                 {
                     "role": "tool",
                     "tool_call_id": tc.id,
-                    "content": json.dumps(
-                        {"error": f"Tool {tool_name} not available"}
-                    ),
+                    "content": json.dumps({"error": f"Tool {tool_name} not available"}),
                 },
                 [],
             )
 
         try:
-            args = (
-                json.loads(tc.function.arguments)
-                if tc.function.arguments
-                else {}
-            )
-            proxy = UnifiedMCPProxy(
-                endpoint=endpoint, function_name=tool_name
-            )
+            args = json.loads(tc.function.arguments) if tc.function.arguments else {}
+            proxy = UnifiedMCPProxy(endpoint=endpoint, function_name=tool_name)
             result = await proxy.call_tool(tool_name, args)
 
             # Resolve resource_link items to multimodal content.
@@ -1319,10 +1305,7 @@ async def _execute_tool_calls_for_iteration(
                     resolved_parts = []
 
                 image_types = ("image", "image_url")
-                has_image = any(
-                    p.get("type") in image_types
-                    for p in resolved_parts
-                )
+                has_image = any(p.get("type") in image_types for p in resolved_parts)
 
                 if has_image:
                     if vendor in _TOOL_IMAGE_UNSUPPORTED_VENDORS:
@@ -1330,17 +1313,19 @@ async def _execute_tool_calls_for_iteration(
                         # Put text-only parts in the tool message, accumulate
                         # images for a single user message after all tool results.
                         text_parts = [
-                            p for p in resolved_parts
+                            p
+                            for p in resolved_parts
                             if p.get("type") not in image_types
                         ]
                         image_parts = [
-                            p for p in resolved_parts
-                            if p.get("type") in image_types
+                            p for p in resolved_parts if p.get("type") in image_types
                         ]
 
                         # Ensure tool message has at least some content
                         if not text_parts:
-                            text_parts = [{"type": "text", "text": "[Image from tool result]"}]
+                            text_parts = [
+                                {"type": "text", "text": "[Image from tool result]"}
+                            ]
 
                         # OpenAI requires tool message content to be a string
                         if len(text_parts) == 1:
@@ -1381,7 +1366,9 @@ async def _execute_tool_calls_for_iteration(
                 else:
                     # Non-image resource_links resolved to text — use resolved text
                     text_content = "\n".join(
-                        p.get("text", "") for p in resolved_parts if p.get("type") == "text"
+                        p.get("text", "")
+                        for p in resolved_parts
+                        if p.get("type") == "text"
                     )
                     if text_content:
                         tool_result = text_content
@@ -1401,9 +1388,7 @@ async def _execute_tool_calls_for_iteration(
                 tool_result = str(result)
 
             if loop_logger:
-                loop_logger.debug(
-                    f"Tool {tool_name} result: {tool_result[:200]}"
-                )
+                loop_logger.debug(f"Tool {tool_name} result: {tool_result[:200]}")
         except Exception as e:
             if loop_logger:
                 loop_logger.error(f"Tool {tool_name} execution failed: {e}")
@@ -1516,9 +1501,7 @@ async def _dispatch_completion(
     """
     if native_handler.has_native():
         _native_args = {
-            k: v
-            for k, v in completion_args.items()
-            if k not in native_exclude_keys
+            k: v for k, v in completion_args.items() if k not in native_exclude_keys
         }
         if stream:
             return await native_handler.complete_stream(
@@ -1582,7 +1565,9 @@ async def _provider_agentic_loop(
     # (Claude handler strips it, but OpenAI would pass it to API)
     parallel = model_params.pop("parallel_tool_calls", False)
     if parallel and loop_logger:
-        loop_logger.info("🔀 Provider parallel tool calls enabled — tools will execute concurrently via asyncio.gather()")
+        loop_logger.info(
+            "🔀 Provider parallel tool calls enabled — tools will execute concurrently via asyncio.gather()"
+        )
 
     # HINT-mode state (set by ClaudeHandler.apply_structured_output, LiteLLM
     # path). Pop ONCE from ``model_params`` here so subsequent iterations
@@ -1669,7 +1654,11 @@ async def _provider_agentic_loop(
         # Real tool calls in the same turn are intentionally dropped: the
         # synthetic call signals "I'm done", and executing additional tools
         # would mean another iteration that the model already opted out of.
-        if synthetic_tool_name and hasattr(message, "tool_calls") and message.tool_calls:
+        if (
+            synthetic_tool_name
+            and hasattr(message, "tool_calls")
+            and message.tool_calls
+        ):
             synthetic_args, bad_tc_id = _extract_synthetic_format_arguments(
                 message, synthetic_tool_name
             )
@@ -1707,7 +1696,8 @@ async def _provider_agentic_loop(
                         retry_template = {
                             k: v
                             for k, v in completion_args.items()
-                            if k not in (
+                            if k
+                            not in (
                                 "messages",
                                 "tools",
                                 "tool_choice",
@@ -1715,23 +1705,24 @@ async def _provider_agentic_loop(
                                 "stream_options",
                             )
                         }
-                        synthetic_args, retry_usage = (
-                            await _maybe_retry_synthetic_on_validation_failure(
-                                synthetic_args=synthetic_args,
-                                synthetic_tool=synthetic_tool,
-                                synthetic_tool_name=synthetic_tool_name,
-                                bad_tool_use_id=bad_tc_id,
-                                assistant_message_dict=_serialize_assistant_message_for_retry(
-                                    message, bad_tool_use_id=bad_tc_id
-                                ),
-                                current_messages=current_messages,
-                                tools=tools,
-                                completion_args_template=retry_template,
-                                native_handler=_native_handler,
-                                effective_model=effective_model,
-                                vendor=vendor,
-                                loop_logger=loop_logger,
-                            )
+                        (
+                            synthetic_args,
+                            retry_usage,
+                        ) = await _maybe_retry_synthetic_on_validation_failure(
+                            synthetic_args=synthetic_args,
+                            synthetic_tool=synthetic_tool,
+                            synthetic_tool_name=synthetic_tool_name,
+                            bad_tool_use_id=bad_tc_id,
+                            assistant_message_dict=_serialize_assistant_message_for_retry(
+                                message, bad_tool_use_id=bad_tc_id
+                            ),
+                            current_messages=current_messages,
+                            tools=tools,
+                            completion_args_template=retry_template,
+                            native_handler=_native_handler,
+                            effective_model=effective_model,
+                            vendor=vendor,
+                            loop_logger=loop_logger,
                         )
 
                 message_dict: dict[str, Any] = {
@@ -1792,8 +1783,7 @@ async def _provider_agentic_loop(
                 "role": "assistant",
                 "content": message.content or "",
                 "tool_calls": [
-                    _build_assistant_tool_call_dict(tc)
-                    for tc in message.tool_calls
+                    _build_assistant_tool_call_dict(tc) for tc in message.tool_calls
                 ],
             }
             current_messages.append(assistant_msg)
@@ -1813,13 +1803,18 @@ async def _provider_agentic_loop(
             # This is valid because it comes after all tool results and before the
             # next LLM call.
             if accumulated_images:
-                current_messages.append({
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Here are the images from the tool results above:"},
-                        *accumulated_images,
-                    ],
-                })
+                current_messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Here are the images from the tool results above:",
+                            },
+                            *accumulated_images,
+                        ],
+                    }
+                )
                 if loop_logger:
                     loop_logger.info(
                         f"Injected user message with {len(accumulated_images)} accumulated images "
@@ -1967,8 +1962,7 @@ async def _provider_agentic_loop(
             except Exception as e:
                 if loop_logger:
                     loop_logger.error(
-                        "Native synthetic-tool fallback to response_format "
-                        "failed: %s",
+                        "Native synthetic-tool fallback to response_format failed: %s",
                         e,
                     )
                 raise
@@ -2232,9 +2226,7 @@ async def _provider_agentic_loop_stream(
             iter_usage = MeshLlmAgent._extract_usage_from_chunks(chunks)
             if iter_usage:
                 total_input_tokens += iter_usage.get("prompt_tokens", 0) or 0
-                total_output_tokens += (
-                    iter_usage.get("completion_tokens", 0) or 0
-                )
+                total_output_tokens += iter_usage.get("completion_tokens", 0) or 0
             iter_model = MeshLlmAgent._extract_model_from_chunks(chunks)
             if iter_model:
                 effective_model = iter_model
@@ -2315,15 +2307,16 @@ async def _provider_agentic_loop_stream(
                     }
                 )
 
-                tool_messages, accumulated_images = (
-                    await _execute_tool_calls_for_iteration(
-                        mock_message,
-                        tool_endpoints,
-                        parallel,
-                        vendor,
-                        loop_logger,
-                        has_native_dispatch=_native_handler.has_native(),
-                    )
+                (
+                    tool_messages,
+                    accumulated_images,
+                ) = await _execute_tool_calls_for_iteration(
+                    mock_message,
+                    tool_endpoints,
+                    parallel,
+                    vendor,
+                    loop_logger,
+                    has_native_dispatch=_native_handler.has_native(),
                 )
                 current_messages.extend(tool_messages)
 
@@ -2393,9 +2386,7 @@ async def _provider_agentic_loop_stream(
                 # true work performed.
                 if _resp is not None and hasattr(_resp, "usage") and _resp.usage:
                     _fb_usage = _resp.usage
-                    total_input_tokens += (
-                        getattr(_fb_usage, "prompt_tokens", 0) or 0
-                    )
+                    total_input_tokens += getattr(_fb_usage, "prompt_tokens", 0) or 0
                     total_output_tokens += (
                         getattr(_fb_usage, "completion_tokens", 0) or 0
                     )
@@ -2540,11 +2531,7 @@ def _infer_big3_vendor_from_bare_name(model: str) -> str | None:
         ("o1-", "o3-", "o4-")
     )
 
-    if (
-        name.startswith("gpt-")
-        or _openai_reasoning
-        or name.startswith("chatgpt-")
-    ):
+    if name.startswith("gpt-") or _openai_reasoning or name.startswith("chatgpt-"):
         return "openai"
     if name.startswith("claude-"):
         return "anthropic"
@@ -2917,9 +2904,7 @@ def llm_provider(
                 # popping the key off the model_params dict — the native
                 # synthetic-format path returns a NEW list rather than
                 # mutating the original.
-                effective_messages = model_params_copy.get(
-                    "messages", request.messages
-                )
+                effective_messages = model_params_copy.get("messages", request.messages)
                 # Remove messages to avoid duplication in completion_args
                 model_params_copy.pop("messages", None)
                 logger.debug(
@@ -2946,7 +2931,6 @@ def llm_provider(
             # built by the Claude native synthetic-format path).
             messages = effective_messages
             if effective_tools:
-
                 # Find and format system message
                 formatted_messages = []
                 for msg in messages:
@@ -3100,9 +3084,7 @@ def llm_provider(
                 else:
                     # LiteLLM is optional (#1383) — import it only here, on
                     # the long-tail branch that actually calls into it.
-                    litellm = _require_litellm(
-                        model=effective_model, vendor=vendor
-                    )
+                    litellm = _require_litellm(model=effective_model, vendor=vendor)
                     response = await asyncio.to_thread(
                         litellm.completion, **completion_args
                     )
@@ -3226,7 +3208,11 @@ def llm_provider(
                         }
                         if hint_mode:
                             try:
-                                final_content, message, response = await _maybe_run_hint_fallback(
+                                (
+                                    final_content,
+                                    message,
+                                    response,
+                                ) = await _maybe_run_hint_fallback(
                                     final_content=final_content,
                                     message=message,
                                     response=response,
@@ -3254,7 +3240,11 @@ def llm_provider(
                         # shapes — so the early-returns in each helper gate this
                         # correctly.
                         try:
-                            final_content, message, response = await _maybe_run_synthetic_fallback(
+                            (
+                                final_content,
+                                message,
+                                response,
+                            ) = await _maybe_run_synthetic_fallback(
                                 final_content=final_content,
                                 message=message,
                                 response=response,
@@ -3291,8 +3281,7 @@ def llm_provider(
                 # uses the helper.
                 if hasattr(message, "tool_calls") and message.tool_calls:
                     message_dict["tool_calls"] = [
-                        _build_assistant_tool_call_dict(tc)
-                        for tc in message.tool_calls
+                        _build_assistant_tool_call_dict(tc) for tc in message.tool_calls
                     ]
 
                 # Issue #311: Include usage metadata for cost tracking
@@ -3340,9 +3329,7 @@ def llm_provider(
                 model_params_copy,
                 resolved_max_iterations,
             ) = _prepare_provider_request(request, streaming=True)
-            effective_tools = (
-                clean_tools if clean_tools is not None else request.tools
-            )
+            effective_tools = clean_tools if clean_tools is not None else request.tools
 
             if tool_endpoints:
                 logger.info(

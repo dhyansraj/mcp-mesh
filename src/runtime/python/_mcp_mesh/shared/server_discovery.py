@@ -9,7 +9,7 @@ import gc
 import logging
 import socket
 import threading
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from .fastapi_routes import iter_app_routes
 
@@ -20,7 +20,7 @@ class ServerDiscoveryUtil:
     """Utility class for discovering existing FastAPI apps and uvicorn servers."""
 
     @staticmethod
-    def discover_fastapi_instances() -> Dict[str, Dict[str, Any]]:
+    def discover_fastapi_instances() -> dict[str, dict[str, Any]]:
         """
         Discover FastAPI application instances in the Python runtime.
 
@@ -104,7 +104,7 @@ class ServerDiscoveryUtil:
         return fastapi_apps
 
     @staticmethod
-    def discover_running_servers() -> List[Dict[str, Any]]:
+    def discover_running_servers() -> list[dict[str, Any]]:
         """
         Discover running uvicorn servers by scanning threads and checking port bindings.
 
@@ -160,7 +160,7 @@ class ServerDiscoveryUtil:
         return running_servers
 
     @staticmethod
-    def _extract_server_details_from_thread(thread) -> Dict[str, Any]:
+    def _extract_server_details_from_thread(thread) -> dict[str, Any]:
         """Extract server details from a thread if possible."""
         details = {}
 
@@ -205,7 +205,7 @@ class ServerDiscoveryUtil:
         return details
 
     @staticmethod
-    def _discover_bound_ports() -> List[Dict[str, Any]]:
+    def _discover_bound_ports() -> list[dict[str, Any]]:
         """Discover ports that are currently bound by this process."""
         bound_ports = []
 
@@ -238,7 +238,7 @@ class ServerDiscoveryUtil:
     @staticmethod
     def find_server_on_port(
         target_port: int, target_host: str = None
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Find if there's already a server running on the specified port.
 
@@ -273,7 +273,7 @@ class ServerDiscoveryUtil:
 
     @staticmethod
     def _routes_are_identical(
-        routes1: List[Dict[str, Any]], routes2: List[Dict[str, Any]]
+        routes1: list[dict[str, Any]], routes2: list[dict[str, Any]]
     ) -> bool:
         """Compare two route lists to see if they're identical."""
         if len(routes1) != len(routes2):
@@ -296,7 +296,7 @@ class ServerDiscoveryUtil:
         return sig1 == sig2
 
     @staticmethod
-    def _extract_route_info(app) -> List[Dict[str, Any]]:
+    def _extract_route_info(app) -> list[dict[str, Any]]:
         """Extract route information from FastAPI app without modifying it.
 
         Walks via ``iter_app_routes`` rather than ``app.router.routes``, so
@@ -327,7 +327,7 @@ class ServerDiscoveryUtil:
         return routes
 
     @staticmethod
-    def _get_app_module(app) -> Optional[str]:
+    def _get_app_module(app) -> str | None:
         """Try to determine which module the FastAPI app belongs to."""
         try:
             # Try to get module from the app's stack frame when it was created

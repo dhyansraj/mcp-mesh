@@ -1,5 +1,6 @@
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from ..shared import PipelineResult, PipelineStatus, PipelineStep
 
@@ -340,7 +341,6 @@ class FastMCPServerDiscoveryStep(PipelineStep):
                     and module.__file__
                     and not module.__file__.endswith(".so")
                 ):  # Skip binary extensions
-
                     found_in_module = self._search_module_for_fastmcp(
                         module, module_name
                     )

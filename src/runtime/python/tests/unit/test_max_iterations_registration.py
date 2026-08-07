@@ -66,9 +66,7 @@ def _build_llm_agent_specs():
         "agent_id": "test-agent-deadbeef",
     }
 
-    with patch.object(
-        rust_heartbeat, "_get_rust_core", return_value=_HybridCore
-    ):
+    with patch.object(rust_heartbeat, "_get_rust_core", return_value=_HybridCore):
         rust_heartbeat._build_agent_spec(context)
 
     return captured.get("llm_agents") or []

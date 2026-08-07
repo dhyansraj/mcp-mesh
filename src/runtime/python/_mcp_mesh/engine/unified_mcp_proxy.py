@@ -14,6 +14,8 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any, Optional
 
+from fastmcp.exceptions import ToolError
+
 from ..shared.json_fast import dumps_bytes as json_dumps_bytes
 from ..shared.json_fast import loads as json_loads
 from ..shared.logging_config import (
@@ -24,8 +26,6 @@ from ..shared.logging_config import (
 from ..shared.sse_parser import SSEParser
 from ..tracing.context import TraceContext
 from ..tracing.utils import generate_span_id
-from fastmcp.exceptions import ToolError
-
 from .superseded import SupersededError, parse_superseded_envelope
 
 logger = logging.getLogger(__name__)
@@ -194,7 +194,7 @@ async def close_connection_pools() -> None:
         fut = asyncio.run_coroutine_threadsafe(coro, owning_loop)
         try:
             await asyncio.wait_for(asyncio.wrap_future(fut), timeout=5)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(f"Timed out closing {kind} client for: {label}")
 
     for key, client in fastmcp_to_close:
@@ -938,9 +938,7 @@ class UnifiedMCPProxy:
             # a recognized error, not a conversion failure to swallow.
             raise
         except Exception as e:
-            self.logger.warning(
-                f"⚠️ Failed to convert MCP result, returning as-is: {e}"
-            )
+            self.logger.warning(f"⚠️ Failed to convert MCP result, returning as-is: {e}")
             return mcp_result
 
     def _convert_content_item_to_python(self, content_item: Any) -> Any:
@@ -1022,9 +1020,7 @@ class UnifiedMCPProxy:
         if not isinstance(meta, dict):
             return False
         fastmcp_meta = meta.get("fastmcp")
-        return isinstance(fastmcp_meta, dict) and bool(
-            fastmcp_meta.get("wrap_result")
-        )
+        return isinstance(fastmcp_meta, dict) and bool(fastmcp_meta.get("wrap_result"))
 
     def _recover_structured_content(self, structured: Any, meta: Any) -> Any:
         """Recover a Python value from ``structuredContent`` (issue #1250).
@@ -1070,7 +1066,11 @@ class UnifiedMCPProxy:
             val = item.get(field) if field in item else nested.get(field)
             if val is not None:
                 resource_data["resource"][field] = val
-        annotations = item.get("annotations") if "annotations" in item else nested.get("annotations")
+        annotations = (
+            item.get("annotations")
+            if "annotations" in item
+            else nested.get("annotations")
+        )
         if annotations is not None:
             resource_data["resource"]["annotations"] = annotations
         return resource_data
@@ -1200,7 +1200,10 @@ class UnifiedMCPProxy:
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "tools/call",
-                "params": {"name": name, "arguments": self._sanitize_arguments(arguments)},
+                "params": {
+                    "name": name,
+                    "arguments": self._sanitize_arguments(arguments),
+                },
             }
 
             # Serialize payload as bytes — avoids extra str→bytes encode
@@ -1245,10 +1248,7 @@ class UnifiedMCPProxy:
             # this Python-side variant covers calls that originate in
             # Python user code (vs Rust-originated outbound, e.g. from
             # the agentic-loop LLM provider).
-            if (
-                "X-Mesh-Job-Id" not in headers
-                and "x-mesh-job-id" not in headers
-            ):
+            if "X-Mesh-Job-Id" not in headers and "x-mesh-job-id" not in headers:
                 try:
                     from .job_context import current_job
 
@@ -1297,7 +1297,9 @@ class UnifiedMCPProxy:
                     )
 
             # Use X-Mesh-Timeout to set client-side timeout (authoritative override)
-            mesh_timeout_val = headers.get("X-Mesh-Timeout") or headers.get("x-mesh-timeout")
+            mesh_timeout_val = headers.get("X-Mesh-Timeout") or headers.get(
+                "x-mesh-timeout"
+            )
             if mesh_timeout_val:
                 try:
                     mesh_timeout_secs = int(mesh_timeout_val)

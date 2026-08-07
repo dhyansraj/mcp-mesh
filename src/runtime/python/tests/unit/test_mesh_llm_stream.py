@@ -15,9 +15,10 @@ from typing import Any, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import BaseModel
+
 from _mcp_mesh.engine.llm_config import LLMConfig
 from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
-from pydantic import BaseModel
 
 
 def make_config(
@@ -346,6 +347,8 @@ class TestMeshDelegatedStreaming:
             "request_id",
             "caller_agent",
         }
+
+
 class TestStreamHelpers:
     def test_merge_streamed_tool_calls_concatenates_arguments_per_index(self):
         chunks = [
@@ -354,9 +357,7 @@ class TestStreamHelpers:
                     _tool_call_delta(index=0, id="A", type="function", name="f")
                 ]
             ),
-            _chunk(
-                tool_calls=[_tool_call_delta(index=0, arguments='{"a":')]
-            ),
+            _chunk(tool_calls=[_tool_call_delta(index=0, arguments='{"a":')]),
             _chunk(tool_calls=[_tool_call_delta(index=0, arguments="1}")]),
             _chunk(
                 tool_calls=[

@@ -20,8 +20,9 @@ import asyncio
 import json
 from unittest.mock import patch
 
-import mesh
 import pytest
+
+import mesh
 from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
 from _mcp_mesh.engine.dependency_injector import (
     DependencyInjector,
@@ -111,9 +112,7 @@ class TestRequiredDeclaration:
     def test_route_required_non_bool_rejected(self):
         with pytest.raises(ValueError, match="required must be a boolean"):
 
-            @mesh.route(
-                dependencies=[{"capability": "weather-api", "required": 1}]
-            )
+            @mesh.route(dependencies=[{"capability": "weather-api", "required": 1}])
             async def handler(weather: mesh.McpMeshTool = None):
                 return "ok"
 
@@ -215,9 +214,7 @@ class TestRoutePerimeter503:
             called.append(True)
             return {"ok": True}
 
-        wrapper = self._make_route_wrapper(
-            handler, ["weather-api"], ["weather-api"]
-        )
+        wrapper = self._make_route_wrapper(handler, ["weather-api"], ["weather-api"])
         # Proxy unavailable (never resolved) — default injected_deps is [None].
         result = asyncio.run(wrapper())
 
@@ -236,9 +233,7 @@ class TestRoutePerimeter503:
             called.append(weather)
             return {"ok": True}
 
-        wrapper = self._make_route_wrapper(
-            handler, ["weather-api"], ["weather-api"]
-        )
+        wrapper = self._make_route_wrapper(handler, ["weather-api"], ["weather-api"])
         proxy = object()
         wrapper._mesh_update_dependency(0, proxy)
 
@@ -267,9 +262,7 @@ class TestRoutePerimeter503:
             called.append(True)
             return {"ok": True}
 
-        wrapper = self._make_route_wrapper(
-            handler, ["weather-api"], ["weather-api"]
-        )
+        wrapper = self._make_route_wrapper(handler, ["weather-api"], ["weather-api"])
         result = wrapper()
 
         assert result.status_code == 503
@@ -289,9 +282,7 @@ class TestRoutePerimeter503:
             called.append(weather)
             return {"ok": True}
 
-        wrapper = self._make_route_wrapper(
-            handler, ["weather-api"], ["weather-api"]
-        )
+        wrapper = self._make_route_wrapper(handler, ["weather-api"], ["weather-api"])
         # Proxy deliberately unresolved (_mesh_injected_deps == [None]); caller
         # supplies a fake for the 'weather' parameter.
         fake = object()

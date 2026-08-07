@@ -6,7 +6,7 @@ in @mesh.agent decorators to prevent Python interpreter shutdown.
 """
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from ...shared.server_discovery import ServerDiscoveryUtil
 from ..shared import PipelineResult, PipelineStatus, PipelineStep
@@ -144,7 +144,7 @@ class ServerDiscoveryStep(PipelineStep):
 
     def _find_associated_fastapi_app(
         self, server_info: dict[str, Any]
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Try to find the FastAPI app associated with the existing server.
 

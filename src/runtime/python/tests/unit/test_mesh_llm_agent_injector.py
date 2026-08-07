@@ -42,7 +42,7 @@ class AdvancedResponse(BaseModel):
 
 # Helper function to register LLM functions
 def register_test_llm_function(
-    function_id: str, output_type: type = ChatResponse, config: Optional[dict] = None
+    function_id: str, output_type: type = ChatResponse, config: dict | None = None
 ):
     """Helper to register a test LLM function in DecoratorRegistry."""
     import mesh
@@ -56,7 +56,10 @@ def register_test_llm_function(
         )
 
     if config is None:
-        config = {"filter": {"capability": "document"}, "provider": {"capability": "llm", "tags": ["claude"]}}
+        config = {
+            "filter": {"capability": "document"},
+            "provider": {"capability": "llm", "tags": ["claude"]},
+        }
 
     DecoratorRegistry.register_mesh_llm(
         test_func, config, output_type, "llm", function_id
@@ -126,7 +129,10 @@ class TestProcessLLMTools:
         function_id = "chat_abc123"
         DecoratorRegistry.register_mesh_llm(
             chat,
-            {"filter": {"capability": "document"}, "provider": {"capability": "llm", "tags": ["claude"]}},
+            {
+                "filter": {"capability": "document"},
+                "provider": {"capability": "llm", "tags": ["claude"]},
+            },
             ChatResponse,
             "llm",
             function_id,
@@ -174,14 +180,20 @@ class TestProcessLLMTools:
 
         DecoratorRegistry.register_mesh_llm(
             chat_func,
-            {"filter": {"capability": "document"}, "provider": {"capability": "llm", "tags": ["claude"]}},
+            {
+                "filter": {"capability": "document"},
+                "provider": {"capability": "llm", "tags": ["claude"]},
+            },
             ChatResponse,
             "llm",
             "chat_abc123",
         )
         DecoratorRegistry.register_mesh_llm(
             analyze_func,
-            {"filter": {"capability": "document"}, "provider": {"capability": "llm", "tags": ["claude"]}},
+            {
+                "filter": {"capability": "document"},
+                "provider": {"capability": "llm", "tags": ["claude"]},
+            },
             ChatResponse,
             "llm",
             "analyze_def456",
@@ -527,14 +539,20 @@ class TestTopologyUpdates:
 
         DecoratorRegistry.register_mesh_llm(
             chat_func,
-            {"filter": {"capability": "document"}, "provider": {"capability": "llm", "tags": ["claude"]}},
+            {
+                "filter": {"capability": "document"},
+                "provider": {"capability": "llm", "tags": ["claude"]},
+            },
             ChatResponse,
             "llm",
             "chat_abc123",
         )
         DecoratorRegistry.register_mesh_llm(
             analyze_func,
-            {"filter": {"capability": "document"}, "provider": {"capability": "llm", "tags": ["claude"]}},
+            {
+                "filter": {"capability": "document"},
+                "provider": {"capability": "llm", "tags": ["claude"]},
+            },
             ChatResponse,
             "llm",
             "analyze_def456",
@@ -697,7 +715,10 @@ class TestIntegrationWithDecoratorRegistry:
 
         # Verify all config fields were captured (mesh delegation: provider is dict)
         llm_agent_data = injector._llm_agents[function_id]
-        assert llm_agent_data["config"]["provider"] == {"capability": "llm", "tags": ["openai"]}
+        assert llm_agent_data["config"]["provider"] == {
+            "capability": "llm",
+            "tags": ["openai"],
+        }
         assert llm_agent_data["config"]["model"] == "gpt-4o"
         assert llm_agent_data["config"]["max_iterations"] == 15
         assert llm_agent_data["config"]["system_prompt"] == "You are helpful"
@@ -1027,7 +1048,7 @@ class TestContextExtractionWithTemplates:
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
         from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
 
-        def chat(msg: str, ctx: Optional[ChatContext] = None, llm: MeshLlmAgent = None):
+        def chat(msg: str, ctx: ChatContext | None = None, llm: MeshLlmAgent = None):
             # Check that llm was injected
             assert llm is not None
             # Context should be None

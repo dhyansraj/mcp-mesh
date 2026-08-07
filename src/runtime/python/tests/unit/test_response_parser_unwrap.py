@@ -8,8 +8,6 @@ the response in {"parameter": {...}}).
 Reference: issue #961 covers the fuller retry-on-validation-failure fix.
 """
 
-from typing import List
-
 import pytest
 from pydantic import BaseModel
 
@@ -19,8 +17,8 @@ from _mcp_mesh.engine.response_parser import ResponseParseError, ResponseParser
 class LogisticsPlanLike(BaseModel):
     """Small fixture model mirroring the real LogisticsPlan shape."""
 
-    daily_schedule: List[str]
-    transit_tips: List[str]
+    daily_schedule: list[str]
+    transit_tips: list[str]
     time_optimization: str
 
 

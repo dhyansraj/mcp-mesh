@@ -21,6 +21,7 @@ import asyncio
 import time
 
 import pytest
+
 from _mcp_mesh.engine import claim_dispatcher as claim_dispatcher_module
 from _mcp_mesh.engine.claim_dispatcher import stop_dispatchers
 from _mcp_mesh.pipeline.mcp_heartbeat import rust_heartbeat
@@ -84,9 +85,7 @@ class TestStopDispatchersSharedBudget:
         assert [d.received_drain_timeout for d in dispatchers] == [7.0] * 3
 
     @pytest.mark.asyncio
-    async def test_hanging_drain_is_abandoned_and_code_after_still_runs(
-        self, caplog
-    ):
+    async def test_hanging_drain_is_abandoned_and_code_after_still_runs(self, caplog):
         """A drain that never completes must not block past the hard cap;
         registry-cleanup-style code sequenced after the call still runs."""
         hanging = _FakeDispatcher("cap-stuck", hang=True)
@@ -95,9 +94,7 @@ class TestStopDispatchersSharedBudget:
         cleanup_ran = False
         t0 = time.monotonic()
         with caplog.at_level("WARNING"):
-            await stop_dispatchers(
-                [hanging, healthy], drain_timeout=0.1, grace=0.1
-            )
+            await stop_dispatchers([hanging, healthy], drain_timeout=0.1, grace=0.1)
         # Mirrors the lifespan finally block: cleanup is the next statement.
         cleanup_ran = True
         elapsed = time.monotonic() - t0
@@ -107,8 +104,7 @@ class TestStopDispatchersSharedBudget:
         assert not hanging.stop_finished
         assert elapsed < 1.0, f"hard cap did not engage: {elapsed:.2f}s"
         assert any(
-            "exceeded the shared budget" in rec.getMessage()
-            for rec in caplog.records
+            "exceeded the shared budget" in rec.getMessage() for rec in caplog.records
         )
 
     @pytest.mark.asyncio
@@ -174,9 +170,7 @@ class TestStopClaimDispatcherWrappers:
         async def fast_budget(dispatchers, drain_timeout=0.05, grace=0.1):
             await real(dispatchers, drain_timeout=drain_timeout, grace=grace)
 
-        monkeypatch.setattr(
-            claim_dispatcher_module, "stop_dispatchers", fast_budget
-        )
+        monkeypatch.setattr(claim_dispatcher_module, "stop_dispatchers", fast_budget)
 
         hanging = _FakeDispatcher("cap-stuck", hang=True)
         t0 = time.monotonic()

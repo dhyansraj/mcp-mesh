@@ -1,17 +1,47 @@
 #!/usr/bin/env python3
 """
-Comprehensive CI test runner that executes tests in proper order with parallelization.
-This script replicates the CI/CD pipeline locally for development and debugging.
+Local runner for the Python-side jobs of .github/workflows/ci.yml.
+
+Runs the same commands, over the same paths, as the `lint-and-format`,
+`python-test` and `scripts-test` jobs, so a green run here means those three
+jobs will be green on the PR. Everything is invoked from the directory its CI
+job uses, because both the ruff config and the pytest config are per-directory.
+
+DELIBERATELY NOT COVERED — these have no meaningful local shortcut, so this
+script does not pretend to run them:
+
+  * go-test / rust-test / typescript-test / java-test / ui-test — each needs its
+    own toolchain; run them from their own directories.
+  * helm-charts / lockfile-integrity — need helm and a base-branch ref.
+  * build-and-package — copies `_mcp_mesh`, `mesh`, README and LICENSE into
+    packaging/pypi before building. That scribbles untracked files into the
+    working tree, which is the wrong thing for a script people run mid-change.
+  * security-scan — bandit, run below but ADVISORY only. CI runs it with
+    `|| true` on push events only; it is not in `integration-status`'s `needs:`
+    and does not gate a merge, so it does not gate this script either.
+
+This file used to also shell out to `black --check`, `isort --check-only` and
+`mypy src`. black and isort are no longer dev dependencies and the type-check
+job no longer exists — linting and formatting are consolidated on ruff alone —
+so those invocations could not pass and are gone.
 """
 
-import asyncio
-import concurrent.futures
-import os
+import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any
+
+# Every CI job below sets its working directory to the Python runtime, and both
+# the [tool.ruff] and [tool.pytest.ini_options] tables live in that directory's
+# pyproject.toml. Running from anywhere else silently picks up different config.
+PYTHON_RUNTIME = Path("src/runtime/python")
+
+# The exact scope of the two `lint-and-format` ruff steps: every Python package
+# under src/runtime/python, `mesh` (the public API shipped in the wheel)
+# included. Keep in sync with .github/workflows/ci.yml.
+LINT_PATHS = ["_mcp_mesh", "mesh", "tests"]
 
 
 class CITestRunner:
@@ -22,19 +52,32 @@ class CITestRunner:
         self.results: dict[str, dict[str, Any]] = {}
 
     def run_command(
-        self, cmd: list[str], description: str, timeout: int = 300
+        self,
+        cmd: list[str],
+        description: str,
+        timeout: int = 300,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        echo_on_failure: bool = True,
     ) -> tuple[bool, str, str]:
         """Run a command and return success status with output."""
         print(f"🔄 Running: {description}")
         start_time = time.time()
 
+        run_env = None
+        if env:
+            import os
+
+            run_env = {**os.environ, **env}
+
         try:
             result = subprocess.run(
                 cmd,
-                cwd=self.project_root,
+                cwd=self.project_root / cwd if cwd else self.project_root,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                env=run_env,
             )
 
             duration = time.time() - start_time
@@ -43,8 +86,17 @@ class CITestRunner:
             status = "✅" if success else "❌"
             print(f"{status} {description} ({duration:.2f}s)")
 
+            if not success and echo_on_failure:
+                # The output is the whole point of running this locally; a bare
+                # ❌ sends people to the CI logs they were trying to avoid.
+                sys.stdout.write(result.stdout)
+                sys.stderr.write(result.stderr)
+
             return success, result.stdout, result.stderr
 
+        except FileNotFoundError:
+            print(f"💥 {description}: `{cmd[0]}` not found on PATH")
+            return False, "", f"{cmd[0]} not installed"
         except subprocess.TimeoutExpired:
             print(f"⏰ {description} timed out after {timeout}s")
             return False, "", f"Command timed out after {timeout}s"
@@ -53,277 +105,197 @@ class CITestRunner:
             return False, "", str(e)
 
     def run_lint_checks(self) -> bool:
-        """Run all linting and formatting checks in parallel."""
+        """Replicate the `lint-and-format` job (ruff check + ruff format)."""
         print("\n🔍 Running Code Quality Checks...")
 
+        # Sequential, not parallel: these are the only two checks left, they
+        # take under a second each, and running them in order means `ruff check`
+        # findings and `ruff format` findings do not interleave on the terminal.
         checks = [
-            (["ruff", "check", "src", "tests"], "Ruff linting"),
-            (["ruff", "format", "--check", "src", "tests"], "Ruff formatting check"),
-            (["black", "--check", "src", "tests"], "Black formatting check"),
-            (["isort", "--check-only", "src", "tests"], "Import sorting check"),
+            (["ruff", "check", *LINT_PATHS], "Ruff linting"),
+            (["ruff", "format", "--check", *LINT_PATHS], "Ruff formatting check"),
         ]
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-            futures = [
-                executor.submit(self.run_command, cmd, desc) for cmd, desc in checks
-            ]
-
-            results = [
-                future.result() for future in concurrent.futures.as_completed(futures)
-            ]
+        results = [
+            self.run_command(cmd, desc, cwd=PYTHON_RUNTIME) for cmd, desc in checks
+        ]
 
         all_passed = all(result[0] for result in results)
         self.results["lint"] = {"passed": all_passed, "details": results}
         return all_passed
 
-    def run_type_check(self) -> bool:
-        """Run type checking with mypy."""
-        print("\n🔍 Running Type Checking...")
-
-        success, stdout, stderr = self.run_command(
-            ["mypy", "src"], "MyPy type checking"
-        )
-
-        self.results["typecheck"] = {
-            "passed": success,
-            "stdout": stdout,
-            "stderr": stderr,
-        }
-        return success
-
     def run_security_scan(self) -> bool:
-        """Run security scanning with bandit."""
-        print("\n🔒 Running Security Scan...")
+        """Run bandit. ADVISORY — the return value never gates the pipeline."""
+        print("\n🔒 Running Security Scan (advisory)...")
 
+        # bandit exits non-zero on ANY finding, and _mcp_mesh currently has
+        # ~1400 of them, so the full report would bury every other result on the
+        # terminal. Findings are summarised below and the report is one command
+        # away; suppress the dump.
         success, stdout, stderr = self.run_command(
-            ["bandit", "-r", "src/", "-f", "txt"], "Bandit security scan"
+            ["bandit", "-r", "_mcp_mesh/", "-f", "txt"],
+            "Bandit security scan",
+            cwd=PYTHON_RUNTIME,
+            echo_on_failure=False,
         )
+        if not success:
+            print(
+                "   ℹ️  Findings are advisory and do not gate. Full report:\n"
+                "      (cd src/runtime/python && bandit -r _mcp_mesh/ -f txt)"
+            )
 
         self.results["security"] = {
             "passed": success,
+            "advisory": True,
             "stdout": stdout,
             "stderr": stderr,
         }
         return success
 
-    def run_test_suite(self, test_type: str, parallel: bool = True) -> bool:
-        """Run a specific test suite."""
-        print(f"\n🧪 Running {test_type.title()} Tests...")
+    def run_python_unit_tests(self) -> bool:
+        """Replicate the `python-test` job's unit run."""
+        print("\n🧪 Running Python Unit Tests...")
 
-        cmd = ["pytest", f"tests/{test_type}/", "-v"]
-
-        if parallel and test_type in ["unit", "integration"]:
-            cmd.extend(["-n", "auto"])  # pytest-xdist for parallelization
-
-        cmd.extend(
+        success, stdout, stderr = self.run_command(
             [
-                "--cov=mcp_mesh",
-                "--cov-report=xml",
+                "pytest",
+                "tests/unit/",
+                "_mcp_mesh/",
+                "-v",
+                "--cov=_mcp_mesh",
                 "--cov-report=term-missing",
-                f"--junit-xml=test-results-{test_type}.xml",
-            ]
-        )
-
-        success, stdout, stderr = self.run_command(
-            cmd, f"{test_type.title()} tests", timeout=600  # 10 minutes for test suites
-        )
-
-        self.results[f"test_{test_type}"] = {
-            "passed": success,
-            "stdout": stdout,
-            "stderr": stderr,
-        }
-        return success
-
-    def run_mcp_compliance_tests(self) -> bool:
-        """Run MCP protocol compliance tests."""
-        print("\n🔌 Running MCP Protocol Compliance Tests...")
-
-        success, stdout, stderr = self.run_command(
-            [
-                "pytest",
-                "tests/integration/test_mcp_protocol_compliance.py",
-                "-v",
-                "--junit-xml=mcp-compliance-results.xml",
-                "-m",
-                "not slow",
+                # No --junit-xml, unlike CI: nothing local reads it, and
+                # `test-results-*.xml` is not gitignored, so writing one leaves
+                # an untracked file in the tree of whoever ran this.
             ],
-            "MCP compliance tests",
+            "Python unit tests",
+            timeout=1800,
+            cwd=PYTHON_RUNTIME,
+            # Without this the mesh runtime auto-starts an HTTP server per
+            # decorated test module. CI sets it for the same reason.
+            env={"MCP_MESH_AUTO_RUN": "false"},
         )
 
-        self.results["mcp_compliance"] = {
+        self.results["test_unit"] = {
             "passed": success,
             "stdout": stdout,
             "stderr": stderr,
         }
         return success
 
-    def run_performance_tests(self) -> bool:
-        """Run performance and load tests."""
-        print("\n⚡ Running Performance Tests...")
+    def run_scripts_tests(self) -> bool:
+        """Replicate the `scripts-test` job (both of its steps)."""
+        print("\n🧰 Running Repo Script Tests...")
 
-        success, stdout, stderr = self.run_command(
-            [
-                "pytest",
-                "tests/integration/test_performance_load.py",
-                "-v",
-                "--junit-xml=performance-results.xml",
-                "-m",
-                "not slow",
-            ],
-            "Performance tests",
+        pytest_ok, pytest_out, pytest_err = self.run_command(
+            ["pytest", "scripts/", "-v"], "scripts/ tests"
         )
 
-        self.results["performance"] = {
+        # scripts/test_bump_version.py documents `python scripts/...` as a
+        # supported entry point, and that __main__ runner collects by a
+        # different rule than pytest does. CI runs both; so do we.
+        direct_ok, direct_out, direct_err = self.run_command(
+            [sys.executable, "scripts/test_bump_version.py"],
+            "scripts/test_bump_version.py direct entry point",
+        )
+
+        success = pytest_ok and direct_ok
+        self.results["test_scripts"] = {
             "passed": success,
-            "stdout": stdout,
-            "stderr": stderr,
+            "stdout": pytest_out + direct_out,
+            "stderr": pytest_err + direct_err,
         }
         return success
 
-    def build_package(self) -> bool:
-        """Build and verify the package."""
-        print("\n📦 Building Package...")
-
-        # Build the package
-        build_success, build_stdout, build_stderr = self.run_command(
-            ["python", "-m", "build"], "Package build"
-        )
-
-        if not build_success:
-            self.results["build"] = {
-                "passed": False,
-                "stdout": build_stdout,
-                "stderr": build_stderr,
-            }
-            return False
-
-        # Verify the package
-        verify_success, verify_stdout, verify_stderr = self.run_command(
-            ["twine", "check", "dist/*"], "Package verification"
-        )
-
-        self.results["build"] = {
-            "passed": verify_success,
-            "build_stdout": build_stdout,
-            "build_stderr": build_stderr,
-            "verify_stdout": verify_stdout,
-            "verify_stderr": verify_stderr,
-        }
-        return verify_success
-
-    def generate_report(self) -> None:
+    def generate_report(self) -> bool:
         """Generate a comprehensive test report."""
         print("\n" + "=" * 80)
         print("🎯 CI TEST RESULTS SUMMARY")
         print("=" * 80)
 
         total_passed = 0
-        total_tests = 0
+        total_gating = 0
 
         for test_name, result in self.results.items():
+            if result.get("advisory"):
+                # Never "FAILED": this check cannot fail the run, and labelling
+                # it that way is exactly the overclaim this report should avoid.
+                status = "✅ clean" if result["passed"] else "⚠️  findings"
+                print(f"{test_name.ljust(20)}: {status} (advisory, not gating)")
+                continue
+
             status = "✅ PASSED" if result["passed"] else "❌ FAILED"
             print(f"{test_name.ljust(20)}: {status}")
 
             if result["passed"]:
                 total_passed += 1
-            total_tests += 1
+            total_gating += 1
 
         print("=" * 80)
-        print(f"Overall: {total_passed}/{total_tests} checks passed")
+        print(f"Overall: {total_passed}/{total_gating} gating checks passed")
 
-        if total_passed == total_tests:
-            print("🎉 All CI checks passed! Ready for production.")
+        if total_passed == total_gating:
+            print("🎉 The Python-side CI jobs should pass.")
+            print("   Still unchecked here: go, rust, typescript, java, ui,")
+            print("   helm-charts, lockfile-integrity and build-and-package.")
             return True
         else:
             print("💥 Some CI checks failed. Please review and fix issues.")
             return False
 
-    async def run_full_ci_pipeline(self) -> bool:
+    def run_full_ci_pipeline(self) -> bool:
         """Run the complete CI pipeline in proper order."""
-        print("🚀 Starting Full CI Pipeline...")
+        print("🚀 Starting Python CI Pipeline...")
         print(f"📁 Project root: {self.project_root}")
 
-        # Phase 1: Static Analysis (can run in parallel)
+        # Phase 1: Static Analysis
         print("\n" + "=" * 60)
         print("📋 PHASE 1: Static Analysis")
         print("=" * 60)
 
-        static_tasks = [
-            self.run_lint_checks(),
-            self.run_type_check(),
-            self.run_security_scan(),
-        ]
+        lint_ok = self.run_lint_checks()
+        self.run_security_scan()  # advisory; result deliberately ignored
 
-        static_success = all(static_tasks)
-
-        if not static_success:
-            print("❌ Static analysis failed. Stopping pipeline.")
+        if not lint_ok:
+            print("❌ Lint/format failed. Stopping pipeline.")
             self.generate_report()
             return False
 
-        # Phase 2: Unit Tests
+        # Phase 2: Python Unit Tests
         print("\n" + "=" * 60)
-        print("🧪 PHASE 2: Unit Tests")
+        print("🧪 PHASE 2: Python Unit Tests")
         print("=" * 60)
 
-        unit_success = self.run_test_suite("unit")
+        self.run_python_unit_tests()
 
-        if not unit_success:
-            print("❌ Unit tests failed. Continuing with integration tests...")
-
-        # Phase 3: Integration Tests (including MCP compliance)
+        # Phase 3: Repo Script Tests
         print("\n" + "=" * 60)
-        print("🔗 PHASE 3: Integration Tests")
+        print("🧰 PHASE 3: Repo Script Tests")
         print("=" * 60)
 
-        self.run_test_suite("integration")
-        self.run_mcp_compliance_tests()
+        self.run_scripts_tests()
 
-        # Phase 4: E2E Tests and Performance
-        print("\n" + "=" * 60)
-        print("🌐 PHASE 4: E2E and Performance Tests")
-        print("=" * 60)
-
-        self.run_test_suite("e2e", parallel=False)
-        self.run_performance_tests()
-
-        # Phase 5: Build and Package
-        print("\n" + "=" * 60)
-        print("📦 PHASE 5: Build and Package")
-        print("=" * 60)
-
-        self.build_package()
-
-        # Generate final report
-        overall_success = self.generate_report()
-
-        return overall_success
+        return self.generate_report()
 
 
 def main():
     """Main entry point for the CI test runner."""
     project_root = Path(__file__).parent.parent
 
-    # Ensure we're in a virtual environment
-    if not os.environ.get("VIRTUAL_ENV") and not sys.prefix != sys.base_prefix:
-        print("⚠️  Warning: Not running in a virtual environment")
-        print("   Consider running: python -m venv venv && source venv/bin/activate")
+    # Deliberately does NOT install anything. It used to `pip install -r
+    # requirements-dev.txt` and `pip install -e .` from the repo root, neither
+    # of which exists (the Python manifest lives in src/runtime/python). A
+    # checker that mutates the environment it is checking is also just a bad
+    # idea. Report what is missing and let the caller decide.
+    missing = [tool for tool in ("ruff", "pytest", "bandit") if not shutil.which(tool)]
+    if missing:
+        print(f"⚠️  Not on PATH: {', '.join(missing)}")
+        print("   Install the dev extra first:")
+        print("     pip install -e 'src/runtime/python[dev]'")
+        print()
 
-    # Install development dependencies
-    print("📦 Installing development dependencies...")
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-r", "requirements-dev.txt"],
-        cwd=project_root,
-    )
-
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-e", "."], cwd=project_root
-    )
-
-    # Run the CI pipeline
     runner = CITestRunner(project_root)
-    success = asyncio.run(runner.run_full_ci_pipeline())
+    success = runner.run_full_ci_pipeline()
 
     sys.exit(0 if success else 1)
 

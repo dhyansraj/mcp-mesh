@@ -64,7 +64,7 @@ logger = logging.getLogger(__name__)
 async def refresh_health_once(
     *,
     agent_name: str,
-    health_check_fn: Optional[Callable[[], Any]],
+    health_check_fn: Callable[[], Any] | None,
     agent_config: dict[str, Any],
     startup_context: dict[str, Any],
     ttl_seconds: int,
@@ -135,8 +135,8 @@ async def health_refresh_loop(
     agent_config: dict[str, Any],
     startup_context: dict[str, Any],
     ttl_seconds: int,
-    log: Optional[logging.Logger] = None,
-    wait_ready: Optional[Callable[[], Awaitable[None]]] = None,
+    log: logging.Logger | None = None,
+    wait_ready: Callable[[], Awaitable[None]] | None = None,
     seed: bool = False,
 ) -> None:
     """Re-run the check every ``ttl_seconds`` and publish each verdict.
@@ -224,7 +224,7 @@ def start_gateway_health_refresh(
     service_type: str,
     service_id: str,
     context: dict[str, Any],
-    log: Optional[logging.Logger] = None,
+    log: logging.Logger | None = None,
 ) -> Optional["asyncio.Task"]:
     """Start the refresh loop for an ``api`` or ``a2a`` gateway.
 

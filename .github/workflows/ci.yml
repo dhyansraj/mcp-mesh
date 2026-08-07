@@ -15,7 +15,6 @@ jobs:
   lint-and-format:
     name: Code Quality Checks
     runs-on: ubuntu-latest
-    if: false # Temporarily disabled to unblock PR merge
     defaults:
       run:
         working-directory: src/runtime/python
@@ -33,41 +32,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .[dev]
 
+      # `mesh` is in scope deliberately: it is the public decorator surface
+      # shipped in the wheel (hatch `packages = ["_mcp_mesh", "mesh"]`), and it
+      # was previously linted by nothing at all — not this job, and not
+      # .pre-commit-config.yaml, which has no ruff hook by design. The three
+      # directories here are every Python package under src/runtime/python.
       - name: Run ruff linting
-        run: ruff check _mcp_mesh tests
+        run: ruff check _mcp_mesh mesh tests
 
       - name: Run ruff formatting check
-        run: ruff format --check _mcp_mesh tests
-
-      - name: Run black formatting check
-        run: black --check _mcp_mesh tests
-
-      - name: Run isort import sorting check
-        run: isort --check-only _mcp_mesh tests
-
-  type-check:
-    name: Type Checking
-    runs-on: ubuntu-latest
-    if: false # Temporarily disabled to unblock PR merge
-    defaults:
-      run:
-        working-directory: src/runtime/python
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: "pip"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .[dev]
-
-      - name: Run mypy type checking
-        run: mypy _mcp_mesh
+        run: ruff format --check _mcp_mesh mesh tests
 
   go-test:
     name: Go Tests
@@ -599,7 +573,6 @@ jobs:
     needs:
       [
         lint-and-format,
-        type-check,
         python-test,
         go-test,
         rust-test,
@@ -617,7 +590,6 @@ jobs:
       - name: Check all jobs status
         run: |
           echo "Lint and Format: ${{ needs.lint-and-format.result }}"
-          echo "Type Check: ${{ needs.type-check.result }}"
           echo "Python Tests: ${{ needs.python-test.result }}"
           echo "Go Tests: ${{ needs.go-test.result }}"
           echo "Rust Tests: ${{ needs.rust-test.result }}"
@@ -629,8 +601,19 @@ jobs:
           echo "Helm Charts: ${{ needs.helm-charts.result }}"
           echo "Build and Package: ${{ needs.build-and-package.result }}"
 
-          # Allow skipped status for temporarily disabled jobs
-          if [[ "${{ needs.python-test.result }}" != "success" ]] || \
+          # Every job in needs: must have succeeded for the pipeline to pass.
+          #
+          # security-scan is deliberately NOT gated and deliberately NOT in
+          # needs:. Two independent reasons: it runs `bandit ... || true` twice,
+          # so it reports success regardless of findings and could only ever
+          # fail on infrastructure trouble; and it is guarded by
+          # `if: github.event_name == 'push' || workflow_dispatch`, so on the
+          # pull_request events this gate exists to serve its result is
+          # `skipped` — adding it to the condition above would fail every single
+          # PR. It is an artifact-producing advisory job; the message below says
+          # so rather than claiming coverage this step does not have.
+          if [[ "${{ needs.lint-and-format.result }}" != "success" ]] || \
+             [[ "${{ needs.python-test.result }}" != "success" ]] || \
              [[ "${{ needs.go-test.result }}" != "success" ]] || \
              [[ "${{ needs.rust-test.result }}" != "success" ]] || \
              [[ "${{ needs.typescript-test.result }}" != "success" ]] || \
@@ -643,5 +626,6 @@ jobs:
             echo "❌ CI pipeline failed"
             exit 1
           else
-            echo "✅ Essential CI checks passed (quality checks temporarily disabled)"
+            echo "✅ All gating CI checks passed"
+            echo "ℹ️  Security Scanning is advisory and not gated here — read its report artifact"
           fi

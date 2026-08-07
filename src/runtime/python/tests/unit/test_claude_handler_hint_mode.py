@@ -42,6 +42,7 @@ def _force_litellm_path(monkeypatch):
     """
     monkeypatch.setenv("MCP_MESH_NATIVE_LLM", "0")
 
+
 # ---------------------------------------------------------------------------
 # ClaudeHandler.apply_structured_output
 # ---------------------------------------------------------------------------
@@ -76,9 +77,7 @@ class TestClaudeApplyStructuredOutputHintMode:
             "messages": [{"role": "system", "content": "You are helpful."}],
         }
 
-        result = handler.apply_structured_output(
-            self._schema(), "MyType", model_params
-        )
+        result = handler.apply_structured_output(self._schema(), "MyType", model_params)
 
         assert "response_format" not in result, (
             "ClaudeHandler.apply_structured_output must not set response_format "
@@ -92,9 +91,7 @@ class TestClaudeApplyStructuredOutputHintMode:
             "messages": [{"role": "system", "content": "You are helpful."}],
         }
 
-        result = handler.apply_structured_output(
-            self._schema(), "MyType", model_params
-        )
+        result = handler.apply_structured_output(self._schema(), "MyType", model_params)
 
         assert result.get("_mesh_hint_mode") is True
 
@@ -105,9 +102,7 @@ class TestClaudeApplyStructuredOutputHintMode:
             "messages": [{"role": "system", "content": "You are helpful."}],
         }
 
-        result = handler.apply_structured_output(
-            self._schema(), "MyType", model_params
-        )
+        result = handler.apply_structured_output(self._schema(), "MyType", model_params)
 
         assert "_mesh_hint_schema" in result
         assert isinstance(result["_mesh_hint_schema"], dict)
@@ -121,9 +116,7 @@ class TestClaudeApplyStructuredOutputHintMode:
             "messages": [{"role": "system", "content": "You are helpful."}],
         }
 
-        result = handler.apply_structured_output(
-            self._schema(), "MyType", model_params
-        )
+        result = handler.apply_structured_output(self._schema(), "MyType", model_params)
 
         assert result.get("_mesh_hint_fallback_timeout") == 90
         assert result.get("_mesh_hint_output_type_name") == "MyType"
@@ -199,9 +192,7 @@ class TestClaudeApplyStructuredOutputHintMode:
             "messages": [{"role": "system", "content": "You are helpful."}],
         }
 
-        result = handler.apply_structured_output(
-            self._schema(), "MyType", model_params
-        )
+        result = handler.apply_structured_output(self._schema(), "MyType", model_params)
 
         assert "response_format" in result, (
             "Env override must restore base response_format behavior"
@@ -480,7 +471,9 @@ class TestClaudeApplyStructuredOutputNoSystemMessage:
 
         # Flags should be set as normal
         assert model_params["_mesh_hint_mode"] is True
-        assert model_params["_mesh_hint_schema"]["properties"]["foo"]["type"] == "string"
+        assert (
+            model_params["_mesh_hint_schema"]["properties"]["foo"]["type"] == "string"
+        )
 
     def test_apply_structured_output_synthesizes_when_only_user_messages(self):
         """Multiple user messages, no system — should still prepend exactly one."""
@@ -703,10 +696,13 @@ class TestRunResponseFormatRetryVendorRouting:
             litellm_called = True
             return fake_response
 
-        with patch(
-            "mesh.helpers.ProviderHandlerRegistry.get_handler",
-            return_value=fake_handler,
-        ), patch("mesh.helpers.asyncio.to_thread", side_effect=fake_to_thread):
+        with (
+            patch(
+                "mesh.helpers.ProviderHandlerRegistry.get_handler",
+                return_value=fake_handler,
+            ),
+            patch("mesh.helpers.asyncio.to_thread", side_effect=fake_to_thread),
+        ):
             final_content, _msg, _resp = await _run_response_format_retry(
                 base_completion_args=base_args,
                 schema=schema,
@@ -928,13 +924,17 @@ class TestRunResponseFormatRetryVendorRouting:
         async def fake_to_thread(fn, **kwargs):
             return fake_response
 
-        with patch(
-            "_mcp_mesh.engine.provider_handlers.base_provider_handler.make_schema_strict",
-            side_effect=fake_make_schema_strict,
-        ), patch(
-            "mesh.helpers.ProviderHandlerRegistry.get_handler",
-            return_value=fake_handler,
-        ), patch("mesh.helpers.asyncio.to_thread", side_effect=fake_to_thread):
+        with (
+            patch(
+                "_mcp_mesh.engine.provider_handlers.base_provider_handler.make_schema_strict",
+                side_effect=fake_make_schema_strict,
+            ),
+            patch(
+                "mesh.helpers.ProviderHandlerRegistry.get_handler",
+                return_value=fake_handler,
+            ),
+            patch("mesh.helpers.asyncio.to_thread", side_effect=fake_to_thread),
+        ):
             await _run_response_format_retry(
                 base_completion_args=base_args,
                 schema=schema,

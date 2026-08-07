@@ -160,9 +160,7 @@ class TestStreamYieldsChunks:
         # Sentinel-driven termination: queue.get loop must exit on SENTINEL,
         # not hang forever waiting for more progress events.
         proxy = _make_proxy()
-        fake_client = _FakeFastMCPClient(
-            chunks=["a", "b"], result_text="ab"
-        )
+        fake_client = _FakeFastMCPClient(chunks=["a", "b"], result_text="ab")
 
         with patch.object(
             UnifiedMCPProxy,
@@ -170,6 +168,7 @@ class TestStreamYieldsChunks:
             new=AsyncMock(return_value=fake_client),
         ):
             collected: list[str] = []
+
             # Wrap in wait_for to fail loudly if the iterator hangs past last chunk
             async def _drive() -> None:
                 async for chunk in proxy.stream(prompt="x"):
@@ -290,9 +289,7 @@ class TestStreamErrorPropagation:
     @pytest.mark.asyncio
     async def test_timeout_error_propagates_unchanged(self):
         proxy = _make_proxy()
-        fake_client = _FakeFastMCPClient(
-            chunks=[], raise_exc=TimeoutError()
-        )
+        fake_client = _FakeFastMCPClient(chunks=[], raise_exc=TimeoutError())
 
         with patch.object(
             UnifiedMCPProxy,
@@ -364,9 +361,7 @@ class TestStreamNonStreamingFallback:
 
         assert collected == ["Whole response in one go."]
         # Soft-warn was emitted because stream_type != "text"
-        assert any(
-            "does not advertise" in record.message for record in caplog.records
-        )
+        assert any("does not advertise" in record.message for record in caplog.records)
 
     @pytest.mark.asyncio
     async def test_non_streaming_with_no_text_yields_nothing(self):

@@ -5,10 +5,11 @@ Tests the simplified heartbeat loop configuration logic after refactoring
 to remove duplicated configuration handling and use the config resolver.
 """
 
-from typing import Any, Dict
+from typing import Any
 from unittest.mock import ANY, MagicMock, call, patch
 
 import pytest
+
 # Import the classes under test
 from _mcp_mesh.pipeline.mcp_startup.heartbeat_loop import HeartbeatLoopStep
 from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
