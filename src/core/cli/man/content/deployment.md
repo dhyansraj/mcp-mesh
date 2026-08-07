@@ -375,6 +375,8 @@ Pointing liveness at `/health` turns an upstream outage into a pod restart, whic
 
 Route (`@mesh.route`) and A2A (`@mesh.a2a`) agents run `health_check` on the same timer, and a failing one pauses their heartbeat too. A withdrawn gateway keeps serving the ingress it already had - `/ready` stays 200, so the pod keeps its Service endpoints - and stops being discovered. Mesh registers the four paths on the gateway's own FastAPI app, and a path your application already defines wins.
 
+Declaring either hook is another matter: `startup_check` and `health_check` are `@mesh.agent` arguments, and that decorator cannot share a process with `@mesh.route` or `@mesh.a2a` (issue #1506), so the examples above apply to `@mesh.agent` agents only. `meshctl man health` has the detail.
+
 ### Probe Wiring
 
 The agent chart already wires all three. If you write your own Deployment, wire them the same way - the paths are the whole contract:

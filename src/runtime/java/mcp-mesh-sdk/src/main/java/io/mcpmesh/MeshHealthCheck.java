@@ -61,11 +61,12 @@ import java.lang.annotation.Target;
  * <h2>Route and A2A agents</h2>
  *
  * <p>The hook works the same way on an {@code api} (route-only) or {@code a2a}
- * agent: a failing check pauses the heartbeat there too (RFC #1502). It
- * declares "I am not available" on every agent type, and mesh does the same
- * thing with it everywhere — it stops wiring that agent. What differs is
- * topology, not meaning: a provider is something others route <i>to</i>, a
- * gateway is where requests <i>enter</i>.
+ * agent: an <b>unhealthy verdict</b> pauses the heartbeat there too (RFC #1502),
+ * while a check that throws publishes {@link MeshHealthStatus#DEGRADED} and
+ * keeps beating. It declares "I am not available" on every agent type, and mesh
+ * does the same thing with it everywhere — it stops wiring that agent. What
+ * differs is topology, not meaning: a provider is something others route
+ * <i>to</i>, a gateway is where requests <i>enter</i>.
  *
  * <p>So a withdrawn gateway is not a gateway that went down. Suppressing the
  * heartbeat stops registry traffic only — the servlet container keeps serving,

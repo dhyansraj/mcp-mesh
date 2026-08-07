@@ -296,9 +296,10 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // The `_java` and `_typescript` variants of both pages were rewritten the same
 // way and, as ever, move nothing here: these constants sample the default
 // variant alone, so a review of those files cannot lean on this test.
-// RFC #1502 step 3 follow-up: +5 / +0 / +0, all in `health.md`. Route and A2A
-// agents stopped being exempt from the health check, so both pages that stated
-// the exemption described behaviour the runtimes no longer have.
+// RFC #1502 step 3 follow-up: +12 / +0 / +0, in `health.md` and
+// `deployment.md`. Route and A2A agents stopped being exempt from the health
+// check, so both pages that stated the exemption described behaviour the
+// runtimes no longer have.
 //
 // `health.md`: the "Route and A2A Agents" section goes from two paragraphs to
 // three. The first swaps "never run the check" for "run it on the same timer",
@@ -309,11 +310,18 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // paragraph swaps its `/health` clause one-for-one. Prose throughout, so the
 // two list goldens hold.
 //
-// `deployment.md` was rewritten the same way and nets ZERO: its one carve-out
-// sentence trades `/health` ("stays 200") for `/ready` ("stays 200, so the pod
-// keeps its Service endpoints") and keeps its other three spans.
+// `deployment.md`: the carve-out sentence itself nets ZERO — it trades
+// `/health` ("stays 200") for `/ready` ("stays 200, so the pod keeps its
+// Service endpoints") and keeps its other three spans. The +7 is the paragraph
+// after it, which states the gap the runtime change leaves in Python: the
+// hooks are `@mesh.agent` arguments (`startup_check`, `health_check`,
+// `@mesh.agent` = +3) and that decorator cannot share a process with
+// `@mesh.route` or `@mesh.a2a` (+2), so the examples above are `@mesh.agent`
+// only (+1) and `meshctl man health` carries the detail (+1). Python-only, so
+// the `_java` and `_typescript` deployment pages do not get it — and they are
+// not sampled here anyway.
 const (
-	wantInlineCodeSpans = 1751
+	wantInlineCodeSpans = 1758
 	wantListCodeSpans   = 522
 	wantMarkupListLines = 448
 )

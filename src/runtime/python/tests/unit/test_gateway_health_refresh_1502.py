@@ -25,6 +25,7 @@ What is pinned here:
 """
 
 import asyncio
+import concurrent.futures
 from types import SimpleNamespace
 
 import pytest
@@ -76,32 +77,157 @@ async def _wait_for(predicate, timeout=10.0):
     raise AssertionError(f"condition not met within {timeout}s")
 
 
+# (module path, heartbeat task, the service_type it must report)
+GATEWAY_HEARTBEATS = [
+    (
+        "_mcp_mesh.pipeline.api_heartbeat.rust_api_heartbeat",
+        "rust_api_heartbeat_task",
+        "api",
+    ),
+    (
+        "_mcp_mesh.pipeline.a2a_heartbeat.rust_a2a_heartbeat",
+        "rust_a2a_heartbeat_task",
+        "a2a",
+    ),
+]
+
+
+def _drive_gateway_heartbeat(
+    monkeypatch, module_path, task_name, fake_start, on_start_agent=None
+):
+    """Run one gateway heartbeat task to completion against a stubbed core.
+
+    ``fake_start`` is installed on ``refresh_mod`` — the SHARED module — and
+    both heartbeats resolve ``start_gateway_health_refresh`` from there at call
+    time, so a heartbeat that grew its own copy of the loop would never reach
+    this stub and the caller's assertions would go red.
+    """
+    import importlib
+
+    module = importlib.import_module(module_path)
+    spec_builder = (
+        "_build_api_agent_spec"
+        if hasattr(module, "_build_api_agent_spec")
+        else "_build_a2a_agent_spec"
+    )
+    monkeypatch.setattr(module, spec_builder, lambda context, service_id=None: object())
+
+    # A core handle that reports one ``shutdown`` event and stops.
+    handle = SimpleNamespace(
+        next_event=lambda: asyncio.sleep(
+            0, result=SimpleNamespace(event_type="shutdown")
+        ),
+        shutdown=lambda: None,
+    )
+    core = SimpleNamespace(
+        start_agent=lambda spec: (on_start_agent and on_start_agent(), handle)[1]
+    )
+    monkeypatch.setattr(module, "_get_rust_core", lambda: core)
+    monkeypatch.setattr(refresh_mod, "start_gateway_health_refresh", fake_start)
+
+    asyncio.run(
+        getattr(module, task_name)(
+            {"service_id": "gw-1", "context": {}, "standalone_mode": False}
+        )
+    )
+
+
 class TestSharedLoopIsShared:
-    def test_the_provider_pipeline_uses_it(self):
+    def test_the_provider_pipeline_uses_it(self, monkeypatch):
         """The MCP path must not keep its own copy — a second loop is how the
-        provider and gateway behaviours drift apart."""
+        provider and gateway behaviours drift apart.
+
+        Patching the shared module and watching the pipeline drive it is the
+        only way to show that: a source grep passes on a comment, and on an
+        import that nothing ever calls.
+        """
+        from unittest.mock import MagicMock
+
+        from _mcp_mesh.pipeline.mcp_startup.fastapiserver_setup import (
+            FastAPIServerSetupStep,
+        )
+        from _mcp_mesh.shared import tool_executor, user_loop_hooks
+
+        seeded: list[dict] = []
+        looped: list[dict] = []
+
+        async def fake_once(**kwargs):
+            seeded.append(kwargs)
+            return {"status": "healthy"}
+
+        async def fake_loop(**kwargs):
+            looped.append(kwargs)
+
+        monkeypatch.setattr(refresh_mod, "refresh_health_once", fake_once)
+        monkeypatch.setattr(refresh_mod, "health_refresh_loop", fake_loop)
+
+        # The provider runs the loop on the user loop, behind the
+        # lifespan-ready gate; none of that machinery is under test here, so
+        # run the scheduled coroutine inline instead.
+        scheduled: list = []
+        monkeypatch.setattr(tool_executor, "_start_workers", lambda: None)
+        monkeypatch.setattr(
+            tool_executor, "get_worker_loops", lambda: [asyncio.get_event_loop()]
+        )
+        monkeypatch.setattr(
+            user_loop_hooks,
+            "get_or_create_lifespan_ready_future",
+            lambda app: concurrent.futures.Future(),
+        )
+        monkeypatch.setattr(
+            user_loop_hooks,
+            "schedule_on_user_loop",
+            lambda app, user_loop, coro_factory, **kw: scheduled.append(
+                asyncio.ensure_future(coro_factory())
+            ),
+        )
+
+        async def check():
+            return True
+
+        async def run():
+            await FastAPIServerSetupStep()._add_k8s_endpoints(
+                MagicMock(),
+                {"name": "provider", "health_check": check, "health_check_ttl": 1},
+                {},
+                {},
+            )
+            await asyncio.gather(*scheduled)
+
+        asyncio.run(run())
+
+        assert [kw["publish_to_core"] for kw in seeded] == [False], (
+            "the provider seed must go through the shared refresh_health_once, "
+            "and must not publish"
+        )
+        assert len(looped) == 1, "the shared loop was never driven"
+        assert looped[0]["agent_name"] == "provider"
+        assert looped[0]["health_check_fn"] is check
+
+        # And no second copy of the extracted body was left behind.
         import inspect
 
         from _mcp_mesh.pipeline.mcp_startup import fastapiserver_setup
 
-        source = inspect.getsource(fastapiserver_setup)
-        assert "health_refresh" in source
-        # The extracted body is gone from the pipeline step.
-        assert "publish_health_status_to_core" not in source
+        assert "publish_health_status_to_core" not in inspect.getsource(
+            fastapiserver_setup
+        )
 
-    @pytest.mark.parametrize(
-        "module_path",
-        [
-            "_mcp_mesh.pipeline.api_heartbeat.rust_api_heartbeat",
-            "_mcp_mesh.pipeline.a2a_heartbeat.rust_a2a_heartbeat",
-        ],
-    )
-    def test_both_gateway_heartbeats_use_it(self, module_path):
-        import importlib
-        import inspect
+    @pytest.mark.parametrize("module_path,task_name,service_type", GATEWAY_HEARTBEATS)
+    def test_both_gateway_heartbeats_use_it(
+        self, monkeypatch, module_path, task_name, service_type
+    ):
+        """Same argument for the two gateway paths: the heartbeat must actually
+        call the shared starter, not merely mention or import it."""
+        called: list[str] = []
 
-        source = inspect.getsource(importlib.import_module(module_path))
-        assert "start_gateway_health_refresh" in source
+        def fake_start(*, service_type, service_id, context, log=None):
+            called.append(service_type)
+            return SimpleNamespace(cancel=lambda: None)
+
+        _drive_gateway_heartbeat(monkeypatch, module_path, task_name, fake_start)
+
+        assert called == [service_type], "the shared starter was never invoked"
 
 
 class TestStartGatewayHealthRefresh:
@@ -231,64 +357,23 @@ class TestStartGatewayHealthRefresh:
 class TestHeartbeatWiring:
     """The gateway heartbeats start the loop and cancel it on teardown."""
 
-    @staticmethod
-    def _stub_handle(monkeypatch, module):
-        """A core handle that reports one ``shutdown`` event and stops."""
-        shutdown_event = SimpleNamespace(event_type="shutdown")
-        spec_builder = (
-            "_build_api_agent_spec"
-            if hasattr(module, "_build_api_agent_spec")
-            else "_build_a2a_agent_spec"
-        )
-        monkeypatch.setattr(
-            module, spec_builder, lambda context, service_id=None: object()
-        )
-        return SimpleNamespace(
-            next_event=lambda: asyncio.sleep(0, result=shutdown_event),
-            shutdown=lambda: None,
-        )
-
-    @pytest.mark.parametrize(
-        "module_path,task_name,service_type",
-        [
-            (
-                "_mcp_mesh.pipeline.api_heartbeat.rust_api_heartbeat",
-                "rust_api_heartbeat_task",
-                "api",
-            ),
-            (
-                "_mcp_mesh.pipeline.a2a_heartbeat.rust_a2a_heartbeat",
-                "rust_a2a_heartbeat_task",
-                "a2a",
-            ),
-        ],
-    )
+    @pytest.mark.parametrize("module_path,task_name,service_type", GATEWAY_HEARTBEATS)
     def test_started_after_registration_and_cancelled_on_teardown(
         self, monkeypatch, module_path, task_name, service_type
     ):
-        import importlib
-
-        module = importlib.import_module(module_path)
-        handle = self._stub_handle(monkeypatch, module)
-
         order: list[str] = []
         cancelled: list[bool] = []
-
-        core = SimpleNamespace(
-            start_agent=lambda spec: (order.append("start_agent"), handle)[1]
-        )
-        monkeypatch.setattr(module, "_get_rust_core", lambda: core)
 
         def fake_start(*, service_type, service_id, context, log=None):
             order.append(f"health_refresh:{service_type}")
             return SimpleNamespace(cancel=lambda: cancelled.append(True))
 
-        monkeypatch.setattr(refresh_mod, "start_gateway_health_refresh", fake_start)
-
-        asyncio.run(
-            getattr(module, task_name)(
-                {"service_id": "gw-1", "context": {}, "standalone_mode": False}
-            )
+        _drive_gateway_heartbeat(
+            monkeypatch,
+            module_path,
+            task_name,
+            fake_start,
+            on_start_agent=lambda: order.append("start_agent"),
         )
 
         assert order == ["start_agent", f"health_refresh:{service_type}"], (
