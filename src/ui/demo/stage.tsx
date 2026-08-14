@@ -480,6 +480,17 @@ const CHAPTER_VH: number[] = (() => {
   return out;
 })();
 
+/**
+ * First beat index and beat count per chapter, for the progress rail's fill.
+ * Precomputed: this was a findIndex + filter over all 14 beats, per chapter,
+ * inside the per-frame apply — ~140 array element visits every frame at 60fps
+ * to recompute constants.
+ */
+const CHAPTER_SPAN = Array.from({ length: BUILT_CHAPTERS }, (_, c) => ({
+  first: BEATS.findIndex((b) => b.chapter === c),
+  count: BEATS.filter((b) => b.chapter === c).length,
+}));
+
 /** Focus in these swallows the keys entirely — they are text entry. */
 const TEXT_ENTRY = new Set(["INPUT", "TEXTAREA", "SELECT"]);
 /** Space/Enter belong to these; the paging keys still do not. */
@@ -610,8 +621,7 @@ export function Stage({ devTools = false, showHeader = false }: StageProps) {
     // reads as one move rather than a mask cut plus a pan.
     s.setProperty("--gutter", lerp(a.fullBleed ? 0 : 1, b.fullBleed ? 0 : 1, f).toFixed(3));
     for (let c = 0; c < BUILT_CHAPTERS; c++) {
-      const first = BEATS.findIndex((x) => x.chapter === c);
-      const count = BEATS.filter((x) => x.chapter === c).length;
+      const { first, count } = CHAPTER_SPAN[c];
       s.setProperty(`--ch${c}-f`, `${(clamp((raw - first) / count, 0, 1) * 100).toFixed(2)}%`);
     }
 

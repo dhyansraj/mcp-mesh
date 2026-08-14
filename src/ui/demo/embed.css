@@ -149,6 +149,14 @@
   color: #94a3b8;
 }
 
+/* Load failure: collapse the reservation rather than leave 22 screens of empty
+ * scroll behind a section that will never arrive. Set by the loader's onerror
+ * in docs/index.md. Only applies AFTER a failure, so it cannot reintroduce the
+ * layout shift the reservation exists to prevent. */
+#mesh-scroll.mesh-scroll-failed {
+  display: none;
+}
+
 /* The mount point. It has to carry what the dev page gets from <body>, since
  * the scoped preflight can no longer set it on the document. */
 #mesh-scroll {

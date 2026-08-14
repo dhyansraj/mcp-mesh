@@ -339,7 +339,7 @@ A `kubectl`-style command-line tool that follows you from first agent to product
 </div>
 </div>
 
-These are the summary; [Feature Comparison](../comparison.md) has the detailed treatment of the same ground, feature by feature.
+The cards above are a summary; [Feature Comparison](../comparison.md) has the detailed treatment of the same ground, feature by feature.
 
 ---
 

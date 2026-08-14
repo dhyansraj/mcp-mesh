@@ -206,9 +206,53 @@ function scopeCss(): Plugin {
         );
         const ref = new RegExp(`(^|[\\s,])(${names.join("|")})(?=$|[\\s,])`, "g");
         root.walkDecls((decl) => {
-          if (decl.prop !== "animation" && decl.prop !== "animation-name") return;
+          // CUSTOM PROPERTIES TOO, and this was the bug: Tailwind does not put
+          // the keyframe name in the `animation` declaration. It defines
+          // `--animate-bounce: bounce 1s infinite` and then the utility says
+          // `animation: var(--animate-bounce)`. Renaming only the @keyframes
+          // block and the `animation:` declaration left every --animate-*
+          // pointing at a name that no longer existed, which silently killed
+          // animate-bounce and animate-pulse — including the threshold slide's
+          // scroll arrow. Any declaration can carry a keyframe name; the
+          // token-boundary match below is what keeps unrelated values intact.
+          const isAnim =
+            decl.prop === "animation" ||
+            decl.prop === "animation-name" ||
+            decl.prop.startsWith("--");
+          if (!isAnim) return;
           decl.value = decl.value.replace(ref, (_m, pre, name) => pre + NS + name);
         });
+      }
+
+      // CROSS-CHECK: every keyframe name referenced must resolve to a block we
+      // emitted. This is the assertion that would have caught the regression
+      // above at build time instead of on the live site.
+      {
+        const defined = new Set<string>();
+        root.walkAtRules((at) => {
+          if (/keyframes$/.test(at.name)) defined.add(at.params.trim());
+        });
+        const dangling = new Set<string>();
+        root.walkDecls((decl) => {
+          if (
+            decl.prop !== "animation" &&
+            decl.prop !== "animation-name" &&
+            !decl.prop.startsWith("--animate")
+          ) {
+            return;
+          }
+          for (const name of kf) {
+            const bare = new RegExp(`(^|[\\s,])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[\\s,])`);
+            if (bare.test(decl.value) && !defined.has(name)) dangling.add(`${decl.prop}: ${decl.value}`);
+          }
+        });
+        if (dangling.size) {
+          throw new Error(
+            "keyframe rename left dangling references:\n  " +
+              [...dangling].join("\n  ") +
+              "\nEvery name used in an animation or --animate-* value must have a matching @keyframes."
+          );
+        }
       }
 
       // ---- scope every selector -----------------------------------------

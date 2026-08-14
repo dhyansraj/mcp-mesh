@@ -279,6 +279,17 @@ meshctl man
       var s = document.createElement("script");
       s.src = src;
       s.defer = true;
+      /* If the bundle cannot load, collapse the reservation. Without this the
+         page keeps ~2205vh of height reserved for a section that will never
+         mount: 22 screens of empty scroll. Covers CDN failure, a CSP block and
+         a dropped connection.
+         NOT covered: JavaScript disabled entirely. Then this loader never runs,
+         no onerror fires, and the reservation stands. That case needs the
+         reservation inverted so the height is only applied once the bundle has
+         mounted, which is a larger change and is not done here. */
+      s.onerror = function () {
+        el.className += " mesh-scroll-failed";
+      };
       document.body.appendChild(s);
     };
     var arm = function () {
