@@ -477,6 +477,20 @@ docs-artifacts:
 	@bash scripts/generate_tutorial_artifacts.sh
 	@echo "Artifacts generated in docs/downloads/"
 
+.PHONY: docs-scroll-build
+docs-scroll-build:
+	@echo "📜 Building the home-page scroll section..."
+	@cd src/ui && npx vite build --config vite.demo.config.ts
+	@# Wipe first: cp never prunes, so an asset that stops being emitted would
+	@# otherwise linger in the output tree and get served forever.
+	@rm -rf docs/assets/mesh-scroll
+	@mkdir -p docs/assets/mesh-scroll
+	@cp -R src/ui/demo/dist/. docs/assets/mesh-scroll/
+	@echo "✅ docs/assets/mesh-scroll/ updated (gitignored - do NOT commit)"
+	@echo "   Local preview only. CI builds this from source on every docs"
+	@echo "   deploy, so nothing here is committed and nothing can go stale."
+	@echo "   Run this before 'make docs-serve' to see the section."
+
 .PHONY: docs-build
 docs-build:
 	@echo "📚 Building static docs site..."

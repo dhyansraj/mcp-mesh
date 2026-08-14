@@ -294,3 +294,10 @@ src/ui/node_modules/
 mcp-mesh-ui
 uisample/
 dump.rdb
+
+# Homepage scroll section — BUILT, never committed.
+# At 531KB the bundle exceeds this repo's 500KB large-file limit, and
+# .github/workflows/docs.yml builds it from source on every docs deploy, so a
+# committed copy could only ever be stale. `make docs-scroll-build` regenerates
+# it locally for `mkdocs serve`.
+docs/assets/mesh-scroll/

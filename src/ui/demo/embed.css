@@ -1,0 +1,228 @@
+/* Docs-site bundle: font faces and the scope root.
+ *
+ * The rest of the CSS (Tailwind + meshui globals, React Flow, scroll.css) is
+ * imported by embed.tsx. Everything that lands in the emitted stylesheet is
+ * rewritten at build time so every selector is confined to #mesh-scroll — see
+ * `scopeCss` in vite.demo.config.ts. That is what stops Tailwind's preflight
+ * resetting Material's headings, lists and links, and stops meshui's `:root`
+ * block redefining --font-sans for the whole document.
+ *
+ * The @font-face rules are deliberately NOT scoped: a font-face is a
+ * document-level declaration and cannot be. They are safe because the family
+ * names are ours alone — Material's own font is Inter, declared by Material.
+ */
+
+/* ONE file for 400/500/600. Google serves Geist as a variable font with a
+ * wght axis of 100-900, and the three weight URLs return byte-identical
+ * payloads — shipping them separately would have been 59KB of duplicate. */
+@font-face {
+  font-family: "Geist";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("./fonts/geist-var.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./fonts/geist-mono-400.woff2") format("woff2");
+}
+
+/* ---------------------------------------------------------------------------
+ * Material neutraliser.
+ *
+ * Unwrapping @layer fixed the CASCADE problem — our scoped utilities now beat
+ * Material's .md-typeset rules on specificity (1,1,0 vs 0,1,1) instead of
+ * losing to them for being layered. But it cannot fix a SECOND, quieter
+ * problem: Material declares properties that nothing in our CSS declares at
+ * all, and you cannot outrank a rule you never wrote.
+ *
+ * Audited by diffing every `.md-typeset <tag>` declaration against our own.
+ * Most apparent gaps were false (preflight's `*` covers margin and padding at
+ * 1,0,0, which still beats 0,1,1). These are the real ones, and they are all
+ * on inline code — Material's chip treatment, which is why the harness saw a
+ * background on our code spans even though the type was right.
+ *
+ * Only reachable when the section is mounted inside .md-typeset. Listed
+ * explicitly rather than reset wholesale, so the list stays auditable.
+ * --------------------------------------------------------------------------- */
+/* EVERY EDGE WAS INVISIBLE ON THE DOCS SITE. This is the same class of bug as
+ * the code chip below — Material declares a property we never declare — but it
+ * failed silently and total.
+ *
+ * Material ships `.md-typeset svg { height: auto; max-width: 100% }`. React
+ * Flow 12 renders EACH EDGE as its own <svg> inside the `.react-flow__edges`
+ * div, and that div is 0px wide: it is a positioning shell that relies on
+ * `overflow: visible` to paint outside itself. So `max-width: 100%` resolved
+ * against a zero-width containing block and gave every edge svg `max-width: 0`
+ * — and a zero-width outer <svg> is not rendered at all, per SVG spec.
+ * `overflow: visible` does not save it. Measured: 18 edge svgs at width 0
+ * before, 240 after.
+ *
+ * I called this rule "probably inert" when the static analysis first surfaced
+ * it, on the reasoning that React Flow paints outside the box anyway. That was
+ * wrong, and the harness agreed with me for the wrong reason — see the probe
+ * note in isolation/index.html.
+ *
+ * Scoped to `.react-flow__edges svg` and NOT to all svg under #mesh-scroll:
+ * the node cards contain lucide icons that legitimately want max-width: 100%.
+ *
+ * The dev page never showed this because nothing there loads Material. */
+#mesh-scroll .react-flow__edges svg {
+  max-width: none;
+}
+
+#mesh-scroll code {
+  background-color: transparent;
+  border-radius: 0;
+  padding: 0;
+  box-decoration-break: slice;
+  -webkit-box-decoration-break: slice;
+  white-space: inherit;
+  word-break: normal;
+}
+#mesh-scroll a {
+  word-break: normal;
+}
+
+/* Placeholder shown until the bundle mounts. It lives in home.html so it is in
+ * the first HTML response, and it carries B1's copy verbatim — a reader who
+ * arrives before 173KB of JS does gets the opening frame's words rather than a
+ * void. React clears the mount node on first render, so it needs no teardown.
+ *
+ * Pinned to the viewport so it stays on screen for the whole reserved height
+ * rather than scrolling away and leaving a long emptiness behind it.
+ *
+ * KNOWN GAP, deliberately not addressed in this pass: if the JS never arrives
+ * at all, this is what the reader keeps, followed by a very tall empty box.
+ * The reservation is unconditional, so the emptiness is visible rather than
+ * hidden. Inverting that is deferred work. */
+.mesh-scroll-placeholder {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  gap: 1rem;
+  padding: 12vh 6vw 0;
+  box-sizing: border-box;
+}
+.mesh-scroll-ph-rule {
+  width: 3px;
+  height: 62px;
+  margin-top: 4px;
+  border-radius: 999px;
+  background: #f97316;
+  box-shadow: 0 0 18px rgba(249, 115, 22, 0.4);
+}
+.mesh-scroll-ph-copy {
+  max-width: 32rem;
+}
+.mesh-scroll-ph-chapter {
+  margin: 0;
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: #f97316;
+}
+.mesh-scroll-ph-title {
+  margin: 8px 0 0;
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.12;
+  letter-spacing: -0.01em;
+  color: #fff;
+}
+.mesh-scroll-ph-sub {
+  margin: 12px 0 0;
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #94a3b8;
+}
+.mesh-scroll-ph-desc {
+  margin: 16px 0 0;
+  font-size: 15px;
+  line-height: 1.7;
+  color: #94a3b8;
+}
+
+/* The mount point. It has to carry what the dev page gets from <body>, since
+ * the scoped preflight can no longer set it on the document. */
+#mesh-scroll {
+  /* HIDDEN BY DEFAULT, shown only at >= MIN_WIDTH by the media query the build
+   * appends (see vite.demo.config.ts). This is the half of the mobile guard the
+   * loader cannot do: matchMedia in the loader is a ONE-SHOT check at load, so
+   * a page loaded wide and then narrowed — resize, or a device-orientation
+   * change — kept a fully mounted section at 500px, where the title breaks one
+   * character per line and the graph overflows. CSS re-evaluates continuously;
+   * the loader does not.
+   *
+   * `display: none` rather than visibility or opacity, deliberately: it also
+   * collapses the reserved height, so narrowing leaves no debris behind. Any
+   * other hiding mechanism would leave ~2205vh of blank page.
+   *
+   * It hides the static placeholder too, which is intended — B1's copy ("This
+   * is the mesh dashboard. Every card is a running agent…") describes a
+   * dashboard that is not beneath it. Out of context that is more confusing
+   * than an absence. */
+  display: none;
+
+  /* Breathing room at the seam. The preceding element on the docs page is a
+   * dense admonition, and the band changes width, background, type scale and
+   * reading mode all at once — four changes on one boundary, previously with
+   * only a 1px rule between them.
+   *
+   * NOTE ON WHAT THIS ACTUALLY BUYS: adjacent siblings' margins COLLAPSE, so
+   * the gap is max(admonition margin-bottom, this) — not the sum. Material's
+   * admonition carries 20px (1.5625em of its own .64rem), so this yields a
+   * flat 64px rather than 20+64. Deliberate: margin leaves the element's
+   * height alone, so the build-emitted min-height reservation stays exact.
+   * padding-top would give the full 84px but would make the section taller
+   * than its reservation and reintroduce a small shift on mount.
+   *
+   * 4rem is converted to 64px at build time, so it does not track Material's
+   * responsive root (where it would have been 80px at 1440). */
+  margin-top: 4rem;
+
+  font-family: "Geist", ui-sans-serif, system-ui, sans-serif;
+  background: #050c17;
+  color: #e2e8f0;
+
+  /* FULL-BLEED BREAKOUT — MARGIN-BASED, AND IT MUST STAY THAT WAY.
+   *
+   * The section is mounted mid-page inside Material's centred content column
+   * and has to escape it to viewport width. The tidy-looking alternative,
+   * `left: 50%; transform: translateX(-50%)`, would CREATE A CONTAINING BLOCK
+   * for every descendant — which silently kills `position: sticky` on the
+   * pinned panel, i.e. the entire piece stops pinning and just scrolls past.
+   * Same for `filter`, `perspective`, `contain` and `will-change`. Margins
+   * establish nothing, so they are the only safe way to do this here.
+   *
+   * 100vw includes the scrollbar, so this overflows horizontally by that much;
+   * Material's `html { overflow-x: hidden }` clips it without a scrollbar.
+   * Harmless at full width too (50% - 50vw is then ~0), so the rule is
+   * position-independent. */
+  width: 100vw;
+  /* No sidebar correction term: docs/index.md carries `hide: navigation`, so
+   * the content column is viewport-centred and this is exact at every width.
+   * If the nav is ever restored on that page the band will sit off-centre by
+   * half the sidebar (12.1rem) plus half Material's `:not([hidden])` content
+   * margin (1.2rem), and a `@media (min-width: 76.25em)` correction has to
+   * come back — along with the rem exemption in vite.demo.config.ts, which
+   * existed only to keep that one value tied to Material's responsive root. */
+  margin-left: calc(50% - 50vw);
+  /* clip, NEVER hidden: `overflow-x: hidden` forces overflow-y to auto, which
+   * makes this element a scroll container and breaks the sticky panel inside
+   * it. `clip` is the one value that pairs legally with `visible`. */
+  overflow-x: clip;
+  /* Inheritance is the one thing scoping cannot stop. Material's .md-typeset
+   * sets font-size: 0.8rem and line-height: 1.6 on the article wrapper, and
+   * if the section is ever mounted inside one, every em-relative value below
+   * would be computed against 12.8px instead of 16px. Anchor both. */
+  font-size: 16px;
+  line-height: 1.5;
+  text-align: left;
+}

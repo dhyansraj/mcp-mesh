@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<!--
+  CSS ISOLATION HARNESS — Phase 1 proof.
+
+  Loads the REAL MkDocs Material 9.7.1 stylesheets (copied from the installed
+  package into ./vendor) alongside the built bundle, and checks both directions
+  automatically:
+
+    A. Does our CSS change Material?  Computed styles of Material elements are
+       snapshotted BEFORE mesh-scroll.css is injected and re-measured after.
+       Any difference is a leak.
+    B. Does Material change ours?  The mount point is deliberately placed
+       INSIDE .md-typeset — the worst case, where Material's typography rules
+       target bare h2/p/a/code — and our elements are asserted against the
+       design's absolute values.
+
+  Serve statically (no dev server, so nothing is transformed):
+      cd src/ui/demo && python3 -m http.server 8081
+      open http://localhost:8081/isolation/
+
+  Build the bundle first:
+      cd src/ui && npx vite build --config vite.demo.config.ts
+-->
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>mesh-scroll — CSS isolation harness</title>
+
+    <!-- Material, exactly as the docs site loads it -->
+    <link rel="stylesheet" href="./vendor/main.min.css" />
+    <link rel="stylesheet" href="./vendor/palette.min.css" />
+
+    <style>
+      #report {
+        position: fixed;
+        inset: 0 0 auto 0;
+        z-index: 99999;
+        max-height: 50vh;
+        overflow: auto;
+        background: #0b1220;
+        color: #cbd5e1;
+        font: 12px/1.5 ui-monospace, monospace;
+        padding: 10px 14px;
+        border-bottom: 2px solid #334155;
+      }
+      #report table { border-spacing: 0; width: 100%; }
+      #report td { padding: 1px 8px 1px 0; vertical-align: top; }
+      .ok { color: #4ade80; }
+      .bad { color: #f87171; }
+      .hd { color: #fbbf24; font-weight: 700; padding-top: 8px; }
+      body { padding-top: 52vh; }
+    </style>
+  </head>
+
+  <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="indigo">
+    <div id="report">measuring…</div>
+
+    <!-- ------------------------------------------------ Material chrome -->
+    <header class="md-header" data-md-component="header">
+      <nav class="md-header__inner md-grid" aria-label="Header">
+        <a href="/" class="md-header__button md-logo" aria-label="MCP Mesh">
+          <span class="md-ellipsis">MCP Mesh</span>
+        </a>
+        <div class="md-header__title"><div class="md-header__ellipsis">Docs</div></div>
+      </nav>
+    </header>
+
+    <div class="md-container">
+      <main class="md-main">
+        <div class="md-main__inner md-grid">
+          <div class="md-content" data-md-component="content">
+            <article class="md-content__inner md-typeset">
+              <!-- Material typography probes, OUTSIDE our tree -->
+              <h1 id="p-h1">Material heading one</h1>
+              <p id="p-p">
+                Body copy with <a id="p-a" href="#x">a link</a> and
+                <code id="p-code">inline_code()</code> in it.
+              </p>
+              <h2 id="p-h2">Material heading two</h2>
+              <ul id="p-ul">
+                <li id="p-li">First list item</li>
+                <li>Second list item</li>
+              </ul>
+              <table>
+                <thead><tr><th id="p-th">Column</th></tr></thead>
+                <tbody><tr><td id="p-td">Cell</td></tr></tbody>
+              </table>
+              <blockquote id="p-bq"><p>A quotation.</p></blockquote>
+
+              <hr />
+
+              <!-- WORST CASE: our section mounted inside .md-typeset -->
+              <div id="mesh-scroll"></div>
+
+              <hr />
+              <h2 id="p-h2b">Material heading after the section</h2>
+              <p id="p-p2">More body copy below the section.</p>
+            </article>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <script>
+      // ---- probe definitions ------------------------------------------
+      // Material properties that Tailwind's preflight or meshui's :root would
+      // disturb if either escaped the scope.
+      const MATERIAL_PROBES = [
+        ["body", ["font-family", "background-color", "color", "margin"]],
+        ["#p-h1", ["font-family", "font-size", "font-weight", "margin-top", "color"]],
+        ["#p-h2", ["font-family", "font-size", "font-weight", "margin-top"]],
+        ["#p-p", ["font-family", "font-size", "line-height", "margin-top"]],
+        ["#p-a", ["color", "text-decoration-line"]],
+        ["#p-code", ["font-family", "font-size", "background-color", "padding-left"]],
+        ["#p-ul", ["list-style-type", "padding-left", "margin-top"]],
+        ["#p-li", ["list-style-type", "display"]],
+        ["#p-th", ["border-bottom-width", "border-bottom-style", "font-weight", "padding-top"]],
+        ["#p-td", ["border-top-width", "border-top-style", "padding-top"]],
+        ["#p-bq", ["border-left-width", "border-left-style", "padding-left"]],
+        [".md-header", ["background-color", "position", "height"]],
+        [".md-logo", ["color", "display"]],
+      ];
+
+      const snap = () => {
+        const out = {};
+        for (const [sel, props] of MATERIAL_PROBES) {
+          const el = document.querySelector(sel);
+          if (!el) { out[sel] = null; continue; }
+          const cs = getComputedStyle(el);
+          out[sel] = Object.fromEntries(props.map((p) => [p, cs.getPropertyValue(p)]));
+        }
+        return out;
+      };
+
+      const rows = [];
+      const push = (cls, a, b, c) => rows.push([cls, a, b, c]);
+      const render = () => {
+        document.getElementById("report").innerHTML =
+          "<table>" +
+          rows
+            .map(
+              ([cls, a, b, c]) =>
+                `<tr class="${cls}"><td>${cls === "hd" ? "" : cls === "ok" ? "PASS" : "FAIL"}</td><td>${a}</td><td>${b}</td><td>${c}</td></tr>`
+            )
+            .join("") +
+          "</table>";
+      };
+
+      const before = snap();
+
+      // ---- inject our stylesheet, then re-measure ----------------------
+      const css = document.createElement("link");
+      css.rel = "stylesheet";
+      css.href = "../dist/mesh-scroll.css";
+      css.onload = () => requestAnimationFrame(() => afterCss());
+      css.onerror = () => {
+        push("bad", "mesh-scroll.css", "failed to load", "build it first");
+        render();
+      };
+      document.head.appendChild(css);
+
+      function afterCss() {
+        const after = snap();
+        push("hd", "DIRECTION A — does our CSS change Material?", "", "");
+        let leaks = 0, checked = 0;
+        for (const [sel, props] of MATERIAL_PROBES) {
+          if (!before[sel]) { push("bad", sel, "probe element missing", ""); continue; }
+          for (const p of props) {
+            checked++;
+            const a = before[sel][p], b = after[sel][p];
+            if (a !== b) { leaks++; push("bad", `${sel} { ${p} }`, a, "→ " + b); }
+          }
+        }
+        push(leaks ? "bad" : "ok", `${checked} Material properties compared`, `${leaks} changed`, leaks ? "LEAK" : "no leak");
+
+        // ---- now load the bundle and check direction B ----------------
+        const js = document.createElement("script");
+        js.src = "../dist/mesh-scroll.js";
+        js.onerror = () => { push("bad", "mesh-scroll.js", "failed to load", ""); render(); };
+        js.onload = () => setTimeout(afterJs, 600);
+        document.body.appendChild(js);
+        render();
+      }
+
+      function afterJs() {
+        push("hd", "DIRECTION B — does Material change ours? (mounted inside .md-typeset)", "", "");
+        const root = document.getElementById("mesh-scroll");
+        const q = (s) => root.querySelector(s);
+        const expect = (label, el, prop, want) => {
+          if (!el) { push("bad", label, "element not found", ""); return; }
+          const got = getComputedStyle(el).getPropertyValue(prop).trim();
+          const ok = Array.isArray(want) ? want.some((w) => got.includes(w)) : got.includes(want);
+          push(ok ? "ok" : "bad", `${label} { ${prop} }`, got, ok ? "" : "want " + want);
+        };
+
+        expect("mount root", root, "background-color", "rgb(5, 12, 23)");
+        expect("mount root", root, "font-family", "Geist");
+        const h2 = q("h2");
+        expect("beat title h2", h2, "font-size", "30px");
+        expect("beat title h2", h2, "font-weight", "600");
+        expect("beat title h2", h2, "font-family", "Geist");
+        expect("beat title h2", h2, "margin-top", "8px");
+        const panel = q(".demo-panel");
+        expect("panel", panel, "background-color", "rgb(10, 22, 40)");
+        expect("panel", panel, "position", "relative");
+        const rf = q(".react-flow");
+        expect("react flow", rf, "direction", "ltr");
+        const desc = root.querySelector("p.demo-fade + p, .demo-fade");
+        expect("copy paragraph", desc, "font-family", "Geist");
+        const code = q("code");
+        expect("inline code", code, "font-family", ["Geist Mono", "ui-monospace"]);
+        expect("inline code", code, "background-color", "rgba(0, 0, 0, 0)");
+
+        // FUNCTIONAL probe, not a style probe. Material ships
+        // `.md-typeset svg { height:auto; max-width:100% }` and React Flow
+        // deliberately gives its edge <svg> no size at all, relying on
+        // overflow:visible — so a specificity comparison cannot settle whether
+        // edges still draw. Measure the painted geometry instead, then run the
+        // remaining checks as a continuation once it settles.
+        edgeProbe(0, function () {
+          // Presence is not paint, for the same reason as the edges above:
+          // count the nodes AND require that they occupy real space.
+          const nodeEls = [...root.querySelectorAll(".react-flow__node")];
+          const nodesPainted = nodeEls.filter(function (n) {
+            const b = n.getBoundingClientRect();
+            return b.width > 1 && b.height > 1;
+          }).length;
+          push(nodeEls.length > 0 && nodesPainted === nodeEls.length ? "ok" : "bad",
+               "nodes rendered + painted",
+               `${nodeEls.length} in DOM · ${nodesPainted} with a non-zero box`,
+               nodeEls.length ? "" : "graph did not mount");
+
+          // Unwrapping @layer changes precedence WITHIN our own stylesheet
+          // too: Tailwind's utilities stop losing to unlayered CSS by rule and
+          // start competing on specificity and source order. These are the
+          // regression guard — a utility must still apply, and scroll.css must
+          // still beat the utilities where it is meant to.
+          // 18px, not 16: globals.css overrides the radius scale to
+          // calc(var(--radius) + 8px), and --radius is 10px after the rem fix.
+          expect("utility still applies (rounded-2xl)", panel, "border-radius", "18px");
+          const anyNode = q(".react-flow__node");
+          expect("scroll.css still outranks utilities", anyNode, "transition-property", "opacity");
+
+          // rem used to resolve against Material's 22px root, inflating every
+          // spacing value by 37.5%. These two show the dependency is severed.
+          expect("rem-derived margin (mt-2)", q("h2"), "margin-top", "8px");
+          expect("scoped root font-size", root, "font-size", "16px");
+          push("ok", "document root font-size (Material)",
+               getComputedStyle(document.documentElement).fontSize,
+               "ours must no longer depend on this");
+
+          const loaded = [...document.fonts].filter((f) => f.family.includes("Geist"));
+          push(loaded.length ? "ok" : "bad", "self-hosted faces",
+               `${loaded.length} Geist faces registered`,
+               loaded.map((f) => f.family + " " + f.weight + " " + f.status).join(", "));
+
+          // Material must still be untouched after the bundle mounted, too.
+          const after2 = snap();
+          let leaks2 = 0;
+          for (const [sel, props] of MATERIAL_PROBES) {
+            if (!before[sel]) continue;
+            for (const p of props) if (before[sel][p] !== after2[sel][p]) leaks2++;
+          }
+          push(leaks2 ? "bad" : "ok", "Material re-checked after mount",
+               `${leaks2} changed`, leaks2 ? "LEAK" : "no leak");
+          render();
+        });
+      }
+
+      // RETRIES, and it is not optional. A backgrounded tab suspends
+      // requestAnimationFrame, so React Flow never measures its nodes and
+      // never computes edge geometry — the paths genuinely are not there yet,
+      // and a single-shot assertion reports "edges collapsed" for a page that
+      // is perfectly fine. Every false alarm this harness has produced traces
+      // back to document.hidden, so say that plainly instead of blaming CSS.
+      //
+      // Several edges are exactly vertical (flight-agent -> user-prefs is a
+      // straight drop), so a zero-WIDTH box is correct geometry there. The
+      // assertion is on the union of all paths, never on one sample.
+      // GEOMETRY IS NOT PAINT. This probe reported "18 paths · 15 with width ·
+      // 0 degenerate" on a page where no edge was painted at all, and that false
+      // PASS is why the bug shipped.
+      //
+      // A <path> reports a bounding box from its own geometry whether or not
+      // its owner <svg> is actually rendered. Material's
+      // `.md-typeset svg { max-width: 100% }` resolved against React Flow's
+      // zero-width `.react-flow__edges` shell, giving each edge svg
+      // `max-width: 0` — and a zero-width outer <svg> is not rendered at all.
+      // The paths still had perfect geometry inside an element that painted
+      // nothing.
+      //
+      // So the assertion is now on BOTH: the path must have geometry AND its
+      // owner <svg> must have a non-zero rendered box. Either alone is a lie.
+      // This is the mirror of the earlier false FAIL (a vertical edge has zero
+      // WIDTH by correct geometry); both came from measuring the wrong thing.
+      function edgeProbe(tries, done) {
+        const root = document.getElementById("mesh-scroll");
+        const paths = [...root.querySelectorAll(".react-flow__edge-path")];
+        const boxes = paths.map((p) => p.getBoundingClientRect());
+        const wide = boxes.filter((b) => b.width > 1).length;
+        const tall = boxes.filter((b) => b.height > 1).length;
+        const dead = boxes.filter((b) => b.width <= 1 && b.height <= 1).length;
+        // The paint check.
+        const owners = paths.map((p) => p.ownerSVGElement);
+        const unpainted = owners.filter(function (svg) {
+          if (!svg) { return true; }
+          const b = svg.getBoundingClientRect();
+          return b.width <= 0 || b.height <= 0;
+        }).length;
+        const good =
+          paths.length > 0 && wide > 0 && tall > 0 && dead === 0 && unpainted === 0;
+        if (!good && tries < 60) {
+          requestAnimationFrame(function () { edgeProbe(tries + 1, done); });
+          return;
+        }
+        const shape = `${paths.length} paths · ${wide} with width · ${tall} with height · ${dead} degenerate · ${unpainted} unpainted`;
+        if (good) {
+          push("ok", "edge paint + geometry", shape,
+               tries ? `settled after ${tries} frames` : "");
+        } else if (document.hidden) {
+          push("bad", "edge paint + geometry", "tab is BACKGROUNDED",
+               "rAF suspended — foreground the tab and reload");
+        } else if (unpainted > 0) {
+          push("bad", "edge paint + geometry", shape,
+               `${unpainted} edge svg(s) render at zero size — geometry is fine, nothing paints. Check .md-typeset svg max-width.`);
+        } else {
+          push("bad", "edge paint + geometry", shape, "edge geometry collapsed");
+        }
+        const svg = paths.length ? paths[0].ownerSVGElement : null;
+        if (svg) {
+          const cs = getComputedStyle(svg);
+          const b = svg.getBoundingClientRect();
+          push("ok", "edge svg as rendered",
+               `${b.width.toFixed(0)}x${b.height.toFixed(0)} · max-width=${cs.maxWidth} · overflow=${cs.overflow}`,
+               "informational");
+        }
+        done();
+      }
+
+    </script>
+  </body>
+</html>

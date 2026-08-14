@@ -1,0 +1,112 @@
+/* Throwaway demo styling. */
+
+.demo-panel .react-flow__edge.animated path {
+  animation: none !important;
+}
+
+/* Object identities are stable and the driver writes CSS vars every rAF, so a
+   SHORT transition only has to smooth over chunky wheel/trackpad deltas — it
+   is not doing the animation. Anything longer visibly lags the scrub. */
+.demo-panel .react-flow__edge-path {
+  transition:
+    stroke 90ms linear,
+    stroke-width 90ms linear,
+    opacity 90ms linear;
+}
+.demo-panel .react-flow__node {
+  transition: opacity 90ms linear;
+}
+/* Never transition the node transform — that property IS the pinned position. */
+.demo-panel .react-flow__node {
+  transition-property: opacity;
+}
+
+/* B11's whole point is that a single badge changes, which is easy to miss —
+   a driver-interpolated ring calls the eye to the one card that moved.
+   White, not accent orange: the beat's payload is a runtime swap, and the
+   `Java` runtime chip is itself orange. An orange ring around a card whose
+   orange badge is the news makes "look here" and "this is Java" the same
+   colour. White belongs to no runtime, so the ring reads purely as emphasis. */
+.demo-panel .demo-pulse {
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 3px rgba(255, 255, 255, calc(var(--pulse, 0) * 0.9)),
+    0 0 46px 6px rgba(255, 255, 255, calc(var(--pulse, 0) * 0.3));
+}
+
+/* The camera keeps every FOCUSED card out of the reserved column, but two
+   things still land there: the background wash (0.28-0.32 cards that sit left
+   of the beat's focus box) and, during a camera handoff, the card that is on
+   its way out of frame — "out of frame" means leaving to the left, which is
+   now the text. Measured worst cases: 0.32 opacity settled, 0.96 in transit.
+   So the column is masked as well as reserved. --gutter dissolves the mask for
+   the full-bleed final frame. */
+.demo-gutter {
+  opacity: var(--gutter, 1);
+  transition: opacity 90ms linear;
+  background: linear-gradient(
+    to right,
+    rgba(5, 12, 23, 0.94) 0%,
+    rgba(5, 12, 23, 0.94) 70%,
+    rgba(5, 12, 23, 0.62) 88%,
+    rgba(5, 12, 23, 0) 100%
+  );
+}
+
+/* The graph leaves as a whole rather than node by node — a per-node fade-out
+   would read as twelve agents dying, which is the wrong last impression. */
+.demo-graph {
+  transition: opacity 90ms linear;
+}
+
+/* Each phase reads its own driver variable through --p, so the rule is shared
+   and only the indirection differs per card. The lift is small on purpose: at
+   scroll-scrubbed speed anything larger reads as a slide rather than an
+   arrival. */
+.demo-phase {
+  opacity: var(--p, 0);
+  transform: translateY(calc((1 - var(--p, 0)) * 14px));
+  transition:
+    opacity 90ms linear,
+    transform 90ms linear;
+}
+
+.demo-rule {
+  background: var(--accent, #f97316);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--accent, #f97316) 40%, transparent);
+}
+.demo-accent {
+  color: var(--accent, #f97316);
+}
+.demo-rail-fill {
+  background: var(--accent, #f97316);
+}
+
+.demo-fade {
+  animation: demo-text-in 380ms ease both;
+}
+
+@keyframes demo-text-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .demo-fade {
+    animation: none !important;
+  }
+  .demo-panel .react-flow__edge-path,
+  .demo-panel .react-flow__node,
+  .demo-gutter,
+  .demo-graph,
+  .demo-phase {
+    transition: none !important;
+  }
+  .demo-phase {
+    transform: none;
+  }
+}
