@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MCP Mesh — scroll topology prototype</title>
+
+    <!--
+      PROTOTYPE ONLY — do not copy this into the SPA.
+
+      app/globals.css declares --font-geist-sans / --font-geist-mono, and
+      Tailwind's --font-sans / --font-mono resolve to them, but nothing in the
+      repo ever loads the faces: there is no @font-face rule, no `geist`
+      package, and document.fonts is empty. Everything therefore renders in the
+      ui-sans-serif / system-ui fallback, which is why this prototype's
+      typography did not match the design.
+
+      This link is the throwaway fix, scoped to this demo's own HTML so no
+      production file changes. Shipping it for real is a separate decision
+      about the dashboard: self-hosted woff2 in the bundle, not a runtime
+      dependency on a third-party CDN (offline/air-gapped installs, privacy,
+      and the go:embed bundle all argue against fonts.googleapis.com).
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400&display=swap"
+    />
+
+    <script>
+      // config.ts reads these; the demo never calls the API but the globals
+      // keep any transitive import from tripping over `undefined`.
+      window.__MESH_BASE_PATH__ = "";
+      window.__MESH_REGISTRY_URL__ = "http://localhost:8000/api";
+    </script>
+    <style>
+      html {
+        scroll-behavior: auto;
+      }
+    </style>
+  </head>
+  <body class="antialiased">
+    <div id="root"></div>
+    <script type="module" src="./scroll.tsx"></script>
+  </body>
+</html>

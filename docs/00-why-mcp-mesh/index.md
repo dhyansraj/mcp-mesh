@@ -286,6 +286,119 @@ Here's a real-world agent spec: a portfolio analyzer that needs provider failove
 
 Every requirement is handled. The provider selector has two tag groups — Claude matches both `+anthropic` and `+sonnet` (score 2), while Gemini matches only `+gemini` (score 1). The mesh deterministically selects the highest-scoring provider and falls back automatically. Filter tags (`financial`, `data`) are hard requirements — only tools with those capabilities are wired in. No HTTP clients, no retry logic, no service discovery code. The mesh does it all.
 
+## :sparkles: Key Features
+
+<div class="grid-features" markdown>
+<div class="feature-card" markdown>
+### :electric_plug: Zero Boilerplate
+Two decorators replace hundreds of lines of networking code. Just write business logic.
+</div>
+<div class="feature-card" markdown>
+### :dart: Smart Discovery
+Tag-based service resolution with version constraints. Agents automatically find dependencies.
+</div>
+<div class="feature-card" markdown>
+### :material-kubernetes: Kubernetes Native
+Helm charts with horizontal scaling, health checks, and observability.
+</div>
+<div class="feature-card" markdown>
+### :arrows_counterclockwise: DDDI — Dynamic Injection
+Distributed Dynamic Dependency Injection without restarts. Add, remove, or upgrade services seamlessly across the mesh.
+</div>
+<div class="feature-card" markdown>
+### :bar_chart: Built-in Observability
+Grafana dashboards, distributed tracing with Tempo, and Redis-backed session management.
+</div>
+<div class="feature-card" markdown>
+### :shield: Enterprise Ready
+Graceful failure handling, auto-reconnection, header-propagation-based authorization hooks, and real-time monitoring.
+</div>
+<div class="feature-card" markdown>
+### :globe_with_meridians: Multi-Language Agents
+Write agents in Python, TypeScript, or Java — they discover and call each other natively across the mesh via a shared Rust FFI core.
+</div>
+<div class="feature-card" markdown>
+### :material-swap-horizontal: Multi-Protocol Bridging
+Native support for MCP, Google's A2A v1.0, and REST. Consume external A2A producers as mesh capabilities, or expose mesh agents as A2A producers for non-mesh callers — same code, same `@mesh.tool` shape.
+</div>
+<div class="feature-card" markdown>
+### :brain: Multi-Provider LLM Support
+First-class support for Claude, GPT, and Gemini with agentic tool execution, structured output, and auto-resolution. Any provider supported by LiteLLM, Vercel AI SDK, or Spring AI works out of the box.
+</div>
+<div class="feature-card" markdown>
+### :camera: Multimodal Support
+Pass images, PDFs, and files between agents and LLMs. Claude, OpenAI, and Gemini each require different API structures for media — the mesh abstracts that away.
+</div>
+<div class="feature-card" markdown>
+### :material-progress-clock: Long-Running with MeshJob
+Mark a tool `task=True` and mesh handles the rest — job persistence, status polling, cancellation, SSE streaming, and retries on transient failure. No queue infrastructure to provision; the registry IS the job substrate.
+</div>
+<div class="feature-card" markdown>
+### :material-console-line: meshctl CLI
+A `kubectl`-style command-line tool that follows you from first agent to production — scaffold new agents, inspect the registry, view traces, call tools directly, and manage agent lifecycle. Same commands work against local dev, Docker, and Kubernetes.
+</div>
+</div>
+
+The cards above are a summary; [Feature Comparison](../comparison.md) has the detailed treatment of the same ground, feature by feature.
+
+---
+
+## Who it is for
+
+=== "For Developers"
+
+    **Stop fighting infrastructure. Start building intelligence.**
+
+    - **Zero Boilerplate**: Simple decorators/functions replace hundreds of lines of networking code
+    - **Python, Java & TypeScript**: Write MCP servers as simple functions in your preferred language — no manual client/server setup
+    - **Multi-Protocol**: Build MCP, A2A, and REST agents with the same framework. Bridge between protocols — consume external A2A producers, or expose mesh tools to A2A clients — without rewriting business logic
+    - **Web Framework Integration**: Inject MCP agents directly into FastAPI (Python), Spring Boot (Java), or Express (TypeScript) APIs seamlessly
+    - **LLM as Dependencies**: Inject LLMs just like MCP agents — dynamic prompts with Jinja2 (Python), FreeMarker (Java), or Handlebars (TypeScript)
+    - **Seamless Development Flow**: Code locally, test with Docker Compose, deploy to Kubernetes — same code, zero changes
+    - **kubectl-like Management**: `meshctl` — a familiar command-line tool to run, monitor, and manage your entire agent network
+
+=== "For Solution Architects"
+
+    **Design intelligent systems, not complex integrations.**
+
+    - **Agent-Centric Architecture**: Design specialized agents with clear capabilities and dependencies, not monolithic systems
+    - **Dynamic Intelligence**: Agents get smarter automatically when new capabilities come online — no reconfiguration needed
+    - **Domain-Driven Design**: Solve business problems with ecosystems of focused agents that can be designed and developed independently
+    - **Composable Solutions**: Mix and match agents to create new business capabilities without custom integration code
+
+    **Example**: Deploy a financial analysis agent that automatically discovers and uses risk assessment, market data, and compliance agents as they become available.
+
+=== "For DevOps Teams"
+
+    **AI infrastructure out of the box.**
+
+    - **Kubernetes-Native**: Deploy with Helm charts — horizontal scaling, health checks, and service discovery included
+    - **Enterprise Observability**: Built-in Grafana dashboards, distributed tracing, and centralized logging for complete system visibility
+    - **Zero-Touch Operations**: Agents self-register, auto-discover dependencies, and gracefully handle failures without network restarts
+    - **Standards-Based**: Leverage existing Kubernetes patterns — RBAC, network policies, service mesh integration, and security policies
+
+    **Scale from 2 agents to 200+ with the same operational complexity.**
+
+=== "For Support & Operations"
+
+    **Complete visibility and zero-downtime operations.**
+
+    - **Real-Time Network Monitoring**: See every agent, dependency, and health status in live dashboards
+    - **Intelligent Scaling**: Agents scale independently based on demand - no cascading performance issues
+    - **Graceful Failure Handling**: Agents degrade gracefully when dependencies are unavailable, automatically reconnect when services return
+    - **One-Click Diagnostics**: `meshctl status` provides instant network health assessment with actionable insights
+
+=== "For Engineering Leadership"
+
+    **Transform AI experiments into production revenue.**
+
+    - **Accelerated Time-to-Market**: Move from PoC to production deployment in weeks, not months
+    - **Cross-Team Collaboration**: Enable different departments to build agents that automatically enhance each other's capabilities
+    - **Risk Mitigation**: Proven patterns help ensure reliable AI deployments that scale with your business
+    - **Future-Proof Architecture**: Add new AI capabilities without disrupting existing systems
+
+    Turn your AI strategy from "promising experiments" to "competitive advantage in production."
+
 ---
 
 ## Next Steps

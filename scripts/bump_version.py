@@ -1341,10 +1341,16 @@ OVERMATCH_ALLOWLIST: list[Exemption] = [
         reason="the example version inside that same input's description.",
     ),
     Exemption(
-        glob="docs/index.md",
+        # Moved from docs/index.md to docs/contributing.md when the homepage
+        # was reorganised for the scroll section. This glob and the mandatory
+        # -coverage pattern in _guard_required_patterns are deliberately
+        # coupled — that one says the rewrite is mandatory, this one says it is
+        # legitimate — so they must name the same file. If the line moves
+        # again, move both.
+        glob="docs/contributing.md",
         pattern=r"\*\*Latest Release\*\*:\s*vNEW",
         reason=(
-            "the release line on the docs landing page; the sentence names "
+            "the release line on the contributing page; the sentence names "
             "the release, not an artifact."
         ),
     ),

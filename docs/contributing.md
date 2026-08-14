@@ -144,11 +144,32 @@ field that broke CI while local environments stayed green (#1453).
 - Test locally: `mkdocs serve`
 - Keep examples runnable
 
+## :star: Project Status
+
+- **Latest Release**: v3.6.0
+- **Languages**: Python 3.11+, TypeScript/Node.js 18+, and Java 17+ (runtime), Go 1.23+ (registry)
+- **Status**: Production-ready, actively developed
+
+What changed in each version — breaking changes, upgrade notes and fixes — is in the [Release Notes](release-notes.md).
+
+---
+
+## :pray: Acknowledgments
+
+- **[Anthropic](https://anthropic.com)** for creating the MCP protocol
+- **[Google](https://a2a-protocol.org/)** for the A2A protocol
+- **[FastMCP](https://github.com/jlowin/fastmcp)** for excellent MCP server foundations
+- **[Kubernetes](https://kubernetes.io)** community for the infrastructure platform
+- All **contributors** who help make MCP Mesh better
+
+---
+
 ## Getting Help
 
 - **Questions**: [GitHub Discussions](https://github.com/dhyansraj/mcp-mesh/discussions)
 - **Bugs**: [GitHub Issues](https://github.com/dhyansraj/mcp-mesh/issues)
 - **Chat**: [Discord Community](https://discord.gg/KDFDREphWn)
+- **Examples**: [Working code examples](https://github.com/dhyansraj/mcp-mesh/tree/main/examples)
 
 ## License
 

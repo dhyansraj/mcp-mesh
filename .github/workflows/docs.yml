@@ -11,6 +11,19 @@ on:
       - '.github/workflows/docs.yml'
       - 'examples/tutorial/**'
       - 'scripts/generate_tutorial_artifacts.sh'
+      # The homepage scroll bundle is BUILT here, not committed, so a change to
+      # its source produces no diff under docs/ and would otherwise not deploy
+      # — the site would keep serving the previously built bundle until some
+      # unrelated docs edit happened to trigger this workflow.
+      #
+      # Deliberately the whole tree rather than an enumeration. The bundle
+      # depends on src/ui/demo/, components/topology/AgentNode.tsx,
+      # lib/topology.ts, app/globals.css, vite.demo.config.ts AND
+      # package-lock.json; any hand-maintained list eventually misses one and
+      # under-deploys silently. Over-triggering costs an occasional needless
+      # docs deploy after a dashboard-only change, which is harmless.
+      - 'src/ui/**'
+      - 'Makefile'
   workflow_dispatch:
 
 permissions:
@@ -38,10 +51,18 @@ jobs:
             ${{ runner.os }}-pip-
 
       - name: Install dependencies
+        # PINNED, and it matters more than it looks. The scroll section's CSS is
+        # scoped against Material's own stylesheet — the isolation harness
+        # vendors 9.7.1 and every specificity and cascade decision was
+        # calibrated against it. A silent Material bump can change a
+        # `.md-typeset` rule underneath us with no signal at deploy time: one
+        # such rule (`.md-typeset svg { max-width: 100% }`) already collapsed
+        # every edge in the graph to zero width during development.
+        # Versions match the local .venv so CI and local render identically.
         run: |
-          pip install mkdocs-material
-          pip install mkdocs-minify-plugin
-          pip install mkdocs-git-revision-date-localized-plugin
+          pip install mkdocs-material==9.7.1
+          pip install mkdocs-minify-plugin==0.8.0
+          pip install mkdocs-git-revision-date-localized-plugin==1.5.0
 
       - name: Install pandoc
         run: sudo apt-get update && sudo apt-get install -y pandoc
@@ -79,6 +100,37 @@ jobs:
             exit 1
           fi
           echo "All tutorial artifacts present."
+
+      # Node 22 to match ci.yml's ui-test job: the two must agree, or the bundle
+      # this deploys could differ from the one CI type-checks and tests.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: src/ui/package-lock.json
+
+      - name: Install dashboard dependencies
+        working-directory: src/ui
+        run: npm ci
+
+      # The scroll bundle is built here rather than committed: at 531KB it
+      # exceeds the repo's 500KB large-file limit, and building it from source
+      # on every deploy removes the possibility of shipping a stale artifact.
+      - name: Build the homepage scroll section
+        run: make docs-scroll-build
+
+      - name: Verify the scroll bundle was produced
+        run: |
+          set -e
+          for f in mesh-scroll.js mesh-scroll.css fonts/geist-var.woff2 fonts/geist-mono-400.woff2; do
+            if [ ! -s "docs/assets/mesh-scroll/$f" ]; then
+              echo "ERROR: docs/assets/mesh-scroll/$f missing or empty after build."
+              echo "The homepage would deploy without its scroll section."
+              exit 1
+            fi
+          done
+          echo "Scroll bundle present."
 
       - name: Deploy to GitHub Pages
         run: mkdocs gh-deploy --force

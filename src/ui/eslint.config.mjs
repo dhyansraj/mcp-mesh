@@ -5,7 +5,10 @@ import reactHooks from "eslint-plugin-react-hooks";
 import globals from "globals";
 
 const eslintConfig = defineConfig([
-  globalIgnores(["dist/**", "node_modules/**", "*.config.*", "*.tsbuildinfo"]),
+  // "**/dist/**", not "dist/**": the latter is root-relative and missed
+  // src/ui/demo/dist/, so `npx eslint demo` reported 6 errors and 9 warnings
+  // from inside the demo's own minified build artifact.
+  globalIgnores(["**/dist/**", "node_modules/**", "*.config.*", "*.tsbuildinfo"]),
   {
     files: ["**/*.js", "**/*.jsx", "**/*.mjs"],
     ...js.configs.recommended,

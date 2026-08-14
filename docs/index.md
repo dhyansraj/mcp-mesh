@@ -1,7 +1,25 @@
 ---
 title: Home
 template: home.html
+hide:
+  - navigation
 ---
+
+<!-- `hide: navigation` is LOAD-BEARING for the scroll section, not a styling
+     preference. Material's primary sidebar is sticky and in-flow at >= 76.25em,
+     and the section is a full-bleed 100vw band — so the sidebar sat on top of
+     its left 266px, which is exactly where the copy column lives. Every beat's
+     title, sub-line and description were underneath the site nav.
+
+     Hiding it also makes the content column viewport-centred, which is why
+     embed.css's breakout is a plain `calc(50% - 50vw)` with no correction. If
+     the nav is ever restored here, that correction has to come back — see the
+     note in src/ui/demo/embed.css.
+
+     `hide: toc` is NOT needed: the secondary sidebar is not rendered on this
+     page at all (verified in the built HTML). -->
+
+
 
 # Distributed Service Mesh for AI Agents
 
@@ -15,31 +33,9 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
 
 ---
 
-## :zap: Getting Started
-
-Start with the CLI — fastest way to explore mesh, scaffold agents, and read documentation offline.
-
-`meshctl` is a fully-featured command-line tool that follows you from your first agent through production and beyond: scaffolding, local dev, registry inspection, tracing, observability, deployment, and operations are all one command away. [Explore the full CLI reference →](cli/index.md)
-
-```bash
-# Install the CLI
-npm install -g @mcpmesh/cli
-
-# Explore commands
-meshctl --help
-
-# Built-in documentation
-meshctl man
-```
-
-!!! tip "Turn your AI coding assistant into a mesh expert"
-    Working with Claude Code, Cursor, Copilot, or any other AI coding assistant? Ask it to run `meshctl man` and read through the topics it surfaces. The built-in man pages cover every feature in depth — within a few minutes your assistant will be fluent in mesh, ready to scaffold agents, debug DDDI wiring, and answer architecture questions without you having to copy-paste docs into the chat.
-
----
-
 ## :rocket: Quick Overview
 
-Build multi-agent systems that are production-ready from day one. Mesh handles the operational surface — scaling, security, observability, and seamless routing across protocols (MCP, A2A, REST), languages (Python, Java, TypeScript), and LLM providers — so the code you write stays focused on business logic, in whatever language fits.
+The same agent, in each language.
 
 === "Python"
 
@@ -218,219 +214,100 @@ Build multi-agent systems that are production-ready from day one. Mesh handles t
 
 ---
 
-## :sparkles: Key Features
+## :zap: Getting Started
 
-<div class="grid-features" markdown>
-<div class="feature-card" markdown>
-### :electric_plug: Zero Boilerplate
-Two decorators replace hundreds of lines of networking code. Just write business logic.
-</div>
-<div class="feature-card" markdown>
-### :dart: Smart Discovery
-Tag-based service resolution with version constraints. Agents automatically find dependencies.
-</div>
-<div class="feature-card" markdown>
-### :material-kubernetes: Kubernetes Native
-Helm charts with horizontal scaling, health checks, and observability.
-</div>
-<div class="feature-card" markdown>
-### :arrows_counterclockwise: DDDI — Dynamic Injection
-Distributed Dynamic Dependency Injection without restarts. Add, remove, or upgrade services seamlessly across the mesh.
-</div>
-<div class="feature-card" markdown>
-### :bar_chart: Built-in Observability
-Grafana dashboards, distributed tracing with Tempo, and Redis-backed session management.
-</div>
-<div class="feature-card" markdown>
-### :shield: Enterprise Ready
-Graceful failure handling, auto-reconnection, RBAC support, and real-time monitoring.
-</div>
-<div class="feature-card" markdown>
-### :globe_with_meridians: Multi-Language Agents
-Write agents in Python, TypeScript, or Java — they discover and call each other natively across the mesh via a shared Rust FFI core.
-</div>
-<div class="feature-card" markdown>
-### :material-swap-horizontal: Multi-Protocol Bridging
-Native support for MCP, Google's A2A v1.0, and REST. Consume external A2A producers as mesh capabilities, or expose mesh agents as A2A producers for non-mesh callers — same code, same `@mesh.tool` shape.
-</div>
-<div class="feature-card" markdown>
-### :brain: Multi-Provider LLM Support
-First-class support for Claude, GPT, and Gemini with agentic tool execution, structured output, and auto-resolution. Any provider supported by LiteLLM, Vercel AI SDK, or Spring AI works out of the box.
-</div>
-<div class="feature-card" markdown>
-### :camera: Multimodal Support
-Pass images, PDFs, and files between agents and LLMs. Claude, OpenAI, and Gemini each require different API structures for media — the mesh abstracts that away.
-</div>
-<div class="feature-card" markdown>
-### :material-progress-clock: Long-Running with MeshJob
-Mark a tool `task=True` and mesh handles the rest — job persistence, status polling, cancellation, SSE streaming, and retries on transient failure. No queue infrastructure to provision; the registry IS the job substrate.
-</div>
-<div class="feature-card" markdown>
-### :material-console-line: meshctl CLI
-A `kubectl`-style command-line tool that follows you from first agent to production — scaffold new agents, inspect the registry, view traces, call tools directly, and manage agent lifecycle. Same commands work against local dev, Docker, and Kubernetes.
-</div>
+Start with the CLI — fastest way to explore mesh, scaffold agents, and read documentation offline.
+
+`meshctl` is a fully-featured command-line tool that follows you from your first agent through production and beyond: scaffolding, local dev, registry inspection, tracing, observability, deployment, and operations are all one command away. [Explore the full CLI reference →](cli/index.md)
+
+```bash
+# Install the CLI
+npm install -g @mcpmesh/cli
+
+# Explore commands
+meshctl --help
+
+# Built-in documentation
+meshctl man
+```
+
+!!! tip "Turn your AI coding assistant into a mesh expert"
+    Working with Claude Code, Cursor, Copilot, or any other AI coding assistant? Ask it to run `meshctl man` and read through the topics it surfaces. The built-in man pages cover every feature in depth — within a few minutes your assistant will be fluent in mesh, ready to scaffold agents, debug DDDI wiring, and answer architecture questions without you having to copy-paste docs into the chat.
+
+<!-- No `---` above the mount on purpose: a 1px rule reads as "next section"
+     punctuation, and the band announces itself far more loudly than a rule
+     can. The separation is done with margin on #mesh-scroll in embed.css. -->
+<!-- Scroll-driven topology section. The stylesheet is loaded eagerly by
+     docs/overrides/home.html's extrahead block; the bundle is lazy, and the
+     loader below sits beside the mount deliberately — in home.html it rendered
+     in {% block tabs %}, BEFORE this content block, so `document.getElementById`
+     returned null and the loader silently no-opped. Ordering is now structural
+     rather than defensive. Rebuild with `make docs-scroll-build`. -->
+<div id="mesh-scroll">
+  <div class="mesh-scroll-placeholder">
+    <div class="mesh-scroll-ph-rule"></div>
+    <div class="mesh-scroll-ph-copy">
+      <p class="mesh-scroll-ph-chapter">01 ARRIVE</p>
+      <h2 class="mesh-scroll-ph-title">It starts with one.</h2>
+      <p class="mesh-scroll-ph-sub">@mesh.tool(capability="flight_search")</p>
+      <p class="mesh-scroll-ph-desc">This is the mesh dashboard. Every card is a running agent; every line is a dependency the mesh resolved on its own. Right now there is one agent — a plain Python function that searches flights. No server code, no registration call, no config file.</p>
+    </div>
+  </div>
 </div>
 
----
-
-## :fire: Why MCP Mesh?
-
-=== "For Developers"
-
-    **Stop fighting infrastructure. Start building intelligence.**
-
-    - **Zero Boilerplate**: Simple decorators/functions replace hundreds of lines of networking code
-    - **Python, Java & TypeScript**: Write MCP servers as simple functions in your preferred language — no manual client/server setup
-    - **Multi-Protocol**: Build MCP, A2A, and REST agents with the same framework. Bridge between protocols — consume external A2A producers, or expose mesh tools to A2A clients — without rewriting business logic
-    - **Web Framework Integration**: Inject MCP agents directly into FastAPI (Python), Spring Boot (Java), or Express (TypeScript) APIs seamlessly
-    - **LLM as Dependencies**: Inject LLMs just like MCP agents — dynamic prompts with Jinja2 (Python), FreeMarker (Java), or Handlebars (TypeScript)
-    - **Seamless Development Flow**: Code locally, test with Docker Compose, deploy to Kubernetes — same code, zero changes
-    - **kubectl-like Management**: `meshctl` — a familiar command-line tool to run, monitor, and manage your entire agent network
-
-=== "For Solution Architects"
-
-    **Design intelligent systems, not complex integrations.**
-
-    - **Agent-Centric Architecture**: Design specialized agents with clear capabilities and dependencies, not monolithic systems
-    - **Dynamic Intelligence**: Agents get smarter automatically when new capabilities come online — no reconfiguration needed
-    - **Domain-Driven Design**: Solve business problems with ecosystems of focused agents that can be designed and developed independently
-    - **Composable Solutions**: Mix and match agents to create new business capabilities without custom integration code
-
-    **Example**: Deploy a financial analysis agent that automatically discovers and uses risk assessment, market data, and compliance agents as they become available.
-
-=== "For DevOps Teams"
-
-    **AI infrastructure out of the box.**
-
-    - **Kubernetes-Native**: Deploy with Helm charts — horizontal scaling, health checks, and service discovery included
-    - **Enterprise Observability**: Built-in Grafana dashboards, distributed tracing, and centralized logging for complete system visibility
-    - **Zero-Touch Operations**: Agents self-register, auto-discover dependencies, and gracefully handle failures without network restarts
-    - **Standards-Based**: Leverage existing Kubernetes patterns — RBAC, network policies, service mesh integration, and security policies
-
-    **Scale from 2 agents to 200+ with the same operational complexity.**
-
-=== "For Support & Operations"
-
-    **Complete visibility and zero-downtime operations.**
-
-    - **Real-Time Network Monitoring**: See every agent, dependency, and health status in live dashboards
-    - **Intelligent Scaling**: Agents scale independently based on demand - no cascading performance issues
-    - **Graceful Failure Handling**: Agents degrade gracefully when dependencies are unavailable, automatically reconnect when services return
-    - **One-Click Diagnostics**: `meshctl status` provides instant network health assessment with actionable insights
-
-=== "For Engineering Leadership"
-
-    **Transform AI experiments into production revenue.**
-
-    - **Accelerated Time-to-Market**: Move from PoC to production deployment in weeks, not months
-    - **Cross-Team Collaboration**: Enable different departments to build agents that automatically enhance each other's capabilities
-    - **Risk Mitigation**: Proven patterns help ensure reliable AI deployments that scale with your business
-    - **Future-Proof Architecture**: Add new AI capabilities without disrupting existing systems
-
-    Turn your AI strategy from "promising experiments" to "competitive advantage in production."
-
----
-
-## :package: Installation
-
-=== "meshctl (CLI)"
-
-    ```bash
-    npm install -g @mcpmesh/cli
-    ```
-
-    Command-line tool for managing agents, registry, and mesh operations.
-
-=== "Registry"
-
-    ```bash
-    npm install -g @mcpmesh/cli
-    ```
-
-    Service discovery and coordination server. Included with the npm package above.
-
-=== "Python Runtime"
-
-    ```bash
-    pip install mcp-mesh
-    ```
-
-    Runtime for building agents with `@mesh.agent`, `@mesh.tool`, `@mesh.llm`, and `@mesh.llm_provider` decorators.
-    Includes `@mesh.route()` for FastAPI integration.
-
-=== "Java Runtime"
-
-    ```xml
-    <dependency>
-        <groupId>io.mcp-mesh</groupId>
-        <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-        <version>3.6.0</version>
-    </dependency>
-    ```
-
-    Spring Boot starter for building agents with `@MeshAgent`, `@MeshTool`, `@MeshLlm`, and `@MeshLlmProvider` annotations.
-    Includes `@MeshRoute` for Spring Boot REST integration.
-
-=== "TypeScript Runtime"
-
-    ```bash
-    npm install @mcpmesh/sdk
-    ```
-
-    Runtime for building agents with `mesh()`, `addTool()`, `addLlm()`, and `addLlmProvider()` functions.
-    Includes `addRoute()` for Express integration.
-
-=== "Docker Images"
-
-    ```bash
-    docker pull mcpmesh/registry:3.6.0
-    docker pull mcpmesh/python-runtime:3.6.0
-    docker pull mcpmesh/java-runtime:3.6.0
-    docker pull mcpmesh/typescript-runtime:3.6.0
-    ```
-
-    Official container images for production deployments.
-
-=== "Helm Charts"
-
-    ```bash
-    helm install mcp-mesh oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-      -n mcp-mesh --create-namespace
-    ```
-
-    Kubernetes deployment with the umbrella chart.
-
----
-
-## :handshake: Community & Support
-
-- [:fontawesome-brands-discord: Discord](https://discord.gg/KDFDREphWn) - Real-time help and discussions
-- [:fontawesome-brands-github: GitHub Discussions](https://github.com/dhyansraj/mcp-mesh/discussions) - Share ideas and ask questions
-- [:fontawesome-brands-github: Issues](https://github.com/dhyansraj/mcp-mesh/issues) - Report bugs or request features
-- [:material-code-braces: Examples](https://github.com/dhyansraj/mcp-mesh/tree/main/examples) - Working code examples
-
----
-
-## :star: Project Status
-
-- **Latest Release**: v3.6.0
-- **License**: MIT
-- **Languages**: Python 3.11+, TypeScript/Node.js 18+, and Java 17+ (runtime), Go 1.23+ (registry)
-- **Status**: Production-ready, actively developed
-
-What changed in each version — breaking changes, upgrade notes and fixes — is in the [Release Notes](release-notes.md).
-
----
-
-## :pray: Acknowledgments
-
-- **[Anthropic](https://anthropic.com)** for creating the MCP protocol
-- **[Google](https://a2a-protocol.org/)** for the A2A protocol
-- **[FastMCP](https://github.com/jlowin/fastmcp)** for excellent MCP server foundations
-- **[Kubernetes](https://kubernetes.io)** community for the infrastructure platform
-- All **contributors** who help make MCP Mesh better
-
----
+<script>
+  /* Lazy-loads the bundle one viewport ahead of the section. No line comments
+     and fully semicolon-terminated: mkdocs-minify runs with minify_html, and a
+     minifier that collapsed newlines would swallow the rest of a // line. */
+  (function () {
+    "use strict";
+    var el = document.getElementById("mesh-scroll");
+    if (!el) { return; }
+    /* 900px MUST match MIN_WIDTH in src/ui/vite.demo.config.ts, which gates
+       the reserved min-height on the same query. Below it the bundle is never
+       fetched and the height is never reserved, so a narrow viewport gets the
+       static placeholder alone rather than 226KB rendering a graph at ~0.23
+       zoom above 2175vh of pinned scroll. This is not a mobile fallback; it is
+       declining to ship a known-broken one. */
+    var wide = window.matchMedia("(min-width: 900px)");
+    var src = "assets/mesh-scroll/mesh-scroll.js";
+    var loaded = false;
+    var armed = false;
+    var load = function () {
+      if (loaded) { return; }
+      loaded = true;
+      var s = document.createElement("script");
+      s.src = src;
+      s.defer = true;
+      /* If the bundle cannot load, collapse the reservation. Without this the
+         page keeps ~2205vh of height reserved for a section that will never
+         mount: 22 screens of empty scroll. Covers CDN failure, a CSP block and
+         a dropped connection.
+         NOT covered: JavaScript disabled entirely. Then this loader never runs,
+         no onerror fires, and the reservation stands. That case needs the
+         reservation inverted so the height is only applied once the bundle has
+         mounted, which is a larger change and is not done here. */
+      s.onerror = function () {
+        el.className += " mesh-scroll-failed";
+      };
+      document.body.appendChild(s);
+    };
+    var arm = function () {
+      if (armed || !wide.matches) { return; }
+      armed = true;
+      if (!("IntersectionObserver" in window)) { load(); return; }
+      var io = new IntersectionObserver(function (entries) {
+        var i;
+        for (i = 0; i < entries.length; i += 1) {
+          if (entries[i].isIntersecting) { io.disconnect(); load(); return; }
+        }
+      }, { rootMargin: "100% 0px" });
+      io.observe(el);
+    };
+    if (wide.addEventListener) { wide.addEventListener("change", arm); }
+    arm();
+  })();
+</script>
 
 <div class="center" markdown>
 
@@ -440,6 +317,9 @@ What changed in each version — breaking changes, upgrade notes and fixes — i
 [Java SDK](java/getting-started/index.md){ .md-button .md-button--primary }
 [TypeScript SDK](typescript/getting-started/index.md){ .md-button .md-button--primary }
 [View on GitHub](https://github.com/dhyansraj/mcp-mesh){ .md-button }
+
+[YouTube](https://www.youtube.com/@MCPMesh){ .md-button }
+[Discord](https://discord.gg/KDFDREphWn){ .md-button }
 
 **Star the repo** if MCP Mesh helps you build better AI systems! :star:
 
