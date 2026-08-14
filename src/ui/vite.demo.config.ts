@@ -23,8 +23,15 @@
 // app/globals.css and which excludes demo/ plus this config and
 // vite.static.config.ts. The exclusions could NOT go in app/globals.css:
 // Tailwind compiles each CSS entry against its own flattened source set, and
-// app/globals.css is this bundle's entry too, so an exclusion there strips the
-// demo's own classes. __tests__/spa-css-isolation.test.ts holds both halves.
+// app/globals.css sits in both entries' import graphs, so an exclusion there
+// applies to this bundle as well and strips the demo's own classes.
+//
+// THE SAME HAZARD RUNS THE OTHER WAY and is handled the same way. This bundle's
+// entry is demo/entry.css, which wraps app/globals.css and excludes the two
+// surfaces that are dashboard-private by definition; without it this bundle was
+// scanning the dashboard's unit tests and emitting 225 bytes it renders nothing
+// from. Neither wrapper is a guarantee about the other's output — each one only
+// states its own boundary. __tests__/spa-css-isolation.test.ts holds both.
 //
 // Relocating the demo outside src/ui remains a valid alternative (verified: a
 // probe file in web/scroll-demo/ is NOT scanned, one in src/ui/demo/ is), and
@@ -96,7 +103,7 @@ export const MIN_WIDTH = 900;
  * do with. That particular escape route is now closed: app/spa.css excludes
  * this config from the dashboard's scan (see the header). It is still worth
  * avoiding bare utility words anywhere under src/ui, because THIS bundle
- * scans everything the exclusions do not cover, in the other direction.
+ * scans everything demo/entry.css does not exclude, which is most of the tree.
  */
 export function scopeCss(): Plugin {
   const scoper = {

@@ -22,8 +22,17 @@
 // MOVING the exclusion is a different failure and this check cannot see it:
 // relocated into app/globals.css it still keeps the dashboard clean, while the
 // demo's own entry silently loses its classes — the regression app/spa.css was
-// written to document. The second assertion below covers that case, by holding
+// written to document. The third assertion below covers that case, by holding
 // app/globals.css free of source directives entirely.
+//
+// THE SAME LEAK RUNS THE OTHER WAY, and the second assertion covers it — but by
+// checking the WIRING rather than the output, for reasons set out where it sits.
+// The demo compiles its own entry, demo/entry.css, which excludes the two
+// surfaces that are dashboard-private by definition. Before that file existed
+// the demo was scanning them, and a dotted name inside a string literal in one
+// of the dashboard's unit tests was worth 225 bytes of the demo's stylesheet —
+// so "the demo is unaffected" was an assumption with a counterexample already in
+// the tree, not a property of the design.
 //
 // It builds the dashboard, which no other test does — that is deliberate.
 // `npx tsc --noEmit` proves it type-checks and nothing proved it still
@@ -35,6 +44,11 @@ import path from "node:path";
 
 const UI = path.resolve(__dirname, "..");
 const DEMO = path.join(UI, "demo");
+/** The shared theme, and the two wrappers that are the only way in to it. */
+const GLOBALS = path.join(UI, "app", "globals.css");
+const WRAPPER = path.join(DEMO, "entry.css");
+/** The surfaces demo/entry.css has to exclude. */
+const PRIVATE = [__dirname, path.join(UI, "app", "spa.css")];
 
 /** Directories that are build output or vendored, never authored sources. */
 const IGNORED = new Set(["node_modules", "dist", "dist-static", "generated", ".git", "public"]);
@@ -99,22 +113,63 @@ function layerBlocks(css: string, names: string[]): string[] {
   return out;
 }
 
+/**
+ * What a file PULLS IN, by form rather than by mention.
+ *
+ * Matching the bare text `app/globals.css` would be simpler and useless here:
+ * half the files under demo/ discuss it in prose, and one of them has to, since
+ * explaining the boundary means naming what sits on the other side of it. Only
+ * these forms actually create an import edge, and only an import edge can put a
+ * second entry into Tailwind's compilation. Covering all of them rather than
+ * the one spelling in the tree today is the point — repointing an entry at the
+ * theme via an alias, a dynamic import or a stylesheet link is the same
+ * regression as repointing it with a relative path.
+ */
+function importedPaths(file: string): string[] {
+  const text = fs.readFileSync(file, "utf8");
+  const out: string[] = [];
+  const forms = [
+    /\bimport\s+(?:[^;()]*?\bfrom\s+)?["']([^"']+)["']/g,
+    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
+    /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
+    /@import\s+(?:url\(\s*)?["']?([^"')\s;]+)/g,
+    /<link\b[^>]*\bhref\s*=\s*["']([^"']+)["']/gi,
+  ];
+  for (const re of forms) for (const m of text.matchAll(re)) out.push(m[1]);
+  return out;
+}
+
+/** Where a specifier lands, or null if it names a package rather than a file. */
+function resolveSpecifier(from: string, spec: string): string | null {
+  if (spec.startsWith("@/")) return path.join(UI, spec.slice(2));
+  if (spec.startsWith("/")) return path.join(UI, spec.slice(1));
+  if (spec.startsWith(".")) return path.resolve(path.dirname(from), spec);
+  return null;
+}
+
+/**
+ * Build fresh: the point is to test what ships, not a stale artifact.
+ *
+ * stdio is piped so a green run stays quiet, which means a BROKEN build would
+ * otherwise surface as a bare "Command failed" with the compiler's diagnosis
+ * stranded on the error object. Put it back in the message.
+ */
+function build(args: string[], what: string): void {
+  try {
+    execFileSync("npx", ["vite", "build", ...args], { cwd: UI, stdio: "pipe" });
+  } catch (err) {
+    const e = err as { stdout?: Buffer; stderr?: Buffer; message?: string };
+    throw new Error(
+      `the ${what} build failed, so this check never ran.\n${e.message ?? ""}\n` +
+        `--- stderr ---\n${e.stderr?.toString() ?? ""}\n` +
+        `--- stdout ---\n${e.stdout?.toString() ?? ""}`
+    );
+  }
+}
+
 describe("dashboard stylesheet isolation (#1519)", () => {
   it("contains no utility that exists only because of demo/", () => {
-    // Build fresh: the point is to test what ships, not a stale artifact.
-    // stdio is piped so a green run stays quiet, which means a BROKEN build
-    // would otherwise surface as a bare "Command failed" with the compiler's
-    // diagnosis stranded on the error object. Put it back in the message.
-    try {
-      execFileSync("npx", ["vite", "build"], { cwd: UI, stdio: "pipe" });
-    } catch (err) {
-      const e = err as { stdout?: Buffer; stderr?: Buffer; message?: string };
-      throw new Error(
-        `the dashboard build failed, so this check never ran.\n${e.message ?? ""}\n` +
-          `--- stderr ---\n${e.stderr?.toString() ?? ""}\n` +
-          `--- stdout ---\n${e.stdout?.toString() ?? ""}`
-      );
-    }
+    build([], "dashboard");
 
     const cssFiles = fs
       .readdirSync(path.join(UI, "dist", "assets"))
@@ -232,21 +287,95 @@ describe("dashboard stylesheet isolation (#1519)", () => {
     ).toEqual([]);
   }, 120_000);
 
-  // The design's load-bearing property, which nothing else enforces. Both
-  // builds compile app/globals.css, so a source directive placed there reaches
-  // the demo's entry too and strips it of its own classes — the check above
-  // still passes, because the dashboard itself comes out clean. Keeping this
-  // free of them is what makes "the demo bundle is unchanged BY CONSTRUCTION"
-  // true rather than something to re-verify by hand.
+  // THE MIRROR OF THE ABOVE, AND DELIBERATELY NOT AN OUTPUT CHECK. This one
+  // reads the wiring and builds nothing. That is a considered downgrade, not an
+  // omission, so the reasoning is recorded rather than left to be rediscovered.
+  //
+  // THE OUTPUT CHECK WAS WRITTEN, MEASURED AND DELETED. Its shape had to mirror
+  // the first one — recompute, on every run, the candidates that exist only in
+  // the private files, then assert none of them reached the demo's stylesheet.
+  // The dashboard direction has a large self-renewing surface to recompute from,
+  // because demo/ is full of real classes. This direction has none: both private
+  // files are disciplined about never naming a utility, so the recomputed set is
+  // made up of indexing expressions out of test code that Tailwind emits nothing
+  // for. Repointing the demo's entry back at the theme left that assertion GREEN.
+  // A check that stays green through the exact regression it names is worse than
+  // no check, and it was buying that for 1.5s of build time on every run.
+  //
+  // NOR CAN IT BE REPAIRED by loosening the tokenizer. The single rule that was
+  // in fact leaking arrived as the tail of a dotted name inside a string
+  // literal, and its bare form also occurs in a vendored stylesheet under demo/,
+  // so it is not "private-only" under any tokenizer — while a tokenizer loose
+  // enough to reach it would launder genuine leaks into the permitted set, which
+  // is the failure the first check's own notes spend a paragraph avoiding.
+  //
+  // SO THE BOUNDARY IS THE GUARANTEE HERE, and the boundary was verified once,
+  // empirically, rather than argued: with demo/entry.css in place the demo's
+  // stylesheet is byte-identical to one built with __tests__/ and app/spa.css
+  // physically removed from the tree, and the one rule that had been leaking —
+  // 225 bytes, from a string literal in a unit test — is gone. That leaves
+  // exactly one thing worth asserting on every run: that the boundary stays
+  // WIRED. Every regression available here takes that path. Nobody defeats an
+  // exclusion in place; they repoint an entry at the theme because it is one
+  // character shorter, or drop a directive that looks redundant.
+  it("keeps the scroll demo wired to its own entry", () => {
+    // Both halves of the guard, in one assertion: this is also what proves
+    // importedPaths can see an edge at all. If it silently stopped matching, the
+    // sweep below would find nothing and pass on every file in the tree.
+    expect(
+      importedPaths(WRAPPER).map((s) => resolveSpecifier(WRAPPER, s)),
+      "demo/entry.css does not import app/globals.css, so the demo has no theme " +
+        "and the check below is asserting that nothing reaches a file nothing " +
+        "imports. The wrapper exists to be the demo's one way in to the theme."
+    ).toContain(GLOBALS);
+
+    const direct = walk(DEMO)
+      .filter((f) => f !== WRAPPER)
+      .filter((f) => importedPaths(f).some((s) => resolveSpecifier(f, s) === GLOBALS))
+      .map((f) => path.relative(UI, f))
+      .sort();
+    expect(
+      direct,
+      "these files under demo/ import app/globals.css directly instead of going " +
+        "through demo/entry.css. That makes app/globals.css a second entry for " +
+        "the demo's build, and app/globals.css carries no exclusions — so the " +
+        "demo goes back to scanning the dashboard's own tests and stylesheet " +
+        "entry, which is where the 225 bytes came from. Import demo/entry.css."
+    ).toEqual([]);
+
+    // Resolved rather than compared as text, so rewriting a path in a different
+    // but equivalent spelling is not a failure and quietly dropping one is.
+    const wrapper = fs.readFileSync(WRAPPER, "utf8");
+    const excluded = [...wrapper.matchAll(/@source\s+not\s+["']([^"']+)["']/g)].map((m) =>
+      path.resolve(DEMO, m[1])
+    );
+    for (const required of PRIVATE) {
+      expect(
+        excluded,
+        `demo/entry.css no longer excludes ${path.relative(UI, required)} from the ` +
+          "demo's scan. Tailwind's source detection is rooted at the Vite root for " +
+          "both builds, so without this the demo scans a dashboard-private surface " +
+          "and emits utilities out of it that nothing in the demo renders."
+      ).toContain(required);
+    }
+  });
+
+  // The design's load-bearing property, which nothing else enforces. BOTH
+  // entries import app/globals.css, so a source directive placed there applies
+  // to both compilations at once: it cannot say anything about one of them, and
+  // an exclusion meant for the dashboard would strip the demo of its own
+  // classes. Neither check above sees that, because each build comes out clean
+  // on its own terms. Keeping this file free of directives is what makes the two
+  // wrappers independent.
   it("keeps source directives out of app/globals.css", () => {
     const globals = fs.readFileSync(path.join(UI, "app", "globals.css"), "utf8");
     const found = [...globals.matchAll(/^[^\n]*@source[^\n]*$/gm)].map((m) => m[0].trim());
     expect(
       found,
-      "app/globals.css now carries a source directive. It is the scroll demo's " +
-        "own stylesheet entry as well as the dashboard's, so this also applies to " +
-        "the demo's build and can silently strip its classes. Put dashboard-only " +
-        "directives in app/spa.css, which the demo does not import."
+      "app/globals.css now carries a source directive. It sits in the import graph " +
+        "of the scroll demo's entry as well as the dashboard's, so this also applies " +
+        "to the demo's build and can silently strip its classes. Dashboard-only " +
+        "directives belong in app/spa.css, demo-only ones in demo/entry.css."
     ).toEqual([]);
   });
 });

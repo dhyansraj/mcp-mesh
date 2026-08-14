@@ -1,0 +1,48 @@
+/*
+ * SCROLL-DEMO stylesheet entry, and the mirror image of app/spa.css. The theme
+ * itself lives in app/globals.css; this file exists only to carry exclusions
+ * that must NOT reach the dashboard's compilation.
+ *
+ * WHY IT EXISTS. Tailwind v4's automatic source detection is rooted at the
+ * Vite root (src/ui) and extracts utility candidates from ANY text it scans,
+ * comments and JSON keys included. Until this file was added the demo's entry
+ * was app/globals.css directly, which carries no exclusions at all, so the
+ * demo's scan covered every authored file under src/ui — including the
+ * dashboard's own unit tests and app/spa.css. That was not theoretical: a
+ * dotted name inside a string literal in one of those tests was contributing
+ * 225 bytes to a bundle that renders nothing from it, and two ordinary English
+ * words in another one added 42 more before that.
+ *
+ * WHY THE EXCLUSIONS CANNOT LIVE IN app/globals.css. Tailwind compiles each
+ * CSS ENTRY on its own, against the source set flattened out of THAT entry's
+ * import graph. Both wrappers import app/globals.css, so a directive placed
+ * there applies to both compilations at once and can say nothing about one of
+ * them alone. That is the whole reason there are two wrappers rather than one
+ * shared file: each build states its own boundary, and neither can disturb the
+ * other's.
+ *
+ * WHY THE BOUNDARY STOPS WHERE IT DOES. Only the two surfaces that are
+ * dashboard-private by definition are named below. This bundle renders
+ * meshui's real AgentNode and pulls in components/, lib/ and the rest of app/,
+ * so those must keep being scanned or the demo loses utilities it genuinely
+ * renders. Narrow on purpose: what is excluded is what this bundle can never
+ * legitimately need, not everything it happens not to use today.
+ *
+ * DO NOT NAME A UTILITY ANYWHERE IN THIS FILE, comments included. It sits
+ * under demo/, which this bundle's own scan still covers, so a name written
+ * here is emitted straight into the stylesheet it produces.
+ */
+@import "../app/globals.css";
+
+/*
+ * Paths are relative to THIS file, so these are src/ui/__tests__ and
+ * src/ui/app/spa.css.
+ *
+ * __tests__/ is the dashboard's unit tests, which assert on dashboard data and
+ * dashboard markup; this bundle imports nothing from it. app/spa.css is the
+ * dashboard's own entry, which the demo by construction never imports — it
+ * would be self-defeating for the two entries to read each other, since each
+ * one's prose is about what the other must not scan.
+ */
+@source not "../__tests__";
+@source not "../app/spa.css";

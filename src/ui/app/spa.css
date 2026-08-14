@@ -10,25 +10,35 @@
  * measured against a build with the demo directory removed from the tree.
  * Three of those rules came from ordinary English words in comments rather
  * than from any class anyone wrote — which is why prose discipline is not the
- * fix and a guard is. (The three are deliberately not named here: this file is
- * itself scanned by the demo's build, so naming a utility in it would emit
- * that rule into the demo bundle. Same trap, opposite direction.)
+ * fix and a guard is. (The three are deliberately not named here. This file is
+ * now excluded from the demo's scan too — see demo/entry.css — so a name
+ * written here no longer reaches either stylesheet, but the habit is kept:
+ * that exclusion is one edit away from being removed, and every recurrence so
+ * far arrived through prose someone was sure was safe.)
  *
  * WHY THE EXCLUSIONS ARE HERE AND NOT IN globals.css. Tailwind v4 compiles
  * each CSS ENTRY on its own, against the `@source` set flattened out of THAT
- * entry's import graph. globals.css is not merely reachable from the scroll
- * demo — it IS the demo's entry, imported straight by demo/embed.tsx and
- * demo/static.ts. So anything added there lands in both compilations: it fixes
- * the dashboard and simultaneously stops the demo's own entry from finding the
- * demo's classes, which is what made an earlier attempt fail. Only the
- * dashboard reaches globals.css through this file.
+ * entry's import graph. globals.css is reachable from BOTH entries — this one
+ * and the demo's, demo/entry.css — so anything added there lands in both
+ * compilations at once: it would fix the dashboard and simultaneously stop the
+ * demo's entry from finding the demo's own classes, which is what made an
+ * earlier attempt fail. A directive can only be scoped to one build by sitting
+ * in a file the other build's entry does not import.
  *
- * A wrapper the demo does not import is the smallest thing that separates the
- * two, and it has a property the alternatives do not: globals.css is byte-for-
- * byte unchanged, so the demo bundle is unchanged BY CONSTRUCTION rather than
- * by verification. The alternative designs — splitting the theme into a shared
- * partial, or relocating the demo outside src/ui — both edit or move what the
- * demo consumes, and would need the demo's CSS re-proven.
+ * WHAT THIS DESIGN DOES AND DOES NOT GUARANTEE. It leaves globals.css
+ * unmodified, so the demo's THEME — every variable, every @theme mapping — is
+ * untouched by anything written here. It does NOT by itself make the demo's
+ * output independent of dashboard-private files: source detection is rooted at
+ * the Vite root for both builds, so before demo/entry.css existed the demo was
+ * still scanning __tests__/ and this very file, and a string literal in one of
+ * those tests was worth 225 bytes of the demo's stylesheet. What keeps
+ * dashboard-private files out of the demo's scan is the demo's OWN boundary in
+ * demo/entry.css, not the fact that this file exists. The two are symmetric and
+ * each one only speaks for its own build.
+ *
+ * The alternative designs — splitting the theme into a shared partial, or
+ * relocating the demo outside src/ui — both edit or move what the demo
+ * consumes, and would need the demo's CSS re-proven.
  *
  * Keep the dashboard's own sources implicit: auto-detection already covers
  * src/, app/ and components/, and enumerating them here would be a second list
@@ -45,8 +55,8 @@
  * lines of prose about the demo's stylesheet. They belong to the demo by
  * ownership even though they do not sit in its directory.
  *
- * The scroll demo is built by those two configs, each of which is its own
- * entry with its own scan.
+ * The scroll demo is built by those two configs. Both compile the same entry,
+ * demo/entry.css, which carries the exclusions pointing the other way.
  */
 @source not "../demo";
 @source not "../vite.demo.config.ts";
