@@ -264,11 +264,12 @@ meshctl man
     var el = document.getElementById("mesh-scroll");
     if (!el) { return; }
     /* 900px MUST match MIN_WIDTH in src/ui/vite.demo.config.ts, which gates
-       the reserved min-height on the same query. Below it the bundle is never
-       fetched and the height is never reserved, so a narrow viewport gets the
-       static placeholder alone rather than 226KB rendering a graph at ~0.23
-       zoom above 2175vh of pinned scroll. This is not a mobile fallback; it is
-       declining to ship a known-broken one. */
+       the reserved min-height on the same query and is shared by both bundle
+       configs. Below it the bundle is never fetched and the height is never
+       reserved, so a narrow viewport gets the static placeholder alone rather
+       than 185KB rendering a graph at ~0.23 zoom above 2205vh of pinned
+       scroll. This is not a mobile fallback; it is declining to ship a
+       known-broken one. */
     var wide = window.matchMedia("(min-width: 900px)");
     var src = "assets/mesh-scroll/mesh-scroll.js";
     var loaded = false;

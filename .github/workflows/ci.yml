@@ -151,6 +151,30 @@ jobs:
       - name: Install dashboard dependencies
         run: npm ci
 
+      # REQUIRED BEFORE tsc, not optional tidiness. demo/static.ts imports
+      # demo/generated/graph.json, which is a build artifact and gitignored (it
+      # is 150 kB of rendered markup and would otherwise be scanned by Tailwind
+      # into the dashboard's own stylesheet). tsconfig includes **/*.ts and
+      # excludes only node_modules and dist, so on a fresh checkout — which is
+      # exactly what CI is — `tsc --noEmit` fails with TS2307 until this has run.
+      #
+      # It also happens to be the cheapest useful guard we have. No browser, no
+      # Playwright: esbuild plus one node process, a couple of seconds. It
+      # re-renders the real <Stage> and fails the build if the edge geometry
+      # disagrees with the captured fixture (36 paths across 2 states), if
+      # AgentNode's markup has drifted from the card table the driver swaps in,
+      # or if any selector the driver queries has gone missing from the shell.
+      # That last one is the difference between a red PR and shipping an empty
+      # dark panel over 2205vh of scroll.
+      #
+      # The full equivalence capture (demo/equivalence.mjs) stays OUT of CI: it
+      # needs two browser runs against a served build, and its React reference
+      # bundle is a 531 kB build of its own. It is a local gate for changes to
+      # this section, not a per-PR check.
+      - name: Prerender the scroll section (also its build-time guards)
+        working-directory: ${{ github.workspace }}
+        run: make docs-scroll-prerender
+
       - name: Type check dashboard
         run: npx tsc --noEmit
 

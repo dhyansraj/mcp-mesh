@@ -8,7 +8,18 @@ const eslintConfig = defineConfig([
   // "**/dist/**", not "dist/**": the latter is root-relative and missed
   // src/ui/demo/dist/, so `npx eslint demo` reported 6 errors and 9 warnings
   // from inside the demo's own minified build artifact.
-  globalIgnores(["**/dist/**", "node_modules/**", "*.config.*", "*.tsbuildinfo"]),
+  //
+  // dist-static/ needs its own entry for the same reason it needs its own
+  // .gitignore line — it is NOT matched by a `dist` pattern. It holds the
+  // prerendered bundle, which is the one that ships.
+  globalIgnores([
+    "**/dist/**",
+    "**/dist-static/**",
+    "**/generated/**",
+    "node_modules/**",
+    "*.config.*",
+    "*.tsbuildinfo",
+  ]),
   {
     files: ["**/*.js", "**/*.jsx", "**/*.mjs"],
     ...js.configs.recommended,

@@ -477,15 +477,64 @@ docs-artifacts:
 	@bash scripts/generate_tutorial_artifacts.sh
 	@echo "Artifacts generated in docs/downloads/"
 
-.PHONY: docs-scroll-build
-docs-scroll-build:
-	@echo "📜 Building the home-page scroll section..."
+# Prerender step. Renders the real <Stage> to static markup in Node and writes
+# src/ui/demo/generated/graph.json. Also the first layer of the equivalence
+# proof: it fails the build if the edge geometry it computes disagrees with the
+# geometry captured from the running React build, or if AgentNode's markup has
+# drifted from what the driver would swap in.
+#
+# The compiled emitter goes in demo/generated/, NOT demo/dist/. demo/dist/ is
+# the React bundle's outDir and vite empties it, so with the emitter there a
+# `make -j docs-scroll-compare` could delete emit.cjs in the window between
+# esbuild writing it and node running it. Moving the file removes the race
+# rather than ordering around it — the two builds now share no path at all.
+.PHONY: docs-scroll-prerender
+docs-scroll-prerender:
+	@cd src/ui && npx esbuild demo/emit.tsx --bundle --platform=node --format=cjs \
+		--outfile=demo/generated/emit.cjs --log-level=error \
+		--external:react --external:react-dom --external:react-dom/server \
+		--banner:js='globalThis.window={__MESH_REGISTRY_URL__:"",__MESH_BASE_PATH__:""};'
+	@cd src/ui && node demo/generated/emit.cjs --report
+
+# The PRERENDERED bundle — 180 kB / 20 kB gz, no React, no React Flow, no
+# dagre, no d3. THIS IS WHAT SHIPS: docs-scroll-build below delegates here.
+.PHONY: docs-scroll-build-static
+docs-scroll-build-static: docs-scroll-prerender
+	@cd src/ui && npx vite build --config vite.static.config.ts
+
+# The REACT bundle — 531 kB / 172 kB gz. Superseded on the shipping path and
+# KEPT ON PURPOSE, not left behind: it is the reference the equivalence harness
+# compares against, which makes it the regression test for every future change
+# to this section. Deleting it would delete the only thing that can tell you the
+# driver has drifted from the component. Both are built from the same beat data,
+# the same AgentNode and the same timeline.ts.
+.PHONY: docs-scroll-build-react
+docs-scroll-build-react:
 	@cd src/ui && npx vite build --config vite.demo.config.ts
+
+# Serve both bundles for a side-by-side capture. src/ui/demo/compare.html picks
+# a bundle from ?v=react|static, so one harness drives both and the only
+# variable is which JS runs.
+#
+#   make docs-scroll-compare              # this, in one terminal
+#   node src/ui/demo/equivalence.mjs      # the numbers, in another
+#   node src/ui/demo/screenshots.mjs      # the pixels (read its header first)
+.PHONY: docs-scroll-compare
+docs-scroll-compare: docs-scroll-build-static docs-scroll-build-react
+	@echo ""
+	@echo "  http://localhost:8899/compare.html?v=react"
+	@echo "  http://localhost:8899/compare.html?v=static"
+	@echo ""
+	@cd src/ui/demo && python3 -m http.server 8899
+
+.PHONY: docs-scroll-build
+docs-scroll-build: docs-scroll-build-static
+	@echo "📜 Building the home-page scroll section..."
 	@# Wipe first: cp never prunes, so an asset that stops being emitted would
 	@# otherwise linger in the output tree and get served forever.
 	@rm -rf docs/assets/mesh-scroll
 	@mkdir -p docs/assets/mesh-scroll
-	@cp -R src/ui/demo/dist/. docs/assets/mesh-scroll/
+	@cp -R src/ui/demo/dist-static/. docs/assets/mesh-scroll/
 	@echo "✅ docs/assets/mesh-scroll/ updated (gitignored - do NOT commit)"
 	@echo "   Local preview only. CI builds this from source on every docs"
 	@echo "   deploy, so nothing here is committed and nothing can go stale."

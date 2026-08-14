@@ -301,3 +301,19 @@ dump.rdb
 # committed copy could only ever be stale. `make docs-scroll-build` regenerates
 # it locally for `mkdocs serve`.
 docs/assets/mesh-scroll/
+
+# Output tree of the PRERENDERED scroll bundle. The `dist/` pattern near the top
+# of this file does not match `dist-static/`, and leaving a build artifact
+# unignored under src/ui is not merely untidy: Tailwind v4's automatic source
+# detection scans every non-ignored text file under the Vite root, so the
+# bundle's own emitted markup leaked a spurious utility rule into the
+# DASHBOARD's stylesheet — a build it has nothing to do with. Same reason
+# src/ui/demo/dist/generated.json is written where it is. (The utility is
+# deliberately not named here; naming it is what re-creates it.)
+src/ui/demo/dist-static/
+
+# Prerendered markup + animation tables, written by demo/emit.tsx. Ignored for
+# the same Tailwind reason as above (it is 150 kB of rendered class attributes),
+# and kept OUT of demo/dist/ because the React bundle builds into that directory
+# with emptyOutDir and would delete it.
+src/ui/demo/generated/

@@ -51,7 +51,7 @@ const SCOPE = "#mesh-scroll";
  * declines to fetch the bundle below this width; this file declines to reserve
  * the height. KEEP THE TWO IN SYNC.
  */
-const MIN_WIDTH = 900;
+export const MIN_WIDTH = 900;
 
 /**
  * Confine the emitted stylesheet to a single root element.
@@ -92,7 +92,7 @@ const MIN_WIDTH = 900;
  * do with. Avoid bare utility words in files under src/ui; the durable fix
  * is one @source line in app/globals.css (see the Phase 2 notes).
  */
-function scopeCss(): Plugin {
+export function scopeCss(): Plugin {
   const scoper = {
     postcssPlugin: "mesh-scroll-scope",
     // Once() rather than the Rule() visitor: mutating a selector inside the
@@ -311,7 +311,7 @@ function scopeCss(): Plugin {
  * Matches Stage's own layout: header 70vh + section (100 + travel*100)vh +
  * closing spacer 25vh.
  */
-function emitReservedHeight(): Plugin {
+export function emitReservedHeight(): Plugin {
   return {
     name: "mesh-scroll-reserve-height",
     // SEQUENTIAL, and it matters: writeBundle is a PARALLEL rollup hook, so
@@ -365,7 +365,7 @@ function emitReservedHeight(): Plugin {
  * compressed on its own: the parts do NOT sum to the whole (shared dictionary
  * across the real bundle does better), so treat them as proportions.
  */
-function sizeReport(): Plugin {
+export function sizeReport(): Plugin {
   const group = (id: string) => {
     const m = id.replace(/\\/g, "/").match(/node_modules\/((?:@[^/]+\/)?[^/]+)/);
     if (!m) return id.includes("/demo/") ? "our code (demo)" : "our code (meshui)";

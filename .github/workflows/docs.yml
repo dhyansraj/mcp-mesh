@@ -18,10 +18,11 @@ on:
       #
       # Deliberately the whole tree rather than an enumeration. The bundle
       # depends on src/ui/demo/, components/topology/AgentNode.tsx,
-      # lib/topology.ts, app/globals.css, vite.demo.config.ts AND
-      # package-lock.json; any hand-maintained list eventually misses one and
-      # under-deploys silently. Over-triggering costs an occasional needless
-      # docs deploy after a dashboard-only change, which is harmless.
+      # lib/topology.ts, app/globals.css, BOTH vite configs (the shipping one
+      # imports its plugins from the other) AND package-lock.json; any
+      # hand-maintained list eventually misses one and under-deploys silently.
+      # Over-triggering costs an occasional needless docs deploy after a
+      # dashboard-only change, which is harmless.
       - 'src/ui/**'
       - 'Makefile'
   workflow_dispatch:
@@ -114,9 +115,16 @@ jobs:
         working-directory: src/ui
         run: npm ci
 
-      # The scroll bundle is built here rather than committed: at 531KB it
-      # exceeds the repo's 500KB large-file limit, and building it from source
-      # on every deploy removes the possibility of shipping a stale artifact.
+      # The scroll bundle is built here rather than committed, so that shipping
+      # a stale artifact is not possible: the bundle is generated from the beat
+      # data, AgentNode and lib/topology, and a committed copy would silently
+      # outlive any of them.
+      #
+      # It USED to be justified by size — the React build was 531KB against
+      # this repo's 500KB large-file limit. The prerendered build is 185KB, so
+      # that argument no longer applies and the staleness one is now doing all
+      # the work. Stated explicitly because a rationale that has quietly become
+      # false is worse than no rationale.
       - name: Build the homepage scroll section
         run: make docs-scroll-build
 
