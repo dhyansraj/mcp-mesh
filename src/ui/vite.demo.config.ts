@@ -2,15 +2,15 @@
 // on purpose: nothing here is shared with it and `npm run build` never reads
 // this file.
 //
-// KNOWN, MEASURED EXCEPTION — this config does not fully separate the two
-// builds, and cannot.
+// WHY THIS FILE IS NOT SCANNED BY THE DASHBOARD BUILD.
 // Tailwind v4's automatic source detection is rooted at the Vite root
 // (src/ui), and it extracts utility candidates from ANY text it scans,
 // including prose inside comments and the keys of JSON data files. So every
-// file under src/ui/demo/ contributes utilities to the DASHBOARD's stylesheet
-// even though the dashboard never renders them.
+// file under src/ui/demo/ — and this config, which sits at the root — used to
+// contribute utilities to the DASHBOARD's stylesheet even though the dashboard
+// never renders them.
 //
-// This is not fixable by writing careful prose. An earlier draft of THIS
+// This was not fixable by writing careful prose. An earlier draft of THIS
 // comment used a word that is itself a utility name and added another rule to
 // the dashboard's stylesheet. The surface includes comments, copy documents
 // and the keys of JSON data files.
@@ -19,12 +19,16 @@
 // all". That was false and is exactly the kind of assertion that outlives the
 // thing it describes, so it is stated accurately here instead.
 //
-// Two independent fixes exist, both out of scope for this config:
-//   - relocate the demo outside src/ui (verified: a probe file in
-//     web/scroll-demo/ is NOT scanned, one in src/ui/demo/ is);
-//   - or land the prerender migration, after which the demo no longer imports
-//     app/globals.css and `@source not "../demo"` works cleanly — it does not
-//     today, because both entries share that Tailwind entry point.
+// FIXED IN app/spa.css (#1519), which the dashboard entry imports instead of
+// app/globals.css and which excludes demo/ plus this config and
+// vite.static.config.ts. The exclusions could NOT go in app/globals.css:
+// Tailwind compiles each CSS entry against its own flattened source set, and
+// app/globals.css is this bundle's entry too, so an exclusion there strips the
+// demo's own classes. __tests__/spa-css-isolation.test.ts holds both halves.
+//
+// Relocating the demo outside src/ui remains a valid alternative (verified: a
+// probe file in web/scroll-demo/ is NOT scanned, one in src/ui/demo/ is), and
+// the prerender migration would end the shared entry point altogether.
 //
 //   npx vite build --config vite.demo.config.ts
 //
@@ -89,8 +93,10 @@ export const MIN_WIDTH = 900;
  * from ANY text it scans, prose in comments included. Two ordinary English
  * words used here earlier were each a valid utility name, and emitted two
  * extra rules into the SPA's stylesheet — a build this file has nothing to
- * do with. Avoid bare utility words in files under src/ui; the durable fix
- * is one @source line in app/globals.css (see the Phase 2 notes).
+ * do with. That particular escape route is now closed: app/spa.css excludes
+ * this config from the dashboard's scan (see the header). It is still worth
+ * avoiding bare utility words anywhere under src/ui, because THIS bundle
+ * scans everything the exclusions do not cover, in the other direction.
  */
 export function scopeCss(): Plugin {
   const scoper = {
