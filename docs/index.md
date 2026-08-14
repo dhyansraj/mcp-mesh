@@ -243,17 +243,20 @@ meshctl man
      in {% block tabs %}, BEFORE this content block, so `document.getElementById`
      returned null and the loader silently no-opped. Ordering is now structural
      rather than defensive. Rebuild with `make docs-scroll-build`. -->
+<!-- The copy is INCLUDED, not written here: src/ui/demo/copy.generated.html is
+     rendered from src/ui/demo/script.ts by the same build step that prerenders
+     the animation, so the fourteen beats and the epilogue are in the served
+     document and cannot drift from what the animation says. `make
+     docs-scroll-prerender` rewrites it; CI fails on any difference.
+
+     The skip link is first, and it is the only hand-written markup inside the
+     mount. The bundle replaces everything in here on mount, so demo/static.ts
+     lifts both it and the copy blocks out and puts them back. -->
 <div id="mesh-scroll">
-  <div class="mesh-scroll-placeholder">
-    <div class="mesh-scroll-ph-rule"></div>
-    <div class="mesh-scroll-ph-copy">
-      <p class="mesh-scroll-ph-chapter">01 ARRIVE</p>
-      <h2 class="mesh-scroll-ph-title">It starts with one.</h2>
-      <p class="mesh-scroll-ph-sub">@mesh.tool(capability="flight_search")</p>
-      <p class="mesh-scroll-ph-desc">This is the mesh dashboard. Every card is a running agent; every line is a dependency the mesh resolved on its own. Right now there is one agent — a plain Python function that searches flights. No server code, no registration call, no config file.</p>
-    </div>
-  </div>
+<a class="mesh-skip" data-mesh-skip href="#mesh-scroll-end">Skip the scrolling story</a>
+--8<-- "src/ui/demo/copy.generated.html"
 </div>
+<div id="mesh-scroll-end" tabindex="-1"></div>
 
 <script>
   /* Lazy-loads the bundle one viewport ahead of the section. No line comments
@@ -265,11 +268,10 @@ meshctl man
     if (!el) { return; }
     /* 900px MUST match MIN_WIDTH in src/ui/vite.demo.config.ts, which gates
        the reserved min-height on the same query and is shared by both bundle
-       configs. Below it the bundle is never fetched and the height is never
-       reserved, so a narrow viewport gets the static placeholder alone rather
-       than 185KB rendering a graph at ~0.23 zoom above 2205vh of pinned
-       scroll. This is not a mobile fallback; it is declining to ship a
-       known-broken one. */
+       configs. Below it the bundle is never fetched, the height is never
+       reserved and the section is not rendered, rather than 185KB rendering a
+       graph at ~0.23 zoom above 2205vh of pinned scroll. This is not a mobile
+       fallback; it is declining to ship a known-broken one. */
     var wide = window.matchMedia("(min-width: 900px)");
     var src = "assets/mesh-scroll/mesh-scroll.js";
     var loaded = false;
@@ -280,22 +282,30 @@ meshctl man
       var s = document.createElement("script");
       s.src = src;
       s.defer = true;
-      /* If the bundle cannot load, collapse the reservation. Without this the
-         page keeps ~2205vh of height reserved for a section that will never
-         mount: 22 screens of empty scroll. Covers CDN failure, a CSP block and
-         a dropped connection.
-         NOT covered: JavaScript disabled entirely. Then this loader never runs,
-         no onerror fires, and the reservation stands. That case needs the
-         reservation inverted so the height is only applied once the bundle has
-         mounted, which is a larger change and is not done here. */
+      /* If the bundle cannot load, disarm: the reservation goes away and the
+         section reverts to the copy it is already carrying, as linear prose.
+         Covers CDN failure, a CSP block and a dropped connection.
+         JavaScript disabled entirely needs no handling at all now, which is the
+         point of arming rather than reserving unconditionally: this loader
+         never runs, the class is never added, and the reservation was never
+         applied. */
       s.onerror = function () {
-        el.className += " mesh-scroll-failed";
+        el.classList.remove("mesh-scroll-armed");
       };
       document.body.appendChild(s);
     };
     var arm = function () {
       if (armed || !wide.matches) { return; }
       armed = true;
+      /* RESERVE THE HEIGHT, and do it here rather than in a base stylesheet
+         rule. This runs inline, at parse time, before the section has been laid
+         out — so the reservation still lands before first paint and a reader
+         with JavaScript sees no shift. What changes is the reader who does NOT
+         have JavaScript: nothing arms, no height is reserved, and the copy this
+         section carries reads as ordinary prose instead of being buried under
+         twenty-two empty screens. The class also swaps the section's pre-mount
+         view to the opening beat alone. */
+      el.className += " mesh-scroll-armed";
       if (!("IntersectionObserver" in window)) { load(); return; }
       var io = new IntersectionObserver(function (entries) {
         var i;

@@ -26,9 +26,7 @@
     </style>
   </head>
   <body>
-    <div id="mesh-scroll">
-      <div class="mesh-scroll-placeholder"></div>
-    </div>
+    <div id="mesh-scroll" class="mesh-scroll-armed"></div>
     <script>
       (function () {
         var v = new URLSearchParams(location.search).get("v") === "static"
@@ -39,10 +37,64 @@
         css.rel = "stylesheet";
         css.href = "./" + v + "/mesh-scroll.css";
         document.head.appendChild(css);
-        var js = document.createElement("script");
-        js.src = "./" + v + "/mesh-scroll.js";
-        js.defer = true;
-        document.head.appendChild(js);
+        // THE COPY THE DOCS PAGE SERVES, loaded before either bundle.
+        //
+        // Not decoration: the prerendered build ADOPTS these nodes rather than
+        // rendering copy of its own, so a harness without them would exercise
+        // the fallback path and quietly stop comparing what ships. It is the
+        // same file docs/index.md includes. The React build ignores it — it
+        // clears the mount and renders its own — which is the point: the host
+        // page is identical and the only variable is the bundle.
+        //
+        // ANY FAILURE HERE IS FATAL TO THE HARNESS, and that is the whole
+        // reason this block is written out rather than chained onto a fetch.
+        // It previously swallowed every error and checked no status, so a 404
+        // injected the server's error page as markup, adoption fell through to
+        // the bundle's own copy, and the comparison went on reporting IDENTICAL
+        // while comparing something other than what ships. A harness that
+        // passes having compared nothing is worse than no harness.
+        var fatal = function (why) {
+          document.documentElement.dataset.meshHarnessFatal = why;
+          // Three surfaces, because the harness reads a different one in each
+          // mode: the flag for equivalence.mjs, the console for its error
+          // capture, and the page for a human who opened the URL.
+          console.error("HARNESS FATAL: " + why);
+          document.body.innerHTML =
+            '<pre style="color:#f97316;font:14px/1.6 ui-monospace,monospace;padding:2rem">' +
+            "HARNESS FATAL: " + why + "\n\n" +
+            "copy.generated.html is the copy the prerendered build adopts.\n" +
+            "Without it this page compares the fallback path, not what ships.\n" +
+            "Run `make docs-scroll-prerender`, and serve from src/ui/demo/." +
+            "</pre>";
+          throw new Error("mesh-scroll compare harness: " + why);
+        };
+        fetch("./copy.generated.html")
+          .then(function (r) {
+            if (!r.ok) { fatal("copy.generated.html returned HTTP " + r.status); }
+            return r.text();
+          })
+          .then(function (html) {
+            // A served error page is a 200 in some setups, so check that what
+            // came back is the artifact and not merely bytes.
+            if (html.indexOf("data-mesh-beat") === -1) {
+              fatal("copy.generated.html carries no beat blocks");
+            }
+            document.getElementById("mesh-scroll").innerHTML = html;
+            var js = document.createElement("script");
+            js.src = "./" + v + "/mesh-scroll.js";
+            js.defer = true;
+            document.head.appendChild(js);
+          })
+          .catch(function (e) {
+            // Reaching the network at all is part of the contract; a transport
+            // failure lands here and must not load the bundle either. A rethrow
+            // rather than a swallow: this is the last handler, so the rejection
+            // stays unhandled and reaches the page's error reporting.
+            if (!document.documentElement.dataset.meshHarnessFatal) {
+              fatal("copy.generated.html could not be fetched: " + e);
+            }
+            throw e;
+          });
       })();
     </script>
   </body>

@@ -22,8 +22,10 @@ import { ReactFlowProvider } from "@xyflow/react";
 import { AgentNode } from "@/components/topology/AgentNode";
 import { buildGraphFromAgents } from "@/lib/topology";
 import {
-  Stage, BeatCopy, setSsrGeometry, HANDLE_OFFSET, type SsrBox,
+  Stage, setSsrGeometry, HANDLE_OFFSET, type SsrBox,
+  RevealTitle, RevealSub, PhaseCopy, CtaCopy,
 } from "./stage";
+import { beatBlocks, renderPartial } from "./partial";
 import {
   BEATS, BUILT_CHAPTERS, REVEAL, buildWorld, MAXIMAL, MAXIMAL_REPLICAS,
   WEATHER_GROUP, EMBED_SHOWS_HEADER,
@@ -84,10 +86,16 @@ const boxes = (state: number) =>
 // ---------------------------------------------------------------------------
 // Render the real component, once per geometry state
 // ---------------------------------------------------------------------------
-function renderStage(state: number): string {
+function renderStage(
+  state: number,
+  copy: "inline" | "slot",
+  register?: "framed" | "open"
+): string {
   setSsrGeometry(boxes(state));
   try {
-    return renderToStaticMarkup(<Stage showHeader={EMBED_SHOWS_HEADER} />);
+    return renderToStaticMarkup(
+      <Stage showHeader={EMBED_SHOWS_HEADER} copy={copy} register={register} />
+    );
   } finally {
     setSsrGeometry(null);
   }
@@ -95,7 +103,13 @@ function renderStage(state: number): string {
 
 // One shell per geometry state, derived from the fixture rather than written
 // out — a third state must not silently go unrendered.
-const shells = GEO.states.map((_, i) => renderStage(i));
+//
+// `copy="slot"`: the shipped shell leaves the copy stack EMPTY, because the
+// docs page already serves the fourteen blocks and the driver moves those in.
+// Rendering them here as well would put two copies of every beat in the
+// document, one of them permanently at opacity 0 and still readable by every
+// tool this was done for.
+const shells = GEO.states.map((_, i) => renderStage(i, "slot"));
 
 /** Split the markup into one chunk per edge <g>, keyed by data-id. */
 function edgeChunks(html: string): Map<string, string> {
@@ -216,7 +230,7 @@ for (const id of NODE_IDS) {
   for (let b = 0; b < BEATS.length; b++) {
     const data = (perBeatData[b].get(id) ?? FALLBACK.get(id)) as Record<string, unknown>;
     const part = splitCard(renderCard(id, data));
-    const key = `${part.cls} ${part.html}`;
+    const key = `${part.cls}\x00${part.html}`;
     let v = index.get(key);
     if (v === undefined) {
       v = table.variants.length;
@@ -281,11 +295,15 @@ let hookCount = 0;
     // <Background> renders the pattern the camera has to keep in step.
     ["<pattern", 1],
     ["<circle", "atLeastOne"],
-    // Beat copy. `desc` is deliberately absent: it is optional per beat, and
-    // the driver already treats it as such.
-    ['data-mesh="title"', 1],
-    ['data-mesh="sub"', 1],
-    ['data-mesh="chapter"', 1],
+    // The copy stack. EMPTY here by construction; that half is asserted in the
+    // copy section below, since `0` means "at least one" in this table.
+    ['data-mesh="copy"', 1],
+    // The epilogue's blocks, which the driver takes out of the accessibility
+    // tree as each one's opacity window closes. Missing, they would stay
+    // announced and findable for the whole section — silently, since nothing
+    // about the picture would change.
+    ['data-mesh="reveal"', 1],
+    ['data-mesh="cta"', 1],
     // One wrapper, path, interaction path and label per edge; one card per node.
     ["react-flow__node", NODE_IDS.length],
     ["react-flow__edge-path", EDGE_IDS.length],
@@ -295,6 +313,7 @@ let hookCount = 0;
     ["react-flow__edge-text", EDGE_IDS.length],
   ];
   for (let c = 0; c < BUILT_CHAPTERS; c++) required.push([`data-mesh-rail="${c}"`, 1]);
+  for (let i = 0; i < REVEAL.phases.length; i++) required.push([`data-mesh-phase="${i}"`, 1]);
   for (const id of NODE_IDS) required.push([`.react-flow__node[data-id="${id}"]`, 0]);
   for (const id of EDGE_IDS) required.push([`.react-flow__edge[data-id="${id}"]`, 0]);
 
@@ -319,35 +338,232 @@ let hookCount = 0;
 }
 
 // ---------------------------------------------------------------------------
-// Beat copy — rendered from the SAME component <Stage> mounts
+// Beat copy — the served document's, and the fallback
 // ---------------------------------------------------------------------------
-// The driver replaces the whole copy block at each lead flip, so what it needs
-// is the markup, not the pieces. Rendering <BeatCopy> here rather than
-// rebuilding the four elements from hand-copied class strings is what makes
-// that safe: a type change in stage.tsx now reaches the shipped bundle by
-// construction instead of by somebody remembering.
-const beatCopy = BEATS.map((b, i) => ({
-  html: renderToStaticMarkup(<BeatCopy beat={b} lead={i} />),
-}));
+// These fourteen blocks are written to demo/copy.generated.html, which
+// docs/index.md includes, so they are elements in the first HTML response. The
+// same strings also go into the bundle as `beatCopy`, for a host page that does
+// not carry them — see the note on Generated.beatCopy in driver.ts.
+const blocks = beatBlocks();
+const beatCopy = blocks.map((html) => ({ html }));
 
-// EQUIVALENCE, LAYER 4: the copy the driver swaps in at beat 1 must BE the copy
-// already in the shell.
+/**
+ * React's escaping, undone — the five references it emits, plus the newline one
+ * keepBreaks adds. Enough to compare authored prose against rendered output,
+ * and deliberately not a general HTML parser: anything else appearing here
+ * would mean the renderer changed, which is worth failing on rather than
+ * absorbing.
+ */
+const decodeEntities = (s: string) =>
+  s
+    .replace(/&#x27;|&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#10;/g, "\n")
+    // Last, so a literal "&amp;lt;" in the copy does not decode twice.
+    .replace(/&amp;/g, "&");
+
+/**
+ * A searchable plain-text opening for each piece of epilogue prose.
+ *
+ * The strings in script.ts carry inline markup — `backticks` become <code> and
+ * *asterisks* become <em> — so only the run before the first marker survives as
+ * one uninterrupted piece of text. THAT RUN MUST EXIST: `split("`")[0]` returns
+ * "" for a body that opens with a marker, and indexOf("") is 0, so the guard
+ * would have reported such a string as present without looking for it. An
+ * empty prefix is an authoring case this cannot check, and it says so instead
+ * of passing.
+ */
+function prosePrefixes(): string[] {
+  const sources = [...REVEAL.phases.map((p) => p.body), REVEAL.cta.title];
+  return sources.map((s) => {
+    const prefix = s.split(/[`*]/)[0].slice(0, 40).trim();
+    if (!prefix) {
+      throw new Error(
+        `epilogue copy opens with inline markup, so it has no plain-text run ` +
+          `to search the partial for: ${JSON.stringify(s.slice(0, 60))}. ` +
+          `Give the guard something to match on, or check this string another way.`
+      );
+    }
+    return prefix;
+  });
+}
+
+// EQUIVALENCE, LAYER 4: the blocks the docs page serves must BE the blocks the
+// component renders.
 //
-// HONEST SCOPE: this no longer catches class drift, and that is the point —
-// both sides render <BeatCopy>, so they cannot disagree about markup. Verified
-// by perturbing a class and watching this NOT fire, because both outputs moved
-// together. What it still catches is the shell and the table being rendered
-// from different beat data or a different lead, which is cheap to check and
-// would otherwise show up only as wrong copy on the first frame.
+// This is what makes adoption safe. The driver takes nodes it did not create
+// and animates them by index, so if the served markup and <Stage>'s markup ever
+// diverged — a class, an attribute, an element order — the prerendered build
+// and the React reference would render differently from the same beat data, and
+// nothing downstream looks inside the copy.
+//
+// Compared against a Stage rendered with `copy="inline"`, which is what the dev
+// page and the React bundle mount. Neither render carries any hidden state —
+// that is written per frame from the opacities by whichever renderer is
+// animating (see rail.ts), so the two markups are directly comparable.
+//
+// THE REGISTER IS FORCED, AND THAT IS ONLY HALF THE COMPARISON. `open` is the
+// register the served copy sets the phase cells in, so it is what this render
+// has to be for the partial to be checkable against it — and forcing it also
+// keeps the choice out of a `sessionStorage` lookup that in Node decides it by
+// throwing. But `framed` is the register that SHIPS, so a guard that only ever
+// saw `open` would leave the six cells the page actually animates compared to
+// nothing at all. They are checked separately, against the emitted shell rather
+// than against a second synthetic render — see the phase cells below.
+//
+// The partial itself, and the one place it is written. Committed rather than
+// ignored, unlike everything else this file emits, for two reasons that both
+// matter: pymdownx.snippets runs with check_paths, so a missing snippet is a
+// hard docs-build failure and `mkdocs serve` would need a bundle build first;
+// and it is product prose, which belongs in a diff where it can be read. CI
+// regenerates it and fails on any difference.
+//
+// RENDERED ONCE. Every guard below reads this exact string and it is this exact
+// string that goes on disk, so nothing can be checked in a render that is not
+// the one shipped.
+const partialPath = path.join(HERE, "copy.generated.html");
+const partial = renderPartial();
 {
-  const at = shells[0].indexOf(beatCopy[0].html);
-  if (at === -1) {
+  const inlineShell = renderStage(0, "inline", "open");
+  const missing: string[] = [];
+  for (let i = 0; i < blocks.length; i++) {
+    if (inlineShell.indexOf(blocks[i]) === -1) {
+      missing.push(`  beat ${i + 1}: ${blocks[i].slice(0, 200)}`);
+    }
+  }
+  if (missing.length) {
     throw new Error(
-      "the beat-1 copy block the driver would swap in does not appear in the " +
-        "prerendered shell:\n  " + beatCopy[0].html.slice(0, 240)
+      "the copy blocks the docs page serves do not appear in <Stage>'s own " +
+        "render — the served markup and the component have diverged, and the " +
+        "driver adopts the served one:\n" + missing.join("\n")
+    );
+  }
+  // THE WRITTEN FILE, not just the rendered blocks. What goes on disk has its
+  // authored line breaks written as character references so the docs minifier
+  // cannot collapse them (see keepBreaks) — which is only correct if the
+  // parser puts back exactly what was taken out. Decoded here and compared to
+  // the block that produced it, so an escape that changed anything else would
+  // fail the build rather than reach the page.
+  const decoded = partial.split("&#10;").join("\n");
+  const notRoundTripped = blocks.filter((b) => decoded.indexOf(b) === -1);
+  if (notRoundTripped.length) {
+    throw new Error(
+      "the written copy partial does not decode back to the blocks it was " +
+        "rendered from — the line-break escaping is lossy:\n  " +
+        notRoundTripped[0].slice(0, 200)
+    );
+  }
+  // THE EPILOGUE, ON THE SAME TERMS AS THE BEATS.
+  //
+  // It reached this build hand-copied from stage.tsx into partial.tsx and had
+  // already drifted — the served call to action rendered its code spans with
+  // the mono sub-line's inline style instead of its own. Nothing caught it
+  // because nothing compared them: the beat blocks had this guard and the
+  // epilogue had none, which is precisely the gap a shared component plus this
+  // assertion closes. Both outputs, so re-inlining either one fails the build.
+  const epilogue: Array<[string, string]> = [
+    ["the reveal headline", renderToStaticMarkup(<RevealTitle />)],
+    ["the reveal sub-line", renderToStaticMarkup(<RevealSub />)],
+    ...REVEAL.phases.map(
+      (p) => [`phase ${p.label}`, renderToStaticMarkup(<PhaseCopy phase={p} />)] as [string, string]
+    ),
+    ["the call to action", renderToStaticMarkup(<CtaCopy />)],
+  ];
+  const drifted: string[] = [];
+  for (const [what, html] of epilogue) {
+    const inShell = inlineShell.indexOf(html) !== -1;
+    const inPartial = decoded.indexOf(html) !== -1;
+    if (!inShell || !inPartial) {
+      drifted.push(
+        `  ${what}: ${inShell ? "" : "NOT in <Stage>'s render"}` +
+          `${!inShell && !inPartial ? ", " : ""}` +
+          `${inPartial ? "" : "NOT in the served partial"}\n    ${html.slice(0, 200)}`
+      );
+    }
+  }
+  if (drifted.length) {
+    throw new Error(
+      "the epilogue's markup differs between the panel and the served copy. " +
+        "Both must render the SAME components — only the arrangement around " +
+        "them may differ:\n" + drifted.join("\n")
+    );
+  }
+  // THE PHASE CELLS AS THEY SHIP, which is a different register from the one
+  // above and for a while was the gap in this guard: the panel renders `framed`
+  // unless a reader has picked otherwise in the session, and while that markup
+  // was written out inside <Stage> the check above was comparing the register
+  // the page does not use. Both registers now come from PhaseCopy, so the
+  // shipped one can be checked the same way — against the EMITTED SHELL, the
+  // string that goes into graph.json and gets mounted, rather than against
+  // another render of the same component. Every state, since every one of them
+  // is a shell the driver may be handed.
+  const framedCells = REVEAL.phases.map(
+    (p) => [p.label, renderToStaticMarkup(<PhaseCopy phase={p} register="framed" />)] as const
+  );
+  const notShipped: string[] = [];
+  for (const [label, html] of framedCells) {
+    // Named for what it holds rather than `states`, which is the emitted edge
+    // geometry two hundred lines up and still in scope.
+    const absentFrom = shells.map((s, i) => [i, s.indexOf(html)] as const).filter(([, at]) => at === -1);
+    if (absentFrom.length) {
+      notShipped.push(
+        `  phase ${label}: not in shell state${absentFrom.length > 1 ? "s" : ""} ` +
+          `${absentFrom.map(([i]) => i).join(", ")}\n    ${html.slice(0, 200)}`
+      );
+    }
+  }
+  if (notShipped.length) {
+    throw new Error(
+      "the prerendered shell's lifecycle cells are not what PhaseCopy renders in " +
+        "the shipped register. The panel's markup and the shared component have " +
+        "diverged, and the shell is what the docs page animates:\n" + notShipped.join("\n")
+    );
+  }
+  // ...and the shipped shell carries no copy at all, so nothing the driver
+  // adopts can end up in the document twice.
+  if (shells.some((s) => s.indexOf("data-mesh-beat") !== -1)) {
+    throw new Error(
+      "the prerendered shell contains beat copy. It must ship an EMPTY stack: " +
+        "the copy comes from the served document, and a second set would be " +
+        "readable by every tool this exists to serve while being invisible."
     );
   }
 }
+
+// What the served document must actually contain. Counted rather than trusted:
+// this is the only artifact here whose purpose is to be READ, so "it rendered"
+// is not the same as "the words are in it".
+{
+  const count = (needle: string) => partial.split(needle).length - 1;
+  const want: Array<[string, number]> = [
+    ['data-mesh="title"', BEATS.length],
+    ['data-mesh="sub"', BEATS.length],
+    ['data-mesh="chapter"', BEATS.length],
+    ['data-mesh="desc"', BEATS.filter((b) => b.desc).length],
+  ];
+  const bad = want.filter(([sel, n]) => count(sel) !== n);
+  // Every phase body and the CTA, by their own text — the blocks above are
+  // structural, but the epilogue's copy has no marker of its own.
+  //
+  // COMPARED AS TEXT, NOT AS MARKUP, on both sides. The needle is authored
+  // prose and the haystack is React's output, where `'` is a character
+  // reference and `&`, `<` and `>` are entities — so this compared an
+  // unescaped string against an escaped one and passed only for as long as no
+  // phase body happened to open with an apostrophe. The next one to do so
+  // would have failed a build for a file that was completely correct.
+  const text = decodeEntities(partial);
+  const proseMissing = prosePrefixes().filter((s) => text.indexOf(s) === -1);
+  if (bad.length || proseMissing.length) {
+    throw new Error(
+      "the generated copy partial is incomplete:\n" +
+        bad.map(([sel, n]) => `  ${sel}: found ${count(sel)}, expected ${n}`).join("\n") +
+        proseMissing.map((s) => `  missing reveal copy: ${s.slice(0, 60)}…`).join("\n")
+    );
+  }
+}
+fs.writeFileSync(partialPath, partial);
 
 /** Per-beat edge stroke, so the driver never needs the graph builder. */
 const edgeStroke = BEATS.map((b) => {
@@ -373,6 +589,7 @@ const out = {
   states,
   cards,
   beatCopy,
+  beatCount: BEATS.length,
   edgeStroke,
 };
 // Emitted into demo/generated/, which is gitignored, and BOTH halves of that
@@ -408,6 +625,10 @@ console.log(
 );
 console.log(`  prerender: ${NODE_IDS.length} cards, ${variantCount} distinct variants, shell verified against the table`);
 console.log(`  prerender: ${hookCount} driver hooks present in the shell (selectors, node/edge ids, rail slots)`);
+console.log(
+  `  prerender: ${blocks.length} copy blocks + the epilogue written to ` +
+    `demo/copy.generated.html (${(partial.length / 1024).toFixed(1)} kB), verified against <Stage>`
+);
 if (process.argv.includes("--report")) {
   console.log(`    shell markup   ${kb(shells[0].length)}`);
   console.log(`    card variants  ${kb(JSON.stringify(cards).length)}`);

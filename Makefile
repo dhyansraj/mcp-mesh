@@ -483,6 +483,13 @@ docs-artifacts:
 # geometry captured from the running React build, or if AgentNode's markup has
 # drifted from what the driver would swap in.
 #
+# It also writes src/ui/demo/copy.generated.html — the fourteen beats and the
+# epilogue as markup, which docs/index.md includes so the section's prose is in
+# the served document rather than inside a JSON string in the bundle. That one
+# is COMMITTED, unlike everything else here: a missing snippet is a hard mkdocs
+# failure, and product prose belongs in a diff. Run this after any edit to
+# demo/script.ts and commit the result; CI fails on the difference otherwise.
+#
 # The compiled emitter goes in demo/generated/, NOT demo/dist/. demo/dist/ is
 # the React bundle's outDir and vite empties it, so with the emitter there a
 # `make -j docs-scroll-compare` could delete emit.cjs in the window between

@@ -59,16 +59,47 @@
   transition: opacity 90ms linear;
 }
 
+/* THE COPY STACK — fourteen beats in one position.
+   Every block is taken out of flow, so the stack has no height of its own and
+   the beats cannot push each other around; the column still has to be told to
+   fill the space beside the accent rule, since a flex item whose children are
+   all out of flow would otherwise size to nothing. */
+.demo-copy-stack {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* Which beat is on screen is decided entirely here, by two windows that MEET
+   rather than overlap — see beatCopyOpacity in timeline.ts. Deliberately with
+   no transition: the driver writes this every frame, so there is nothing to
+   smooth over, and a transition would let the outgoing block's PAINTED opacity
+   lag past the point the incoming one starts rising. That is superimposition,
+   which is the one thing the windows exist to prevent. */
+.demo-copy-stack > .demo-beat {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  opacity: var(--b, 0);
+}
+
 /* Each phase reads its own driver variable through --p, so the rule is shared
    and only the indirection differs per card. The lift is small on purpose: at
    scroll-scrubbed speed anything larger reads as a slide rather than an
-   arrival. */
+   arrival.
+
+   NO TRANSITION, for the reason the copy stack has none: these six cells are on
+   the rail, and the rail decides whether a cell is announced and findable from
+   the number that is WRITTEN this frame. A 90ms ease made the number and the
+   picture two different things, so a cell taken out of the reading could still
+   be legible for up to 90ms on a fast traversal — and the equivalence harness,
+   which settles for 120ms before it reads, could not see it happen. The 90ms
+   here was smoothing chunky wheel deltas, which is worth having on the graph
+   and is not worth an invariant: each cell's window is ~60vh of scroll, so a
+   wheel notch moves it a fraction of the way and the fade is the scroll. */
 .demo-phase {
   opacity: var(--p, 0);
   transform: translateY(calc((1 - var(--p, 0)) * 14px));
-  transition:
-    opacity 90ms linear,
-    transform 90ms linear;
 }
 
 .demo-rule {
@@ -82,30 +113,23 @@
   background: var(--accent, #f97316);
 }
 
-.demo-fade {
-  animation: demo-text-in 380ms ease both;
-}
-
-@keyframes demo-text-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
+/* WHAT USED TO BE HERE: `.demo-fade`, a 380ms opacity animation that replayed
+   at every beat change because the copy elements were destroyed and rebuilt.
+   The blocks are now permanent and scroll-driven, so the fade it performed is
+   the incoming block's own window (COPY_IN) — which holds mid-fade when the
+   reader stops scrolling, where a time-based animation could only finish.
+   Nothing else used it, so the rule and its keyframes are gone rather than
+   left inert. */
 
 @media (prefers-reduced-motion: reduce) {
-  .demo-fade {
-    animation: none !important;
-  }
   .demo-panel .react-flow__edge-path,
   .demo-panel .react-flow__node,
   .demo-gutter,
-  .demo-graph,
-  .demo-phase {
+  .demo-graph {
     transition: none !important;
   }
+  /* The phase cells have no transition to turn off — only the lift, which is
+     motion for its own sake and is the part this query is actually about. */
   .demo-phase {
     transform: none;
   }

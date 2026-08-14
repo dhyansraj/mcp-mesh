@@ -311,18 +311,27 @@ export function scopeCss(): Plugin {
 /**
  * Emit the section's total height into the stylesheet.
  *
- * The docs page has to reserve this height BEFORE the 173KB of JS arrives, or
- * the page grows under the reader and the scroll position jumps. The number is
- * a function of the beat weights, so hardcoding it into home.html would put a
+ * The docs page has to reserve this height BEFORE the JS arrives, or the page
+ * grows under the reader and the scroll position jumps. The number is a
+ * function of the beat weights, so hardcoding it into the docs page would put a
  * second copy of the arithmetic somewhere that cannot see script.ts and would
  * silently drift the first time a weight changes.
  *
  * Instead the build reads it from the same module the driver uses and writes
  * it into the CSS, which is loaded eagerly. One source of truth, and the
- * placeholder physically cannot disagree with the animation.
+ * reservation physically cannot disagree with the animation.
  *
  * Matches Stage's own layout: header 70vh + section (100 + travel*100)vh +
  * closing spacer 25vh.
+ *
+ * CONDITIONAL ON `mesh-scroll-armed`, WHICH THE LOADER PUTS ON THE MOUNT.
+ * It used to be unconditional at >= 900px, which was right when the only thing
+ * in the section was a placeholder and wrong the moment the section started
+ * carrying the whole story as prose: with JavaScript disabled the loader never
+ * runs, no onerror ever fires, and an unconditional reservation buried that
+ * prose under twenty-two empty screens. Arming is done inline at parse time,
+ * before the section has been laid out, so this still lands before first paint
+ * and a reader with JavaScript sees no shift.
  */
 export function emitReservedHeight(): Plugin {
   return {
@@ -347,24 +356,23 @@ export function emitReservedHeight(): Plugin {
       for (const file of Object.values(bundle)) {
         if (file.type !== "asset" || !file.fileName.endsWith(".css")) continue;
         const target = path.join(dir, file.fileName);
-        // GATED ON THE SAME BREAKPOINT AS THE LOADER in docs/overrides/
-        // home.html — the two must agree, and neither can read the other, so
-        // they are cross-referenced by comment. Reserving the height on a
-        // viewport that will never fetch the bundle would produce exactly the
-        // failure the reservation exists to prevent: 2175vh of nothing. Below
-        // the breakpoint the section collapses to the placeholder's own
-        // height, which is one screen of B1's copy.
+        // GATED ON THE SAME BREAKPOINT AS THE LOADER in docs/index.md — the
+        // two must agree, and neither can read the other, so they are
+        // cross-referenced by comment. Below the breakpoint the section is not
+        // rendered at all, so there is nothing to reserve for; the arming class
+        // is a second, independent gate on the same rule.
         fs.appendFileSync(
           target,
           // display:block is the other half of the mobile guard — the base
           // rule in embed.css hides the section, and this is the only thing
           // that shows it. One media query governs both existence and the
           // reservation, so they can never disagree.
-          `\n@media (min-width:${MIN_WIDTH}px){#mesh-scroll{display:block;min-height:${vh}vh}}\n` +
-            `#mesh-scroll[data-mesh-scroll-mounted="1"] .mesh-scroll-placeholder{display:none}\n`
+          `\n@media (min-width:${MIN_WIDTH}px){#mesh-scroll{display:block}` +
+            `#mesh-scroll.mesh-scroll-armed{min-height:${vh}vh}}\n`
         );
         console.log(
-          `  reserved height: ${vh}vh written into ${file.fileName} (>= ${MIN_WIDTH}px only)`
+          `  reserved height: ${vh}vh written into ${file.fileName} ` +
+            `(>= ${MIN_WIDTH}px, and only once armed)`
         );
       }
       },

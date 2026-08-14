@@ -14,19 +14,21 @@
 //
 //   setViewport(...)  ->  a transform on .react-flow__viewport (+ the
 //                         background pattern, which is a pure function of it)
-//   setLead(i)        ->  swap the card bodies and the beat copy
+//   setLead(i)        ->  swap the card bodies
 //
 // Everything else — the ~80 setProperty calls, the camera maths, the reveal
-// windows, the keyboard snapping — is the same code path as before.
+// windows, the keyboard snapping, the hidden state — is the same code path as
+// before.
 import {
-  BEATS, ACCENT, BUILT_CHAPTERS, TOTAL_VH, REVEAL, REVEAL_VH,
+  BEATS, ACCENT, BUILT_CHAPTERS,
 } from "./script";
 import {
-  clamp, smoothstep, lerp, lerpColor, camFor, LEAD_FLIP, restWidth,
-  totalTravel, rawFromVh, R_CLEAR, R_BEAT_OUT, R_HEAD, R_PHASE_0, R_PHASE_STEP,
-  R_PHASE_SPAN, R_OUT, R_CTA, SNAP_VH, CHAPTER_VH, CHAPTER_SPAN,
-  TEXT_ENTRY, ACTIVATABLE,
+  clamp, lerp, lerpColor, camFor, LEAD_FLIP, restWidth,
+  totalTravel, copyFrameAt,
+  SNAP_VH, CHAPTER_VH, CHAPTER_SPAN, TEXT_ENTRY, ACTIVATABLE,
+  type CopyFrame,
 } from "./timeline";
+import { collectRail, applyRailHidden } from "./rail";
 
 export interface Generated {
   shell: string;
@@ -38,7 +40,22 @@ export interface Generated {
     label: Record<string, [number, number]>;
   }>;
   cards: Record<string, { variants: Array<{ cls: string; html: string }>; byBeat: number[] }>;
+  /**
+   * The fourteen copy blocks, as markup.
+   *
+   * NOT the shipping path — the docs page serves these as real elements and
+   * static.ts moves those into the shell. This is the fallback for a host page
+   * that does not carry them — an embedder who copied only the mount div — where
+   * the alternative is an empty rail for the length of the section.
+   *
+   * The equivalence harness used to be the other case and deliberately is not
+   * any more: it now refuses to load either bundle without the served copy,
+   * because a comparison that quietly ran against this fallback would report
+   * IDENTICAL having compared something other than what ships.
+   */
   beatCopy: Array<{ html: string }>;
+  /** BEATS.length, so static.ts can check what it adopted without importing. */
+  beatCount: number;
   edgeStroke: string[][];
 }
 
@@ -48,7 +65,15 @@ const N = BEATS.length;
 const BG_GAP = 22;
 const BG_SIZE = 1;
 
-export function start(root: HTMLElement, G: Generated) {
+/**
+ * Take over the prerendered markup.
+ *
+ * Returns false, having changed NOTHING, if the shell it was handed is not the
+ * one it was built for. The caller has already replaced the host page's markup
+ * by then, so a silent bail-out would leave ~2205vh of reserved height with no
+ * prose in it — see the restore path in static.ts.
+ */
+export function start(root: HTMLElement, G: Generated): boolean {
   const q = <T extends Element>(sel: string) => root.querySelector<T>(sel);
 
   const section = q<HTMLElement>('[data-mesh="section"]');
@@ -57,7 +82,7 @@ export function start(root: HTMLElement, G: Generated) {
   const viewport = q<HTMLElement>(".react-flow__viewport");
   const bgPattern = q<SVGPatternElement>(".react-flow__background pattern");
   const bgDot = q<SVGCircleElement>(".react-flow__background circle");
-  if (!section || !panel || !wrap || !viewport) return;
+  if (!section || !panel || !wrap || !viewport) return false;
 
   const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 
@@ -95,7 +120,25 @@ export function start(root: HTMLElement, G: Generated) {
     });
   }
 
-  const titleHost = q<HTMLElement>('[data-mesh="title"]')?.parentElement ?? null;
+  // ---- copy blocks --------------------------------------------------------
+  // Fourteen elements that the SERVED DOCUMENT provided and static.ts moved
+  // into the shell's empty stack before this ran. Nothing here creates or
+  // rewrites copy; it only sets an opacity per block.
+  const copyEl = Array.from(
+    root.querySelectorAll<HTMLElement>('[data-mesh="copy"] > [data-mesh-beat]')
+  );
+  // An empty or short stack is a REFUSAL, not something to animate around. The
+  // driver addresses blocks by index and reserves ~2205vh of pinned scroll for
+  // them, so carrying on here is how the section comes to be twenty-two screens
+  // of nothing. Checked before anything has been written, so the caller can put
+  // the served copy back.
+  if (copyEl.length !== N) return false;
+  // ...and every block that carries words, beats and epilogue alike, paired
+  // with the opacity that decides whether it is in the accessibility tree. See
+  // rail.ts for why that is the opacity and not the current beat index.
+  const rail = collectRail(root);
+  const frame: CopyFrame = copyFrameAt(0, false);
+
   const railEl = Array.from({ length: BUILT_CHAPTERS }, (_, c) =>
     q<HTMLElement>(`[data-mesh-rail="${c}"]`)
   );
@@ -166,11 +209,6 @@ export function start(root: HTMLElement, G: Generated) {
   // card carries `transition-all duration-300`, so its border colour is meant
   // to ease from green to red when a provider dies. Replacing the element
   // would make that snap.
-  //
-  // The beat copy is the opposite case and is replaced outright, which is also
-  // what React did — its <h2> is keyed on the beat, so the old element
-  // unmounted and the new one played `demo-fade` from the start. Rewriting
-  // text in place would leave the animation already finished.
   let lead = -1;
   const applyLead = (i: number) => {
     if (i === lead) return;
@@ -181,12 +219,11 @@ export function start(root: HTMLElement, G: Generated) {
       if (el.className !== v.cls) el.className = v.cls;
       if (el.innerHTML !== v.html) el.innerHTML = v.html;
     }
-    // One assignment, from markup emitted by the very component <Stage>
-    // renders. Replacing the elements (rather than rewriting their text) is
-    // deliberate and matches React: the title is keyed on the beat there, so
-    // the old <h2> unmounts and `demo-fade` replays from the start.
-    if (titleHost) titleHost.innerHTML = G.beatCopy[i].html;
-
+    // NO HIDDEN STATE IS SET HERE, deliberately. `lead` is which beat's title
+    // is current, which is not the same question as which blocks are on screen
+    // — it says nothing about the epilogue and it freezes at B14 while the copy
+    // column fades away. That is decided per frame from the opacities; see
+    // rail.ts.
     const chapter = BEATS[i].chapter;
     for (let c = 0; c < BUILT_CHAPTERS; c++) {
       const active = chapter === c;
@@ -213,19 +250,13 @@ export function start(root: HTMLElement, G: Generated) {
     const travel = r.height - window.innerHeight;
     const progress = travel <= 0 ? 0 : clamp(-r.top / travel, 0, 1);
 
-    const vhPos = progress * totalTravel;
-    const raw = rawFromVh(Math.min(vhPos, TOTAL_VH));
-    const rev = clamp((vhPos - TOTAL_VH) / REVEAL_VH, 0, 1);
-    const pos = raw - 0.5;
-    const i0 = clamp(Math.floor(pos), 0, N - 1);
-    const i1 = Math.min(i0 + 1, N - 1);
-    const t = clamp(pos - i0, 0, 1);
-    const f = reduced ? (t >= 0.5 ? 1 : 0) : smoothstep(t);
-    // Everything the next beat ADDS is held back until its title is actually on
-    // screen. Withdrawal still tracks f: a card leaving early contradicts
-    // nothing, and the stagger makes each reveal read as caused by its heading
+    // Every number this frame is drawn from, derived once by the module the
+    // React component and the overlap sweep also call. `fIn` holds back
+    // everything the next beat ADDS until its title is actually on screen;
+    // withdrawal still tracks `f`, since a card leaving early contradicts
+    // nothing and the stagger makes each reveal read as caused by its heading
     // rather than anticipating it.
-    const fIn = smoothstep(clamp((f - LEAD_FLIP) / (1 - LEAD_FLIP), 0, 1));
+    const { raw, i0, i1, f, fIn } = copyFrameAt(progress * totalTravel, reduced, frame);
 
     const a = BEATS[i0];
     const b = BEATS[i1];
@@ -264,24 +295,22 @@ export function start(root: HTMLElement, G: Generated) {
       s.setProperty(`--ch${c}-f`, `${(clamp((raw - first) / count, 0, 1) * 100).toFixed(2)}%`);
     }
 
+    // ---- beat copy --------------------------------------------------------
+    // The fourteen blocks share one position, so which of them is on screen is
+    // decided here and nowhere else — see beatCopyOpacity for why the two
+    // windows meet instead of overlapping.
+    for (let k = 0; k < N; k++) s.setProperty(`--b${k}`, frame.copy[k].toFixed(3));
+
     // ---- the reveal -------------------------------------------------------
-    const ease = (x: number) => (reduced ? (x >= 0.5 ? 1 : 0) : smoothstep(clamp(x, 0, 1)));
-    const window_ = (from: number, to: number) => ease((rev - from) / (to - from));
-
-    const cleared = ease(rev / R_CLEAR);
-    s.setProperty("--graph", (1 - cleared).toFixed(3));
-    s.setProperty("--rail", (1 - cleared).toFixed(3));
-
-    const headIn = window_(R_HEAD[0], R_HEAD[1]);
-    const beatOut = window_(R_BEAT_OUT[0], R_BEAT_OUT[1]);
-    const gone = 1 - window_(R_OUT[0], R_OUT[1]);
-    s.setProperty("--beat", (1 - beatOut).toFixed(3));
-    s.setProperty("--reveal", (headIn * gone).toFixed(3));
-    for (let i = 0; i < REVEAL.phases.length; i++) {
-      const from = R_PHASE_0 + i * R_PHASE_STEP;
-      s.setProperty(`--p${i}`, (window_(from, from + R_PHASE_SPAN) * gone).toFixed(3));
+    const rf = frame.reveal;
+    s.setProperty("--graph", rf.graph.toFixed(3));
+    s.setProperty("--rail", rf.graph.toFixed(3));
+    s.setProperty("--beat", rf.beat.toFixed(3));
+    s.setProperty("--reveal", rf.reveal.toFixed(3));
+    for (let i = 0; i < rf.p.length; i++) {
+      s.setProperty(`--p${i}`, rf.p[i].toFixed(3));
     }
-    s.setProperty("--cta", window_(R_CTA[0], R_CTA[1]).toFixed(3));
+    s.setProperty("--cta", rf.cta.toFixed(3));
 
     // ---- camera -----------------------------------------------------------
     const W = wrap.clientWidth;
@@ -317,6 +346,15 @@ export function start(root: HTMLElement, G: Generated) {
     }
 
     applyLead(f >= LEAD_FLIP ? i1 : i0);
+    // WHAT A SCREEN READER AND FIND-IN-PAGE SEE OF THE PROSE, from the same
+    // frame that just drew it. Every block the rail governs and the frame is
+    // not painting — thirteen beats during the arc, all fourteen plus most of
+    // the epilogue after it — leaves the accessibility tree. The graph is not
+    // in that set: the cards and the chapter labels also reach zero opacity and
+    // are marked by nothing, which rail.ts says plainly and on purpose. The
+    // served document carries neither attribute on anything and reads as the
+    // whole story, which is what a crawler and a reader without JavaScript get.
+    applyRailHidden(rail, frame);
     measureLabels();
   };
 
@@ -432,4 +470,5 @@ export function start(root: HTMLElement, G: Generated) {
   };
   window.addEventListener("wheel", clearTarget, { passive: true });
   window.addEventListener("touchstart", clearTarget, { passive: true });
+  return true;
 }

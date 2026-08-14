@@ -56,6 +56,7 @@ const NODE_IDS = G.nodeOrder;
 const EDGE_IDS = G.edgeOrder;
 const CHAPTER_COUNT = G.chapterCount;
 const PHASE_COUNT = G.phaseCount;
+const BEAT_COUNT = G.beatCount;
 
 const BASE = process.env.MESH_COMPARE_BASE ?? "http://localhost:8899/compare.html";
 const OUT = path.join(import.meta.dirname, "dist");
@@ -75,13 +76,38 @@ async function capture(variant) {
   page.on("pageerror", (e) => errors.push(String(e)));
 
   await page.goto(`${BASE}?v=${variant}`, { waitUntil: "load" });
+  // THE HARNESS'S OWN PRECONDITION, checked before anything is measured.
+  // compare.html refuses to load either bundle if the served copy is not
+  // there, because the prerendered build ADOPTS it — without it the comparison
+  // runs against the in-bundle fallback and reports IDENTICAL having compared
+  // something other than what ships. Read here so that failure is one line of
+  // output rather than a selector timeout.
+  //
+  // WAITED FOR RATHER THAN SAMPLED. The flag is set from a `fetch` chain, and a
+  // pending fetch does not hold back the load event — so reading it the instant
+  // `load` fires is a race the slow case loses, and losing it costs exactly the
+  // clear message this exists to give. Either outcome resolves this: the mount
+  // flag means the copy arrived and the bundle took over, the fatal flag means
+  // it did not.
+  await page.waitForFunction(
+    () =>
+      document.documentElement.dataset.meshHarnessFatal !== undefined ||
+      document.querySelector('#mesh-scroll[data-mesh-scroll-mounted="1"]') !== null
+  );
+  const fatal = await page.evaluate(() => document.documentElement.dataset.meshHarnessFatal);
+  if (fatal) {
+    await browser.close();
+    console.error(`harness precondition failed (${variant}): ${fatal}`);
+    console.error("Refusing to report a verdict — nothing comparable was loaded.");
+    process.exit(1);
+  }
   await page.waitForSelector('#mesh-scroll[data-mesh-scroll-mounted="1"]');
   await page.waitForSelector('[data-mesh="section"]');
   await page.evaluate(() => document.fonts.ready);
   // React needs a commit after mount before the first frame is authoritative.
   await page.waitForTimeout(300);
 
-  const frames = await page.evaluate(async ({ SAMPLES, NODE_IDS, EDGE_IDS, CHAPTER_COUNT, PHASE_COUNT }) => {
+  const frames = await page.evaluate(async ({ SAMPLES, NODE_IDS, EDGE_IDS, CHAPTER_COUNT, PHASE_COUNT, BEAT_COUNT }) => {
     const section = document.querySelector('[data-mesh="section"]');
     const panel = document.querySelector(".demo-panel");
     const viewport = document.querySelector(".react-flow__viewport");
@@ -96,7 +122,22 @@ async function capture(variant) {
       await raf();
       await raf();
       await raf();
-      await new Promise((r) => setTimeout(r, 20));
+      // ...then longer than the longest transition in scroll.css (90ms).
+      //
+      // THIS IS NOT SLACK. The graph is transitioned — edges, nodes, the gutter
+      // and the graph layer — so their PAINTED values trail what the driver
+      // wrote for up to 90ms, and this capture reads computed style on purpose,
+      // to measure what the browser does rather than what the driver said. At
+      // 20ms it was reading the middle of a fade and calling it a settled frame.
+      //
+      // IT CANNOT HIDE A MARKING SKEW, which is the thing to keep true here.
+      // Nothing on the rail is transitioned any more — not the beats, not the
+      // headline, not the call to action and, since the 90ms came off them, not
+      // the six lifecycle cells — so for every block whose accessibility state
+      // is asserted below, the painted opacity is the value written for the
+      // frame that marked it. A settle long enough to let an ease finish is
+      // exactly what would make that assertion unable to fail.
+      await new Promise((r) => setTimeout(r, 120));
     };
 
     // Every custom property either build writes, by name. Read back off the
@@ -110,6 +151,7 @@ async function capture(variant) {
     for (let c = 0; c < CHAPTER_COUNT; c++) names.push(`--ch${c}-f`);
     names.push("--graph", "--rail", "--beat", "--reveal", "--cta");
     for (let i = 0; i < PHASE_COUNT; i++) names.push(`--p${i}`);
+    for (let i = 0; i < BEAT_COUNT; i++) names.push(`--b${i}`);
 
     const positions = [];
     for (let i = 0; i <= SAMPLES; i++) positions.push(i / SAMPLES);
@@ -120,10 +162,53 @@ async function capture(variant) {
       await settle();
       const vars = {};
       for (const n of names) vars[n] = panel.style.getPropertyValue(n);
-      const title = document.querySelector('[data-mesh="title"]');
-      const sub = document.querySelector('[data-mesh="sub"]');
-      const desc = document.querySelector('[data-mesh="desc"]');
-      const chapter = document.querySelector('[data-mesh="chapter"]');
+
+      // THE COPY BLOCKS. All fourteen are in the document now, stacked in one
+      // position, so "the copy on screen" is no longer whatever the one <h2>
+      // happens to say — it is the block with the highest RENDERED opacity.
+      // Read from the computed style rather than from the custom property, so
+      // this measures what a CSS mistake would actually do (a stray transition,
+      // a rule that stops applying) and not just what the driver wrote.
+      const blocks = Array.from(
+        document.querySelectorAll('[data-mesh="copy"] > [data-mesh-beat]')
+      );
+      const stackOpacity = Number(
+        getComputedStyle(document.querySelector('[data-mesh="copy"]').parentElement).opacity
+      );
+      const shown = blocks.map((b) => Number(getComputedStyle(b).opacity) * stackOpacity);
+      let active = 0;
+      for (let i = 1; i < shown.length; i++) if (shown[i] > shown[active]) active = i;
+      const lead = blocks[active] ?? document;
+      const title = lead.querySelector('[data-mesh="title"]');
+      const sub = lead.querySelector('[data-mesh="sub"]');
+      const desc = lead.querySelector('[data-mesh="desc"]');
+      const chapter = lead.querySelector('[data-mesh="chapter"]');
+      const state = (el) =>
+        !el
+          ? "??"
+          : (el.getAttribute("aria-hidden") === "true" ? "h" : "-") +
+            (el.hasAttribute("inert") ? "i" : "-");
+      const copyState = blocks.map(state).join("");
+      // THE EPILOGUE'S BLOCKS, on the same terms. Nothing used to mark these at
+      // all — the hidden state keyed off the current beat index, which says
+      // nothing about them — so a reader met the whole epilogue throughout the
+      // topology arc while it sat at zero opacity. Captured beside the rendered
+      // opacity of each one, so the rule can be checked rather than only
+      // compared between the builds (which agreed while both were wrong).
+      const epilogueEls = [
+        document.querySelector('[data-mesh="reveal"]'),
+        document.querySelector('[data-mesh="cta"]'),
+        ...Array.from(document.querySelectorAll("[data-mesh-phase]")),
+      ];
+      const epilogueState = epilogueEls.map(state).join("|");
+      const epilogueShown = epilogueEls.map((el) =>
+        el ? Number(getComputedStyle(el).opacity) : -1
+      );
+      // Above this, two blocks would be legible at once. 0.005 is the floor the
+      // reveal's windows were sized against — smoothstep crosses it at 4.14% of
+      // a window, which is where a fade stops being nothing.
+      const VISIBLE = 0.005;
+      const superimposed = shown.filter((o) => o > VISIBLE).length;
       const pat = document.querySelector(".react-flow__background pattern");
       const dot = document.querySelector(".react-flow__background circle");
       // THE CARDS. This is what applyLead actually rewrites at the 14 flips,
@@ -171,6 +256,13 @@ async function capture(variant) {
         cards,
         labels,
         labelBox,
+        blockCount: blocks.length,
+        copyState,
+        shown,
+        epilogueState,
+        epilogueShown,
+        superimposed,
+        activeBeat: active,
         transform: viewport ? viewport.style.transform : null,
         title: title ? title.textContent : null,
         sub: sub ? sub.textContent : null,
@@ -193,7 +285,7 @@ async function capture(variant) {
       });
     }
     return out;
-  }, { SAMPLES, NODE_IDS, EDGE_IDS, CHAPTER_COUNT, PHASE_COUNT });
+  }, { SAMPLES, NODE_IDS, EDGE_IDS, CHAPTER_COUNT, PHASE_COUNT, BEAT_COUNT });
 
   await browser.close();
   return { frames, errors };
@@ -227,6 +319,19 @@ if (react.frames.length !== stat.frames.length) {
   );
   process.exit(1);
 }
+
+/**
+ * Compared byte-exact, one value per frame each. Named in one place so the
+ * count printed at the end is derived from the list rather than written next
+ * to it, which is how it came to be reported as six while nine were compared.
+ * The last three are the copy stack: same number of blocks, the same one on
+ * screen, and the same thirteen out of the accessibility tree and out of
+ * find-in-page.
+ */
+const SCALAR_FIELDS = [
+  "transform", "title", "sub", "desc", "chapter", "bg",
+  "blockCount", "copyState", "epilogueState", "activeBeat",
+];
 
 const diffs = [];
 /** Half of the fixture's own 2dp rounding step — an order below a device pixel. */
@@ -331,7 +436,7 @@ for (let i = 0; i < n; i++) {
     }
   }
 
-  for (const k of ["transform", "title", "sub", "desc", "chapter", "bg"]) {
+  for (const k of SCALAR_FIELDS) {
     if (a[k] !== b[k]) {
       const trim = (v) => (v === null ? "null" : String(v).slice(0, 120));
       diffs.push(`${where} ${k}:\n    react  ${trim(a[k])}\n    static ${trim(b[k])}`);
@@ -417,8 +522,116 @@ for (let i = 0; i < n; i++) {
   }
 }
 
+// NO TWO BEATS ON SCREEN AT ONCE, measured rather than reasoned about.
+//
+// The guarantee used to be structural: one copy block existed at a time, so
+// superimposition was impossible at any copy length. All fourteen are mounted
+// now, so it is a timing property of two windows that meet at LEAD_FLIP —
+// swept exhaustively in demo/copy-overlap.test.ts, and confirmed HERE against
+// what the browser actually renders, which is the part maths cannot see.
+{
+  let worst = 0;
+  const bad = [];
+  for (const [name, cap] of [["react", react], ["static", stat]]) {
+    for (const f of cap.frames) {
+      if (f.blockCount !== BEAT_COUNT) {
+        bad.push(`  ${name} p=${f.p.toFixed(4)}: ${f.blockCount} copy blocks, expected ${BEAT_COUNT}`);
+      }
+      if (f.superimposed > worst) worst = f.superimposed;
+      if (f.superimposed > 1) {
+        bad.push(`  ${name} p=${f.p.toFixed(4)}: ${f.superimposed} copy blocks legible at once`);
+      }
+    }
+  }
+  console.log(
+    `copy stack: ${BEAT_COUNT} blocks in both builds, at most ${worst} legible at any sampled position`
+  );
+  if (bad.length) {
+    console.log("COPY STACK FAILURES:");
+    for (const l of bad.slice(0, 20)) console.log(l);
+    process.exitCode = 1;
+  }
+}
+
+// THE HIDDEN STATE IS THE OPACITY — checked as a RULE, not as an agreement.
+//
+// The two builds agreeing proves nothing here, and demonstrably so: they agreed
+// for the whole of the previous implementation, in which the state keyed off the
+// current beat index. That froze at the last beat through the epilogue, so
+// B14's words stayed announced and findable at zero opacity for ~620vh, and the
+// epilogue's own blocks were never marked at any position. Both builds were
+// wrong together, byte for byte.
+//
+// So this asserts the property against the RENDERED opacity of each block:
+// live above the threshold, out of the accessibility tree at or below it.
+// Sampled across the whole travel, which means the epilogue positions — where
+// every one of those failures lived — are covered by construction.
+{
+  // The floor the reveal's windows were sized against, and the one the
+  // renderers apply. Same value as VISIBLE in demo/timeline.ts.
+  const VISIBLE = 0.005;
+  // The renderers apply the rule to the full-precision value and then write the
+  // opacity out at 3dp, so a block within half a step of the threshold can be
+  // marked one way and painted the other for one frame. That is rounding, not
+  // drift; anything further out is the rule being wrong.
+  const ROUNDING = 0.001;
+  const wrong = [];
+  let checked = 0;
+  let epiloguePositions = 0;
+  for (const [name, cap] of [["react", react], ["static", stat]]) {
+    for (const f of cap.frames) {
+      // Anything the epilogue is doing means the beat column is on its way out
+      // or already gone — the positions the old rule could not describe.
+      const inEpilogue = f.epilogueShown.some((o) => o > VISIBLE);
+      if (inEpilogue) epiloguePositions++;
+      const marks = [
+        // `?? []` is not defensiveness for its own sake: copyState is one pair
+        // of characters per copy block, so it is "" exactly when the stack is
+        // empty — which the block above has already reported as the failure it
+        // is. Without the guard the harness dies of a TypeError in the one case
+        // it had just diagnosed correctly, and the diagnosis never prints.
+        ...(f.copyState.match(/../g) ?? []).map((s, i) => [`B${i + 1}`, s, f.shown[i]]),
+        ...f.epilogueState.split("|").map((s, i) => [
+          i === 0 ? "headline" : i === 1 ? "cta" : `phase ${i - 1}`,
+          s,
+          f.epilogueShown[i],
+        ]),
+      ];
+      for (const [what, mark, opacity] of marks) {
+        checked++;
+        const live = mark === "--";
+        const painted = opacity > VISIBLE;
+        if (live !== painted && Math.abs(opacity - VISIBLE) > ROUNDING) {
+          wrong.push(
+            `  ${name} p=${f.p.toFixed(4)} ${what}: opacity ${opacity.toFixed(4)} but ` +
+              `${live ? "in" : "OUT of"} the accessibility tree (${mark})`
+          );
+        }
+        // Half-marked is its own failure: `inert` without `aria-hidden` leaves
+        // the block announced but unreachable, which is worse than either.
+        if (mark !== "--" && mark !== "hi") {
+          wrong.push(`  ${name} p=${f.p.toFixed(4)} ${what}: half-marked (${mark})`);
+        }
+      }
+    }
+  }
+  console.log(
+    `hidden state: ${checked} block states checked against their own rendered ` +
+      `opacity, ${epiloguePositions} of the sampled positions inside the epilogue`
+  );
+  if (!epiloguePositions) {
+    console.log("NO EPILOGUE POSITIONS SAMPLED — the rule is unproven where it used to fail.");
+    process.exitCode = 1;
+  }
+  if (wrong.length) {
+    console.log(`${wrong.length} BLOCKS MARKED AGAINST WHAT IS PAINTED:`);
+    for (const l of wrong.slice(0, 20)) console.log(l);
+    process.exitCode = 1;
+  }
+}
+
 console.log(`sampled ${n} positions x ${Object.keys(react.frames[0].vars).length} custom properties`);
-console.log(`compared ${varCmp} custom-property values + ${n * 6} other fields`);
+console.log(`compared ${varCmp} custom-property values + ${n * SCALAR_FIELDS.length} other fields`);
 console.log(`compared ${cardCmp} card class/body values across ${NODE_IDS.length} cards`);
 console.log(`compared ${labelCmp} edge-label states across ${EDGE_IDS.length} edges (visibility exact, geometry max deviation ${maxLabelDelta.toFixed(4)} px, tolerance ${LABEL_TOLERANCE})`);
 console.log(`compared ${pathCmp} edge-path coordinates, max deviation ${maxPathDelta} px (tolerance ${PATH_TOLERANCE})`);
