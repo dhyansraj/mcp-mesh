@@ -1,9 +1,73 @@
 {% extends "main.html" %}
 
+{#
+  The scroll section's stylesheet is loaded EAGERLY and only on this page.
+  Eagerly, because it carries the section's reserved height (min-height, a
+  build-emitted number): without it the page would grow by ~2175vh the moment
+  the bundle mounted and throw the reader's scroll position. Only on this page,
+  via extrahead rather than mkdocs.yml's extra_css, so the other ~100 doc pages
+  do not pay 15KB for an element they do not contain.
+#}
+{% block extrahead %}
+  {{ super() }}
+  <link rel="stylesheet" href="{{ 'assets/mesh-scroll/mesh-scroll.css' | url }}">
+{% endblock %}
+
 {% block tabs %}
 {{ super() }}
 
 <style>
+  /* ===================================================================
+     HOME PAGE PALETTE — this page adopts the scroll section's background.
+
+     Material paints the page from `body { background-color:
+     var(--md-default-bg-color) }`, so the section's #050c17 met the site's
+     background at a hard horizontal seam above and below the band.
+
+     Setting the background alone is not enough: the light scheme leaves the
+     typeset colour dark, so the content below would be dark-on-dark. This
+     block therefore also carries the foreground half — the same values
+     Material's `slate` scheme uses, re-pointed at our hue — so the page reads
+     correctly in BOTH schemes rather than only in dark.
+
+     Scoped to this template, so it renders on the home page only; every other
+     page keeps Material's default palette untouched. Selector is
+     body[data-md-color-scheme] (0,1,1) so it outranks palette.css's
+     [data-md-color-scheme=slate] (0,1,0) in either scheme.
+
+     Code and admonition surfaces are pinned to #0a1628 — the section's panel
+     colour — rather than a grey, so the page's raised surfaces and the
+     animation's cards are the same material.
+     =================================================================== */
+  body[data-md-color-scheme] {
+    color-scheme: dark;
+    --md-hue: 217;
+
+    --md-default-bg-color: #050c17;
+    --md-default-bg-color--light: rgba(5, 12, 23, 0.54);
+    --md-default-bg-color--lighter: rgba(5, 12, 23, 0.26);
+    --md-default-bg-color--lightest: rgba(5, 12, 23, 0.07);
+
+    --md-default-fg-color: hsla(var(--md-hue), 15%, 90%, 0.82);
+    --md-default-fg-color--light: hsla(var(--md-hue), 15%, 90%, 0.56);
+    --md-default-fg-color--lighter: hsla(var(--md-hue), 15%, 90%, 0.32);
+    --md-default-fg-color--lightest: hsla(var(--md-hue), 15%, 90%, 0.12);
+    --md-typeset-color: var(--md-default-fg-color);
+
+    --md-code-fg-color: hsla(var(--md-hue), 18%, 86%, 0.82);
+    --md-code-bg-color: #0a1628;
+    --md-typeset-table-color: hsla(var(--md-hue), 15%, 95%, 0.12);
+    --md-typeset-kbd-color: hsla(var(--md-hue), 15%, 90%, 0.12);
+    --md-typeset-kbd-accent-color: hsla(var(--md-hue), 15%, 90%, 0.2);
+    --md-typeset-kbd-border-color: #050c17;
+
+    --md-admonition-bg-color: #0a1628;
+    --md-admonition-fg-color: var(--md-default-fg-color);
+
+    --md-footer-bg-color: #050c17;
+    --md-footer-bg-color--dark: #030811;
+  }
+
   .md-main__inner {
     margin-top: 0;
   }
@@ -35,7 +99,9 @@
     left: 0;
     right: 0;
     bottom: 0;
-    background: linear-gradient(180deg, rgba(0,0,0,0.3) 0%, rgba(0,0,0,0.6) 100%);
+    /* Lands on the page background rather than on generic black, so the hero
+       dissolves into the section's navy instead of meeting it at an edge. */
+    background: linear-gradient(180deg, rgba(5,12,23,0.35) 0%, rgba(5,12,23,0.75) 65%, #050c17 100%);
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -144,6 +210,13 @@
   </div>
 </section>
 
+{#
+  The scroll section's mount and loader used to live here. They now live in
+  docs/index.md, beside each other, so the section sits mid-page above Quick
+  Overview instead of directly under the hero. Only the stylesheet link stays
+  in this template (extrahead, above) — it must load eagerly for the height
+  reservation, and this is the only page that needs it.
+#}
 {% endblock %}
 
 {% block content %}
