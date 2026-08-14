@@ -22,10 +22,10 @@ import { ReactFlowProvider } from "@xyflow/react";
 import { AgentNode } from "@/components/topology/AgentNode";
 import { buildGraphFromAgents } from "@/lib/topology";
 import {
-  Stage, setSsrGeometry, inline, SUB_INLINE, DESC_INLINE, type SsrBox,
+  Stage, BeatCopy, setSsrGeometry, HANDLE_OFFSET, type SsrBox,
 } from "./stage";
 import {
-  BEATS, CHAPTERS, BUILT_CHAPTERS, REVEAL, buildWorld, MAXIMAL, MAXIMAL_REPLICAS,
+  BEATS, BUILT_CHAPTERS, REVEAL, buildWorld, MAXIMAL, MAXIMAL_REPLICAS,
   WEATHER_GROUP, EMBED_SHOWS_HEADER,
 } from "./script";
 
@@ -62,6 +62,21 @@ if (GEO.stateCount !== EXPECTED_STATES) {
   );
 }
 
+// The fixture carries its own copy of the handle offsets, and stage.tsx derives
+// every edge endpoint from ITS copy. Nothing compared the two, so the fixture
+// could be re-captured against a changed card and silently disagree with the
+// code that consumes it — the same class of drift the stateCount guard exists
+// to catch, on the other input.
+for (const k of ["source", "target"] as const) {
+  if (GEO.handleOffset[k] !== HANDLE_OFFSET[k]) {
+    throw new Error(
+      `geometry.json handleOffset.${k} is ${GEO.handleOffset[k]} but stage.tsx uses ` +
+        `${HANDLE_OFFSET[k]}. One of them was changed without the other; every edge ` +
+        `endpoint depends on this.`
+    );
+  }
+}
+
 const BEAT_TO_STATE = BEATS.map((_, i) => GEO.beatToState[String(i + 1)] ?? 0);
 const boxes = (state: number) =>
   new Map<string, SsrBox>(Object.entries(GEO.states[state].nodes));
@@ -78,7 +93,9 @@ function renderStage(state: number): string {
   }
 }
 
-const shells = [renderStage(0), renderStage(1)];
+// One shell per geometry state, derived from the fixture rather than written
+// out — a third state must not silently go unrendered.
+const shells = GEO.states.map((_, i) => renderStage(i));
 
 /** Split the markup into one chunk per edge <g>, keyed by data-id. */
 function edgeChunks(html: string): Map<string, string> {
@@ -302,14 +319,35 @@ let hookCount = 0;
 }
 
 // ---------------------------------------------------------------------------
-// Beat copy — rendered through the SAME inline() the component uses
+// Beat copy — rendered from the SAME component <Stage> mounts
 // ---------------------------------------------------------------------------
-const beatCopy = BEATS.map((b) => ({
-  chapter: CHAPTERS[b.chapter],
-  title: b.title,
-  sub: renderToStaticMarkup(<>{inline(b.sub, SUB_INLINE)}</>),
-  desc: b.desc ? renderToStaticMarkup(<>{inline(b.desc, DESC_INLINE)}</>) : "",
+// The driver replaces the whole copy block at each lead flip, so what it needs
+// is the markup, not the pieces. Rendering <BeatCopy> here rather than
+// rebuilding the four elements from hand-copied class strings is what makes
+// that safe: a type change in stage.tsx now reaches the shipped bundle by
+// construction instead of by somebody remembering.
+const beatCopy = BEATS.map((b, i) => ({
+  html: renderToStaticMarkup(<BeatCopy beat={b} lead={i} />),
 }));
+
+// EQUIVALENCE, LAYER 4: the copy the driver swaps in at beat 1 must BE the copy
+// already in the shell.
+//
+// HONEST SCOPE: this no longer catches class drift, and that is the point —
+// both sides render <BeatCopy>, so they cannot disagree about markup. Verified
+// by perturbing a class and watching this NOT fire, because both outputs moved
+// together. What it still catches is the shell and the table being rendered
+// from different beat data or a different lead, which is cheap to check and
+// would otherwise show up only as wrong copy on the first frame.
+{
+  const at = shells[0].indexOf(beatCopy[0].html);
+  if (at === -1) {
+    throw new Error(
+      "the beat-1 copy block the driver would swap in does not appear in the " +
+        "prerendered shell:\n  " + beatCopy[0].html.slice(0, 240)
+    );
+  }
+}
 
 /** Per-beat edge stroke, so the driver never needs the graph builder. */
 const edgeStroke = BEATS.map((b) => {
@@ -363,7 +401,11 @@ const out = {
 fs.writeFileSync(path.join(HERE, "generated", "graph.json"), JSON.stringify(out));
 
 const kb = (n: number) => (n / 1024).toFixed(1).padStart(7) + " kB";
-console.log(`  prerender: ${pathOk}/${pathOk} edge paths match the captured fixture (2 states x 18)`);
+const pathTotal = GEO.states.reduce((n, st) => n + Object.keys(st.edges).length, 0);
+console.log(
+  `  prerender: ${pathOk}/${pathTotal} edge paths match the captured fixture ` +
+    `(${GEO.stateCount} states x ${EDGE_IDS.length} edges)`
+);
 console.log(`  prerender: ${NODE_IDS.length} cards, ${variantCount} distinct variants, shell verified against the table`);
 console.log(`  prerender: ${hookCount} driver hooks present in the shell (selectors, node/edge ids, rail slots)`);
 if (process.argv.includes("--report")) {

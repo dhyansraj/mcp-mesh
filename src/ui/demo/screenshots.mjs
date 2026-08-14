@@ -213,5 +213,8 @@ if (self && bad.length) {
 if (bad.length) {
   console.log(bad.join("\n"));
   console.log(`worst: ${worst} px at ${worstAt} = ${((worst / total) * 100).toFixed(4)}% of the frame`);
-  process.exitCode = 1;
+  // In CONTROL mode a difference is the measurement, not a failure — the whole
+  // point is to find out how much this page differs from itself. Only a
+  // cross-build run has a verdict to fail.
+  if (!self) process.exitCode = 1;
 }

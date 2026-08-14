@@ -19,7 +19,7 @@
 // Everything else — the ~80 setProperty calls, the camera maths, the reveal
 // windows, the keyboard snapping — is the same code path as before.
 import {
-  BEATS, CHAPTERS, ACCENT, BUILT_CHAPTERS, TOTAL_VH, REVEAL, REVEAL_VH,
+  BEATS, ACCENT, BUILT_CHAPTERS, TOTAL_VH, REVEAL, REVEAL_VH,
 } from "./script";
 import {
   clamp, smoothstep, lerp, lerpColor, camFor, LEAD_FLIP, restWidth,
@@ -38,7 +38,7 @@ export interface Generated {
     label: Record<string, [number, number]>;
   }>;
   cards: Record<string, { variants: Array<{ cls: string; html: string }>; byBeat: number[] }>;
-  beatCopy: Array<{ chapter: string; title: string; sub: string; desc: string }>;
+  beatCopy: Array<{ html: string }>;
   edgeStroke: string[][];
 }
 
@@ -126,7 +126,17 @@ export function start(root: HTMLElement, G: Generated) {
       els.wrapper.setAttribute("visibility", "visible");
     }
     // Fonts can still be loading on the first frame; retry until one measures.
-    if (any) labelsMeasured = true;
+    if (!any) return;
+    labelsMeasured = true;
+    // FORCE A GEOMETRY RE-APPLY. applyGeometry centres each label wrapper on
+    // `els.bbox`, and it has already run for this state — with an empty box,
+    // because measurement had not succeeded yet. Its `state === geomState`
+    // early return then means the wrapper keeps a transform computed from 0x0,
+    // leaving every label offset by half its own box until the state genuinely
+    // changes at B14. Invalidating geomState here is the whole fix: the guard
+    // above stays, so this still runs exactly once.
+    geomState = -1;
+    applyGeometry(G.beatToState[Math.max(lead, 0)]);
   };
 
   // ---- geometry state (card boxes change at B14, so the paths do too) -----
@@ -171,23 +181,12 @@ export function start(root: HTMLElement, G: Generated) {
       if (el.className !== v.cls) el.className = v.cls;
       if (el.innerHTML !== v.html) el.innerHTML = v.html;
     }
-    const copy = G.beatCopy[i];
-    if (titleHost) {
-      // The chapter label is REBUILT here rather than left alone, because this
-      // assignment owns the whole block: an earlier version wrote it separately
-      // and then destroyed it on the next line, which the capture caught as a
-      // missing element at all 201 sampled positions. It carries no entrance
-      // animation (only `demo-fade` on the three below it does), so recreating
-      // it every flip is not observable — unlike the title, which must be
-      // recreated for exactly that reason.
-      titleHost.innerHTML =
-        `<p data-mesh="chapter" class="demo-accent font-mono text-[10px] uppercase tracking-[0.32em]">${escapeText(copy.chapter)}</p>` +
-        `<h2 data-mesh="title" class="demo-fade mt-2 whitespace-pre-line text-balance text-[30px] font-semibold leading-[1.12] tracking-tight text-white">${escapeText(copy.title)}</h2>` +
-        `<p data-mesh="sub" class="demo-fade mt-3 whitespace-pre-line text-balance break-words font-mono text-[13px] leading-relaxed text-slate-400">${copy.sub}</p>` +
-        (copy.desc
-          ? `<p data-mesh="desc" class="demo-fade mt-4 text-[15px] leading-[1.7] text-slate-400">${copy.desc}</p>`
-          : "");
-    }
+    // One assignment, from markup emitted by the very component <Stage>
+    // renders. Replacing the elements (rather than rewriting their text) is
+    // deliberate and matches React: the title is keyed on the beat there, so
+    // the old <h2> unmounts and `demo-fade` replays from the start.
+    if (titleHost) titleHost.innerHTML = G.beatCopy[i].html;
+
     const chapter = BEATS[i].chapter;
     for (let c = 0; c < BUILT_CHAPTERS; c++) {
       const active = chapter === c;
@@ -340,12 +339,16 @@ export function start(root: HTMLElement, G: Generated) {
   };
   apply();
   // The first apply runs before webfonts settle, so the label boxes measured
-  // then are the fallback font's. Re-measure once the real faces are in.
+  // then are the fallback font's. Re-measure once the real faces are in;
+  // measureLabels re-applies the geometry itself when it succeeds.
+  //
+  // This is a REFINEMENT, not the correctness guarantee — it used to be both,
+  // which hid the bug above. Optional chaining means the whole callback is
+  // skipped where document.fonts does not exist, so label centring must not
+  // depend on it.
   document.fonts?.ready.then(() => {
     labelsMeasured = false;
     measureLabels();
-    geomState = -1;
-    applyGeometry(G.beatToState[Math.max(lead, 0)]);
   });
   window.addEventListener("scroll", onScroll, { passive: true });
   window.addEventListener("resize", onResize);
@@ -430,10 +433,3 @@ export function start(root: HTMLElement, G: Generated) {
   window.addEventListener("wheel", clearTarget, { passive: true });
   window.addEventListener("touchstart", clearTarget, { passive: true });
 }
-
-/** Beat titles are plain text with authored newlines, never markup. */
-function escapeText(s: string) {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-export { CHAPTERS };

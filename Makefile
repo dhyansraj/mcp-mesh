@@ -525,7 +525,9 @@ docs-scroll-compare: docs-scroll-build-static docs-scroll-build-react
 	@echo "  http://localhost:8899/compare.html?v=react"
 	@echo "  http://localhost:8899/compare.html?v=static"
 	@echo ""
-	@cd src/ui/demo && python3 -m http.server 8899
+	@# Bound to loopback: python3 -m http.server listens on 0.0.0.0 by default,
+	@# which publishes an unauthenticated dev server to the whole local network.
+	@cd src/ui/demo && python3 -m http.server 8899 --bind 127.0.0.1
 
 .PHONY: docs-scroll-build
 docs-scroll-build: docs-scroll-build-static

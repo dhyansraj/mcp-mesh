@@ -43,6 +43,17 @@ function boot() {
     }
   });
   obs.observe(document.documentElement, { childList: true, subtree: true });
+  // Give up once the document is done. Without this the observer runs for the
+  // lifetime of the page on every page that loads this bundle without a mount
+  // point, firing on every DOM mutation the site makes — a permanent cost for
+  // a mount that is never going to appear.
+  window.addEventListener(
+    "load",
+    () => {
+      if (!document.getElementById(MOUNT_ID)) obs.disconnect();
+    },
+    { once: true }
+  );
 }
 
 if (document.readyState === "loading") {

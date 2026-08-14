@@ -142,6 +142,7 @@ async function capture(variant) {
       // visibility:hidden in the static build while React shows them, and
       // nothing else in this capture would notice.
       const labels = {};
+      const labelBox = {};
       for (const id of EDGE_IDS) {
         const g = document.querySelector(
           `.react-flow__edge[data-id="${CSS.escape(id)}"]`
@@ -158,6 +159,10 @@ async function capture(variant) {
               r && r.getAttribute("height"),
             ].join("|")
           : null;
+        // The live box, so the harness can check the wrapper is actually
+        // CENTRED on it rather than only that both builds agree.
+        const bb = t && t.getBBox();
+        labelBox[id] = bb ? [bb.width, bb.height] : null;
       }
       out.push({
         p,
@@ -165,6 +170,7 @@ async function capture(variant) {
         vars,
         cards,
         labels,
+        labelBox,
         transform: viewport ? viewport.style.transform : null,
         title: title ? title.textContent : null,
         sub: sub ? sub.textContent : null,
@@ -209,6 +215,18 @@ const forDump = (frames) =>
   }));
 fs.writeFileSync(path.join(OUT, "equiv-react.json"), JSON.stringify(forDump(react.frames), null, 1));
 fs.writeFileSync(path.join(OUT, "equiv-static.json"), JSON.stringify(forDump(stat.frames), null, 1));
+
+// FRAME COUNTS MUST MATCH. `Math.min` below would otherwise compare the
+// shorter run and report IDENTICAL — the same fail-open class as swallowing
+// ImageMagick's errors. If one build produced fewer frames, something went
+// wrong in it and that is the finding.
+if (react.frames.length !== stat.frames.length) {
+  console.error(
+    `frame count differs: react ${react.frames.length}, static ${stat.frames.length}. ` +
+      `The two runs are not comparable; refusing to report a verdict.`
+  );
+  process.exit(1);
+}
 
 const diffs = [];
 /** Half of the fixture's own 2dp rounding step — an order below a device pixel. */
@@ -345,6 +363,57 @@ for (let i = 0; i < n; i++) {
       }
     }
     pathCmp += na.length;
+  }
+}
+
+// LABEL CENTRING, CHECKED AGAINST THE FIXTURE — not against the other build.
+//
+// This exists because a real bug got past the cross-build comparison: the
+// driver wrote every label's wrapper transform BEFORE it had measured the
+// label, centring each one on a 0x0 box, and its `state === geomState` guard
+// then blocked any re-application. Every label sat half its own box off centre.
+// The harness reported IDENTICAL throughout, because it only ever asked
+// "do the two builds agree?" — and React's first frame has the same ordering,
+// so both were wrong together.
+//
+// The fix in the harness is to compare against something that is NOT the other
+// renderer: React Flow's own rule is transform = (labelX - w/2, labelY - h/2),
+// labelX/labelY come from the fixture, and w/h are measured live. A stale
+// transform fails this no matter what the other build does.
+{
+  const byState = G.states.map((st) => st.label);
+  let checked = 0;
+  let worstOff = 0;
+  const off = [];
+  for (const [name, cap] of [["react", react], ["static", stat]]) {
+    for (const f of cap.frames) {
+      for (const id of EDGE_IDS) {
+        const raw = f.labels[id];
+        const box = f.labelBox[id];
+        if (!raw || !box || !box[0]) continue;
+        const m = /translate\(([-\d.]+) ([-\d.]+)\)/.exec(raw);
+        if (!m) continue;
+        checked++;
+        // Accept a match against either geometry state: which one is live at a
+        // given frame is the driver's business, and a half-box offset matches
+        // neither.
+        const best = Math.min(
+          ...byState.map((L) =>
+            L[id] ? Math.max(Math.abs(+m[1] - (L[id][0] - box[0] / 2)), Math.abs(+m[2] - (L[id][1] - box[1] / 2))) : Infinity
+          )
+        );
+        if (best > worstOff) worstOff = best;
+        if (best > LABEL_TOLERANCE) {
+          off.push(`  ${name} p=${f.p.toFixed(4)} ${id}: ${best.toFixed(3)} px off centre`);
+        }
+      }
+    }
+  }
+  console.log(`checked ${checked} label centrings against the fixture, worst ${worstOff.toFixed(4)} px off centre`);
+  if (off.length) {
+    console.log(`${off.length} LABELS NOT CENTRED ON THEIR OWN BOX:`);
+    for (const l of off.slice(0, 20)) console.log(l);
+    process.exitCode = 1;
   }
 }
 

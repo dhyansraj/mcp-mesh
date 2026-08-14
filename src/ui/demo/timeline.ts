@@ -96,7 +96,22 @@ export const POS = (() => {
 POS.set(WEATHER_GROUP, POS.get(WEATHER)!);
 
 function bboxOf(ids: string[]) {
-  const pts = ids.map((id) => POS.get(id)!).filter(Boolean);
+  // THROW, do not filter. This used to be `.map(...).filter(Boolean)`, which
+  // silently dropped any id POS did not know — and if a beat's whole focus list
+  // were unknown it reduced to Math.min() of an empty array, i.e. Infinity, and
+  // the camera received NaN geometry with nothing logged. A typo in a beat's
+  // `focus` is an authoring error and should read as one.
+  const pts = ids.map((id) => {
+    const p = POS.get(id);
+    if (!p) {
+      throw new Error(
+        `beat focus references an unknown node id: ${JSON.stringify(id)}. ` +
+          `Known ids: ${[...POS.keys()].join(", ")}`
+      );
+    }
+    return p;
+  });
+  if (!pts.length) throw new Error("beat focus list is empty — the camera has nothing to frame");
   const x = Math.min(...pts.map((p) => p.x));
   const y = Math.min(...pts.map((p) => p.y));
   return {

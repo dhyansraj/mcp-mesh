@@ -18,8 +18,9 @@
 //
 //   npx vite build --config vite.static.config.ts
 //
-// The entry imports demo/generated.json, which demo/emit.tsx must have written
-// first — see the docs-scroll-build target.
+// The entry imports demo/generated/graph.json, which demo/emit.tsx must have
+// written first — see the docs-scroll-prerender target, which every build target
+// here depends on.
 import { defineConfig } from "vite";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";

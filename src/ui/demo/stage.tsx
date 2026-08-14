@@ -42,6 +42,7 @@ import {
   HOTEL,
   WEATHER,
   WEATHER_GROUP,
+  type Beat,
 } from "./script";
 import {
   clamp, smoothstep, lerp, lerpColor, POS, camFor, GUTTER, LEAD_FLIP,
@@ -217,8 +218,12 @@ export function setSsrGeometry(g: Map<string, SsrBox> | null) {
  * handle dots are rendered by AgentNode's own <Handle> elements.
  */
 const HANDLE_SIZE = 8;
-/** Connection point relative to the card box, captured from the running build. */
-const HANDLE_OFFSET = { source: 4, target: -4 };
+/**
+ * Connection point relative to the card box, captured from the running build.
+ * EXPORTED so emit.tsx can assert geometry.json still agrees with it — the
+ * fixture carries its own copy of these numbers and nothing else compares them.
+ */
+export const HANDLE_OFFSET = { source: 4, target: -4 };
 
 const NODE_CACHE = new Map<string, Node>();
 function nodeObj(id: string, lead: number): Node {
@@ -345,6 +350,64 @@ const RAIL_STYLE = { opacity: "var(--rail, 1)" } as const;
 // ---------------------------------------------------------------------------
 // Stage
 // ---------------------------------------------------------------------------
+/**
+ * The pinned beat copy — chapter label, title, mono sub-line, description.
+ *
+ * A COMPONENT rather than inline JSX because BOTH renderers need it: <Stage>
+ * mounts it, and emit.tsx renders it to the markup string the vanilla driver
+ * swaps in at each lead flip. The driver previously rebuilt these four elements
+ * from class strings copied by hand, which meant a type change here silently
+ * stopped applying to the shipping bundle. There is now one definition.
+ *
+ * `lead` drives the React keys, and they are load-bearing: keying the title on
+ * the beat makes React unmount the old <h2> and mount a new one, so `demo-fade`
+ * replays from the start and exactly one title exists at a time. The driver
+ * reproduces that by replacing the elements outright.
+ */
+export function BeatCopy({ beat, lead }: { beat: Beat; lead: number }) {
+  return (
+    <>
+                    <p
+                      data-mesh="chapter"
+                      className="demo-accent font-mono text-[10px] uppercase tracking-[0.32em]"
+                    >
+                      {CHAPTERS[beat.chapter]}
+                    </p>
+                    <h2
+                      key={`t-${lead}`}
+                      data-mesh="title"
+                      // whitespace-pre-line honours the authored `\n` breaks;
+                      // text-balance keeps the rest off ragged single-word
+                      // last lines in a 350px column.
+                      className="demo-fade mt-2 whitespace-pre-line text-balance text-[30px] font-semibold leading-[1.12] tracking-tight text-white"
+                    >
+                      {beat.title}
+                    </h2>
+                    <p
+                      key={`s-${lead}`}
+                      data-mesh="sub"
+                      // break-words is containment, not style: B6's sub is a
+                      // JSON literal with no spaces, so without it the line
+                      // cannot wrap and overflows the reserved column by 25px
+                      // into the graph — which is exactly what the gutter
+                      // exists to prevent.
+                      className="demo-fade mt-3 whitespace-pre-line text-balance break-words font-mono text-[13px] leading-relaxed text-slate-400"
+                    >
+                      {inline(beat.sub, SUB_INLINE)}
+                    </p>
+                    {beat.desc && (
+                      <p
+                        key={`d-${lead}`}
+                        data-mesh="desc"
+                        className="demo-fade mt-4 text-[15px] leading-[1.7] text-slate-400"
+                      >
+                        {inline(beat.desc, DESC_INLINE)}
+                      </p>
+                    )}
+    </>
+  );
+}
+
 export interface StageProps {
   /** Render the grid-variant switch. Dev page always; embed only on ?mesh-grid. */
   devTools?: boolean;
@@ -899,43 +962,7 @@ export function Stage({ devTools = false, showHeader = false }: StageProps) {
                 <div className="flex gap-4 px-8 pt-8" style={BEAT_COPY_STYLE}>
                   <div className="demo-rule mt-1 h-[62px] w-[3px] shrink-0 rounded-full" />
                   <div className="min-w-0">
-                    <p
-                      data-mesh="chapter"
-                      className="demo-accent font-mono text-[10px] uppercase tracking-[0.32em]"
-                    >
-                      {CHAPTERS[beat.chapter]}
-                    </p>
-                    <h2
-                      key={`t-${lead}`}
-                      data-mesh="title"
-                      // whitespace-pre-line honours the authored `\n` breaks;
-                      // text-balance keeps the rest off ragged single-word
-                      // last lines in a 350px column.
-                      className="demo-fade mt-2 whitespace-pre-line text-balance text-[30px] font-semibold leading-[1.12] tracking-tight text-white"
-                    >
-                      {beat.title}
-                    </h2>
-                    <p
-                      key={`s-${lead}`}
-                      data-mesh="sub"
-                      // break-words is containment, not style: B6's sub is a
-                      // JSON literal with no spaces, so without it the line
-                      // cannot wrap and overflows the reserved column by 25px
-                      // into the graph — which is exactly what the gutter
-                      // exists to prevent.
-                      className="demo-fade mt-3 whitespace-pre-line text-balance break-words font-mono text-[13px] leading-relaxed text-slate-400"
-                    >
-                      {inline(beat.sub, SUB_INLINE)}
-                    </p>
-                    {beat.desc && (
-                      <p
-                        key={`d-${lead}`}
-                        data-mesh="desc"
-                        className="demo-fade mt-4 text-[15px] leading-[1.7] text-slate-400"
-                      >
-                        {inline(beat.desc, DESC_INLINE)}
-                      </p>
-                    )}
+                    <BeatCopy beat={beat} lead={lead} />
                   </div>
                 </div>
               </div>
