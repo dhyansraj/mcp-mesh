@@ -1,0 +1,90 @@
+{
+  "_comment": "Ground-truth graph geometry captured from the running React Flow build. Source of truth for the prerender's equivalence check — NOT for generation (the emitter regenerates from AgentNode + beat data so it cannot silently rot). Captured with getComputedStyle().width/.height, NOT offsetWidth/Height (which rounds 117.5 -> 118 and pushes half a pixel into every connected edge endpoint) and NOT getBoundingClientRect (which includes the camera zoom transform). All d coordinates rounded to 2dp AT CAPTURE: raw values carry ~5e-5 px ResizeObserver jitter that is non-deterministic and must never reach a file. Round at capture, round in the emitter, then compare byte-exact.",
+  "capturedAt": "2026-08-14",
+  "viewport": [1500, 900],
+  "handleOffset": { "source": 4, "target": -4, "_verified": "gateway h=94 at y=0 -> source y=98; planner at y=240 -> target y=236. Symmetric." },
+  "stateCount": 2,
+  "beatToState": {
+    "1": 0, "2": 0, "3": 0, "4": 0, "5": 0, "6": 0, "7": 0,
+    "8": 0, "9": 0, "10": 0, "11": 0, "12": 0, "13": 0, "14": 1
+  },
+  "states": [
+    {
+      "firstBeat": 1,
+      "nodes": {
+        "flight-agent-ba2b3bc8": { "w": 240, "h": 94, "transform": "translate(0px, 480px)" },
+        "hotel-agent-91af6b30": { "w": 240, "h": 94, "transform": "translate(360px, 480px)" },
+        "poi-agent-2f88c614": { "w": 240, "h": 94, "transform": "translate(720px, 480px)" },
+        "user-prefs-agent-4c17d9e2": { "w": 244.781, "h": 94, "transform": "translate(0px, 720px)" },
+        "weather-agent-7d3e05a1": { "w": 240, "h": 94, "transform": "translate(360px, 720px)" },
+        "planner-agent-d50a7712": { "w": 240, "h": 94, "transform": "translate(720px, 240px)" },
+        "claude-provider-8b3f4c90": { "w": 240.469, "h": 94, "transform": "translate(1080px, 480px)" },
+        "openai-provider-e62a1d47": { "w": 240, "h": 94, "transform": "translate(1440px, 480px)" },
+        "gateway-0a4e77c3": { "w": 240, "h": 94, "transform": "translate(720px, 0px)" },
+        "budget-analyst-5f21b8e6": { "w": 240, "h": 94, "transform": "translate(720px, 720px)" },
+        "adventure-advisor-c93d20af": { "w": 256.141, "h": 94, "transform": "translate(1080px, 720px)" },
+        "logistics-planner-71e4a9d2": { "w": 243.984, "h": 94, "transform": "translate(1440px, 720px)" },
+        "group:weather-agent": { "w": 240, "h": 94, "transform": "translate(360px, 720px)" }
+      },
+      "edges": {
+        "dep|flight-agent-ba2b3bc8|user-prefs-agent-4c17d9e2|user_preferences": "M120,578 C120,647 122.39,647 122.39,716",
+        "dep|poi-agent-2f88c614|weather-agent-7d3e05a1|weather_forecast": "M840,578 C840,647 480,647 480,716",
+        "dep|planner-agent-d50a7712|user-prefs-agent-4c17d9e2|user_preferences": "M840,338 C840,527 122.39,527 122.39,716",
+        "dep|planner-agent-d50a7712|budget-analyst-5f21b8e6|budget_analysis": "M840,338 C840,527 840,527 840,716",
+        "dep|planner-agent-d50a7712|adventure-advisor-c93d20af|adventure_advice": "M840,338 C840,527 1208.06,527 1208.06,716",
+        "dep|planner-agent-d50a7712|logistics-planner-71e4a9d2|logistics_planning": "M840,338 C840,527 1561.98,527 1561.98,716",
+        "llm|planner-agent-d50a7712|flight-agent-ba2b3bc8|llm:flight_search": "M840,338 C840,407 120,407 120,476",
+        "llm|planner-agent-d50a7712|hotel-agent-91af6b30|llm:hotel_search": "M840,338 C840,407 480,407 480,476",
+        "llm|planner-agent-d50a7712|weather-agent-7d3e05a1|llm:weather_forecast": "M840,338 C840,527 480,527 480,716",
+        "llm|planner-agent-d50a7712|poi-agent-2f88c614|llm:poi_search": "M840,338 C840,407 840,407 840,476",
+        "prov|planner-agent-d50a7712|claude-provider-8b3f4c90|provider:llm": "M840,338 C840,407 1200.23,407 1200.23,476",
+        "prov|planner-agent-d50a7712|openai-provider-e62a1d47|provider:llm": "M840,338 C840,407 1560,407 1560,476",
+        "dep|gateway-0a4e77c3|planner-agent-d50a7712|trip_planning": "M840,98 C840,167 840,167 840,236",
+        "prov|budget-analyst-5f21b8e6|claude-provider-8b3f4c90|provider:llm": "M840,818 C840,933.58 1200.23,360.42 1200.23,476",
+        "prov|adventure-advisor-c93d20af|claude-provider-8b3f4c90|provider:llm": "M1208.06,818 C1208.06,933.58 1200.23,360.42 1200.23,476",
+        "prov|logistics-planner-71e4a9d2|claude-provider-8b3f4c90|provider:llm": "M1561.98,818 C1561.98,933.58 1200.23,360.42 1200.23,476",
+        "dep|poi-agent-2f88c614|group:weather-agent|weather_forecast": "M840,578 C840,647 480,647 480,716",
+        "llm|planner-agent-d50a7712|group:weather-agent|llm:weather_forecast": "M840,338 C840,527 480,527 480,716"
+      }
+    },
+    {
+      "firstBeat": 14,
+      "_differsBy": "planner-agent, adventure-advisor, logistics-planner expand to 280x117.5 and budget-analyst to 279x94 when AgentBadges chips are added. Three wrap to a second badge row (+23.5px).",
+      "nodes": {
+        "flight-agent-ba2b3bc8": { "w": 240, "h": 94, "transform": "translate(0px, 480px)" },
+        "hotel-agent-91af6b30": { "w": 240, "h": 94, "transform": "translate(360px, 480px)" },
+        "poi-agent-2f88c614": { "w": 240, "h": 94, "transform": "translate(720px, 480px)" },
+        "user-prefs-agent-4c17d9e2": { "w": 244.781, "h": 94, "transform": "translate(0px, 720px)" },
+        "weather-agent-7d3e05a1": { "w": 240, "h": 94, "transform": "translate(360px, 720px)" },
+        "planner-agent-d50a7712": { "w": 280, "h": 117.5, "transform": "translate(720px, 240px)" },
+        "claude-provider-8b3f4c90": { "w": 240.469, "h": 94, "transform": "translate(1080px, 480px)" },
+        "openai-provider-e62a1d47": { "w": 240, "h": 94, "transform": "translate(1440px, 480px)" },
+        "gateway-0a4e77c3": { "w": 240, "h": 94, "transform": "translate(720px, 0px)" },
+        "budget-analyst-5f21b8e6": { "w": 279, "h": 94, "transform": "translate(720px, 720px)" },
+        "adventure-advisor-c93d20af": { "w": 280, "h": 117.5, "transform": "translate(1080px, 720px)" },
+        "logistics-planner-71e4a9d2": { "w": 280, "h": 117.5, "transform": "translate(1440px, 720px)" },
+        "group:weather-agent": { "w": 240, "h": 94, "transform": "translate(360px, 720px)" }
+      },
+      "edges": {
+        "dep|flight-agent-ba2b3bc8|user-prefs-agent-4c17d9e2|user_preferences": "M120,578 C120,647 122.39,647 122.39,716",
+        "dep|poi-agent-2f88c614|weather-agent-7d3e05a1|weather_forecast": "M840,578 C840,647 480,647 480,716",
+        "dep|planner-agent-d50a7712|user-prefs-agent-4c17d9e2|user_preferences": "M860,361.5 C860,538.75 122.39,538.75 122.39,716",
+        "dep|planner-agent-d50a7712|budget-analyst-5f21b8e6|budget_analysis": "M860,361.5 C860,538.75 859.5,538.75 859.5,716",
+        "dep|planner-agent-d50a7712|adventure-advisor-c93d20af|adventure_advice": "M860,361.5 C860,538.75 1220,538.75 1220,716",
+        "dep|planner-agent-d50a7712|logistics-planner-71e4a9d2|logistics_planning": "M860,361.5 C860,538.75 1580,538.75 1580,716",
+        "llm|planner-agent-d50a7712|flight-agent-ba2b3bc8|llm:flight_search": "M860,361.5 C860,418.75 120,418.75 120,476",
+        "llm|planner-agent-d50a7712|hotel-agent-91af6b30|llm:hotel_search": "M860,361.5 C860,418.75 480,418.75 480,476",
+        "llm|planner-agent-d50a7712|weather-agent-7d3e05a1|llm:weather_forecast": "M860,361.5 C860,538.75 480,538.75 480,716",
+        "llm|planner-agent-d50a7712|poi-agent-2f88c614|llm:poi_search": "M860,361.5 C860,418.75 840,418.75 840,476",
+        "prov|planner-agent-d50a7712|claude-provider-8b3f4c90|provider:llm": "M860,361.5 C860,418.75 1200.23,418.75 1200.23,476",
+        "prov|planner-agent-d50a7712|openai-provider-e62a1d47|provider:llm": "M860,361.5 C860,418.75 1560,418.75 1560,476",
+        "dep|gateway-0a4e77c3|planner-agent-d50a7712|trip_planning": "M840,98 C840,167 860,167 860,236",
+        "prov|budget-analyst-5f21b8e6|claude-provider-8b3f4c90|provider:llm": "M859.5,818 C859.5,933.58 1200.23,360.42 1200.23,476",
+        "prov|adventure-advisor-c93d20af|claude-provider-8b3f4c90|provider:llm": "M1220,841.5 C1220,960.99 1200.23,356.51 1200.23,476",
+        "prov|logistics-planner-71e4a9d2|claude-provider-8b3f4c90|provider:llm": "M1580,841.5 C1580,960.99 1200.23,356.51 1200.23,476",
+        "dep|poi-agent-2f88c614|group:weather-agent|weather_forecast": "M840,578 C840,647 480,647 480,716",
+        "llm|planner-agent-d50a7712|group:weather-agent|llm:weather_forecast": "M860,361.5 C860,538.75 480,538.75 480,716"
+      }
+    }
+  ]
+}

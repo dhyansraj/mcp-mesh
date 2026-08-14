@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>mesh-scroll · equivalence harness</title>
+    <!--
+      SIDE-BY-SIDE HARNESS for the React bundle and the prerendered one.
+
+        make docs-scroll-compare
+        http://localhost:8899/compare.html?v=react
+        http://localhost:8899/compare.html?v=static
+
+      Both bundles emit the same filenames into different directories, so the
+      ONLY variable between the two loads is which JS runs. The page itself is
+      deliberately bare: no MkDocs, no Material, no other stylesheet. Anything
+      that differs between the two captures is the renderer, not the host page.
+
+      Isolation against Material is a separate, already-passing harness —
+      demo/isolation/index.html. Do not conflate them.
+    -->
+    <style>
+      html, body { margin: 0; background: #050c17; }
+      /* The bundles reserve their own height and set display:block above the
+         breakpoint; nothing here should influence layout. */
+    </style>
+  </head>
+  <body>
+    <div id="mesh-scroll">
+      <div class="mesh-scroll-placeholder"></div>
+    </div>
+    <script>
+      (function () {
+        var v = new URLSearchParams(location.search).get("v") === "static"
+          ? "dist-static"
+          : "dist";
+        document.documentElement.dataset.meshBundle = v;
+        var css = document.createElement("link");
+        css.rel = "stylesheet";
+        css.href = "./" + v + "/mesh-scroll.css";
+        document.head.appendChild(css);
+        var js = document.createElement("script");
+        js.src = "./" + v + "/mesh-scroll.js";
+        js.defer = true;
+        document.head.appendChild(js);
+      })();
+    </script>
+  </body>
+</html>
