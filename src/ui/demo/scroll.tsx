@@ -8,7 +8,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import "@xyflow/react/dist/style.css";
-import "../app/globals.css";
+import "./entry.css";
 import "./scroll.css";
 
 import { Stage } from "./stage";

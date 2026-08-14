@@ -8,7 +8,9 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import "@xyflow/react/dist/style.css";
-import "../app/globals.css";
+// entry.css, not app/globals.css: same theme, plus this bundle's own source
+// boundary. See the header of that file.
+import "./entry.css";
 import "./scroll.css";
 import "./embed.css";
 

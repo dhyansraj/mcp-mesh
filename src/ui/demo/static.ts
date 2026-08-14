@@ -3,15 +3,15 @@
 // both scoped to #mesh-scroll.
 //
 // THE STYLESHEET IS DELIBERATELY THE SAME PIPELINE as the React bundle's, down
-// to importing app/globals.css. That import is the open half of #1519 and it is
-// tempting to close it here, but changing what Tailwind scans changes which
-// utilities exist, and doing that in the same step as replacing the renderer
-// would leave any visual difference with two possible causes. The stylesheets
-// are byte-identical across the two bundles (the build asserts it), so anything
-// that looks wrong is the markup or the driver — which is the whole point of
-// having built them side by side.
+// to the same entry: demo/entry.css, which is app/globals.css plus this
+// bundle's source boundary. Keeping the two identical is what makes the
+// equivalence comparison mean anything — the stylesheets come out byte-for-byte
+// the same across the two bundles, so anything that looks wrong is the markup
+// or the driver, which is the whole point of having built them side by side.
+// Changing this import in only one of the two would give any visual difference
+// a second possible cause.
 import "@xyflow/react/dist/style.css";
-import "../app/globals.css";
+import "./entry.css";
 import "./scroll.css";
 import "./embed.css";
 

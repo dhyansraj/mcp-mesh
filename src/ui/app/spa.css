@@ -1,0 +1,63 @@
+/*
+ * DASHBOARD stylesheet entry. Everything is in globals.css; this file exists
+ * only to add the exclusions that must NOT apply to the other build.
+ *
+ * THE PROBLEM. Tailwind v4's automatic source detection is rooted at the Vite
+ * root (src/ui) and extracts utility candidates from ANY text it scans —
+ * comments, prose and JSON keys included. Everything under src/ui/demo/ was
+ * therefore contributing utilities to the dashboard's stylesheet even though
+ * the dashboard never renders a single one of them: 79 rules and 6.2 kB,
+ * measured against a build with the demo directory removed from the tree.
+ * Three of those rules came from ordinary English words in comments rather
+ * than from any class anyone wrote — which is why prose discipline is not the
+ * fix and a guard is. (The three are deliberately not named here. This file is
+ * now excluded from the demo's scan too — see demo/entry.css — so a name
+ * written here no longer reaches either stylesheet, but the habit is kept:
+ * that exclusion is one edit away from being removed, and every recurrence so
+ * far arrived through prose someone was sure was safe.)
+ *
+ * WHY THE EXCLUSIONS ARE HERE AND NOT IN globals.css. Tailwind v4 compiles
+ * each CSS ENTRY on its own, against the `@source` set flattened out of THAT
+ * entry's import graph. globals.css is reachable from BOTH entries — this one
+ * and the demo's, demo/entry.css — so anything added there lands in both
+ * compilations at once: it would fix the dashboard and simultaneously stop the
+ * demo's entry from finding the demo's own classes, which is what made an
+ * earlier attempt fail. A directive can only be scoped to one build by sitting
+ * in a file the other build's entry does not import.
+ *
+ * WHAT THIS DESIGN DOES AND DOES NOT GUARANTEE. It leaves globals.css
+ * unmodified, so the demo's THEME — every variable, every @theme mapping — is
+ * untouched by anything written here. It does NOT by itself make the demo's
+ * output independent of dashboard-private files: source detection is rooted at
+ * the Vite root for both builds, so before demo/entry.css existed the demo was
+ * still scanning __tests__/ and this very file, and a string literal in one of
+ * those tests was worth 225 bytes of the demo's stylesheet. What keeps
+ * dashboard-private files out of the demo's scan is the demo's OWN boundary in
+ * demo/entry.css, not the fact that this file exists. The two are symmetric and
+ * each one only speaks for its own build.
+ *
+ * The alternative designs — splitting the theme into a shared partial, or
+ * relocating the demo outside src/ui — both edit or move what the demo
+ * consumes, and would need the demo's CSS re-proven.
+ *
+ * Keep the dashboard's own sources implicit: auto-detection already covers
+ * src/, app/ and components/, and enumerating them here would be a second list
+ * to forget to update.
+ */
+@import "./globals.css";
+
+/*
+ * Paths are relative to THIS file, so the first one is src/ui/demo.
+ *
+ * The two configs are the demo's own build definitions. They live at the Vite
+ * root rather than under demo/, so the exclusion above does not reach them,
+ * and they are scanned like any other text — one of them is several hundred
+ * lines of prose about the demo's stylesheet. They belong to the demo by
+ * ownership even though they do not sit in its directory.
+ *
+ * The scroll demo is built by those two configs. Both compile the same entry,
+ * demo/entry.css, which carries the exclusions pointing the other way.
+ */
+@source not "../demo";
+@source not "../vite.demo.config.ts";
+@source not "../vite.static.config.ts";
