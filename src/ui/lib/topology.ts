@@ -231,6 +231,38 @@ export function buildGraphFromAgents(agents: Agent[]): { nodes: Node[]; edges: E
       edgeMap.set(key, { ...existing, animated: base.animated, style: base.style });
       return;
     }
+    // Two DEGRADED contributions can disagree too, and the worst-of rule above
+    // cannot separate them: it compares animation and dashes to decide which is
+    // degraded, and both of these are. One replica's dependency landed on a
+    // provider that is no longer healthy; another's matched nothing at all. The
+    // gap sits exactly between the two cases that ARE order-independent — the
+    // healthy-vs-degraded merge above and the job escalation below — so first
+    // seen would win by snapshot order, and the same mesh could draw this edge
+    // either way from one poll to the next as the agents array is reordered.
+    //
+    // UNAVAILABLE WINS, in the same direction as both neighbouring rules: it is
+    // this palette's broader degraded signal, the one llm and prov edges stroke
+    // for BOTH of their degraded states, which is what the legend row saying
+    // "Unavailable — or LLM unresolved" describes. The other style is the narrow
+    // claim that nothing satisfies the dependency yet, asserted for dep edges
+    // alone, and it should only be shown when that is true of every replica
+    // behind a collapsed edge — one replica having matched a provider is
+    // evidence that something does satisfy it.
+    //
+    // Not reachable from a registry snapshot as things stand: a resolution is
+    // only given a provider_agent_id when it resolves (ent_service.go writes the
+    // id and "available" together, or neither), and the one transition that
+    // keeps that id afterwards sets "unavailable"
+    // (UpdateDependencyStatusOnAgentOffline). The edge loop skips a dep with no
+    // provider id, so the pair cannot meet here today. Written as a rule anyway
+    // — it is an invariant of a different process, this file cannot enforce it,
+    // and nothing here would notice it being relaxed.
+    const existingUnresolved = existing.style?.stroke === EDGE_COLORS.unresolved;
+    const incomingUnavailable = base.style?.stroke === EDGE_COLORS.unavailable;
+    if (!existingHealthy && !incomingHealthy && existingUnresolved && incomingUnavailable) {
+      edgeMap.set(key, { ...existing, animated: base.animated, style: base.style });
+      return;
+    }
     // Two healthy contributions can now disagree on COLOUR, which they never
     // could while colour was a property of the caller: the caller is the same
     // agent for both, but the providers are two replicas that may disagree

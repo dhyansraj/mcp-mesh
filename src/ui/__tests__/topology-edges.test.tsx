@@ -398,6 +398,42 @@ describe("replicas collapsing into one edge", () => {
       expect(edges[0].style?.strokeDasharray).toBe("5 5");
     }
   });
+
+  it("unavailable beats unresolved when replicas disagree, in either order", () => {
+    // The remaining order-dependence, between the two cases above: both
+    // contributions are degraded, so neither the worst-of merge nor the job
+    // escalation fires and the map kept whichever arrived first. One order
+    // alone cannot see it — it passes for the builder that has no rule at all.
+    //
+    // The unresolved contribution carries a provider id, which a registry does
+    // not currently emit (see the note in addEdge): without one the edge loop
+    // drops the dep and there is nothing to merge. The precedence is a property
+    // of the merge, and is asserted as one.
+    const disagreeing = (unavailableFirst: boolean): Agent[] => {
+      const left = provider("prov-22222222", "prov", [cap("reports")]);
+      const right = provider("prov-33333333", "prov", [cap("reports")]);
+      const brokenCaller = consumer("caller-11111111", "caller", [
+        dep("reports", left.id, "unavailable"),
+      ]);
+      const pendingCaller = consumer("caller-44444444", "caller", [
+        dep("reports", right.id, "unresolved"),
+      ]);
+      return unavailableFirst
+        ? [brokenCaller, pendingCaller, left, right]
+        : [pendingCaller, brokenCaller, left, right];
+    };
+
+    for (const unavailableFirst of [true, false]) {
+      const { edges } = buildGraphFromAgents(disagreeing(unavailableFirst));
+      expect(edges).toHaveLength(1);
+      expect(edges[0].style?.stroke).toBe(EDGE_COLORS.unavailable);
+      // The dash has to go with the colour: half a merge leaves a red edge
+      // still drawn dashed, which is the grey row's styling under the red row's
+      // colour and describes neither state.
+      expect(edges[0].style).toHaveProperty("strokeDasharray", undefined);
+      expect(edges[0].animated).toBe(false);
+    }
+  });
 });
 
 describe("edges nothing can be drawn to", () => {
