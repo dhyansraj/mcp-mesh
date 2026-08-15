@@ -25,6 +25,7 @@ import {
 } from "@xyflow/react";
 
 import { buildGraphFromAgents } from "@/lib/topology";
+import { EDGE_COLORS } from "@/lib/edge-palette";
 import { AgentNode } from "@/components/topology/AgentNode";
 import {
   BEATS,
@@ -76,7 +77,7 @@ const BUILT = BEATS.map((b) => {
   return {
     nodeData: new Map(g.nodes.map((n) => [n.id, n.data])),
     edgeStroke: new Map(
-      g.edges.map((e) => [e.id, (e.style?.stroke as string) ?? "#6b7280"])
+      g.edges.map((e) => [e.id, (e.style?.stroke as string) ?? EDGE_COLORS.unresolved])
     ),
   };
 });
@@ -91,8 +92,10 @@ for (const built of BUILT) {
 }
 const dataFor = (id: string, lead: number) =>
   BUILT[lead].nodeData.get(id) ?? FALLBACK_DATA.get(id)!;
+// An edge missing from this beat is drawn as the builder draws an unresolved
+// one, read from the palette rather than restated here.
 const strokeFor = (id: string, beat: number) =>
-  BUILT[beat].edgeStroke.get(id) ?? "#6b7280";
+  BUILT[beat].edgeStroke.get(id) ?? EDGE_COLORS.unresolved;
 const nodeVar = (i: number) => `--n${i}`;
 const edgeVar = (i: number) => `--e${i}`;
 

@@ -1,7 +1,8 @@
 import dagre from "dagre";
 import { type Node, type Edge } from "@xyflow/react";
-import { Agent } from "./types";
+import { Agent, DependencyResolution } from "./types";
 import { groupKeyOf, aggregateStatus } from "./agent-group";
+import { EDGE_COLORS } from "./edge-palette";
 
 // Returns the canonical grouping key for an agent — the declared `agent.name`
 // (falling back to the full id when empty). Replica bucketing keys off this
@@ -101,9 +102,73 @@ export function computeStructureHash(agents: Agent[]): string {
   return nodeKeys.join(",") + "|" + uniqueEdgePairs.join(",");
 }
 
+// Per-agent index of the capabilities declared `task=true` — the MeshJob
+// producers. Keyed by the FULL agent id (not the node key) because a dependency
+// resolution names the exact provider instance it resolved to, which may be one
+// replica of a collapsed group.
+//
+// Built from the same `agents` array the edge loop walks, so a provider that is
+// not in the snapshot simply has no entry and its edge is coloured as an
+// ordinary dependency. That is also the pre-registry-support case: `task` is
+// absent on older registries, and absent must mean "not a job".
+interface TaskIndexEntry {
+  /**
+   * `capability.function_name` — the precise key. A resolution's `mcp_tool` is
+   * written from the winning capability's function name (registry:
+   * resolver.go picks `cap.FunctionName`, ent_service.go emits it as
+   * `mcp_tool`), so the two are the same column and match exactly.
+   */
+  functions: Set<string>;
+  /**
+   * `capability.name`. Only consulted when a resolution carries no `mcp_tool`,
+   * which is every resolution from a registry predating that field. Ambiguous
+   * by nature: one capability name may be declared on two functions of the
+   * same agent, distinguished by tags, and only one of them may be a job.
+   */
+  names: Set<string>;
+}
+
+function buildTaskCapabilityIndex(agents: Agent[]): Map<string, TaskIndexEntry> {
+  const index = new Map<string, TaskIndexEntry>();
+  for (const agent of agents) {
+    const entry: TaskIndexEntry = { functions: new Set(), names: new Set() };
+    for (const cap of agent.capabilities ?? []) {
+      if (cap.task === true) {
+        entry.functions.add(cap.function_name);
+        entry.names.add(cap.name);
+      }
+    }
+    // Written unconditionally, so a duplicated agent id is LAST WINS rather
+    // than last-non-empty-wins. A snapshot should never carry an id twice, but
+    // if it does, the later record is the one that describes the agent — the
+    // same rule every other id-keyed map in this file follows. Skipping empty
+    // entries would let a stale earlier copy keep colouring edges as jobs after
+    // the capability stopped being one.
+    index.set(agent.id, entry);
+  }
+  return index;
+}
+
+// Whether a resolved dependency landed on a `task=true` capability, i.e. is a
+// MeshJob invocation rather than an ordinary call.
+function resolvesToJob(
+  index: Map<string, TaskIndexEntry>,
+  providerAgentId: string,
+  dep: DependencyResolution
+): boolean {
+  const entry = index.get(providerAgentId);
+  if (!entry) return false;
+  // `mcp_tool` names the exact function the dependency resolved to, so when it
+  // is on the wire it decides on its own — falling back to the capability name
+  // here would re-admit the ambiguity it exists to settle.
+  if (dep.mcp_tool) return entry.functions.has(dep.mcp_tool);
+  return entry.names.has(dep.capability);
+}
+
 export function buildGraphFromAgents(agents: Agent[]): { nodes: Node[]; edges: Edge[] } {
   const buckets = bucketAgents(agents);
   const idMap = buildIdToNodeKeyFromBuckets(buckets);
+  const taskCapabilities = buildTaskCapabilityIndex(agents);
 
   // Build nodes: one per group (collapsed) or single agent.
   const nodes: Node[] = [];
@@ -164,20 +229,45 @@ export function buildGraphFromAgents(agents: Agent[]): { nodes: Node[]; edges: E
       base.animated === true && !base.style?.strokeDasharray;
     if (existingHealthy && !incomingHealthy) {
       edgeMap.set(key, { ...existing, animated: base.animated, style: base.style });
+      return;
+    }
+    // Two healthy contributions can now disagree on COLOUR, which they never
+    // could while colour was a property of the caller: the caller is the same
+    // agent for both, but the providers are two replicas that may disagree
+    // about whether the resolved capability is a task — a half-rolled-out
+    // change, or a mixed-version group. The merge above compares animation and
+    // dashes only, so first-seen would have won by snapshot order.
+    //
+    // The job colour escalates, matching the worst-of rule's direction: a
+    // collapsed edge is drawn as a job when ANY replica behind it is one,
+    // because calling into that group can land on the long-running instance.
+    // Order-independent by construction.
+    if (
+      existingHealthy &&
+      incomingHealthy &&
+      base.style?.stroke === EDGE_COLORS.job &&
+      existing.style?.stroke !== EDGE_COLORS.job
+    ) {
+      edgeMap.set(key, { ...existing, style: base.style });
     }
   }
 
   for (const agent of agents) {
     const src = idMap.get(agent.id);
     if (!src || !validNodeKeys.has(src)) continue;
-    const isApi = agent.agent_type === "api";
 
     for (const dep of agent.dependency_resolutions ?? []) {
       if (!dep.provider_agent_id) continue;
       const dst = idMap.get(dep.provider_agent_id);
       if (!dst || !validNodeKeys.has(dst)) continue;
 
-      const availableColor = isApi ? "#ec4899" : "#22c55e";
+      // Coloured by WHAT IS BEING CALLED (issue #1521): the provider's matching
+      // capability decides, not the caller. A `task=true` capability is a
+      // MeshJob invocation rather than an ordinary call, and that is a property
+      // of the callee alone.
+      const availableColor = resolvesToJob(taskCapabilities, dep.provider_agent_id, dep)
+        ? EDGE_COLORS.job
+        : EDGE_COLORS.dependency;
       const label = dep.capability;
       addEdge("dep", src, dst, label, {
         id: `dep|${src}|${dst}|${label}`,
@@ -187,7 +277,12 @@ export function buildGraphFromAgents(agents: Agent[]): { nodes: Node[]; edges: E
         animated: dep.status === "available",
         data: { originalLabel: label },
         style: {
-          stroke: dep.status === "available" ? availableColor : dep.status === "unavailable" ? "#ef4444" : "#6b7280",
+          stroke:
+            dep.status === "available"
+              ? availableColor
+              : dep.status === "unavailable"
+                ? EDGE_COLORS.unavailable
+                : EDGE_COLORS.unresolved,
           strokeDasharray: dep.status === "unresolved" ? "5 5" : undefined,
         },
       });
@@ -198,6 +293,13 @@ export function buildGraphFromAgents(agents: Agent[]): { nodes: Node[]; edges: E
       const dst = idMap.get(llm.provider_agent_id);
       if (!dst || !validNodeKeys.has(dst)) continue;
 
+      // The job colour is scoped to dependency edges ON PURPOSE. An
+      // `@mesh.llm(filter=...)` tool can resolve onto a `task=true` capability,
+      // and this edge stays the LLM-tool colour when it does: the edge kind is
+      // what the reader is being told here — a model reaching for a tool — and
+      // that is a different fact from how the callee runs. The kind is decided
+      // before the callee is consulted, so no `task` lookup happens on this
+      // path at all.
       const label = `llm:${llm.filter_capability}`;
       addEdge("llm", src, dst, label, {
         id: `llm|${src}|${dst}|${label}`,
@@ -207,7 +309,7 @@ export function buildGraphFromAgents(agents: Agent[]): { nodes: Node[]; edges: E
         animated: llm.status === "available",
         data: { originalLabel: label },
         style: {
-          stroke: llm.status === "available" ? "#22d3ee" : "#ef4444",
+          stroke: llm.status === "available" ? EDGE_COLORS.llmTool : EDGE_COLORS.unavailable,
           strokeDasharray: llm.status !== "available" ? "5 5" : undefined,
         },
       });
@@ -227,7 +329,7 @@ export function buildGraphFromAgents(agents: Agent[]): { nodes: Node[]; edges: E
         animated: prov.status === "available",
         data: { originalLabel: label },
         style: {
-          stroke: prov.status === "available" ? "#a855f7" : "#ef4444",
+          stroke: prov.status === "available" ? EDGE_COLORS.llmProvider : EDGE_COLORS.unavailable,
           strokeDasharray: prov.status !== "available" ? "5 5" : undefined,
         },
       });

@@ -21,6 +21,7 @@ import { ReactFlowProvider } from "@xyflow/react";
 
 import { AgentNode } from "@/components/topology/AgentNode";
 import { buildGraphFromAgents } from "@/lib/topology";
+import { EDGE_COLORS } from "@/lib/edge-palette";
 import {
   Stage, setSsrGeometry, HANDLE_OFFSET, type SsrBox,
   RevealTitle, RevealSub, PhaseCopy, CtaCopy,
@@ -565,11 +566,17 @@ const partial = renderPartial();
 }
 fs.writeFileSync(partialPath, partial);
 
-/** Per-beat edge stroke, so the driver never needs the graph builder. */
+/**
+ * Per-beat edge stroke, so the driver never needs the graph builder. An edge
+ * absent from a beat falls back to the builder's own unresolved stroke, read
+ * from the palette rather than restated.
+ */
 const edgeStroke = BEATS.map((b) => {
   const g = buildGraphFromAgents(buildWorld(b.world));
-  const m = new Map(g.edges.map((e) => [e.id, (e.style?.stroke as string) ?? "#6b7280"]));
-  return EDGE_IDS.map((id) => m.get(id) ?? "#6b7280");
+  const m = new Map(
+    g.edges.map((e) => [e.id, (e.style?.stroke as string) ?? EDGE_COLORS.unresolved])
+  );
+  return EDGE_IDS.map((id) => m.get(id) ?? EDGE_COLORS.unresolved);
 });
 
 const out = {

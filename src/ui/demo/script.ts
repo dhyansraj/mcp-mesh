@@ -227,7 +227,11 @@ export function buildWorld(cfg: WorldConfig): Agent[] {
   const openai = base(OPENAI, "llm", "chat", ["openai", "gpt"], "OpenAI GPT");
 
   // The REST entry point: provides nothing, depends on trip_planning.
-  // agent_type "api" makes topology.ts colour its outgoing edge pink.
+  // agent_type "api" is what it IS, and it no longer decides how its edge is
+  // drawn: an edge is coloured by what is being called, so this one is an
+  // ordinary dependency on the planner (issue #1521). The pink in this piece is
+  // now the job colour, on planner -> budget-analyst in the final beat, where
+  // that capability is a `task` producer.
   const gateway = base(GATEWAY, null, "handle_request", [], "REST entry point");
   gateway.agent_type = "api";
   gateway.dependency_resolutions = [dep("handle_request", "trip_planning", PLANNER, "plan_trip")];
