@@ -34,12 +34,13 @@
 // so "the demo is unaffected" was an assumption with a counterexample already in
 // the tree, not a property of the design.
 //
-// It builds the dashboard, which no other test does — that is deliberate.
-// `npx tsc --noEmit` proves it type-checks and nothing proved it still
-// produced a correct stylesheet.
+// It builds the dashboard: `npx tsc --noEmit` proves it type-checks, and
+// nothing proved it still produced a correct stylesheet. That build goes to a
+// temporary directory and NOT to dist/ — see build() below for why.
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const UI = path.resolve(__dirname, "..");
@@ -148,15 +149,38 @@ function resolveSpecifier(from: string, spec: string): string | null {
 }
 
 /**
- * Build fresh: the point is to test what ships, not a stale artifact.
+ * Build fresh into `outDir`: the point is to test what ships, not a stale
+ * artifact.
+ *
+ * INTO ITS OWN DIRECTORY, NEVER dist/. This test only reads the emitted
+ * stylesheet, and it has no reason to write the tree //go:embed compiles into
+ * the binary. It used to, and so does __tests__/dashboard-fonts.test.ts, which
+ * genuinely is about dist/ — two files running `vite build` against one output
+ * directory, and vitest runs test files in PARALLEL by default (measured: 3.63s
+ * of test time inside 2.14s of wall clock). Vite empties outDir before it
+ * writes, so one file can be reading assets while the other has just deleted
+ * them. It never failed here in five runs, which settles nothing: it needs a
+ * read to land inside someone else's write window, and CI has different core
+ * counts and disk latency. dashboard-fonts is now the only writer of dist/.
  *
  * stdio is piped so a green run stays quiet, which means a BROKEN build would
  * otherwise surface as a bare "Command failed" with the compiler's diagnosis
  * stranded on the error object. Put it back in the message.
  */
-function build(args: string[], what: string): void {
+function build(outDir: string, what: string): void {
   try {
-    execFileSync("npx", ["vite", "build", ...args], { cwd: UI, stdio: "pipe" });
+    // --emptyOutDir because outDir is outside the project root, which Vite
+    // otherwise refuses to clear without being asked.
+    execFileSync("npx", ["vite", "build", "--outDir", outDir, "--emptyOutDir"], {
+      cwd: UI,
+      stdio: "pipe",
+      // NOT INHERITED. vitest sets NODE_ENV=test for its whole process tree and
+      // this child would take it, which yields React's development build.
+      // vite.config.ts pins the same value for every build; saying it here as
+      // well means the call site does not depend on reading that file to be
+      // correct.
+      env: { ...process.env, NODE_ENV: "production" },
+    });
   } catch (err) {
     const e = err as { stdout?: Buffer; stderr?: Buffer; message?: string };
     throw new Error(
@@ -169,19 +193,28 @@ function build(args: string[], what: string): void {
 
 describe("dashboard stylesheet isolation (#1519)", () => {
   it("contains no utility that exists only because of demo/", () => {
-    build([], "dashboard");
-
-    const cssFiles = fs
-      .readdirSync(path.join(UI, "dist", "assets"))
-      .filter((f) => f.endsWith(".css"))
-      .map((f) => path.join(UI, "dist", "assets", f));
-    expect(
-      cssFiles,
-      "expected exactly one stylesheet from the dashboard build. None means the " +
-        "build emitted no CSS at all; more than one means it started splitting CSS " +
-        "per chunk, and this check would then be reading only whichever came first."
-    ).toHaveLength(1);
-    const css = fs.readFileSync(cssFiles[0], "utf8");
+    // Same shape as the environment check in __tests__/dashboard-fonts.test.ts:
+    // a directory of its own, removed on the way out however this ends. Only the
+    // stylesheet is wanted, and it is read out before the directory goes.
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), "meshui-cssbuild-"));
+    let css: string;
+    try {
+      build(out, "dashboard");
+      const assets = path.join(out, "assets");
+      const cssFiles = fs
+        .readdirSync(assets)
+        .filter((f) => f.endsWith(".css"))
+        .map((f) => path.join(assets, f));
+      expect(
+        cssFiles,
+        "expected exactly one stylesheet from the dashboard build. None means the " +
+          "build emitted no CSS at all; more than one means it started splitting CSS " +
+          "per chunk, and this check would then be reading only whichever came first."
+      ).toHaveLength(1);
+      css = fs.readFileSync(cssFiles[0], "utf8");
+    } finally {
+      fs.rmSync(out, { recursive: true, force: true });
+    }
 
     const demoTokens = new Set<string>();
     for (const f of walk(DEMO)) for (const t of tokens(f)) demoTokens.add(t);

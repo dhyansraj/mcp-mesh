@@ -61,3 +61,63 @@
 @source not "../demo";
 @source not "../vite.demo.config.ts";
 @source not "../vite.static.config.ts";
+/*
+ * ../fonts holds the two woff2 payloads and the licence they ship under.
+ * Tailwind skips the binaries on its own; the licence is 4.5 kB of English
+ * prose sitting inside the scan root, which is exactly the shape that has put
+ * unwanted rules in this stylesheet four times. Excluded rather than trusted.
+ * demo/entry.css states the same boundary for the other build — neither
+ * directive can speak for the other, which is the whole design here.
+ */
+@source not "../fonts";
+
+/*
+ * THE FACES. Without these the theme below names a family the browser has
+ * never heard of, and every reader has been served the fallback since the
+ * dashboard shipped (#1522).
+ *
+ * IT IS THE WHOLE DOCUMENT, not the odd utility. globals.css maps
+ * --font-geist-sans onto --font-sans, and Tailwind turns that into
+ * --default-font-family, which its preflight applies to <html>. So the
+ * declaration below is what the dashboard paints nearly all of its text with,
+ * and the second one is what every element carrying the monospaced utility
+ * paints with.
+ *
+ * WHY HERE AND NOT IN globals.css, which is the more obvious home. The scroll
+ * demo's entry imports globals.css too, and it already declares these two
+ * faces itself in demo/embed.css — it has to, because its stylesheet is
+ * rewritten so that every selector is confined to one element and a face
+ * cannot be confined to anything. Declaring them in globals.css would not
+ * replace that; it would add a second copy to the demo's bundle. spa.css is
+ * the file only the dashboard reads, so this is the one entry that gets them.
+ *
+ * ONE VARIABLE FILE COVERS 400/500/600. Google serves Geist with a wght axis
+ * of 100-900 and the three single-weight URLs return byte-identical payloads,
+ * so the separate files would have been 59 kB of duplicate. Recorded first in
+ * demo/embed.css; the same reasoning and the same file.
+ *
+ * SELF-HOSTED, NOT A CDN, and not negotiable: the dashboard is compiled into
+ * the meshui binary by `go:embed all:dist` and is expected to run somewhere
+ * with no route to the public internet. Vite fingerprints these into
+ * dist/assets/ and rewrites the URLs below to match, so the embed picks them
+ * up with no manifest to maintain. __tests__/dashboard-fonts.test.ts holds
+ * that: it builds, then opens the files the emitted CSS points at.
+ *
+ * font-display: swap matches the demo, and is the right trade for a font
+ * served from the same origin as the page — first paint is never blocked, and
+ * the swap window is short enough that it lands with the first render.
+ */
+@font-face {
+  font-family: "Geist";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("../fonts/geist-var.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../fonts/geist-mono-400.woff2") format("woff2");
+}

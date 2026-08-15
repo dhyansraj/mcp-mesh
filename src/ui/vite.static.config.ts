@@ -26,31 +26,53 @@ import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 
 import { scopeCss, emitReservedHeight, sizeReport } from "./vite.demo.config";
+import { shipFontLicence } from "./vite.fonts";
+import { pinProductionBuild } from "./vite.env";
 
-export default defineConfig({
-  base: "./",
-  publicDir: false,
-  plugins: [tailwindcss(), scopeCss(), emitReservedHeight(), sizeReport()],
-  resolve: {
-    alias: { "@": path.resolve(__dirname, ".") },
-  },
-  build: {
-    outDir: "demo/dist-static",
-    emptyOutDir: true,
-    cssCodeSplit: false,
-    rollupOptions: {
-      input: path.resolve(__dirname, "demo/static.ts"),
-      output: {
-        format: "iife",
-        entryFileNames: "mesh-scroll.js",
-        assetFileNames: (info) => {
-          const n = info.names?.[0] ?? "";
-          if (n.endsWith(".css")) return "mesh-scroll.css";
-          if (n.endsWith(".woff2")) return "fonts/[name][extname]";
-          return "[name][extname]";
+// A FACTORY, NOT A PLAIN OBJECT, so the production pin has somewhere to run —
+// see vite.env.ts. Nothing this bundle imports switches on export condition
+// today, so the two builds are byte-identical with and without the pin; it is
+// here because THIS is the artifact the docs site publishes and the thing that
+// makes the pin matter is a dependency nobody has added yet. Uniform across all
+// three configs is also the only version of this rule anyone can check.
+export default defineConfig(({ command }) => {
+  pinProductionBuild(command);
+
+  return {
+    base: "./",
+    publicDir: false,
+    // shipFontLicence takes the directory this bundle puts its woff2 files in,
+    // so the licence is published next to the fonts it covers. THIS is the
+    // bundle the docs site serves — the artifact gate in
+    // .github/workflows/docs.yml lists fonts/OFL.txt for exactly this reason.
+    plugins: [
+      tailwindcss(),
+      scopeCss(),
+      emitReservedHeight(),
+      sizeReport(),
+      shipFontLicence("fonts"),
+    ],
+    resolve: {
+      alias: { "@": path.resolve(__dirname, ".") },
+    },
+    build: {
+      outDir: "demo/dist-static",
+      emptyOutDir: true,
+      cssCodeSplit: false,
+      rollupOptions: {
+        input: path.resolve(__dirname, "demo/static.ts"),
+        output: {
+          format: "iife" as const,
+          entryFileNames: "mesh-scroll.js",
+          assetFileNames: (info: { names?: string[] }) => {
+            const n = info.names?.[0] ?? "";
+            if (n.endsWith(".css")) return "mesh-scroll.css";
+            if (n.endsWith(".woff2")) return "fonts/[name][extname]";
+            return "[name][extname]";
+          },
+          inlineDynamicImports: true,
         },
-        inlineDynamicImports: true,
       },
     },
-  },
+  };
 });

@@ -14,20 +14,31 @@
 
 /* ONE file for 400/500/600. Google serves Geist as a variable font with a
  * wght axis of 100-900, and the three weight URLs return byte-identical
- * payloads — shipping them separately would have been 59KB of duplicate. */
+ * payloads — shipping them separately would have been 59KB of duplicate.
+ *
+ * THE FILES LIVE IN src/ui/fonts/, NOT UNDER demo/ (#1522). The dashboard
+ * needs the same two files, and it must not reach into this directory for
+ * them: #1526 and #1527 exist to sever that dependency. So the payload sits
+ * where neither bundle owns it and both address it the same way. Only the
+ * source path moved — this bundle still emits them to fonts/*.woff2, because
+ * assetFileNames in vite.demo.config.ts flattens by basename.
+ *
+ * These declarations are NOT shared with the dashboard's, which are in
+ * app/spa.css. Both entries import app/globals.css, so a face declared there
+ * would be emitted into this stylesheet as well, beside the two here. */
 @font-face {
   font-family: "Geist";
   font-style: normal;
   font-weight: 100 900;
   font-display: swap;
-  src: url("./fonts/geist-var.woff2") format("woff2");
+  src: url("../fonts/geist-var.woff2") format("woff2");
 }
 @font-face {
   font-family: "Geist Mono";
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url("./fonts/geist-mono-400.woff2") format("woff2");
+  src: url("../fonts/geist-mono-400.woff2") format("woff2");
 }
 
 /* ---------------------------------------------------------------------------
