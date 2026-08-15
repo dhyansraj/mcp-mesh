@@ -113,9 +113,11 @@ function mount(el: HTMLElement) {
   for (const node of Array.from(el.childNodes)) served.appendChild(node.cloneNode(true));
 
   let running = false;
+  let why = "declined";
   try {
     running = adopt(el, G) && start(el, G);
   } catch (err) {
+    why = "threw";
     // Reported, not swallowed: the reader gets the served reading either way,
     // but a section that quietly declines to animate should still say why.
     console.error("[mesh-scroll] the animation could not start; served copy restored", err);
@@ -130,6 +132,13 @@ function mount(el: HTMLElement) {
   el.innerHTML = "";
   el.appendChild(served);
   el.classList.remove("mesh-scroll-armed");
+  // THE RESTORED SIGNAL, the counterpart of the mounted one above and set for
+  // the same reason: the two together say which of the section's two readings
+  // is on screen, so anyone looking at a live page — or a harness waiting on
+  // the mount — can tell "restored, and by which route" from "still starting"
+  // without waiting for a timeout to decide for them. Written LAST, after the
+  // served nodes are back, so its presence also means the restore finished.
+  el.dataset.meshScrollRestored = why;
 }
 
 function boot() {

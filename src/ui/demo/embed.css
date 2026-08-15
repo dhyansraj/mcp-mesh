@@ -104,8 +104,28 @@
  * preflight in here wins over Material's class on any property it declares, and
  * a link that inherits this section's foreground onto Material's dark-scheme
  * background is invisible exactly half the time.
+ *
+ * ONLY WHEN THERE IS SOMETHING TO SKIP, which is what the arming class means.
+ * The link is written unconditionally in docs/index.md — it is markup the mount
+ * carries, and the served document cannot know whether the animation will run.
+ * Unarmed, this section is not ~21 screens of pinned scroll: it is the same
+ * copy as linear prose, several thousand characters of it, and an offer to skip
+ * the scrolling story then sends a keyboard reader past the whole thing to the
+ * end marker. That covers all three unarmed states at once — JavaScript off, a
+ * viewport under the breakpoint, and a bundle that failed to load or declined
+ * to start, since the loader's onerror and the restore in demo/static.ts both
+ * take the class back off.
+ *
+ * `display: none` rather than the hidden-but-present treatment the focus styles
+ * below use: transparency and z-index leave the link tabbable, and a link that
+ * takes focus while invisible is the worst of the options, not a compromise
+ * between them. Everything else about it is unchanged once armed.
  * --------------------------------------------------------------------------- */
 #mesh-scroll .mesh-skip {
+  display: none;
+}
+#mesh-scroll.mesh-scroll-armed .mesh-skip {
+  display: block;
   position: fixed;
   top: 0;
   left: 0;
@@ -122,7 +142,7 @@
   transform: translateY(0.4rem);
   outline-color: #f97316;
 }
-#mesh-scroll .mesh-skip:focus {
+#mesh-scroll.mesh-scroll-armed .mesh-skip:focus {
   z-index: 10;
   opacity: 1;
   transform: translateY(0);

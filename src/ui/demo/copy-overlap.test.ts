@@ -13,8 +13,9 @@
 // them, and this sweeps every handoff on the page for the same property.
 //
 // WHAT IS SWEPT: 200,000 evenly spaced positions across the whole pinned
-// travel, which is a sample every ~0.0001vh — three orders of magnitude finer
-// than a scroll notch, and far finer than one device pixel of scroll. At each
+// travel — 2010vh of it, so a sample every ~0.01vh: three orders of magnitude
+// finer than a scroll notch, and, at the 900px viewport this is narrowest on,
+// ~0.09px, still finer than one device pixel of scroll. At each
 // one, every rail element's EFFECTIVE opacity is computed the way the browser
 // composites it (a block's own value times its column's), from the same
 // functions the driver and the React component call. Two above the threshold

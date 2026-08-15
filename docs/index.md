@@ -251,7 +251,12 @@ meshctl man
 
      The skip link is first, and it is the only hand-written markup inside the
      mount. The bundle replaces everything in here on mount, so demo/static.ts
-     lifts both it and the copy blocks out and puts them back. -->
+     lifts both it and the copy blocks out and puts them back.
+
+     It is written unconditionally and GATED IN CSS on the arming class, since
+     the served document cannot know whether the animation will run: unarmed,
+     there is no scrolling story to skip and the offer would send a keyboard
+     reader past the prose itself. See the rule in demo/embed.css. -->
 <div id="mesh-scroll">
 <a class="mesh-skip" data-mesh-skip href="#mesh-scroll-end">Skip the scrolling story</a>
 --8<-- "src/ui/demo/copy.generated.html"

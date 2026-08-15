@@ -86,18 +86,35 @@ async function capture(variant) {
   // WAITED FOR RATHER THAN SAMPLED. The flag is set from a `fetch` chain, and a
   // pending fetch does not hold back the load event — so reading it the instant
   // `load` fires is a race the slow case loses, and losing it costs exactly the
-  // clear message this exists to give. Either outcome resolves this: the mount
+  // clear message this exists to give. Three outcomes resolve this: the mount
   // flag means the copy arrived and the bundle took over, the fatal flag means
-  // it did not.
+  // the precondition failed, and the RESTORED flag means the bundle loaded and
+  // then put the served copy back (demo/static.ts). The third is the one this
+  // used to sit through: a refusal never sets the mount flag, so waiting on
+  // only the first two spent a full selector timeout and then reported the
+  // wait, not the refusal that caused it.
   await page.waitForFunction(
     () =>
       document.documentElement.dataset.meshHarnessFatal !== undefined ||
+      document.querySelector("#mesh-scroll[data-mesh-scroll-restored]") !== null ||
       document.querySelector('#mesh-scroll[data-mesh-scroll-mounted="1"]') !== null
   );
   const fatal = await page.evaluate(() => document.documentElement.dataset.meshHarnessFatal);
   if (fatal) {
     await browser.close();
     console.error(`harness precondition failed (${variant}): ${fatal}`);
+    console.error("Refusing to report a verdict — nothing comparable was loaded.");
+    process.exit(1);
+  }
+  const restored = await page.evaluate(
+    () => document.querySelector("#mesh-scroll")?.dataset.meshScrollRestored
+  );
+  if (restored) {
+    await browser.close();
+    console.error(
+      `the ${variant} bundle restored the served copy instead of animating (${restored})` +
+        (errors.length ? `: ${errors[0]}` : "")
+    );
     console.error("Refusing to report a verdict — nothing comparable was loaded.");
     process.exit(1);
   }
@@ -592,7 +609,10 @@ for (let i = 0; i < n; i++) {
         // it had just diagnosed correctly, and the diagnosis never prints.
         ...(f.copyState.match(/../g) ?? []).map((s, i) => [`B${i + 1}`, s, f.shown[i]]),
         ...f.epilogueState.split("|").map((s, i) => [
-          i === 0 ? "headline" : i === 1 ? "cta" : `phase ${i - 1}`,
+          // `i - 2` because the two epilogue blocks come first: the third
+          // element is the cell whose `data-mesh-phase` is 0, so this names the
+          // cell a reader can find in the DOM rather than its neighbour.
+          i === 0 ? "headline" : i === 1 ? "cta" : `phase ${i - 2}`,
           s,
           f.epilogueShown[i],
         ]),
