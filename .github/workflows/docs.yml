@@ -125,6 +125,12 @@ jobs:
       # that argument no longer applies and the staleness one is now doing all
       # the work. Stated explicitly because a rationale that has quietly become
       # false is worse than no rationale.
+      # This also rewrites src/ui/demo/copy.generated.html, the one committed
+      # output of the prerender, which docs/index.md includes as a snippet. So
+      # the deployed page always carries copy regenerated from the beat data,
+      # even if a commit forgot to. (The rewrite dirties the checkout;
+      # gh-deploy publishes the built site, not the source tree, so that is
+      # harmless. ci.yml is where staleness is actually reported.)
       - name: Build the homepage scroll section
         run: make docs-scroll-build
 

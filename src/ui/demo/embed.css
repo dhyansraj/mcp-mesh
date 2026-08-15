@@ -87,74 +87,168 @@
   word-break: normal;
 }
 
-/* Placeholder shown until the bundle mounts. It lives in home.html so it is in
- * the first HTML response, and it carries B1's copy verbatim — a reader who
- * arrives before 173KB of JS does gets the opening frame's words rather than a
- * void. React clears the mount node on first render, so it needs no teardown.
+/* ---------------------------------------------------------------------------
+ * THE WAY OUT.
  *
- * Pinned to the viewport so it stays on screen for the whole reserved height
- * rather than scrolling away and leaving a long emptiness behind it.
+ * The section is ~21 screens of pinned scroll and its keyboard handler owns
+ * Arrow, Page and Space for the whole of it — deliberately, since those are how
+ * you step a beat at a time, and it hands the page back at the last stop. What
+ * was missing was a way to decline the whole thing that a reader could find:
+ * this is the first focusable element in the section, and it lands after it.
  *
- * KNOWN GAP, deliberately not addressed in this pass: if the JS never arrives
- * at all, this is what the reader keeps, followed by a very tall empty box.
- * The reservation is unconditional, so the emptiness is visible rather than
- * hidden. Inverting that is deferred work. */
-.mesh-scroll-placeholder {
+ * The behaviour is Material's own skip link, restated rather than inherited.
+ * `.md-skip` positions itself by leaving its offsets auto and relying on its
+ * static position being the top of the document; this one is thousands of
+ * pixels down the page, so it has to say where it goes or it is focused
+ * off-screen. Its colours are restated for the same reason — the scoped
+ * preflight in here wins over Material's class on any property it declares, and
+ * a link that inherits this section's foreground onto Material's dark-scheme
+ * background is invisible exactly half the time.
+ *
+ * ONLY WHEN THERE IS SOMETHING TO SKIP, which is what the arming class means.
+ * The link is written unconditionally in docs/index.md — it is markup the mount
+ * carries, and the served document cannot know whether the animation will run.
+ * Unarmed, this section is not ~21 screens of pinned scroll: it is the same
+ * copy as linear prose, several thousand characters of it, and an offer to skip
+ * the scrolling story then sends a keyboard reader past the whole thing to the
+ * end marker. That covers all three unarmed states at once — JavaScript off, a
+ * viewport under the breakpoint, and a bundle that failed to load or declined
+ * to start, since the loader's onerror and the restore in demo/static.ts both
+ * take the class back off.
+ *
+ * `display: none` rather than the hidden-but-present treatment the focus styles
+ * below use: transparency and z-index leave the link tabbable, and a link that
+ * takes focus while invisible is the worst of the options, not a compromise
+ * between them. Everything else about it is unchanged once armed.
+ * --------------------------------------------------------------------------- */
+#mesh-scroll .mesh-skip {
+  display: none;
+}
+#mesh-scroll.mesh-scroll-armed .mesh-skip {
+  display: block;
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: -1;
+  margin: 0.5rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: 2px;
+  background: #e2e8f0;
+  color: #050c17;
+  font-size: 13px;
+  font-family: "Geist", ui-sans-serif, system-ui, sans-serif;
+  text-decoration: none;
+  opacity: 0;
+  transform: translateY(0.4rem);
+  outline-color: #f97316;
+}
+#mesh-scroll.mesh-scroll-armed .mesh-skip:focus {
+  z-index: 10;
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    transform 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 175ms 75ms;
+}
+
+/* ---------------------------------------------------------------------------
+ * THE SERVED COPY, in its two roles.
+ *
+ * docs/index.md includes demo/copy.generated.html inside the mount, so all
+ * fourteen beats and the whole epilogue are elements in the first HTML
+ * response. That is what a crawler gets, whole, and it is what the driver
+ * adopts once the bundle arrives — the same nodes, moved into the animation,
+ * never a second copy.
+ *
+ * WHO ACTUALLY READS ALL OF IT: the crawler, and a reader with JavaScript off.
+ * Nobody else, and in particular not the reader waiting for the bundle. The
+ * loader arms this section during parse, and the armed rules below render one
+ * beat and drop the rest out of the page's layout — which takes them out of
+ * find-in-page and the accessibility tree as completely as `inert` does. So the
+ * mounted section is not the mean version of a generous served one: before the
+ * mount a reader with JavaScript has one beat, after it they have whichever
+ * blocks the frame is painting (see demo/rail.ts), and the linear reading of
+ * the whole thing was never theirs to lose.
+ *
+ * That is the correct behaviour for a section where every block sits in the
+ * same place at zero opacity — matching text nobody can see is not a search
+ * result — and the anti-flash rule below is what makes the pre-mount state
+ * agree with it instead of laying out the entire story and then replacing it.
+ *
+ * Role one, below: linear prose. Role two is the animated stack, which lives in
+ * scroll.css because both renderers need it. The TYPE is identical in both,
+ * because it is the same markup; only the arrangement differs.
+ * --------------------------------------------------------------------------- */
+.mesh-scroll-copy {
+  box-sizing: border-box;
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 10vh 6vw;
+}
+.mesh-scroll-copy > .demo-beat + .demo-beat {
+  margin-top: 3.5rem;
+}
+.mesh-scroll-reveal {
+  margin-top: 5rem;
+}
+.mesh-scroll-phase {
+  margin-top: 2.5rem;
+}
+.mesh-scroll-cta {
+  margin-top: 4rem;
+}
+
+/* ARMED: the loader has decided the bundle is coming (wide enough, JavaScript
+ * on), and says so before first paint by putting this class on the mount. Two
+ * things follow from it, and NEITHER may be in the base rules — that is the
+ * whole point of the inversion.
+ *
+ * The reserved height is one, emitted by the build (see emitReservedHeight in
+ * vite.demo.config.ts). The other is this: hold the opening beat on screen and
+ * put the rest away, so the pre-mount frame is one screen of copy rather than
+ * the entire story briefly laid out and then replaced.
+ *
+ * It is B1's own generated block, not a hand-written duplicate of it. There was
+ * one of those, in this file's previous life, and it was a second copy of
+ * ~350 characters of product prose that nothing could keep in step.
+ *
+ * If the bundle fails to load, the loader takes this class off again: the
+ * reservation goes with it and the section reverts to prose. That is a strictly
+ * better failure than the previous one, which collapsed the section to nothing
+ * — there was nothing in it worth keeping then. */
+#mesh-scroll.mesh-scroll-armed .mesh-scroll-copy {
   position: sticky;
   top: 0;
   height: 100vh;
-  display: flex;
-  gap: 1rem;
+  max-width: none;
+  margin: 0;
   padding: 12vh 6vw 0;
-  box-sizing: border-box;
+  overflow: hidden;
 }
-.mesh-scroll-ph-rule {
+#mesh-scroll.mesh-scroll-armed .mesh-scroll-copy > * {
+  display: none;
+}
+#mesh-scroll.mesh-scroll-armed .mesh-scroll-copy > [data-mesh-beat="0"] {
+  display: block;
+  position: relative;
+  max-width: 32rem;
+  padding-left: 1.25rem;
+  margin-top: 0;
+}
+/* The section's accent rule, which in the mounted panel is a sibling element of
+ * the copy column. Drawn here rather than shipped in the partial: it is
+ * decoration, and putting it in the served markup would mean carrying an empty
+ * element through the adoption into a panel that already has one. */
+#mesh-scroll.mesh-scroll-armed .mesh-scroll-copy > [data-mesh-beat="0"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 4px;
   width: 3px;
   height: 62px;
-  margin-top: 4px;
   border-radius: 999px;
   background: #f97316;
   box-shadow: 0 0 18px rgba(249, 115, 22, 0.4);
-}
-.mesh-scroll-ph-copy {
-  max-width: 32rem;
-}
-.mesh-scroll-ph-chapter {
-  margin: 0;
-  font-family: "Geist Mono", ui-monospace, monospace;
-  font-size: 10px;
-  letter-spacing: 0.32em;
-  text-transform: uppercase;
-  color: #f97316;
-}
-.mesh-scroll-ph-title {
-  margin: 8px 0 0;
-  font-size: 30px;
-  font-weight: 600;
-  line-height: 1.12;
-  letter-spacing: -0.01em;
-  color: #fff;
-}
-.mesh-scroll-ph-sub {
-  margin: 12px 0 0;
-  font-family: "Geist Mono", ui-monospace, monospace;
-  font-size: 13px;
-  line-height: 1.6;
-  color: #94a3b8;
-}
-.mesh-scroll-ph-desc {
-  margin: 16px 0 0;
-  font-size: 15px;
-  line-height: 1.7;
-  color: #94a3b8;
-}
-
-/* Load failure: collapse the reservation rather than leave 22 screens of empty
- * scroll behind a section that will never arrive. Set by the loader's onerror
- * in docs/index.md. Only applies AFTER a failure, so it cannot reintroduce the
- * layout shift the reservation exists to prevent. */
-#mesh-scroll.mesh-scroll-failed {
-  display: none;
 }
 
 /* The mount point. It has to carry what the dev page gets from <body>, since
@@ -172,10 +266,13 @@
    * collapses the reserved height, so narrowing leaves no debris behind. Any
    * other hiding mechanism would leave ~2205vh of blank page.
    *
-   * It hides the static placeholder too, which is intended — B1's copy ("This
-   * is the mesh dashboard. Every card is a running agent…") describes a
-   * dashboard that is not beneath it. Out of context that is more confusing
-   * than an absence. */
+   * IT HIDES THE SERVED COPY TOO, below 900px, which is a narrower decision
+   * than it looks and is worth restating now that there is real prose in here.
+   * The copy is still in the document — this is a rendering rule, so a crawler
+   * is unaffected — but a phone reader does not see it. That is the same thing
+   * that happened before, when the only thing in here was a placeholder. Making
+   * the prose readable on a phone while the animation stays off is a product
+   * decision, not a fix, and is deliberately not made here. */
   display: none;
 
   /* Breathing room at the seam. The preceding element on the docs page is a

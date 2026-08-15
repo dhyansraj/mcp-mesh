@@ -206,7 +206,12 @@
         expect("panel", panel, "position", "relative");
         const rf = q(".react-flow");
         expect("react flow", rf, "direction", "ltr");
-        const desc = root.querySelector("p.demo-fade + p, .demo-fade");
+        // The beat description, by the marker the copy blocks actually carry.
+        // This used to select `.demo-fade`, the class on the copy elements back
+        // when they were destroyed and rebuilt at every beat change; the copy
+        // stack removed it, and the probe went on reporting "element not found"
+        // — a false negative that reads exactly like a real one.
+        const desc = root.querySelector('[data-mesh-beat] [data-mesh="desc"]');
         expect("copy paragraph", desc, "font-family", "Geist");
         const code = q("code");
         expect("inline code", code, "font-family", ["Geist Mono", "ui-monospace"]);

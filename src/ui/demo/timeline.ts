@@ -20,6 +20,7 @@ import {
 } from "./script";
 
 const N = BEATS.length;
+const PHASE_COUNT = REVEAL.phases.length;
 
 // ---------------------------------------------------------------------------
 // Math
@@ -166,6 +167,64 @@ export function camFor(i: number, W: number, H: number) {
  */
 export const LEAD_FLIP = 0.4;
 
+// ---------------------------------------------------------------------------
+// Beat copy — the handoff between two blocks that share one position
+// ---------------------------------------------------------------------------
+// All fourteen copy blocks are in the document at once and stacked in the same
+// spot, so "only one beat is ever on screen" is no longer a fact about the DOM.
+// It is a fact about these two windows, and it holds because they MEET rather
+// than overlap: the outgoing block reaches 0 exactly where the incoming one
+// starts from 0, both at LEAD_FLIP. Nothing in between is ever non-zero on both
+// sides, at any beat length. demo/copy-overlap.test.ts sweeps this.
+//
+// WHAT THIS REPLACES. The copy used to be one element trio that was destroyed
+// and rebuilt at each flip, which made the handoff a hard cut followed by a
+// 380ms `demo-fade` from opacity 0. The out window is deliberately narrow —
+// four hundredths of the crossfade, ~12px of scroll at 900px — so it still
+// reads as that cut, and the in window carries the fade the animation replay
+// used to. Being scroll-driven, it also holds mid-fade when the reader stops,
+// which the time-based animation could not.
+//
+// KEEP THE TWO ENDPOINTS EQUAL. Widening the out window past LEAD_FLIP, or
+// starting the in window before it, superimposes two beats' copy — the exact
+// failure the B14/reveal-headline handoff was sequenced to avoid.
+export const COPY_OUT = [0.36, LEAD_FLIP] as const;
+export const COPY_IN = [LEAD_FLIP, 0.62] as const;
+
+/**
+ * Ramp shape shared by every window here. Under reduced motion each window
+ * steps at its midpoint instead of sliding — the same treatment `f` already
+ * gets, so a stepped `f` and a stepped window agree.
+ */
+export const ramp = (reduced: boolean) => (x: number) =>
+  reduced ? (x >= 0.5 ? 1 : 0) : smoothstep(clamp(x, 0, 1));
+
+/**
+ * Per-beat copy opacity for one frame, written into `out` (length N).
+ *
+ * Fills a caller-owned array rather than allocating: this runs on every
+ * animation frame in the driver.
+ */
+export function beatCopyOpacity(
+  out: number[],
+  i0: number,
+  i1: number,
+  f: number,
+  reduced: boolean
+): number[] {
+  const e = ramp(reduced);
+  for (let k = 0; k < N; k++) out[k] = 0;
+  // The ends of the timeline, where the two indices collapse onto one beat and
+  // there is no handoff to run.
+  if (i0 === i1) {
+    out[i0] = 1;
+    return out;
+  }
+  out[i0] = 1 - e((f - COPY_OUT[0]) / (COPY_OUT[1] - COPY_OUT[0]));
+  out[i1] = e((f - COPY_IN[0]) / (COPY_IN[1] - COPY_IN[0]));
+  return out;
+}
+
 /** Resting stroke width — tier-2 tool edges are drawn lighter. */
 export const restWidth = (edgeId: string) => (edgeId.startsWith("llm|") ? 1.8 : 2.4);
 
@@ -226,6 +285,133 @@ export const R_PHASE_STEP = 0.0652;
 export const R_PHASE_SPAN = 0.087;
 export const R_OUT = [0.787, 0.859] as const;
 export const R_CTA = [0.876, 0.929] as const;
+
+/** Everything the epilogue's own windows produce for one frame. */
+export interface RevealFrame {
+  /** Graph wash — the chapter rail takes the same value. */
+  graph: number;
+  /** The whole beat-copy column, above the per-beat opacities. */
+  beat: number;
+  /** The epilogue headline block. */
+  reveal: number;
+  /** The closing call to action. */
+  cta: number;
+  /** Lifecycle phases, one per REVEAL.phases entry. */
+  p: number[];
+}
+
+/**
+ * The epilogue's windows, evaluated once for a given position in the reveal.
+ *
+ * ONE DEFINITION, THREE CALLERS: the driver, the React component and the
+ * overlap sweep. It used to be written out twice — identically, by hand, in
+ * driver.ts and stage.tsx — which made "the two renderers agree" a thing to
+ * re-check rather than a property, and left the sweep with nothing shared to
+ * test against.
+ */
+export function revealFrame(rev: number, reduced: boolean, out?: RevealFrame): RevealFrame {
+  const e = ramp(reduced);
+  const w = (from: number, to: number) => e((rev - from) / (to - from));
+  const r: RevealFrame = out ?? { graph: 0, beat: 0, reveal: 0, cta: 0, p: [] };
+  r.graph = 1 - e(rev / R_CLEAR);
+  // Everything the epilogue puts on screen leaves again for the CTA. Kept as
+  // its own factor rather than folded into `reveal`: the beat copy hides on the
+  // way IN and must not come back when the headline hides on the way out.
+  const gone = 1 - w(R_OUT[0], R_OUT[1]);
+  // Driven by its OWN window, not by 1 - headIn. Tying them made the two blocks
+  // a crossfade in one position: at headIn = 0.5 both the beat copy and the
+  // headline sat at 0.5 and overlaid each other.
+  r.beat = 1 - w(R_BEAT_OUT[0], R_BEAT_OUT[1]);
+  r.reveal = w(R_HEAD[0], R_HEAD[1]) * gone;
+  r.cta = w(R_CTA[0], R_CTA[1]);
+  for (let i = 0; i < PHASE_COUNT; i++) {
+    const from = R_PHASE_0 + i * R_PHASE_STEP;
+    r.p[i] = w(from, from + R_PHASE_SPAN) * gone;
+  }
+  return r;
+}
+
+/**
+ * The floor below which a block is not on screen for any purpose.
+ *
+ * smoothstep is flat at both ends and crosses this at 4.14% of a window, which
+ * is where a fade stops being nothing and starts being faint words over other
+ * words. ONE DEFINITION: the reveal's windows were sized against it, the
+ * overlap sweep fails above it, and the renderers take a block out of the
+ * accessibility tree at or below it. Three answers to "is this on screen" would
+ * be three chances to disagree.
+ */
+export const VISIBLE = 0.005;
+
+/** Everything either renderer derives from one scroll position. */
+export interface CopyFrame {
+  /** Continuous beat position; the topology arc holds its last beat after it. */
+  raw: number;
+  /** Position within the epilogue, 0 until the arc has finished. */
+  rev: number;
+  /** Outgoing and incoming beat index. */
+  i0: number;
+  i1: number;
+  /** Crossfade between them. */
+  f: number;
+  /** The gated half of `f` — everything a beat ADDS waits for its own title. */
+  fIn: number;
+  /** Per-beat copy opacity, before the column's own factor. */
+  copy: number[];
+  /** The epilogue's windows at the same position. */
+  reveal: RevealFrame;
+}
+
+/**
+ * Scroll position, in vh travelled, to everything drawn from it.
+ *
+ * THREE CALLERS, ONE DERIVATION: the driver, the React component and the
+ * overlap sweep. All three used to re-derive `raw`, `rev`, `i0`, `i1`, `f` and
+ * `fIn` by hand from the same six lines — which meant the sweep was testing a
+ * COPY of the driver, and would have gone on passing through any change to how
+ * the driver derives them. That is the failure mode this whole file exists to
+ * remove, so the last hand-copied step is here too.
+ *
+ * The hidden-state rule in rail.ts is NOT a fourth caller: it is handed the
+ * frame the renderer just drew from, which is the point of it — a rule that
+ * derived its own could describe a different scroll position from the picture.
+ *
+ * Fills a caller-owned frame rather than allocating: this runs on every
+ * animation frame in both renderers.
+ */
+export function copyFrameAt(vhPos: number, reduced: boolean, out?: CopyFrame): CopyFrame {
+  const fr: CopyFrame =
+    out ?? {
+      raw: 0, rev: 0, i0: 0, i1: 0, f: 0, fIn: 0,
+      copy: new Array(N).fill(0),
+      reveal: { graph: 0, beat: 0, reveal: 0, cta: 0, p: [] },
+    };
+  // Beat maths clamps at the end of the arc, so the graph simply holds its
+  // final beat while the epilogue plays over it.
+  const raw = rawFromVh(Math.min(vhPos, TOTAL_VH));
+  fr.raw = raw;
+  fr.rev = clamp((vhPos - TOTAL_VH) / REVEAL_VH, 0, 1);
+  const pos = raw - 0.5;
+  const i0 = clamp(Math.floor(pos), 0, N - 1);
+  const i1 = Math.min(i0 + 1, N - 1);
+  fr.i0 = i0;
+  fr.i1 = i1;
+  const t = clamp(pos - i0, 0, 1);
+  const f = reduced ? (t >= 0.5 ? 1 : 0) : smoothstep(t);
+  fr.f = f;
+  fr.fIn = smoothstep(clamp((f - LEAD_FLIP) / (1 - LEAD_FLIP), 0, 1));
+  beatCopyOpacity(fr.copy, i0, i1, f, reduced);
+  revealFrame(fr.rev, reduced, fr.reveal);
+  return fr;
+}
+
+/**
+ * Effective opacity of beat `k` — its own window times its column's, which is
+ * what compositing does. Reading the block's value alone would report the beat
+ * copy as present through the whole epilogue, where the column has already
+ * taken it to zero.
+ */
+export const beatShown = (fr: CopyFrame, k: number) => fr.copy[k] * fr.reveal.beat;
 
 /**
  * Keyboard snap targets, as vh travelled inside the pinned section.

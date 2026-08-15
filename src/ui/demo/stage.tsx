@@ -34,22 +34,21 @@ import {
   ACCENT,
   CHAPTERS,
   BUILT_CHAPTERS,
-  TOTAL_VH,
   HEADER_VH,
   SPACER_VH,
   REVEAL,
-  REVEAL_VH,
   HOTEL,
   WEATHER,
   WEATHER_GROUP,
   type Beat,
 } from "./script";
 import {
-  clamp, smoothstep, lerp, lerpColor, POS, camFor, GUTTER, LEAD_FLIP,
-  restWidth, totalTravel, rawFromVh, R_CLEAR, R_BEAT_OUT, R_HEAD, R_PHASE_0,
-  R_PHASE_STEP, R_PHASE_SPAN, R_OUT, R_CTA, SNAP_VH, CHAPTER_VH, CHAPTER_SPAN,
-  TEXT_ENTRY, ACTIVATABLE,
+  clamp, lerp, lerpColor, POS, camFor, GUTTER, LEAD_FLIP,
+  restWidth, totalTravel, copyFrameAt,
+  SNAP_VH, CHAPTER_VH, CHAPTER_SPAN, TEXT_ENTRY, ACTIVATABLE,
+  type CopyFrame,
 } from "./timeline";
+import { collectRail, applyRailHidden, type RailBlock } from "./rail";
 
 const nodeTypes = { agentNode: AgentNode };
 
@@ -325,6 +324,102 @@ export function inline(text: string, s: Inline) {
 /** The CTA is set in the accent, so code spans inherit rather than recolour. */
 const CTA_INLINE: Inline = { code: "", em: "font-sans not-italic" };
 
+// ---------------------------------------------------------------------------
+// The epilogue's prose — one definition, two arrangements
+// ---------------------------------------------------------------------------
+// The panel sets these in a pinned frame and demo/partial.tsx sets them in a
+// linear column for the served document. The ARRANGEMENT is the one thing that
+// cannot be shared between the two; the words and their type are the one thing
+// that must not differ. So the arrangement is each caller's wrappers and the
+// rest is here, exactly as the fourteen beat blocks are one BeatBlock.
+//
+// This was hand-copied into partial.tsx first, and it had already drifted by
+// the time anyone looked: the served call to action was rendered with the
+// mono sub-line's inline style instead of its own, so its code spans carried a
+// colour the panel's do not. Nothing could have caught it, because there was
+// nothing to compare against. emit.tsx now asserts each of these appears
+// verbatim in BOTH outputs.
+export function RevealTitle() {
+  return (
+    <h2 className="whitespace-pre-line text-balance text-[30px] font-semibold leading-[1.12] tracking-tight text-white">
+      {REVEAL.title}
+    </h2>
+  );
+}
+export function RevealSub() {
+  return (
+    <p className="mt-3 whitespace-pre-line break-words font-mono text-[13px] leading-relaxed text-slate-400">
+      {inline(REVEAL.sub, SUB_INLINE)}
+    </p>
+  );
+}
+/**
+ * One lifecycle phase, in EITHER register — the only place its label and body
+ * are written.
+ *
+ * BOTH REGISTERS ARE HERE, and the framed one is here for a better reason than
+ * tidiness. It is the register that ships: <Stage> renders it unless a reader
+ * has picked the other one in this session, so it is what the prerendered shell
+ * carries and what the docs page animates. While its markup was written out
+ * inside <Stage> it was the one piece of epilogue prose nothing compared to
+ * anything — the drift guard in emit.tsx renders this component, so it was
+ * checking a register the page does not use. The guard now checks both, which
+ * is only possible because both are rendered from here.
+ *
+ * The open register is also the linear reading's arrangement, which is why
+ * partial.tsx asks for it by default.
+ */
+export function PhaseCopy({
+  phase,
+  register = "open",
+}: {
+  phase: (typeof REVEAL.phases)[number];
+  register?: GridVariant;
+}) {
+  if (register === "framed") {
+    return (
+      // Label set into the top border with the panel colour knocked out behind
+      // it — the technical-drawing convention. Nothing else changes: same copy,
+      // same type, same accent, no glow and no second colour.
+      <div className="relative h-full rounded-[2px] border border-slate-700/60 px-6 pb-6 pt-7">
+        <p className="demo-accent absolute -top-[7px] left-5 bg-[#0a1628] px-2 font-mono text-[10px] uppercase leading-[14px] tracking-[0.32em]">
+          <span className="text-slate-600">/</span> {phase.label}{" "}
+          <span className="text-slate-600">/</span>
+        </p>
+        <p className="text-[15px] leading-[1.7] text-slate-400">
+          {inline(phase.body, DESC_INLINE)}
+        </p>
+      </div>
+    );
+  }
+  return (
+    <>
+      <p className="demo-accent font-mono text-[10px] uppercase tracking-[0.32em]">
+        {phase.label}
+      </p>
+      {/* Same 15px as the beat descriptions — it is the same kind of body
+          copy. The cell is 403px at 1440 (57-59 characters, untouched by the
+          cap) and 553px at 1920, where the 480px cap holds the measure at ~69
+          rather than letting it run to 78. */}
+      <p className="mt-2 max-w-[30rem] text-[15px] leading-[1.7] text-slate-400">
+        {inline(phase.body, DESC_INLINE)}
+      </p>
+    </>
+  );
+}
+export function CtaCopy() {
+  return (
+    <>
+      <h3 className="text-[44px] font-semibold leading-[1.1] tracking-tight text-white">
+        {REVEAL.cta.title}
+      </h3>
+      <p className="mt-6 font-mono text-[15px] leading-relaxed text-slate-300">
+        {inline(REVEAL.cta.sub, CTA_INLINE)}
+      </p>
+    </>
+  );
+}
+
 /**
  * Two registers for the reveal grid, switchable at runtime so they can be
  * compared on the same frame rather than from memory:
@@ -339,6 +434,10 @@ const GRID_VARIANTS = ["framed", "open"] as const;
 type GridVariant = (typeof GRID_VARIANTS)[number];
 const VARIANT_KEY = "demo-grid-variant";
 
+// Per-frame scratch, allocated once: filled and read inside the apply, which
+// runs on every animation frame.
+const frameBuf: CopyFrame = copyFrameAt(0, false);
+
 // Built once — the driver writes the variables these reference every frame, so
 // nothing here re-renders. Same trick as the node and edge styles.
 const GRAPH_STYLE = { opacity: "var(--graph, 1)" } as const;
@@ -351,22 +450,31 @@ const RAIL_STYLE = { opacity: "var(--rail, 1)" } as const;
 // Stage
 // ---------------------------------------------------------------------------
 /**
- * The pinned beat copy — chapter label, title, mono sub-line, description.
+ * One beat's copy — chapter label, title, mono sub-line, description.
  *
- * A COMPONENT rather than inline JSX because BOTH renderers need it: <Stage>
- * mounts it, and emit.tsx renders it to the markup string the vanilla driver
- * swaps in at each lead flip. The driver previously rebuilt these four elements
- * from class strings copied by hand, which meant a type change here silently
- * stopped applying to the shipping bundle. There is now one definition.
+ * A COMPONENT rather than inline JSX because THREE outputs need it, and they
+ * have to be byte-identical: <Stage> mounts fourteen of these, emit.tsx renders
+ * the same fourteen into the partial the docs page serves, and the driver
+ * adopts that partial's nodes and animates them. Anything hand-copied between
+ * those three would drift.
  *
- * `lead` drives the React keys, and they are load-bearing: keying the title on
- * the beat makes React unmount the old <h2> and mount a new one, so `demo-fade`
- * replays from the start and exactly one title exists at a time. The driver
- * reproduces that by replacing the elements outright.
+ * NO HIDDEN STATE IS RENDERED HERE, in any of the three. A block is out of the
+ * accessibility tree exactly while it is at zero opacity, which is a property
+ * of the frame and not of the markup, so both renderers write it imperatively
+ * from the same rule — see rail.ts. It was a `hidden` prop derived from the
+ * current beat index, which is a different question and answered it wrongly for
+ * the whole epilogue. The served document sets nothing either: nothing is
+ * animating there and all fourteen are equally readable.
  */
-export function BeatCopy({ beat, lead }: { beat: Beat; lead: number }) {
+export function BeatBlock({ beat, index }: { beat: Beat; index: number }) {
   return (
-    <>
+    <div
+      className="demo-beat"
+      data-mesh-beat={index}
+      // Its own variable, read through a shared one — the same indirection the
+      // lifecycle phases use, so one rule styles all fourteen.
+      style={{ ["--b" as string]: `var(--b${index}, 0)` }}
+    >
                     <p
                       data-mesh="chapter"
                       className="demo-accent font-mono text-[10px] uppercase tracking-[0.32em]"
@@ -374,36 +482,44 @@ export function BeatCopy({ beat, lead }: { beat: Beat; lead: number }) {
                       {CHAPTERS[beat.chapter]}
                     </p>
                     <h2
-                      key={`t-${lead}`}
                       data-mesh="title"
                       // whitespace-pre-line honours the authored `\n` breaks;
                       // text-balance keeps the rest off ragged single-word
                       // last lines in a 350px column.
-                      className="demo-fade mt-2 whitespace-pre-line text-balance text-[30px] font-semibold leading-[1.12] tracking-tight text-white"
+                      className="mt-2 whitespace-pre-line text-balance text-[30px] font-semibold leading-[1.12] tracking-tight text-white"
                     >
                       {beat.title}
                     </h2>
                     <p
-                      key={`s-${lead}`}
                       data-mesh="sub"
                       // break-words is containment, not style: B6's sub is a
                       // JSON literal with no spaces, so without it the line
                       // cannot wrap and overflows the reserved column by 25px
                       // into the graph — which is exactly what the gutter
                       // exists to prevent.
-                      className="demo-fade mt-3 whitespace-pre-line text-balance break-words font-mono text-[13px] leading-relaxed text-slate-400"
+                      className="mt-3 whitespace-pre-line text-balance break-words font-mono text-[13px] leading-relaxed text-slate-400"
                     >
                       {inline(beat.sub, SUB_INLINE)}
                     </p>
                     {beat.desc && (
                       <p
-                        key={`d-${lead}`}
                         data-mesh="desc"
-                        className="demo-fade mt-4 text-[15px] leading-[1.7] text-slate-400"
+                        className="mt-4 text-[15px] leading-[1.7] text-slate-400"
                       >
                         {inline(beat.desc, DESC_INLINE)}
                       </p>
                     )}
+    </div>
+  );
+}
+
+/** All fourteen blocks, stacked in one position and opacity-driven. */
+export function BeatStack() {
+  return (
+    <>
+      {BEATS.map((b, i) => (
+        <BeatBlock key={i} beat={b} index={i} />
+      ))}
     </>
   );
 }
@@ -417,9 +533,33 @@ export interface StageProps {
    * on so the standalone reading still opens on something.
    */
   showHeader?: boolean;
+  /**
+   * Where the fourteen copy blocks come from.
+   *
+   *   inline — this component renders them. The dev page and the React bundle,
+   *            which have no host page to take them from.
+   *   slot   — leave the stack empty. What emit.tsx prerenders: on the docs
+   *            page the blocks are already in the served document, and the
+   *            driver moves those nodes in here. Emitting them twice would put
+   *            two copies of every beat in the page, one of them unreachable.
+   */
+  copy?: "inline" | "slot";
+  /**
+   * Force the reveal grid's register instead of reading the session's choice.
+   *
+   * Only emit.tsx passes it, so its equivalence guard can render the open
+   * register — the one the served copy is set in — without depending on what a
+   * `sessionStorage` lookup does in Node.
+   */
+  register?: GridVariant;
 }
 
-export function Stage({ devTools = false, showHeader = false }: StageProps) {
+export function Stage({
+  devTools = false,
+  showHeader = false,
+  copy = "inline",
+  register,
+}: StageProps) {
   const sectionRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -430,6 +570,10 @@ export function Stage({ devTools = false, showHeader = false }: StageProps) {
   );
   const [lead, setLead] = useState(0);
   const leadRef = useRef(0);
+  // Resolved on the first apply and held: the copy blocks and the epilogue's
+  // own blocks are mounted for the life of the section, so this is a one-time
+  // query rather than a per-frame one.
+  const rail = useRef<RailBlock[] | null>(null);
 
   // A/B for the reveal grid's register — see GRID_VARIANTS. Switching is
   // instant and touches nothing in the scroll path, so the same frame can be
@@ -440,6 +584,7 @@ export function Stage({ devTools = false, showHeader = false }: StageProps) {
   // exception in a useState initializer unmounts the whole section. A
   // dev-only affordance must not be able to take the piece down.
   const [variant, setVariant] = useState<GridVariant>(() => {
+    if (register) return register;
     try {
       return (sessionStorage.getItem(VARIANT_KEY) as GridVariant | null) ?? "framed";
     } catch {
@@ -475,25 +620,19 @@ export function Stage({ devTools = false, showHeader = false }: StageProps) {
     const travel = r.height - window.innerHeight;
     const progress = travel <= 0 ? 0 : clamp(-r.top / travel, 0, 1);
 
-    // The pinned section carries the topology AND the epilogue. Beat maths
-    // clamps at TOTAL_VH, so the graph simply holds the final beat while the
-    // reveal plays over it.
-    const vhPos = progress * totalTravel;
-    const raw = rawFromVh(Math.min(vhPos, TOTAL_VH));
-    const rev = clamp((vhPos - TOTAL_VH) / REVEAL_VH, 0, 1);
-    const pos = raw - 0.5;
-    const i0 = clamp(Math.floor(pos), 0, N - 1);
-    const i1 = Math.min(i0 + 1, N - 1);
-    const t = clamp(pos - i0, 0, 1);
-    const f = reduced ? (t >= 0.5 ? 1 : 0) : smoothstep(t);
-    // Everything the next beat ADDS is held back until its title is actually
-    // on screen. Reveals used to start at f = 0 while the title only flipped
-    // at LEAD_FLIP, so the picture ran ahead of the words — B1's "Right now
-    // there is one agent" was measured with four other cards already at
-    // 0.15-0.31. Withdrawal still tracks f: a card leaving early contradicts
-    // nothing, and the stagger makes each reveal read as caused by its
-    // heading rather than anticipating it.
-    const fIn = smoothstep(clamp((f - LEAD_FLIP) / (1 - LEAD_FLIP), 0, 1));
+    // The pinned section carries the topology AND the epilogue, and every
+    // number either of them is drawn from comes out of one shared derivation —
+    // the same call the vanilla driver and the overlap sweep make.
+    //
+    // `fIn` holds back everything the next beat ADDS until its title is
+    // actually on screen. Reveals used to start at f = 0 while the title only
+    // flipped at LEAD_FLIP, so the picture ran ahead of the words — B1's
+    // "Right now there is one agent" was measured with four other cards
+    // already at 0.15-0.31. Withdrawal still tracks f: a card leaving early
+    // contradicts nothing, and the stagger makes each reveal read as caused by
+    // its heading rather than anticipating it.
+    const frame = copyFrameAt(progress * totalTravel, reduced, frameBuf);
+    const { raw, i0, i1, f, fIn } = frame;
 
     const a = BEATS[i0];
     const b = BEATS[i1];
@@ -534,37 +673,26 @@ export function Stage({ devTools = false, showHeader = false }: StageProps) {
       s.setProperty(`--ch${c}-f`, `${(clamp((raw - first) / count, 0, 1) * 100).toFixed(2)}%`);
     }
 
+    // ---- beat copy --------------------------------------------------------
+    // Fourteen blocks, one position, sequenced windows — see beatCopyOpacity.
+    for (let k = 0; k < N; k++) s.setProperty(`--b${k}`, frame.copy[k].toFixed(3));
+
     // ---- the reveal -------------------------------------------------------
     // Same idea as the beats: every value is written as a CSS variable and no
-    // React state is involved. Under reduced motion the ramps step rather than
-    // slide, matching how `f` already behaves.
-    const ease = (x: number) =>
-      reduced ? (x >= 0.5 ? 1 : 0) : smoothstep(clamp(x, 0, 1));
-    const window_ = (from: number, to: number) => ease((rev - from) / (to - from));
-
-    const cleared = ease(rev / R_CLEAR);
+    // React state is involved. The windows themselves live in timeline.ts, so
+    // this and the vanilla driver cannot compute them differently.
+    const rf = frame.reveal;
     // The graph and the rail leave together — the rail is the graph's index,
     // and keeping it while the topology dissolves would promise a sixth
     // chapter that never comes.
-    s.setProperty("--graph", (1 - cleared).toFixed(3));
-    s.setProperty("--rail", (1 - cleared).toFixed(3));
-
-    const headIn = window_(R_HEAD[0], R_HEAD[1]);
-    // --beat is driven by its OWN window, not by 1 - headIn. Tying them made
-    // the two blocks a crossfade in one position: at headIn = 0.5 both the
-    // beat copy and the headline sat at 0.5 and overlaid each other.
-    const beatOut = window_(R_BEAT_OUT[0], R_BEAT_OUT[1]);
-    // Everything the epilogue puts on screen leaves again for the CTA. Kept as
-    // its own factor rather than folded into --reveal: the beat copy hides on
-    // the way IN and must not come back when the headline hides on the way out.
-    const gone = 1 - window_(R_OUT[0], R_OUT[1]);
-    s.setProperty("--beat", (1 - beatOut).toFixed(3));
-    s.setProperty("--reveal", (headIn * gone).toFixed(3));
-    for (let i = 0; i < REVEAL.phases.length; i++) {
-      const from = R_PHASE_0 + i * R_PHASE_STEP;
-      s.setProperty(`--p${i}`, (window_(from, from + R_PHASE_SPAN) * gone).toFixed(3));
+    s.setProperty("--graph", rf.graph.toFixed(3));
+    s.setProperty("--rail", rf.graph.toFixed(3));
+    s.setProperty("--beat", rf.beat.toFixed(3));
+    s.setProperty("--reveal", rf.reveal.toFixed(3));
+    for (let i = 0; i < rf.p.length; i++) {
+      s.setProperty(`--p${i}`, rf.p[i].toFixed(3));
     }
-    s.setProperty("--cta", window_(R_CTA[0], R_CTA[1]).toFixed(3));
+    s.setProperty("--cta", rf.cta.toFixed(3));
 
     // Camera
     const W = wrap.clientWidth;
@@ -586,6 +714,15 @@ export function Stage({ devTools = false, showHeader = false }: StageProps) {
         { duration: 0 }
       );
     }
+
+    // WHAT A SCREEN READER AND FIND-IN-PAGE SEE, written imperatively from the
+    // same frame that just drew it — exactly as the vanilla driver does it, and
+    // through the same module, so the two builds cannot answer this question
+    // differently. Not a React prop: the blocks are addressed by their
+    // opacities, which change every frame and would re-render the section 60
+    // times a second to express.
+    rail.current ??= collectRail(panel);
+    applyRailHidden(rail.current, frame);
 
     const nextLead = f >= LEAD_FLIP ? i1 : i0;
     if (nextLead !== leadRef.current || force) {
@@ -913,37 +1050,16 @@ export function Stage({ devTools = false, showHeader = false }: StageProps) {
                   <div
                     key={p.label}
                     className="demo-phase min-w-0"
+                    // Also the handle rail.ts takes it by, so the cell leaves
+                    // the accessibility tree with its own opacity window.
+                    data-mesh-phase={i}
                     style={{ ["--p" as string]: `var(--p${i}, 0)` }}
                   >
-                    {framed ? (
-                      // Label set into the top border with the panel colour
-                      // knocked out behind it — the technical-drawing
-                      // convention. Nothing else changes: same copy, same
-                      // type, same accent, no glow and no second colour.
-                      <div className="relative h-full rounded-[2px] border border-slate-700/60 px-6 pb-6 pt-7">
-                        <p className="demo-accent absolute -top-[7px] left-5 bg-[#0a1628] px-2 font-mono text-[10px] uppercase leading-[14px] tracking-[0.32em]">
-                          <span className="text-slate-600">/</span> {p.label}{" "}
-                          <span className="text-slate-600">/</span>
-                        </p>
-                        <p className="text-[15px] leading-[1.7] text-slate-400">
-                          {inline(p.body, DESC_INLINE)}
-                        </p>
-                      </div>
-                    ) : (
-                      <>
-                        <p className="demo-accent font-mono text-[10px] uppercase tracking-[0.32em]">
-                          {p.label}
-                        </p>
-                        {/* Same 15px as the beat descriptions — it is the same
-                            kind of body copy. The cell is 403px at 1440 (57-59
-                            characters, untouched by the cap) and 553px at 1920,
-                            where the 480px cap holds the measure at ~69 rather
-                            than letting it run to 78. */}
-                        <p className="mt-2 max-w-[30rem] text-[15px] leading-[1.7] text-slate-400">
-                          {inline(p.body, DESC_INLINE)}
-                        </p>
-                      </>
-                    )}
+                    {/* Both registers come out of the same component, so the
+                        one that ships is the one the drift guard in emit.tsx
+                        compares. Only the arrangement around it is decided
+                        here. */}
+                    <PhaseCopy phase={p} register={variant} />
                   </div>
                 ))}
               </div>
@@ -961,8 +1077,12 @@ export function Stage({ devTools = false, showHeader = false }: StageProps) {
               <div className="relative" style={{ width: `${GUTTER * 100}%` }}>
                 <div className="flex gap-4 px-8 pt-8" style={BEAT_COPY_STYLE}>
                   <div className="demo-rule mt-1 h-[62px] w-[3px] shrink-0 rounded-full" />
-                  <div className="min-w-0">
-                    <BeatCopy beat={beat} lead={lead} />
+                  {/* All fourteen blocks live here, stacked in one position and
+                      opacity-driven. The stack has no height of its own — every
+                      block in it is taken out of flow — which is why nothing
+                      below the copy column moves as the beats change. */}
+                  <div className="demo-copy-stack min-w-0" data-mesh="copy">
+                    {copy === "inline" && <BeatStack />}
                   </div>
                 </div>
               </div>
@@ -974,16 +1094,13 @@ export function Stage({ devTools = false, showHeader = false }: StageProps) {
                 on one line instead of two, and the grid gets the panel. */}
             <div
               className="pointer-events-none absolute inset-x-0 top-0 z-20 flex gap-4 px-8 pt-8"
+              data-mesh="reveal"
               style={REVEAL_COPY_STYLE}
             >
               <div className="demo-rule mt-1 h-[62px] w-[3px] shrink-0 rounded-full" />
               <div className="min-w-0">
-                <h2 className="whitespace-pre-line text-balance text-[30px] font-semibold leading-[1.12] tracking-tight text-white">
-                  {REVEAL.title}
-                </h2>
-                <p className="mt-3 whitespace-pre-line break-words font-mono text-[13px] leading-relaxed text-slate-400">
-                  {inline(REVEAL.sub, SUB_INLINE)}
-                </p>
+                <RevealTitle />
+                <RevealSub />
               </div>
             </div>
 
@@ -993,15 +1110,15 @@ export function Stage({ devTools = false, showHeader = false }: StageProps) {
                 Centred, at title scale, after everything else has gone. */}
             <div
               className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center px-8 text-center"
+              data-mesh="cta"
               style={CTA_STYLE}
             >
-              <div className="demo-rule h-[3px] w-14 rounded-full" />
-              <h3 className="mt-8 text-[44px] font-semibold leading-[1.1] tracking-tight text-white">
-                {REVEAL.cta.title}
-              </h3>
-              <p className="mt-6 font-mono text-[15px] leading-relaxed text-slate-300">
-                {inline(REVEAL.cta.sub, CTA_INLINE)}
-              </p>
+              {/* The gap under the rule is carried by the rule, not by the
+                  heading: the heading is shared with the linear reading, which
+                  has no rule above it. Identical geometry either way — this is
+                  a column flex container, where margins do not collapse. */}
+              <div className="demo-rule mb-8 h-[3px] w-14 rounded-full" />
+              <CtaCopy />
             </div>
 
             {/* Chapter rail. Leaves with the graph — it is the topology's

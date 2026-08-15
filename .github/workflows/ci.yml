@@ -175,6 +175,24 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: make docs-scroll-prerender
 
+      # The one artifact of that step that is COMMITTED rather than ignored:
+      # src/ui/demo/copy.generated.html, which docs/index.md includes with
+      # pymdownx.snippets so the section's prose is in the served document.
+      # It has to be committed (check_paths makes a missing snippet a hard docs
+      # build failure, and product prose belongs in a diff where it can be read)
+      # which means it can be stale, which is what this catches. Regenerating is
+      # `make docs-scroll-prerender`.
+      - name: The served copy is in step with the beat data
+        working-directory: ${{ github.workspace }}
+        run: |
+          if ! git diff --exit-code -- src/ui/demo/copy.generated.html; then
+            echo ""
+            echo "ERROR: src/ui/demo/copy.generated.html is stale."
+            echo "demo/script.ts changed without regenerating the copy the docs"
+            echo "page serves. Run 'make docs-scroll-prerender' and commit the result."
+            exit 1
+          fi
+
       - name: Type check dashboard
         run: npx tsc --noEmit
 
