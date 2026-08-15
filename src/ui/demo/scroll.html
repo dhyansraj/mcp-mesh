@@ -6,20 +6,25 @@
     <title>MCP Mesh — scroll topology prototype</title>
 
     <!--
-      PROTOTYPE ONLY — do not copy this into the SPA.
+      PROTOTYPE ONLY — do not copy this into the SPA, and do not read this as a
+      statement about how fonts reach a reader anywhere else in the repo.
 
-      app/globals.css declares --font-geist-sans / --font-geist-mono, and
-      Tailwind's --font-sans / --font-mono resolve to them, but nothing in the
-      repo ever loads the faces: there is no @font-face rule, no `geist`
-      package, and document.fonts is empty. Everything therefore renders in the
-      ui-sans-serif / system-ui fallback, which is why this prototype's
-      typography did not match the design.
+      THE DECISION THIS COMMENT USED TO DEFER HAS BEEN TAKEN (#1522). Both
+      shipping surfaces now self-host the faces: src/ui/fonts/ holds the two
+      woff2 payloads and their licence, app/spa.css declares them for the
+      dashboard, demo/embed.css for the docs-site bundle, and the licence is
+      emitted beside them into every build that carries them. The earlier
+      version of this comment said nothing in the repo ever loads the faces and
+      that document.fonts is empty. Both were true when it was written and
+      neither is true now.
 
-      This link is the throwaway fix, scoped to this demo's own HTML so no
-      production file changes. Shipping it for real is a separate decision
-      about the dashboard: self-hosted woff2 in the bundle, not a runtime
-      dependency on a third-party CDN (offline/air-gapped installs, privacy,
-      and the go:embed bundle all argue against fonts.googleapis.com).
+      This file is the ONE surface still fetching them from a third party, and
+      it stays that way deliberately: it is a local prototype opened straight
+      off disk, it is not built, published or embedded, and pointing it at
+      src/ui/fonts would mean either a build step it does not have or a relative
+      path that only resolves when the file is served rather than opened. What
+      ships does not do this — an air-gapped install has no route to
+      fonts.googleapis.com, which is why nothing that ships depends on it.
     -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

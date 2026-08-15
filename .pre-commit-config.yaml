@@ -3,6 +3,18 @@ repos:
     rev: v4.6.0
     hooks:
       - id: trailing-whitespace
+        # Licence texts are carried verbatim, so a formatter must not touch
+        # them. src/ui/fonts/OFL.txt is the notice SIL OFL 1.1 clause 2
+        # requires to travel with the font software this repo redistributes,
+        # and the upstream Google Fonts copy it was taken from has a trailing
+        # space mid-paragraph ("bundled, embedded, "). Stripping it edits a
+        # document whose only value is being byte-exact, and would re-edit it
+        # every time the text is refetched from upstream.
+        exclude: |
+          (?x)^(
+            (.*/)?LICENSE|
+            (.*/)?OFL\.txt
+          )$
       - id: end-of-file-fixer
       - id: check-yaml
         exclude: |

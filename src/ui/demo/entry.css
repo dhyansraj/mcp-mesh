@@ -46,3 +46,13 @@
  */
 @source not "../__tests__";
 @source not "../app/spa.css";
+
+/*
+ * ../fonts is src/ui/fonts, where the two woff2 payloads moved to so that
+ * neither bundle has to reach into the other's directory for them (#1522).
+ * The payloads themselves are skipped anyway — nothing scans a binary — but
+ * the licence they ship under is several kilobytes of English prose sitting
+ * inside the scan root, and prose inside the scan root is how every leak so
+ * far arrived. app/spa.css states the same boundary for its own build.
+ */
+@source not "../fonts";

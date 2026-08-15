@@ -43,12 +43,16 @@
 //   mesh-scroll.js    self-contained IIFE, React and React Flow included
 //   mesh-scroll.css   every selector confined to #mesh-scroll
 //   fonts/*.woff2     self-hosted Geist, copied verbatim
+//   fonts/OFL.txt     their licence, which has to go where they go
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import postcss from "postcss";
 import path from "path";
 import fs from "fs";
+
+import { shipFontLicence } from "./vite.fonts";
+import { pinProductionBuild } from "./vite.env";
 
 const SCOPE = "#mesh-scroll";
 
@@ -431,38 +435,61 @@ export function sizeReport(): Plugin {
   };
 }
 
-export default defineConfig({
-  // Relative asset URLs: the stylesheet must find ./fonts/*.woff2 wherever the
-  // pair is deployed, not at the site root.
-  base: "./",
-  // No public/ copy: the SPA's logo.svg is not part of this artifact.
-  publicDir: false,
-  plugins: [react(), tailwindcss(), scopeCss(), emitReservedHeight(), sizeReport()],
-  resolve: {
-    alias: { "@": path.resolve(__dirname, ".") },
-  },
-  define: {
-    // React reads this; without it the IIFE ships the dev build.
-    "process.env.NODE_ENV": JSON.stringify("production"),
-  },
-  build: {
-    outDir: "demo/dist",
-    emptyOutDir: true,
-    cssCodeSplit: false,
-    // No hashes: the docs site references these by a stable path.
-    rollupOptions: {
-      input: path.resolve(__dirname, "demo/embed.tsx"),
-      output: {
-        format: "iife",
-        entryFileNames: "mesh-scroll.js",
-        assetFileNames: (info) => {
-          const n = info.names?.[0] ?? "";
-          if (n.endsWith(".css")) return "mesh-scroll.css";
-          if (n.endsWith(".woff2")) return "fonts/[name][extname]";
-          return "[name][extname]";
+// A FACTORY, NOT A PLAIN OBJECT, so the production pin has somewhere to run —
+// see vite.env.ts. It is not decorative here: this bundle measured 562,474 B
+// built from a shell with NODE_ENV=test against 546,096 B with it unset, because
+// the define below cannot reach the dependencies that switch by export
+// condition. `make docs-scroll-compare` is the reference the shipping bundle is
+// judged against, so a reference built from the wrong entry points compares the
+// wrong two things.
+export default defineConfig(({ command }) => {
+  pinProductionBuild(command);
+
+  return {
+    // Relative asset URLs: the stylesheet must find ./fonts/*.woff2 wherever the
+    // pair is deployed, not at the site root.
+    base: "./",
+    // No public/ copy: the SPA's logo.svg is not part of this artifact.
+    publicDir: false,
+    // "fonts" is where assetFileNames below puts the woff2 pair, so the notice
+    // lands beside them. This bundle is published as files on the docs site,
+    // which is a redistribution of the font software like any other.
+    plugins: [
+      react(),
+      tailwindcss(),
+      scopeCss(),
+      emitReservedHeight(),
+      sizeReport(),
+      shipFontLicence("fonts"),
+    ],
+    resolve: {
+      alias: { "@": path.resolve(__dirname, ".") },
+    },
+    define: {
+      // React reads this. KEPT ALONGSIDE THE PIN, not replaced by it: the pin
+      // governs how modules are resolved, this governs what the emitted code
+      // says, and the IIFE has no process at runtime to read either way.
+      "process.env.NODE_ENV": JSON.stringify("production"),
+    },
+    build: {
+      outDir: "demo/dist",
+      emptyOutDir: true,
+      cssCodeSplit: false,
+      // No hashes: the docs site references these by a stable path.
+      rollupOptions: {
+        input: path.resolve(__dirname, "demo/embed.tsx"),
+        output: {
+          format: "iife" as const,
+          entryFileNames: "mesh-scroll.js",
+          assetFileNames: (info: { names?: string[] }) => {
+            const n = info.names?.[0] ?? "";
+            if (n.endsWith(".css")) return "mesh-scroll.css";
+            if (n.endsWith(".woff2")) return "fonts/[name][extname]";
+            return "[name][extname]";
+          },
+          inlineDynamicImports: true,
         },
-        inlineDynamicImports: true,
       },
     },
-  },
+  };
 });

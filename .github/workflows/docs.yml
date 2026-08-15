@@ -135,9 +135,18 @@ jobs:
         run: make docs-scroll-build
 
       - name: Verify the scroll bundle was produced
+        # fonts/OFL.txt IS PART OF THIS LIST, not an afterthought at the end of
+        # it. Publishing the two woff2 files is a redistribution of the font
+        # software, and SIL OFL 1.1 clause 2 requires the notice to go with them.
+        # It is emitted by the shipFontLicence plugin in src/ui/vite.fonts.ts,
+        # which is one entry in a five-element plugin array in
+        # vite.static.config.ts — drop it and the site republishes both fonts
+        # with no notice, silently. The plugin's own build-time error does not
+        # cover that case: it fires when the source file is missing, not when the
+        # plugin has been unwired. This line is what covers it.
         run: |
           set -e
-          for f in mesh-scroll.js mesh-scroll.css fonts/geist-var.woff2 fonts/geist-mono-400.woff2; do
+          for f in mesh-scroll.js mesh-scroll.css fonts/geist-var.woff2 fonts/geist-mono-400.woff2 fonts/OFL.txt; do
             if [ ! -s "docs/assets/mesh-scroll/$f" ]; then
               echo "ERROR: docs/assets/mesh-scroll/$f missing or empty after build."
               echo "The homepage would deploy without its scroll section."
