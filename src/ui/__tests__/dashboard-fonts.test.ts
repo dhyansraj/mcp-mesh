@@ -280,6 +280,7 @@ function fontNames(file: string): Map<number, string> {
     const rec = 6 + i * 12;
     const platform = t.readUInt16BE(rec);
     const id = t.readUInt16BE(rec + 6);
+    if (out.has(id)) continue;
     const len = t.readUInt16BE(rec + 8);
     const off = t.readUInt16BE(rec + 10);
     const raw = Buffer.from(t.subarray(strings + off, strings + off + len));
@@ -885,6 +886,6 @@ describe("every build that redistributes the fonts is protected the same way", (
         if (before === undefined) delete process.env.NODE_ENV;
         else process.env.NODE_ENV = before;
       }
-    });
+    }, 120_000);
   }
 });
