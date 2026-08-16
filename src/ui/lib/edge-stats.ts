@@ -23,14 +23,16 @@ export function edgeStatKey(
 /**
  * `target_function` as a string, whatever arrived.
  *
- * The field is required by the payload contract and by the type, and the server
- * always emits it — but these rows come off the network, and a registry
- * predating #1531 emits a payload without it. The type says `string`, so an
- * absent one is `undefined` at runtime while every reader believes otherwise,
- * and `undefined.localeCompare` throws inside a sort — taking the whole Traffic
- * page down rather than degrading. An older registry's rows are pair-level, and
- * an empty function is exactly what this file already means by "a row that
- * names no function".
+ * DEFENCE IN DEPTH, NOT A SUPPORTED SHAPE. The field is required by the type and
+ * by the payload contract, and there is no version of the payload that omits it:
+ * every producer is meshui's own binary — the live accumulator, its Tempo
+ * fallback and the windowed replay — and that same binary embeds the SPA reading
+ * them, so the two cannot be different versions. What this guards is a
+ * MALFORMED payload, where the type says `string` but the value is `undefined`
+ * at runtime, and `undefined.localeCompare` throws inside a sort — taking the
+ * whole Traffic page down rather than degrading. An empty function is what this
+ * file already means by "a row that names no function", so such a row lands
+ * there instead.
  */
 function functionOf(edge: EdgeStat): string {
   return edge.target_function ?? "";
@@ -42,12 +44,19 @@ export function edgeRowKey(edge: EdgeStat): string {
 }
 
 /**
- * Sort comparator for the traffic tables: by route, then by the function called
- * on the target, so the several rows one route now contributes stay together
- * and in a stable order across polls.
+ * Sort comparator for the traffic tables: by source, then target, then by the
+ * function called on the target, so the several rows one route now contributes
+ * stay together and in a stable order across polls.
+ *
+ * Field by field, never on a joined string. `${source}->${target}` would order
+ * by a separator that can appear inside an agent name, which orders such a name
+ * against the wrong neighbour — the same fault that made the server's delimited
+ * edge key a struct in #1531.
  */
 export function compareEdgeStats(a: EdgeStat, b: EdgeStat): number {
-  const byRoute = `${a.source}->${a.target}`.localeCompare(`${b.source}->${b.target}`);
-  if (byRoute !== 0) return byRoute;
+  const bySource = a.source.localeCompare(b.source);
+  if (bySource !== 0) return bySource;
+  const byTarget = a.target.localeCompare(b.target);
+  if (byTarget !== 0) return byTarget;
   return functionOf(a).localeCompare(functionOf(b));
 }

@@ -500,7 +500,8 @@ export MCP_MESH_TRACE_STREAM_MAXLEN=100000
 # stats). Keyed by name, so they grow with agent/model name cardinality rather
 # than trace volume. A key not written to within the retention window ages out;
 # the max-entries ceiling is a backstop for name churn, evicting the
-# least-recently-seen key first. "0" disables the respective bound.
+# least-recently-seen key first. "0" disables the respective bound. An edge key
+# costs ~2.1 KB, so the default ceiling admits ~20 MB of edge aggregates.
 export MCP_MESH_TELEMETRY_AGGREGATE_RETENTION=24h
 export MCP_MESH_TELEMETRY_AGGREGATE_MAX_ENTRIES=10000
 

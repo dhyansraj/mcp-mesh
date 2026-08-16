@@ -162,8 +162,13 @@ export function mergeEdgeStatsIntoEdges(edges: Edge[], edgeStats: EdgeStat[]): E
 
   const statsMap = new Map<string, EdgeStat>();
   for (const stat of edgeStats) {
-    // edgeRowKey rather than edgeStatKey, so an older registry's row without a
-    // function is indexed under the empty function on both sides of the join.
+    // edgeRowKey rather than edgeStatKey so a row missing its function is
+    // indexed under the empty function instead of under `undefined`. Nothing
+    // matches it either way: the topology side of the join takes its function
+    // from the resolution's `mcp_tool`, which every edge-producing resolution
+    // carries, so no edge is ever keyed under the empty function. Such a row
+    // simply contributes to no edge, and the edge it might have described keeps
+    // its structural style — the right outcome for a row that names nothing.
     statsMap.set(edgeRowKey(stat), stat);
   }
 

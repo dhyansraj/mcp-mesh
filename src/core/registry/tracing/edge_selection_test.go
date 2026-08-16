@@ -145,8 +145,9 @@ func TestSelectEdgeStatsIsDeterministic(t *testing.T) {
 }
 
 // TestSelectEdgeStatsBudgetSmallerThanPairCount: when even one row per pair does
-// not fit, the pairs served are the busiest ones — the old ranking, at the point
-// where the old ranking was still the reasonable answer.
+// not fit, the pairs served are the ones carrying the most traffic in total —
+// the old ranking, at the point where the old ranking was still the reasonable
+// answer.
 func TestSelectEdgeStatsBudgetSmallerThanPairCount(t *testing.T) {
 	edges := []EdgeStats{
 		{Source: "a", Target: "z", TargetFunction: "one", CallCount: 100},
@@ -164,6 +165,36 @@ func TestSelectEdgeStatsBudgetSmallerThanPairCount(t *testing.T) {
 	pairs := pairsIn(selected)
 	if pairs["a -> z"] != 1 || pairs["b -> z"] != 1 {
 		t.Fatalf("want one row each for the two busiest pairs, got %v", pairs)
+	}
+}
+
+// TestSelectEdgeStatsRanksPairsByTheirTotal: the two candidate rankings differ
+// exactly here. `spread` carries five times the traffic of `spiky` but spreads
+// it over ten tools, so its busiest single row is the smaller of the two — and
+// its first appearance in the call-count-sorted input is therefore later. A
+// visit order taken from that first appearance serves `spiky`; the pair total,
+// which is the number the old pair-level row reported, serves `spread`.
+func TestSelectEdgeStatsRanksPairsByTheirTotal(t *testing.T) {
+	edges := []EdgeStats{
+		{Source: "spiky", Target: "z", TargetFunction: "one", CallCount: 1000},
+	}
+	for i := 0; i < 10; i++ {
+		edges = append(edges, EdgeStats{
+			Source: "spread", Target: "z", TargetFunction: fmt.Sprintf("tool_%02d", i), CallCount: 500,
+		})
+	}
+	SortEdgeStats(edges)
+	if edges[0].Source != "spiky" {
+		t.Fatalf("precondition failed: the head row should be the spiky pair's, was %q", edges[0].Source)
+	}
+
+	selected := SelectEdgeStats(edges, 1)
+	if len(selected) != 1 {
+		t.Fatalf("selected %d rows, want 1", len(selected))
+	}
+	if selected[0].Source != "spread" {
+		t.Errorf("the single slot went to %q (%d calls in its busiest row); want the pair "+
+			"carrying the most traffic overall", selected[0].Source, selected[0].CallCount)
 	}
 }
 

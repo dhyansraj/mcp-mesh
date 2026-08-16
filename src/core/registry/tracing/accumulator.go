@@ -134,6 +134,11 @@ type edgeAccum struct {
 	// The histogram holds a ROLLING WINDOW of recent samples, as the reservoir
 	// did; Total/Max/Min are exact and lifetime, as they were. See
 	// latency_histogram.go.
+	//
+	// The aggregate of this per-key cost is what bounds the map, not this
+	// number: see the ceiling arithmetic on AggregateBounds in aggregates.go,
+	// which is where an operator tuning
+	// MCP_MESH_TELEMETRY_AGGREGATE_MAX_ENTRIES ends up.
 	Latency  latencyHistogram
 	TotalMs  int64
 	MaxMs    int64

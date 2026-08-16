@@ -8,7 +8,7 @@
 //
 // Both surfaces are asserted: the graph merge (which joins a stat row to the
 // edge that produced it) and the Traffic table (which now shows the rows).
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import type { Edge } from "@xyflow/react";
 import type { Agent, EdgeStat, TrafficResponse } from "../lib/types";
@@ -23,6 +23,16 @@ const mockEdgeStats: EdgeStat[] = [];
 vi.mock("../lib/mesh-context", () => ({
   useMesh: () => ({ edgeStats: mockEdgeStats, traceActivity: {}, setPaused: () => {} }),
 }));
+
+// Both pieces of shared state — the stubbed `fetch` and the mocked SSE rows —
+// are torn down HERE rather than in the body of the test that set them up. An
+// in-body cleanup does not run when the test fails before reaching it, so one
+// real failure would leak a stub into every test after it and bury its own cause
+// under a cascade.
+afterEach(() => {
+  vi.unstubAllGlobals();
+  mockEdgeStats.length = 0;
+});
 
 function makeStat(overrides: Partial<EdgeStat> & Pick<EdgeStat, "source" | "target" | "target_function">): EdgeStat {
   return {
@@ -389,8 +399,6 @@ describe("the Traffic table shows one row per called function", () => {
     const summariseRow = screen.getByText("summarise").closest("tr");
     expect(within(summariseRow!).getByText("3")).toBeInTheDocument();
     expect(within(summariseRow!).getByText("1500.0ms")).toBeInTheDocument();
-
-    vi.unstubAllGlobals();
   });
 
   it("shows the same rows on the dashboard's own traffic widget", () => {
@@ -398,7 +406,6 @@ describe("the Traffic table shows one row per called function", () => {
     // windowed endpoint. Keyed by the route alone it would now emit duplicate
     // React keys for one route's several functions, and draw rows that look
     // identical while carrying different numbers.
-    mockEdgeStats.length = 0;
     mockEdgeStats.push(...response.edge_stats);
     render(<TrafficTable />);
 
@@ -409,8 +416,6 @@ describe("the Traffic table shows one row per called function", () => {
     expect(within(lookupRow!).getByText("77")).toBeInTheDocument();
     const summariseRow = screen.getByText("summarise").closest("tr");
     expect(within(summariseRow!).getByText("3")).toBeInTheDocument();
-
-    mockEdgeStats.length = 0;
   });
 
   it("names the column so the second value on a route is readable", async () => {
@@ -422,6 +427,5 @@ describe("the Traffic table shows one row per called function", () => {
     render(<TrafficPage />);
 
     await waitFor(() => expect(screen.getByText("Function")).toBeInTheDocument());
-    vi.unstubAllGlobals();
   });
 });

@@ -20,6 +20,21 @@ import (
 // case (name churn faster than the retention window can absorb); it evicts
 // least-recently-seen first, so it only ever degrades into LRU once age
 // pruning has already failed to keep up.
+//
+// WHAT THE CEILING COSTS. MaxEntries is a key count, so the memory it admits
+// depends on the map. The expensive one is the edge map, whose value carries a
+// fixed-size latency histogram: 1,992 bytes per edgeAccum plus a 48-byte
+// edgeKey, the agent and function names it retains, and the map's own overhead
+// — call it ~2.1 KB an entry. At the 10,000 default that is a steady-state
+// ceiling of roughly 20 MB for the edge map, reached only by a mesh with that
+// many live (caller, provider, function) triples; the per-agent and per-model
+// maps hold counters only and are negligible beside it. An operator raising
+// MaxEntries is buying edge rows at ~2.1 KB each.
+//
+// The default is NOT lowered to compensate for per-function edge keys (#1531)
+// multiplying the row count: 20 MB is a fair ceiling for a process whose job is
+// telemetry, and lowering it would silently start evicting live edges in meshes
+// that fit today. If it should move, it should move on its own evidence.
 const (
 	defaultAggregateRetention  = 24 * time.Hour
 	defaultAggregateMaxEntries = 10000
@@ -66,6 +81,9 @@ func DefaultAggregateBounds() AggregateBounds {
 //   - positive: use it
 //   - "0": key ceiling disabled — logged as a removed bound
 //   - negative / unparseable: warn and fall back to the default
+//
+// See the bounds comment above for what a key costs before changing this: an
+// edge entry is ~2.1 KB, so the default admits ~20 MB of edge aggregates.
 //
 // Uses the stdlib log package because it runs at package init, before any
 // manager (and therefore any manager logger) exists.

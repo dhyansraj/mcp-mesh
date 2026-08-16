@@ -41,10 +41,16 @@ func SortEdgeStats(edges []EdgeStats) {
 // remaining function, then every pair its second-busiest, and so on until the
 // budget runs out. So a pair is only starved once EVERY pair has a row, and the
 // row a pair keeps is its busiest — the number a reader would want if they are
-// only getting one. Pairs are visited in the order they first appear in the
-// sorted input, so when the budget is smaller than the number of pairs the
-// busiest pairs are the ones served, which is the old behaviour at the point
-// where the old behaviour was still reasonable.
+// only getting one.
+//
+// PAIR ORDER IS BY THE PAIR'S TOTAL, summed over all its functions, which
+// decides who is served when the budget is smaller than the number of pairs.
+// That total is what the old pair-level row reported, so this degrades into the
+// old ranking at the point where the old ranking was still the reasonable
+// answer. Ranking pairs by their busiest SINGLE function instead — which is
+// what their first appearance in the call-count-sorted input gives — would put
+// a pair with one 1,000-call tool ahead of a pair with ten 500-call ones, and
+// the old payload ranked the second pair five times higher.
 //
 // This bounds the damage; it does not remove it. A consumer that needs a row for
 // every edge it draws needs a budget large enough for them — see
@@ -56,28 +62,47 @@ func SelectEdgeStats(edges []EdgeStats, limit int) []EdgeStats {
 	}
 
 	type pair struct{ source, target string }
-	byPair := make(map[pair][]EdgeStats, limit)
-	// Pair visit order = first appearance in the sorted input, which is a total
-	// order, so the selection is a pure function of the input.
-	order := make([]pair, 0, limit)
+	type pairRows struct {
+		key   pair
+		total int
+		// rows in input order, i.e. busiest function first (SortEdgeStats).
+		rows []EdgeStats
+	}
+	byPair := make(map[pair]*pairRows, limit)
+	order := make([]*pairRows, 0, limit)
 	for _, e := range edges {
 		p := pair{e.Source, e.Target}
-		if _, seen := byPair[p]; !seen {
-			order = append(order, p)
+		pr, seen := byPair[p]
+		if !seen {
+			pr = &pairRows{key: p}
+			byPair[p] = pr
+			order = append(order, pr)
 		}
-		byPair[p] = append(byPair[p], e)
+		pr.total += e.CallCount
+		pr.rows = append(pr.rows, e)
 	}
+
+	// Busiest pair first, then a total order on the pair, so the selection is a
+	// pure function of the input rather than of map iteration order.
+	sort.Slice(order, func(i, j int) bool {
+		if order[i].total != order[j].total {
+			return order[i].total > order[j].total
+		}
+		if order[i].key.source != order[j].key.source {
+			return order[i].key.source < order[j].key.source
+		}
+		return order[i].key.target < order[j].key.target
+	})
 
 	kept := make([]EdgeStats, 0, limit)
 	for rank := 0; len(kept) < limit; rank++ {
 		progressed := false
-		for _, p := range order {
-			rows := byPair[p]
-			if rank >= len(rows) {
+		for _, pr := range order {
+			if rank >= len(pr.rows) {
 				continue
 			}
 			progressed = true
-			kept = append(kept, rows[rank])
+			kept = append(kept, pr.rows[rank])
 			if len(kept) == limit {
 				break
 			}
