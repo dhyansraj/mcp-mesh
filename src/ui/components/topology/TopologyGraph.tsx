@@ -13,9 +13,11 @@ import {
 import "@xyflow/react/dist/style.css";
 import { Agent, EdgeStat } from "@/lib/types";
 import { buildGraphFromAgents, buildIdToNodeKey, computeStructureHash } from "@/lib/topology";
+import { EDGE_HEAT_COLORS } from "@/lib/edge-palette";
 import { extractAgentName, formatDuration } from "@/lib/api";
 import { useMesh } from "@/lib/mesh-context";
 import { AgentNode } from "./AgentNode";
+import { EdgeLegend } from "./EdgeLegend";
 import { TopologySidebar, type SidebarSelection } from "./TopologySidebar";
 
 const nodeTypes = { agentNode: AgentNode };
@@ -67,10 +69,13 @@ function getForwardNeighborIds(
   return ids;
 }
 
+// Traffic heat, NOT edge kind. The scale is its own axis and its own constant
+// (lib/edge-palette.ts) for the reasons written there; two of its three values
+// coinciding with palette entries is not a duplication to collapse.
 function getEdgeHeatColor(errorRate: number): string {
-  if (errorRate === 0) return "#22c55e";
-  if (errorRate < 10) return "#eab308";
-  return "#ef4444";
+  if (errorRate === 0) return EDGE_HEAT_COLORS.clean;
+  if (errorRate < 10) return EDGE_HEAT_COLORS.elevated;
+  return EDGE_HEAT_COLORS.failing;
 }
 
 function computeStrokeWidth(callCount: number, maxCount: number): number {
@@ -301,36 +306,7 @@ export function TopologyGraph({ agents }: TopologyGraphProps) {
         />
       </ReactFlow>
 
-      {/* Legend */}
-      <div className="absolute top-4 left-4 z-10 rounded-lg border border-border bg-card/90 backdrop-blur-sm px-3 py-2.5 shadow-lg">
-        <p className="text-[10px] font-medium text-muted-foreground mb-1.5 uppercase tracking-wider">Edges</p>
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <div className="w-5 h-0.5 bg-[#22c55e] rounded" />
-            <span className="text-[10px] text-muted-foreground">Dependency</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-5 h-0.5 bg-[#ec4899] rounded" />
-            <span className="text-[10px] text-muted-foreground">API dependency</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-5 h-0.5 bg-[#22d3ee] rounded" />
-            <span className="text-[10px] text-muted-foreground">LLM tool</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-5 h-0.5 bg-[#a855f7] rounded" />
-            <span className="text-[10px] text-muted-foreground">LLM provider</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-5 h-0.5 bg-[#ef4444] rounded" />
-            <span className="text-[10px] text-muted-foreground">Unavailable</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-5 h-0.5 border-t border-dashed border-[#6b7280]" />
-            <span className="text-[10px] text-muted-foreground">Unresolved</span>
-          </div>
-        </div>
-      </div>
+      <EdgeLegend />
 
       <TopologySidebar selection={sidebarSelection} onClose={onPaneClick} />
     </div>
