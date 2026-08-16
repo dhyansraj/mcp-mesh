@@ -202,10 +202,36 @@ export interface TraceDetail {
 export interface EdgeStat {
   source: string;
   target: string;
+  /**
+   * The function ON THE TARGET that these calls landed on — one stat row per
+   * (source, target, target_function), not one per agent pair (issue #1531).
+   *
+   * Named for the target deliberately. `DependencyResolution.function_name` is
+   * the CONSUMER's function, and the provider's is what a resolution calls
+   * `mcp_tool`; this is that value, arriving from the callee's span rather than
+   * from the resolution. Reusing either name here would read as the other side
+   * of the edge.
+   *
+   * Empty string when the callee's span carried no operation, which only a
+   * malformed span produces. Such a row joins to no topology edge.
+   */
+  target_function: string;
   call_count: number;
   error_count: number;
   error_rate: number;
   avg_latency_ms: number;
+  /**
+   * The 99th percentile over a ROLLING WINDOW of the row's recent calls, and a
+   * bucket estimate that rounds up rather than down (registry:
+   * latency_histogram.go). Its window is what distinguishes it from every other
+   * number in this row: call_count, error_count, avg/max/min are exact figures
+   * for the whole life of the row, so a spike stays in the max forever and
+   * leaves the P99 once enough calls have happened since.
+   *
+   * That split is not new — the registry always computed this one over recent
+   * samples and the others over everything — but it is the reason this number
+   * can fall while max_latency_ms does not.
+   */
   p99_latency_ms: number;
   max_latency_ms: number;
   min_latency_ms: number;

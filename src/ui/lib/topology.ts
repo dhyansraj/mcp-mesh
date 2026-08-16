@@ -161,6 +161,17 @@ function resolvesToJob(
   // `mcp_tool` names the exact function the dependency resolved to, so when it
   // is on the wire it decides on its own — falling back to the capability name
   // here would re-admit the ambiguity it exists to settle.
+  //
+  // The name branch below is DEFENSIVE, not a live path. Reaching it needs a
+  // resolution that has a provider_agent_id but no mcp_tool, and the registry
+  // does not produce one: the two are written in a single chained statement or
+  // neither is (ent_service.go, SetNillableProviderAgentID +
+  // SetNillableProviderFunctionName), and a capability row cannot exist with an
+  // empty function name in the first place (ent_service.go refuses to persist
+  // one). The edge loop has already required provider_agent_id by the time this
+  // is called. Kept anyway, in the same spirit as the degraded-vs-degraded
+  // precedence rule in addEdge below: it is an invariant of a different process,
+  // this file cannot enforce it, and nothing here would notice it being relaxed.
   if (dep.mcp_tool) return entry.functions.has(dep.mcp_tool);
   return entry.names.has(dep.capability);
 }
@@ -205,14 +216,52 @@ export function buildGraphFromAgents(agents: Agent[]): { nodes: Node[]; edges: E
   // Edge merging note: when multiple replicas' edges collapse into one, we keep
   // the first seen edge's base style/label and let downstream edge-stats merge
   // update the label/stroke. This is a simplification — latency/call stats are
-  // not summed here because edgeStats are keyed by base name (extractAgentName),
-  // which already aligns with the group node ID. See mergeEdgeStatsIntoEdges
-  // in TopologyGraph.tsx.
+  // not summed here because edgeStats are keyed by base agent name, which
+  // already aligns with the group node ID. See mergeEdgeStatsIntoEdges in
+  // TopologyGraph.tsx.
+  //
+  // `data.targetFunctions` is carried for that merge: each is a resolution's
+  // `mcp_tool`, the PROVIDER's function name, and it joins to an edge stat's
+  // `target_function` (issue #1531).
+  //
+  // A SET, not one name, because one drawn edge routinely stands for several
+  // provider functions. An edge is keyed `kind|src|dst|label`, and an LLM tool
+  // edge's label is `llm:<filter_capability>` — while the registry writes ONE
+  // resolution row PER MATCHED TOOL (ent_service.go), all sharing that filter.
+  // A tags-only filter leaves the capability empty, so every tool it matched on
+  // one provider lands on the identical label. Replica collapse and two
+  // same-named capabilities do the same thing on the dependency path.
+  //
+  // Taking one member's name would join the edge to one of N functions and show
+  // its numbers as if they described the whole edge, picked by snapshot order —
+  // the same order-dependence addEdge's merge rules exist to eliminate. The set
+  // is deduped and sorted, so it is a pure function of the snapshot's CONTENT,
+  // and mergeEdgeStatsIntoEdges aggregates every row it matches.
   type EdgeKind = "dep" | "llm" | "prov";
   const edgeMap = new Map<string, Edge>();
+  // Accumulated alongside edgeMap rather than inside each edge's `data` so the
+  // union is independent of which contribution won the style merge below.
+  const edgeFunctions = new Map<string, Set<string>>();
 
-  function addEdge(kind: EdgeKind, src: string, dst: string, label: string, base: Edge) {
+  function addEdge(
+    kind: EdgeKind,
+    src: string,
+    dst: string,
+    label: string,
+    targetFunction: string | undefined,
+    base: Edge
+  ) {
     const key = `${kind}|${src}|${dst}|${label}`;
+
+    if (targetFunction) {
+      const functions = edgeFunctions.get(key);
+      if (functions) {
+        functions.add(targetFunction);
+      } else {
+        edgeFunctions.set(key, new Set([targetFunction]));
+      }
+    }
+
     const existing = edgeMap.get(key);
     if (!existing) {
       edgeMap.set(key, base);
@@ -301,7 +350,7 @@ export function buildGraphFromAgents(agents: Agent[]): { nodes: Node[]; edges: E
         ? EDGE_COLORS.job
         : EDGE_COLORS.dependency;
       const label = dep.capability;
-      addEdge("dep", src, dst, label, {
+      addEdge("dep", src, dst, label, dep.mcp_tool, {
         id: `dep|${src}|${dst}|${label}`,
         source: src,
         target: dst,
@@ -333,7 +382,7 @@ export function buildGraphFromAgents(agents: Agent[]): { nodes: Node[]; edges: E
       // before the callee is consulted, so no `task` lookup happens on this
       // path at all.
       const label = `llm:${llm.filter_capability}`;
-      addEdge("llm", src, dst, label, {
+      addEdge("llm", src, dst, label, llm.mcp_tool, {
         id: `llm|${src}|${dst}|${label}`,
         source: src,
         target: dst,
@@ -353,7 +402,7 @@ export function buildGraphFromAgents(agents: Agent[]): { nodes: Node[]; edges: E
       if (!dst || !validNodeKeys.has(dst)) continue;
 
       const label = `provider:${prov.required_capability}`;
-      addEdge("prov", src, dst, label, {
+      addEdge("prov", src, dst, label, prov.mcp_tool, {
         id: `prov|${src}|${dst}|${label}`,
         source: src,
         target: dst,
@@ -368,7 +417,19 @@ export function buildGraphFromAgents(agents: Agent[]): { nodes: Node[]; edges: E
     }
   }
 
-  const edges: Edge[] = Array.from(edgeMap.values());
+  // Attach each edge's function set last, once every contribution has been
+  // seen. Sorted so two snapshots carrying the same resolutions in a different
+  // order produce identical edges.
+  const edges: Edge[] = Array.from(edgeMap.entries()).map(([key, edge]) => {
+    const functions = edgeFunctions.get(key);
+    return {
+      ...edge,
+      data: {
+        ...edge.data,
+        targetFunctions: functions ? Array.from(functions).sort() : [],
+      },
+    };
+  });
 
   return applyDagreLayout(nodes, edges);
 }

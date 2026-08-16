@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { EdgeStat } from "@/lib/types";
+import { compareEdgeStats, edgeRowKey } from "@/lib/edge-stats";
 import { useMesh } from "@/lib/mesh-context";
 import {
   Table,
@@ -13,6 +13,13 @@ import { cn } from "@/lib/utils";
 import { ArrowRight, RadioTower } from "lucide-react";
 
 const MAX_HISTORY = 30; // ~5 min at 10s intervals
+
+// Rows this dashboard widget will draw. The stream it reads from carries a much
+// larger budget than a widget wants, because the topology graph is its other
+// consumer and needs a row for every edge it draws (edgeStatsStreamLimit, Go
+// side). This keeps that budget off the dashboard: the busiest routes, which is
+// what the server used to send and all this card ever displayed.
+const MAX_ROWS = 20;
 
 function getErrorRateColor(rate: number): string {
   if (rate === 0) return "text-green-400";
@@ -74,28 +81,38 @@ function Sparkline({ points, width = 80, height = 24 }: {
 export function TrafficTable() {
   const { edgeStats } = useMesh();
 
-  // Ring buffer: accumulate edge stats snapshots keyed by route
+  // Ring buffer: accumulate edge stats snapshots, one series per
+  // (route, called function) — see lib/edge-stats.ts.
   const historyRef = useRef<Map<string, number[]>>(new Map());
   const [, setTick] = useState(0);
 
   useEffect(() => {
     if (edgeStats.length === 0) return;
+    const live = new Set<string>();
     for (const edge of edgeStats) {
-      const key = `${edge.source}->${edge.target}`;
+      const key = edgeRowKey(edge);
+      live.add(key);
       const history = historyRef.current.get(key) || [];
       history.push(edge.avg_latency_ms);
       if (history.length > MAX_HISTORY) history.shift();
       historyRef.current.set(key, history);
     }
+    // Drop series for keys that have stopped arriving. The map is keyed per
+    // (route, function) and never shrank, so it grew for the life of the tab
+    // with every route that ever appeared — a finer key multiplies that, and
+    // rows drop in and out of the payload as traffic shifts under the server's
+    // budget. A vanished series has nothing to draw anyway.
+    for (const key of historyRef.current.keys()) {
+      if (!live.has(key)) historyRef.current.delete(key);
+    }
     setTick((t) => t + 1); // force re-render so sparklines update
   }, [edgeStats]);
 
   const sorted = useMemo(() => {
-    return [...edgeStats].sort((a, b) => {
-      const routeA = `${a.source}->${a.target}`;
-      const routeB = `${b.source}->${b.target}`;
-      return routeA.localeCompare(routeB);
-    });
+    const busiest = [...edgeStats]
+      .sort((a, b) => b.call_count - a.call_count || compareEdgeStats(a, b))
+      .slice(0, MAX_ROWS);
+    return busiest.sort(compareEdgeStats);
   }, [edgeStats]);
 
   if (sorted.length === 0) {
@@ -113,6 +130,7 @@ export function TrafficTable() {
       <TableHeader>
         <TableRow>
           <TableHead>Route</TableHead>
+          <TableHead>Function</TableHead>
           <TableHead className="text-right">Calls</TableHead>
           <TableHead className="text-right">Errors</TableHead>
           <TableHead className="text-right">Error Rate</TableHead>
@@ -123,7 +141,7 @@ export function TrafficTable() {
       </TableHeader>
       <TableBody>
         {sorted.map((edge) => {
-          const key = `${edge.source}->${edge.target}`;
+          const key = edgeRowKey(edge);
           const history = historyRef.current.get(key) || [];
 
           return (
@@ -134,6 +152,9 @@ export function TrafficTable() {
                   <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
                   <span className="font-medium text-foreground">{edge.target}</span>
                 </div>
+              </TableCell>
+              <TableCell className="font-mono text-muted-foreground">
+                {edge.target_function || "-"}
               </TableCell>
               <TableCell className="text-right font-mono">
                 {edge.call_count}

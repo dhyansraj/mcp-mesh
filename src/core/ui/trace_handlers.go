@@ -48,7 +48,13 @@ func (s *Server) handleRecentTraces(c *gin.Context) {
 	})
 }
 
-// handleEdgeStats returns aggregated edge statistics from recent traces
+// handleEdgeStats returns aggregated edge statistics from recent traces.
+//
+// `limit` counts ROWS, and a row is one (source, target, target function) since
+// #1531 — so the same number covers fewer agent pairs than it used to. What it
+// no longer does is drop the quietest pairs first: rows past the budget are
+// dropped fairly across pairs (tracing.SelectEdgeStats), so a caller asking for
+// 20 still sees every pair it would have seen, just fewer of each pair's tools.
 func (s *Server) handleEdgeStats(c *gin.Context) {
 	if s.tracingManager == nil {
 		c.JSON(200, map[string]interface{}{

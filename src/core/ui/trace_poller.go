@@ -9,6 +9,28 @@ import (
 	"mcp-mesh/src/core/registry/tracing"
 )
 
+// edgeStatsStreamLimit is the row budget for the streamed `edge_stats` event.
+//
+// It is deliberately NOT the 20 the tables' endpoints default to, because the
+// stream has a consumer the endpoints do not: the topology graph, whose only
+// source of traffic this event is. The graph needs a row for every edge it
+// DRAWS, and one edge is one (consumer, provider, function) since #1531 — so a
+// budget sized for a readable table starves it. An unmatched edge keeps its
+// structural style, which means the starvation is silent: the graph just stops
+// reporting traffic for most of the mesh.
+//
+// A table wants a ranked top-N; a graph wants coverage. One number cannot be
+// both, so the stream gets its own, sized for the drawn edges of a substantial
+// mesh (100 agents each calling 5 tools of 1 other agent is 500) rather than
+// for a screenful. At roughly 200 bytes of JSON a row that is ~100 KB per
+// publish, against the full agent snapshot the same dashboard already fetches.
+// Rows past the budget are dropped fairly across agent pairs, not by rank —
+// see tracing.SelectEdgeStats.
+//
+// The dashboard's own traffic widget takes its top rows from this same event
+// (TrafficTable), which is what keeps the wider budget off the screen.
+const edgeStatsStreamLimit = 500
+
 // TracePoller polls the TracingManager for recent trace data and publishes
 // summary events via the UI EventHub.
 type TracePoller struct {
@@ -141,7 +163,7 @@ func (p *TracePoller) poll() {
 	}
 
 	// Fetch edge stats (reads from accumulator when available)
-	edges, edgeErr := p.tracingManager.GetEdgeStats(20)
+	edges, edgeErr := p.tracingManager.GetEdgeStats(edgeStatsStreamLimit)
 	if edgeErr != nil {
 		log.Printf("[ui] Trace poller: failed to get edge stats: %v", edgeErr)
 	} else {

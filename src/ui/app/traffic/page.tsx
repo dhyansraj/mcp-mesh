@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/table";
 import { Segmented } from "@/components/ui/segmented";
 import { formatBytes, formatTokenCount, getTraffic } from "@/lib/api";
+import { compareEdgeStats, edgeRowKey } from "@/lib/edge-stats";
 import { AgentStat, EdgeStat, ModelStat, TrafficWindow } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
@@ -139,12 +140,22 @@ export default function TrafficPage() {
 
         const edges = data.edge_stats || [];
         setEdgeStats(edges);
+        const live = new Set<string>();
         for (const edge of edges) {
-          const key = `${edge.source}->${edge.target}`;
+          const key = edgeRowKey(edge);
+          live.add(key);
           const history = historyRef.current.get(key) || [];
           history.push(edge.avg_latency_ms);
           if (history.length > MAX_HISTORY) history.shift();
           historyRef.current.set(key, history);
+        }
+        // Drop series for keys that stopped arriving, so the map tracks what is
+        // on screen rather than everything that ever was. It is keyed per
+        // (route, function) now, which multiplies what an unpruned map holds
+        // over a long session, and rows move in and out of the response as
+        // traffic shifts under the server's row budget.
+        for (const key of historyRef.current.keys()) {
+          if (!live.has(key)) historyRef.current.delete(key);
         }
         setTick((t) => t + 1);
         setError(null);
@@ -189,14 +200,8 @@ export default function TrafficPage() {
     return { totalCalls, successRate, totalTokens, totalData };
   }, [agentStats, totalCalls, totalErrors]);
 
-  // Sorted edges by route name
-  const sortedEdges = useMemo(() => {
-    return [...edgeStats].sort((a, b) => {
-      const routeA = `${a.source}->${a.target}`;
-      const routeB = `${b.source}->${b.target}`;
-      return routeA.localeCompare(routeB);
-    });
-  }, [edgeStats]);
+  // By route, then by the function called on the target — see lib/edge-stats.ts.
+  const sortedEdges = useMemo(() => [...edgeStats].sort(compareEdgeStats), [edgeStats]);
 
   // Sorted agent stats by agent name (stable across SSE updates)
   const sortedAgentStats = useMemo(() => {
@@ -376,6 +381,7 @@ export default function TrafficPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Route</TableHead>
+                    <TableHead>Function</TableHead>
                     <TableHead className="text-right">Calls</TableHead>
                     <TableHead className="text-right">Errors</TableHead>
                     <TableHead className="text-right">Error Rate</TableHead>
@@ -386,7 +392,7 @@ export default function TrafficPage() {
                 </TableHeader>
                 <TableBody>
                   {sortedEdges.map((edge) => {
-                    const key = `${edge.source}->${edge.target}`;
+                    const key = edgeRowKey(edge);
                     const history = historyRef.current.get(key) || [];
 
                     return (
@@ -401,6 +407,9 @@ export default function TrafficPage() {
                               {edge.target}
                             </span>
                           </div>
+                        </TableCell>
+                        <TableCell className="font-mono text-muted-foreground">
+                          {edge.target_function || "-"}
                         </TableCell>
                         <TableCell className="text-right font-mono">
                           {edge.call_count}
