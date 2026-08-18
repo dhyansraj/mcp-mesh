@@ -620,14 +620,33 @@ type RecentTraceSummary struct {
 	Agents        []string  `json:"agents"`
 }
 
-// EdgeStats represents aggregated call stats for a dependency edge
+// EdgeStats represents aggregated call stats for one dependency edge — one row
+// per (source, target, target function), not one per agent pair (#1531).
 type EdgeStats struct {
-	Source       string  `json:"source"`
-	Target       string  `json:"target"`
-	CallCount    int     `json:"call_count"`
-	ErrorCount   int     `json:"error_count"`
-	ErrorRate    float64 `json:"error_rate"`
-	AvgLatencyMs float64 `json:"avg_latency_ms"`
+	Source string `json:"source"`
+	Target string `json:"target"`
+	// TargetFunction is the function ON THE TARGET that these calls landed on.
+	//
+	// Named for the target on purpose. The nearby `function_name` on a
+	// DependencyResolution is the CONSUMER's function — the one that declared
+	// the dependency — and calling this one `function_name` too would put two
+	// unrelated meanings behind one word on the same screen. The resolution
+	// calls the provider's function `mcp_tool`, which is the field the UI joins
+	// this to; that name is not reused here because a span's operation is not
+	// always an MCP tool.
+	//
+	// Empty when the callee's span carried no operation (see edgeKey.Function).
+	TargetFunction string  `json:"target_function"`
+	CallCount      int     `json:"call_count"`
+	ErrorCount     int     `json:"error_count"`
+	ErrorRate      float64 `json:"error_rate"`
+	AvgLatencyMs   float64 `json:"avg_latency_ms"`
+	// P99LatencyMs is measured over a ROLLING WINDOW of recent calls, while
+	// Avg/Max/Min are lifetime figures for the key. That split is not new — the
+	// reservoir this replaced held the last 10,000 samples and the other three
+	// were always running totals — but it is the one number here whose meaning
+	// is not "since the key first appeared", so it is worth saying out loud.
+	// See latency_histogram.go for the window and for the bucket estimate.
 	P99LatencyMs float64 `json:"p99_latency_ms"`
 	MaxLatencyMs int64   `json:"max_latency_ms"`
 	MinLatencyMs int64   `json:"min_latency_ms"`
@@ -702,11 +721,9 @@ func (tm *TracingManager) GetEdgeStats(limit int) ([]EdgeStats, error) {
 
 	// Prefer accumulator (fast, in-memory)
 	if tm.accumulator != nil {
-		edges := tm.accumulator.GetEdgeStats()
-		if limit > 0 && limit < len(edges) {
-			edges = edges[:limit]
-		}
-		return edges, nil
+		// Fair across agent pairs rather than a plain head-truncation — see
+		// SelectEdgeStats for why a ranked head starves the topology graph.
+		return SelectEdgeStats(tm.accumulator.GetEdgeStats(), limit), nil
 	}
 
 	if !tm.streamThroughMode || tm.tempoClient == nil {
@@ -719,12 +736,14 @@ func (tm *TracingManager) GetEdgeStats(limit int) ([]EdgeStats, error) {
 		return nil, fmt.Errorf("failed to search traces for edge stats: %w", err)
 	}
 
-	// edgeKey -> list of observations
+	// edgeKey -> list of observations. Keyed the same three ways as the
+	// accumulator (#1531) so both sources of edge stats produce the same row
+	// shape and the dashboard's function column is populated either way.
 	type edgeObs struct {
 		durationMs int64
 		success    bool
 	}
-	edgeData := make(map[string][]edgeObs)
+	edgeData := make(map[edgeKey][]edgeObs)
 
 	for _, r := range results {
 		trace, err := tm.tempoClient.GetTrace(r.TraceID)
@@ -752,7 +771,7 @@ func (tm *TracingManager) GetEdgeStats(limit int) ([]EdgeStats, error) {
 				continue
 			}
 
-			key := parentAgent + " -> " + childAgent
+			key := edgeKey{Source: parentAgent, Target: childAgent, Function: span.Operation}
 			dur := int64(0)
 			if span.DurationMS != nil {
 				dur = *span.DurationMS
@@ -768,11 +787,6 @@ func (tm *TracingManager) GetEdgeStats(limit int) ([]EdgeStats, error) {
 	// Aggregate per edge
 	edges := make([]EdgeStats, 0, len(edgeData))
 	for key, observations := range edgeData {
-		parts := strings.SplitN(key, " -> ", 2)
-		if len(parts) != 2 {
-			continue
-		}
-
 		callCount := len(observations)
 		errorCount := 0
 		var totalLatency int64
@@ -811,24 +825,28 @@ func (tm *TracingManager) GetEdgeStats(limit int) ([]EdgeStats, error) {
 		p99Latency := float64(latencies[p99Index])
 
 		edges = append(edges, EdgeStats{
-			Source:       parts[0],
-			Target:       parts[1],
-			CallCount:    callCount,
-			ErrorCount:   errorCount,
-			ErrorRate:    errorRate,
-			AvgLatencyMs: avgLatency,
-			P99LatencyMs: p99Latency,
-			MaxLatencyMs: maxLatency,
-			MinLatencyMs: minLatency,
+			Source:         key.Source,
+			Target:         key.Target,
+			TargetFunction: key.Function,
+			CallCount:      callCount,
+			ErrorCount:     errorCount,
+			ErrorRate:      errorRate,
+			AvgLatencyMs:   avgLatency,
+			P99LatencyMs:   p99Latency,
+			MaxLatencyMs:   maxLatency,
+			MinLatencyMs:   minLatency,
 		})
 	}
 
-	// Sort edges by call count descending for consistent ordering
-	sort.Slice(edges, func(i, j int) bool {
-		return edges[i].CallCount > edges[j].CallCount
-	})
+	// Busiest first, then a total order on the key — see SortEdgeStats.
+	SortEdgeStats(edges)
 
-	return edges, nil
+	// Then the SAME budget the accumulator path applies. This path never
+	// truncated at all: `limit` reached it only as the number of TRACES to
+	// search, and one trace can contribute many edges, so a caller asking for 20
+	// rows could be handed hundreds. That was survivable while a row meant a
+	// pair; per-function rows multiply it.
+	return SelectEdgeStats(edges, limit), nil
 }
 
 // GetAccumulator returns the trace accumulator (may be nil if tracing is

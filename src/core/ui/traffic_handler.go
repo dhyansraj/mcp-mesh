@@ -89,10 +89,9 @@ func replayWindow(events []*tracing.TraceEvent, limit int) (edges []tracing.Edge
 	// Flush all in-flight traces synchronously so edges + totals are complete.
 	acc.FinalizeAllActive()
 
-	edges = acc.GetEdgeStats()
-	if limit > 0 && limit < len(edges) {
-		edges = edges[:limit]
-	}
+	// Same fair-across-pairs truncation the live path applies, for the same
+	// reason: the head of a per-function ranking can be one busy pair.
+	edges = tracing.SelectEdgeStats(acc.GetEdgeStats(), limit)
 	agents = mp.GetAgentMetrics()
 	models = mp.GetModelMetrics()
 	totalCalls = acc.GetTotalFinalized()
@@ -103,6 +102,11 @@ func replayWindow(events []*tracing.TraceEvent, limit int) (edges []tracing.Edge
 // handleTraffic returns windowed traffic aggregates for the Traffic-page time
 // filter. window=all (default) serves the live all-time aggregates unchanged;
 // window=1h/1d re-aggregate over a bounded XRANGE of the Redis trace stream.
+//
+// This endpoint feeds a TABLE, so a screenful-sized budget is the right budget
+// and the 20/100 below are unchanged. The topology graph does NOT read it — its
+// rows arrive over SSE, on a budget of its own (edgeStatsStreamLimit), because a
+// graph needs a row per edge it draws and a table does not.
 func (s *Server) handleTraffic(c *gin.Context) {
 	limit := 20
 	if l := c.Query("limit"); l != "" {

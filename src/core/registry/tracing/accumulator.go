@@ -54,10 +54,11 @@ type TraceAccumulator struct {
 	// Active (in-progress) traces keyed by trace ID
 	activeTraces map[string]*activeTrace
 
-	// Per-edge stats keyed by "source -> target". Bounded by edgeBounds:
-	// each entry carries a LastSeen stamp so idle edges age out, and the
-	// number of keys is capped as a backstop against name churn (#1424).
-	edgeStats  map[string]*edgeAccum
+	// Per-edge stats keyed by (source, target, function) — see edgeKey.
+	// Bounded by edgeBounds: each entry carries a LastSeen stamp so idle edges
+	// age out, and the number of keys is capped as a backstop against name
+	// churn (#1424).
+	edgeStats  map[edgeKey]*edgeAccum
 	edgeBounds AggregateBounds
 
 	// Total number of finalized traces (never resets)
@@ -92,17 +93,57 @@ type activeTrace struct {
 	HasError  bool
 }
 
-const maxEdgeLatencies = 10000
+// edgeKey identifies one traffic row: the calls from Source into Target that
+// landed on one particular function of Target.
+//
+// A STRUCT, not a delimited string (#1531). The previous key was
+// `source + " -> " + target`, which the read side had to take apart again by
+// scanning for the first " -> " — a parse that is wrong for any agent name
+// containing that sequence, and that would only get more fragile with a third
+// field appended. Nothing here needs a parse: the map key already holds the
+// three values separately.
+type edgeKey struct {
+	Source string
+	Target string
+	// Function is the CALLEE's span operation, i.e. the provider's own function
+	// name — the caller's proxy span is not what edges are attributed from. For
+	// an MCP tool it is character-for-character the `function_name` the registry
+	// stores for that capability (Python `func.__name__`, TypeScript `def.name`,
+	// Java `method.getName()`; no normalisation on either path), which is what
+	// lets the UI join a stat to the exact topology edge that produced it.
+	//
+	// EMPTY when the span carried no operation. A span with no operation can
+	// only come from a malformed event — every runtime names its span after the
+	// function it is running — and it is recorded rather than dropped so the
+	// call still counts towards the traffic totals. It simply joins to no
+	// topology edge, which is the honest outcome: the call happened, but nothing
+	// in the payload says what was called.
+	Function string
+}
 
 type edgeAccum struct {
-	CallCount   int
-	ErrorCount  int
-	Latencies   []int64
-	latencyHead int // ring buffer write position (used once Latencies reaches cap)
-	TotalMs     int64
-	MaxMs       int64
-	MinMs       int64
-	LastSeen    time.Time // last observation, drives age-based pruning
+	CallCount  int
+	ErrorCount int
+	// Latency percentiles come from a fixed-bucket histogram rather than a
+	// reservoir of raw samples, so per-key memory no longer scales with
+	// traffic — a flat ~2 KB per key instead of anywhere from nothing to 80 KB.
+	// The floor is therefore HIGHER than the reservoir's for a key that saw one
+	// call, which is the trade: bounded and predictable rather than cheap until
+	// it is not, on a key that is now per function and so far more numerous.
+	//
+	// The histogram holds a ROLLING WINDOW of recent samples, as the reservoir
+	// did; Total/Max/Min are exact and lifetime, as they were. See
+	// latency_histogram.go.
+	//
+	// The aggregate of this per-key cost is what bounds the map, not this
+	// number: see the ceiling arithmetic on AggregateBounds in aggregates.go,
+	// which is where an operator tuning
+	// MCP_MESH_TELEMETRY_AGGREGATE_MAX_ENTRIES ends up.
+	Latency  latencyHistogram
+	TotalMs  int64
+	MaxMs    int64
+	MinMs    int64
+	LastSeen time.Time // last observation, drives age-based pruning
 }
 
 // NewTraceAccumulator creates a new accumulator with the given ring buffer
@@ -122,7 +163,7 @@ func NewTraceAccumulatorWithBounds(ringSize int, logger *log.Logger, bounds Aggr
 		recentTraces: make([]RecentTraceSummary, ringSize),
 		ringSize:     ringSize,
 		activeTraces: make(map[string]*activeTrace),
-		edgeStats:    make(map[string]*edgeAccum),
+		edgeStats:    make(map[edgeKey]*edgeAccum),
 		edgeBounds:   bounds,
 		liveClients:  make(map[chan *LiveTraceEvent]struct{}),
 		dirtyTraces:  make(map[string]bool),
@@ -196,9 +237,20 @@ func (ta *TraceAccumulator) ProcessTraceEvent(event *TraceEvent) error {
 	return nil
 }
 
-// recordEdge records a cross-agent edge observation.
-func (ta *TraceAccumulator) recordEdge(source, target string, durationMs int64, success *bool) {
-	key := source + " -> " + target
+// recordEdge records a cross-agent edge observation. `function` is the callee's
+// span operation; see edgeKey.Function for what an empty one means.
+func (ta *TraceAccumulator) recordEdge(source, target, function string, durationMs int64, success *bool) {
+	// An edge with an unnamed end names no edge at all and has never been
+	// reported. Refused HERE rather than filtered at read time so it does not
+	// occupy a slot under the key ceiling: an unnamed key kept in the map would
+	// evict a real, displayable edge to hold a row nothing can ever show. (An
+	// empty FUNCTION is different — a partial observation, and kept. See
+	// edgeKey.Function.)
+	if source == "" || target == "" {
+		return
+	}
+
+	key := edgeKey{Source: source, Target: target, Function: function}
 	ea, exists := ta.edgeStats[key]
 	if !exists {
 		ea = &edgeAccum{
@@ -208,12 +260,7 @@ func (ta *TraceAccumulator) recordEdge(source, target string, durationMs int64, 
 	}
 	ea.CallCount++
 	ea.TotalMs += durationMs
-	if len(ea.Latencies) < maxEdgeLatencies {
-		ea.Latencies = append(ea.Latencies, durationMs)
-	} else {
-		ea.Latencies[ea.latencyHead] = durationMs
-		ea.latencyHead = (ea.latencyHead + 1) % maxEdgeLatencies
-	}
+	ea.Latency.Record(durationMs)
 	if durationMs > ea.MaxMs {
 		ea.MaxMs = durationMs
 	}
@@ -228,7 +275,12 @@ func (ta *TraceAccumulator) recordEdge(source, target string, durationMs int64, 
 	// Hard key ceiling. Age pruning (pruneEdgeStats) is the primary bound;
 	// this only trips when new edge names appear faster than the retention
 	// window retires them, and it evicts least-recently-seen first.
-	if evicted := EnforceMaxEntries(ta.edgeStats, edgeLastSeen, ta.edgeBounds.MaxEntries); evicted > 0 && ta.logger != nil {
+	//
+	// The finer key raises cardinality by the number of distinct provider
+	// functions called across each pair, so the ceiling is reached sooner than
+	// it used to be on the same mesh. It is still names, not volume: one key
+	// per (caller, provider, tool) actually in use.
+	if evicted := EnforceMaxEntries(ta.edgeStats, edgeLastSeen, ta.edgeBounds.MaxEntries, edgeKeyLess); evicted > 0 && ta.logger != nil {
 		ta.logger.Printf("TraceAccumulator: edge-stat key cap (%d) reached, evicted %d least-recently-seen edges "+
 			"(raise MCP_MESH_TELEMETRY_AGGREGATE_MAX_ENTRIES or shorten MCP_MESH_TELEMETRY_AGGREGATE_RETENTION)",
 			ta.edgeBounds.MaxEntries, evicted)
@@ -238,6 +290,18 @@ func (ta *TraceAccumulator) recordEdge(source, target string, durationMs int64, 
 // edgeLastSeen adapts edgeAccum to the PruneOlderThan/EnforceMaxEntries
 // accessor signature.
 func edgeLastSeen(ea *edgeAccum) time.Time { return ea.LastSeen }
+
+// edgeKeyLess is EnforceMaxEntries' deterministic tiebreak for edge keys,
+// ordering on the three fields in turn.
+func edgeKeyLess(a, b edgeKey) bool {
+	if a.Source != b.Source {
+		return a.Source < b.Source
+	}
+	if a.Target != b.Target {
+		return a.Target < b.Target
+	}
+	return a.Function < b.Function
+}
 
 // pruneEdgeStats removes edge entries not observed within the retention
 // window. Mirrors SpanCorrelator.pruneExpiredCompletedTraces: age-based, with
@@ -427,41 +491,31 @@ func (ta *TraceAccumulator) GetRecentTraces(limit int) []RecentTraceSummary {
 	return result
 }
 
-// GetEdgeStats computes EdgeStats from the accumulated edge data.
+// GetEdgeStats computes EdgeStats from the accumulated edge data. Returns EVERY
+// edge; truncation belongs to the caller (SelectEdgeStats), because the two
+// consumers of these rows want different budgets.
 func (ta *TraceAccumulator) GetEdgeStats() []EdgeStats {
 	ta.mu.RLock()
 	defer ta.mu.RUnlock()
 
 	edges := make([]EdgeStats, 0, len(ta.edgeStats))
 	for key, ea := range ta.edgeStats {
-		// Parse "source -> target"
-		var source, target string
-		for i := 0; i+3 < len(key); i++ {
-			if key[i:i+4] == " -> " {
-				source = key[:i]
-				target = key[i+4:]
-				break
-			}
-		}
-		if source == "" || target == "" {
-			continue
-		}
-
+		// No read-time filter for unnamed agents: recordEdge refuses to create
+		// such a key in the first place, so one cannot be here. Dropping them on
+		// the way in matters because a row skipped here would still be holding a
+		// slot under the key ceiling, evicting a real edge to keep a row nothing
+		// will ever display.
 		avgLatency := float64(ea.TotalMs) / float64(ea.CallCount)
 		errorRate := 100.0 * float64(ea.ErrorCount) / float64(ea.CallCount)
 
-		// P99 calculation
-		sorted := make([]int64, len(ea.Latencies))
-		copy(sorted, ea.Latencies)
-		sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
-		p99Index := int(math.Ceil(float64(len(sorted))*0.99)) - 1
-		if p99Index < 0 {
-			p99Index = 0
+		// P99 is a bucket estimate over a rolling window of recent calls, and it
+		// never understates what is inside that window (latency_histogram.go).
+		// Clamped to the exactly-tracked lifetime max so it can never claim a latency
+		// larger than one that was actually observed.
+		p99 := ea.Latency.Quantile(0.99)
+		if p99 > ea.MaxMs {
+			p99 = ea.MaxMs
 		}
-		if p99Index >= len(sorted) {
-			p99Index = len(sorted) - 1
-		}
-		p99Latency := float64(sorted[p99Index])
 
 		minMs := ea.MinMs
 		if minMs == math.MaxInt64 {
@@ -469,21 +523,23 @@ func (ta *TraceAccumulator) GetEdgeStats() []EdgeStats {
 		}
 
 		edges = append(edges, EdgeStats{
-			Source:       source,
-			Target:       target,
-			CallCount:    ea.CallCount,
-			ErrorCount:   ea.ErrorCount,
-			ErrorRate:    errorRate,
-			AvgLatencyMs: avgLatency,
-			P99LatencyMs: p99Latency,
-			MaxLatencyMs: ea.MaxMs,
-			MinLatencyMs: minMs,
+			Source:         key.Source,
+			Target:         key.Target,
+			TargetFunction: key.Function,
+			CallCount:      ea.CallCount,
+			ErrorCount:     ea.ErrorCount,
+			ErrorRate:      errorRate,
+			AvgLatencyMs:   avgLatency,
+			P99LatencyMs:   float64(p99),
+			MaxLatencyMs:   ea.MaxMs,
+			MinLatencyMs:   minMs,
 		})
 	}
 
-	sort.Slice(edges, func(i, j int) bool {
-		return edges[i].CallCount > edges[j].CallCount
-	})
+	// Busiest first, then a total order on the key — see SortEdgeStats. This
+	// returns EVERY edge; truncation is the caller's, through SelectEdgeStats,
+	// because the right budget differs per consumer.
+	SortEdgeStats(edges)
 
 	return edges
 }
@@ -606,14 +662,16 @@ func (ta *TraceAccumulator) finalizeReadyTraces() {
 		if at.RootSeen != nil && now.Sub(*at.RootSeen) >= traceGracePeriod {
 			// Grace period elapsed — finalize this trace
 
-			// Detect cross-agent edges from all spans
+			// Detect cross-agent edges from all spans. The edge is attributed
+			// from the CALLEE's span, so s.Operation is the provider's own
+			// function name — see edgeKey.Function.
 			for _, s := range at.Spans {
 				if s.ParentSpan == nil || s.DurationMS == nil {
 					continue
 				}
 				parentAgent, ok := at.SpanAgent[*s.ParentSpan]
 				if ok && parentAgent != s.AgentName {
-					ta.recordEdge(parentAgent, s.AgentName, *s.DurationMS, s.Success)
+					ta.recordEdge(parentAgent, s.AgentName, s.Operation, *s.DurationMS, s.Success)
 				}
 			}
 
@@ -665,7 +723,7 @@ func (ta *TraceAccumulator) FinalizeAllActive() {
 			}
 			parentAgent, ok := at.SpanAgent[*s.ParentSpan]
 			if ok && parentAgent != s.AgentName {
-				ta.recordEdge(parentAgent, s.AgentName, *s.DurationMS, s.Success)
+				ta.recordEdge(parentAgent, s.AgentName, s.Operation, *s.DurationMS, s.Success)
 			}
 		}
 

@@ -10,11 +10,18 @@ import (
 
 // feedEdgeTrace drives one two-agent trace through the accumulator's real
 // entry points (ProcessTraceEvent + FinalizeAllActive), producing exactly one
-// "source -> target" edge key. This is the live path — no direct map writes.
+// edge key. This is the live path — no direct map writes.
 func feedEdgeTrace(ta *TraceAccumulator, traceID, source, target string) {
 	_ = ta.ProcessTraceEvent(makeEndEvent(traceID, "root-"+traceID, "", source, 10, true))
 	_ = ta.ProcessTraceEvent(makeEndEvent(traceID, "child-"+traceID, "root-"+traceID, target, 5, true))
 	ta.FinalizeAllActive()
+}
+
+// edgeKeyFor names the key feedEdgeTrace produces. makeEndEvent stamps every
+// span's operation as "test_op", and the callee's operation is the key's
+// function component (#1531).
+func edgeKeyFor(source, target string) edgeKey {
+	return edgeKey{Source: source, Target: target, Function: "test_op"}
 }
 
 // TestEdgeStatsUnboundedWithoutBounds is the "before" half of the #1424
@@ -79,7 +86,7 @@ func TestEdgeStatsAgePrune(t *testing.T) {
 
 	// Age the retired edge past the window; leave the live one fresh.
 	ta.mu.Lock()
-	ta.edgeStats["retired-agent -> backend"].LastSeen = time.Now().Add(-2 * time.Hour)
+	ta.edgeStats[edgeKeyFor("retired-agent", "backend")].LastSeen = time.Now().Add(-2 * time.Hour)
 	ta.mu.Unlock()
 
 	ta.pruneEdgeStats()
@@ -88,8 +95,8 @@ func TestEdgeStatsAgePrune(t *testing.T) {
 		t.Fatalf("edge keys = %d after prune, want 1", got)
 	}
 	ta.mu.RLock()
-	_, liveOK := ta.edgeStats["live-agent -> backend"]
-	_, deadOK := ta.edgeStats["retired-agent -> backend"]
+	_, liveOK := ta.edgeStats[edgeKeyFor("live-agent", "backend")]
+	_, deadOK := ta.edgeStats[edgeKeyFor("retired-agent", "backend")]
 	ta.mu.RUnlock()
 	if !liveOK {
 		t.Error("still-active edge was pruned")
@@ -107,7 +114,7 @@ func TestEdgeStatsAgePruneDisabled(t *testing.T) {
 
 	feedEdgeTrace(ta, "t1", "ancient", "backend")
 	ta.mu.Lock()
-	ta.edgeStats["ancient -> backend"].LastSeen = time.Now().Add(-1000 * time.Hour)
+	ta.edgeStats[edgeKeyFor("ancient", "backend")].LastSeen = time.Now().Add(-1000 * time.Hour)
 	ta.mu.Unlock()
 
 	ta.pruneEdgeStats()
@@ -134,14 +141,15 @@ func TestEdgeStatsDefaultPathUnchanged(t *testing.T) {
 		feedEdgeTrace(unbounded, id, src, dst)
 	}
 
-	// Compare as a keyed set: GetEdgeStats sorts by CallCount with an
-	// unstable sort, so equal-count edges have never had a deterministic
-	// order. The invariant that matters is that every edge and every number
-	// is identical.
+	// Compare as a keyed set rather than as a list: the invariant that matters
+	// is that every edge and every number is identical, not the order they
+	// arrive in. (GetEdgeStats does now impose a total order — see the
+	// truncation argument there — but this test predates it and should keep
+	// asserting the weaker, more durable property.)
 	index := func(edges []EdgeStats) map[string]EdgeStats {
 		m := make(map[string]EdgeStats, len(edges))
 		for _, e := range edges {
-			m[e.Source+" -> "+e.Target] = e
+			m[e.Source+" -> "+e.Target+" -> "+e.TargetFunction] = e
 		}
 		return m
 	}

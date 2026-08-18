@@ -13,6 +13,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { Agent, EdgeStat } from "@/lib/types";
 import { buildGraphFromAgents, buildIdToNodeKey, computeStructureHash } from "@/lib/topology";
+import { edgeRowKey, edgeStatKey } from "@/lib/edge-stats";
 import { EDGE_HEAT_COLORS } from "@/lib/edge-palette";
 import { extractAgentName, formatDuration } from "@/lib/api";
 import { useMesh } from "@/lib/mesh-context";
@@ -84,33 +85,127 @@ function computeStrokeWidth(callCount: number, maxCount: number): number {
   return 1 + ratio * 3; // min 1, max 4
 }
 
-function mergeEdgeStatsIntoEdges(edges: Edge[], edgeStats: EdgeStat[]): Edge[] {
+// What one edge's stat rows add up to. Only these three numbers are drawn, and
+// all three combine exactly: a count sums, and a per-row mean recovers its total
+// by multiplying back through the count it was taken over.
+interface EdgeTraffic {
+  callCount: number;
+  errorRate: number;
+  avgLatencyMs: number;
+}
+
+// Sum the stat rows belonging to one drawn edge, or null when it has none.
+//
+// An edge stands for its whole `data.targetFunctions` set, which is usually one
+// function and is several whenever the registry emitted a resolution row per
+// matched tool under a shared label (see topology.ts). Summing is what makes
+// the answer independent of which member came first in the snapshot; picking
+// one member would not be.
+//
+// Rows are matched by (base source name, base target name, function), so a
+// function with no row contributes nothing rather than a zero: an edge whose
+// set is partly covered reports the traffic that was actually recorded.
+function aggregateEdgeTraffic(
+  edge: Edge,
+  statsMap: Map<string, EdgeStat>
+): EdgeTraffic | null {
+  const targetFunctions = edge.data?.targetFunctions;
+  if (!Array.isArray(targetFunctions) || targetFunctions.length === 0) return null;
+
+  const sourceName = nodeKeyToBaseName(edge.source);
+  const targetName = nodeKeyToBaseName(edge.target);
+
+  let callCount = 0;
+  let totalLatencyMs = 0;
+  let totalErrorRate = 0;
+  let matched = 0;
+
+  for (const fn of targetFunctions) {
+    if (typeof fn !== "string" || fn === "") continue;
+    const stat = statsMap.get(edgeStatKey(sourceName, targetName, fn));
+    if (!stat) continue;
+    matched++;
+    callCount += stat.call_count;
+    totalLatencyMs += stat.avg_latency_ms * stat.call_count;
+    // Weighted from the row's OWN error rate rather than recomputed from its
+    // error count. The two are the same number on every payload the registry
+    // produces (both server paths derive the rate from the counts), and
+    // weighting the reported field means this never contradicts the rate the
+    // Traffic table prints for the same row.
+    totalErrorRate += stat.error_rate * stat.call_count;
+  }
+
+  if (matched === 0) return null;
+  if (callCount === 0) return { callCount: 0, errorRate: 0, avgLatencyMs: 0 };
+
+  return {
+    callCount,
+    errorRate: totalErrorRate / callCount,
+    avgLatencyMs: totalLatencyMs / callCount,
+  };
+}
+
+// Overlay recorded traffic onto the structural graph.
+//
+// Matching on the agent pair alone was the bug: a pair exchanging a regular
+// tool, an LLM-filtered tool and a MeshJob draws three correctly-coloured
+// edges, and all three were stamped with one average across all of it. Each
+// edge knows which provider functions it resolved to — `data.targetFunctions`,
+// written from the resolutions' `mcp_tool` — so it joins to the rows that
+// actually describe it.
+//
+// Exported for __tests__/traffic-per-function.test.tsx: the join is the whole
+// point of the change and is not observable from the rendered graph, where two
+// edges differ only by a stroke width and a label suffix.
+export function mergeEdgeStatsIntoEdges(edges: Edge[], edgeStats: EdgeStat[]): Edge[] {
   if (edgeStats.length === 0) return edges;
 
   const statsMap = new Map<string, EdgeStat>();
   for (const stat of edgeStats) {
-    statsMap.set(`${stat.source}->${stat.target}`, stat);
+    // edgeRowKey rather than edgeStatKey so a row missing its function is
+    // indexed under the empty function instead of under `undefined`. Nothing
+    // matches it either way: the topology side of the join takes its function
+    // from the resolution's `mcp_tool`, which every edge-producing resolution
+    // carries, so no edge is ever keyed under the empty function. Such a row
+    // simply contributes to no edge, and the edge it might have described keeps
+    // its structural style — the right outcome for a row that names nothing.
+    statsMap.set(edgeRowKey(stat), stat);
   }
 
-  const maxCallCount = Math.max(...edgeStats.map((e) => e.call_count), 1);
+  const traffic = edges.map((edge) => aggregateEdgeTraffic(edge, statsMap));
 
-  return edges.map((edge) => {
-    const sourceName = nodeKeyToBaseName(edge.source);
-    const targetName = nodeKeyToBaseName(edge.target);
-    const stat = statsMap.get(`${sourceName}->${targetName}`);
+  // The stroke-width denominator is the busiest DRAWN EDGE, not the busiest
+  // row: an edge standing for several functions carries their sum, which a
+  // per-row maximum would let exceed the scale's top.
+  const maxCallCount = Math.max(
+    ...traffic.map((t) => (t ? t.callCount : 0)),
+    1
+  );
+
+  return edges.map((edge, i) => {
+    // NO TRAFFIC RECORDED IS NOT ZERO TRAFFIC. An edge with no matching row
+    // keeps its structural style and its plain label — no latency, no heat
+    // colour, no stroke weight — rather than being drawn as an idle edge. Some
+    // real edges legitimately have no row: Python streaming tools publish no
+    // span at all, and Java's synthetic dependency tools create capability rows
+    // no span ever names. Both were already uncovered; a pair-level average
+    // used to hide them behind a sibling's numbers.
+    const stat = traffic[i];
     if (!stat) return edge;
 
     // Use stored original label to prevent accumulation on repeated merges
     const baseLabel = (edge.data?.originalLabel as string) || edge.label || "";
-    const mergedLabel = baseLabel ? `${baseLabel}  ${formatDuration(stat.avg_latency_ms)}` : `${formatDuration(stat.avg_latency_ms)}`;
+    const mergedLabel = baseLabel ? `${baseLabel}  ${formatDuration(stat.avgLatencyMs)}` : `${formatDuration(stat.avgLatencyMs)}`;
 
     return {
       ...edge,
       label: mergedLabel,
       style: {
         ...edge.style,
-        stroke: getEdgeHeatColor(stat.error_rate),
-        strokeWidth: computeStrokeWidth(stat.call_count, maxCallCount),
+        stroke: getEdgeHeatColor(stat.errorRate),
+        // Relative to the busiest EDGE now, not the busiest pair, which is
+        // the same change of denominator the rest of this merge makes.
+        strokeWidth: computeStrokeWidth(stat.callCount, maxCallCount),
       },
     };
   });

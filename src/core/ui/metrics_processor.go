@@ -177,12 +177,12 @@ func (mp *MetricsProcessor) enforceBoundsLocked(now time.Time) {
 		}
 	}
 
-	if n := tracing.EnforceMaxEntries(mp.agentMetrics, agentLastSeen, mp.bounds.MaxEntries); n > 0 {
+	if n := tracing.EnforceMaxEntries(mp.agentMetrics, agentLastSeen, mp.bounds.MaxEntries, tracing.StringKeyLess); n > 0 {
 		log.Printf("[UI-METRICS] Agent aggregate key cap (%d) reached, evicted %d least-recently-seen agents "+
 			"(raise MCP_MESH_TELEMETRY_AGGREGATE_MAX_ENTRIES or shorten MCP_MESH_TELEMETRY_AGGREGATE_RETENTION)",
 			mp.bounds.MaxEntries, n)
 	}
-	if n := tracing.EnforceMaxEntries(mp.modelMetrics, modelLastSeen, mp.bounds.MaxEntries); n > 0 {
+	if n := tracing.EnforceMaxEntries(mp.modelMetrics, modelLastSeen, mp.bounds.MaxEntries, tracing.StringKeyLess); n > 0 {
 		log.Printf("[UI-METRICS] Model aggregate key cap (%d) reached, evicted %d least-recently-seen models "+
 			"(raise MCP_MESH_TELEMETRY_AGGREGATE_MAX_ENTRIES or shorten MCP_MESH_TELEMETRY_AGGREGATE_RETENTION)",
 			mp.bounds.MaxEntries, n)

@@ -102,7 +102,7 @@ func TestEnforceMaxEntriesBoundsGrowth(t *testing.T) {
 	maxSeen := 0
 	for i := 0; i < 5000; i++ {
 		m[fmt.Sprintf("key-%05d", i)] = &stamped{seen: base.Add(time.Duration(i) * time.Millisecond)}
-		EnforceMaxEntries(m, stampedSeen, cap)
+		EnforceMaxEntries(m, stampedSeen, cap, StringKeyLess)
 		if len(m) > maxSeen {
 			maxSeen = len(m)
 		}
@@ -131,7 +131,7 @@ func TestEnforceMaxEntriesDisabled(t *testing.T) {
 	m := make(map[string]*stamped)
 	for i := 0; i < 1000; i++ {
 		m[fmt.Sprintf("k%d", i)] = &stamped{seen: time.Now()}
-		if n := EnforceMaxEntries(m, stampedSeen, 0); n != 0 {
+		if n := EnforceMaxEntries(m, stampedSeen, 0, StringKeyLess); n != 0 {
 			t.Fatalf("cap of 0 evicted %d entries; it must be a no-op", n)
 		}
 	}
@@ -148,7 +148,7 @@ func TestEnforceMaxEntriesTinyCap(t *testing.T) {
 		base := time.Now()
 		for i := 0; i < 50; i++ {
 			m[fmt.Sprintf("k%02d", i)] = &stamped{seen: base.Add(time.Duration(i) * time.Millisecond)}
-			EnforceMaxEntries(m, stampedSeen, cap)
+			EnforceMaxEntries(m, stampedSeen, cap, StringKeyLess)
 			if len(m) > cap {
 				t.Fatalf("cap=%d: len(m) = %d after insert %d", cap, len(m), i)
 			}

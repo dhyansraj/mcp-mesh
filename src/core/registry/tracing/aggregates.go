@@ -20,6 +20,21 @@ import (
 // case (name churn faster than the retention window can absorb); it evicts
 // least-recently-seen first, so it only ever degrades into LRU once age
 // pruning has already failed to keep up.
+//
+// WHAT THE CEILING COSTS. MaxEntries is a key count, so the memory it admits
+// depends on the map. The expensive one is the edge map, whose value carries a
+// fixed-size latency histogram: 1,992 bytes per edgeAccum plus a 48-byte
+// edgeKey, the agent and function names it retains, and the map's own overhead
+// — call it ~2.1 KB an entry. At the 10,000 default that is a steady-state
+// ceiling of roughly 20 MB for the edge map, reached only by a mesh with that
+// many live (caller, provider, function) triples; the per-agent and per-model
+// maps hold counters only and are negligible beside it. An operator raising
+// MaxEntries is buying edge rows at ~2.1 KB each.
+//
+// The default is NOT lowered to compensate for per-function edge keys (#1531)
+// multiplying the row count: 20 MB is a fair ceiling for a process whose job is
+// telemetry, and lowering it would silently start evicting live edges in meshes
+// that fit today. If it should move, it should move on its own evidence.
 const (
 	defaultAggregateRetention  = 24 * time.Hour
 	defaultAggregateMaxEntries = 10000
@@ -66,6 +81,9 @@ func DefaultAggregateBounds() AggregateBounds {
 //   - positive: use it
 //   - "0": key ceiling disabled — logged as a removed bound
 //   - negative / unparseable: warn and fall back to the default
+//
+// See the bounds comment above for what a key costs before changing this: an
+// edge entry is ~2.1 KB, so the default admits ~20 MB of edge aggregates.
 //
 // Uses the stdlib log package because it runs at package init, before any
 // manager (and therefore any manager logger) exists.
@@ -121,7 +139,10 @@ func LoadAggregateBoundsFromEnv() AggregateBounds {
 //
 // Exported so the UI package's MetricsProcessor can share the accumulator's
 // pruning semantics rather than reimplementing them.
-func PruneOlderThan[V any](m map[string]V, lastSeen func(V) time.Time, cutoff time.Time) int {
+//
+// The key is any comparable type: agent and model aggregates are keyed by name,
+// edge stats by a (source, target, function) struct (#1531).
+func PruneOlderThan[K comparable, V any](m map[K]V, lastSeen func(V) time.Time, cutoff time.Time) int {
 	removed := 0
 	for k, v := range m {
 		if lastSeen(v).Before(cutoff) {
@@ -132,6 +153,15 @@ func PruneOlderThan[V any](m map[string]V, lastSeen func(V) time.Time, cutoff ti
 	return removed
 }
 
+// KeyLess orders two map keys. It is only ever consulted to break a tie between
+// entries sharing a lastSeen timestamp, so it needs to be deterministic, not
+// meaningful. StringKeyLess covers the name-keyed maps; a struct-keyed map
+// supplies its own (see edgeKeyLess).
+type KeyLess[K comparable] func(a, b K) bool
+
+// StringKeyLess is the KeyLess for name-keyed aggregate maps.
+func StringKeyLess(a, b string) bool { return a < b }
+
 // EnforceMaxEntries drops the least-recently-seen entries when m exceeds max,
 // returning the number evicted. max <= 0 disables the ceiling.
 //
@@ -139,7 +169,7 @@ func PruneOlderThan[V any](m map[string]V, lastSeen func(V) time.Time, cutoff ti
 // (always at least one entry) so the O(n log n) sort is amortised over many
 // subsequent inserts instead of being paid on every insert past the cap. The
 // post-condition callers rely on is len(m) <= max.
-func EnforceMaxEntries[V any](m map[string]V, lastSeen func(V) time.Time, max int) int {
+func EnforceMaxEntries[K comparable, V any](m map[K]V, lastSeen func(V) time.Time, max int, keyLess KeyLess[K]) int {
 	if max <= 0 || len(m) <= max {
 		return 0
 	}
@@ -156,7 +186,7 @@ func EnforceMaxEntries[V any](m map[string]V, lastSeen func(V) time.Time, max in
 	}
 
 	type entry struct {
-		key  string
+		key  K
 		seen time.Time
 	}
 	entries := make([]entry, 0, len(m))
@@ -167,7 +197,7 @@ func EnforceMaxEntries[V any](m map[string]V, lastSeen func(V) time.Time, max in
 		if entries[i].seen.Equal(entries[j].seen) {
 			// Stable tiebreak so eviction is deterministic when many keys
 			// share a timestamp (common in tests and in bursty churn).
-			return entries[i].key < entries[j].key
+			return keyLess(entries[i].key, entries[j].key)
 		}
 		return entries[i].seen.Before(entries[j].seen)
 	})

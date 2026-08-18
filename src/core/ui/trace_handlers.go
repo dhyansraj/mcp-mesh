@@ -48,7 +48,18 @@ func (s *Server) handleRecentTraces(c *gin.Context) {
 	})
 }
 
-// handleEdgeStats returns aggregated edge statistics from recent traces
+// handleEdgeStats returns aggregated edge statistics from recent traces.
+//
+// `limit` counts ROWS, and a row is one (source, target, target function) since
+// #1531 — so the same number covers fewer agent pairs than it used to. Rows past
+// the budget are dropped fairly across pairs (tracing.SelectEdgeStats), which
+// guarantees this much and no more: while there are at most `limit` pairs, every
+// pair appears, and a caller asking for 20 sees fewer of each pair's tools
+// rather than losing pairs. Past that the budget cannot cover the mesh at all —
+// 50 pairs on a budget of 20 leaves 30 pairs with nothing, and the 20 served are
+// the ones carrying the most traffic. That ceiling is why the topology graph,
+// which needs a row for every edge it draws, streams on a budget of its own
+// (edgeStatsStreamLimit) instead of reading this endpoint.
 func (s *Server) handleEdgeStats(c *gin.Context) {
 	if s.tracingManager == nil {
 		c.JSON(200, map[string]interface{}{

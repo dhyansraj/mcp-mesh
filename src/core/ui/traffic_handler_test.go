@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -111,6 +112,93 @@ func TestReplayWindowExcludesOlderEvents(t *testing.T) {
 	if calls1h >= callsAll || len(edges1h) >= len(edgesAll) || len(agents1h) >= len(agentsAll) {
 		t.Fatalf("1h aggregate did not narrow vs all-time: calls %d/%d edges %d/%d agents %d/%d",
 			calls1h, callsAll, len(edges1h), len(edgesAll), len(agents1h), len(agentsAll))
+	}
+}
+
+// TestReplayWindowKeysEdgesPerFunction: the windowed (1h/1d) path re-aggregates
+// through a throwaway TraceAccumulator fed by the same ProcessTraceEvent the
+// live consumer uses, so it inherits the per-function edge key (#1531) with no
+// windowing-specific code. Asserted rather than assumed — the two paths reading
+// the same field is the whole reason the Traffic page can offer a time filter
+// over the finer rows.
+func TestReplayWindowKeysEdgesPerFunction(t *testing.T) {
+	now := time.Now()
+	var events []*tracing.TraceEvent
+
+	withOp := func(traceID, rootID, source, target, calleeOp string) {
+		spans := makeCall(traceID, rootID, source, target, now, true)
+		spans[1].Operation = calleeOp
+		events = append(events, spans...)
+	}
+
+	withOp("t1", "r1", "agentA", "agentB", "lookup")
+	withOp("t2", "r2", "agentA", "agentB", "lookup")
+	withOp("t3", "r3", "agentA", "agentB", "summarise")
+
+	edges, _, _, _, _ := replayWindow(events, 20)
+	if len(edges) != 2 {
+		t.Fatalf("replayed edges = %d, want 2 (one per called function): %+v", len(edges), edges)
+	}
+
+	byFunction := make(map[string]tracing.EdgeStats, len(edges))
+	for _, e := range edges {
+		if e.Source != "agentA" || e.Target != "agentB" {
+			t.Fatalf("unexpected pair %s -> %s", e.Source, e.Target)
+		}
+		byFunction[e.TargetFunction] = e
+	}
+	if got := byFunction["lookup"].CallCount; got != 2 {
+		t.Fatalf("lookup call count = %d, want 2", got)
+	}
+	if got := byFunction["summarise"].CallCount; got != 1 {
+		t.Fatalf("summarise call count = %d, want 1", got)
+	}
+}
+
+// TestReplayWindowTruncatesFairlyAcrossPairs: the windowed path truncates too,
+// and it must starve the same way the live path does — which is to say, not by
+// dropping whole pairs. Same shape as the accumulator's own starvation test: one
+// chatty pair with more tools than the budget, plus quiet pairs.
+func TestReplayWindowTruncatesFairlyAcrossPairs(t *testing.T) {
+	now := time.Now()
+	var events []*tracing.TraceEvent
+	seq := 0
+
+	call := func(source, target, calleeOp string) {
+		seq++
+		id := "t" + strconv.Itoa(seq)
+		spans := makeCall(id, "r"+strconv.Itoa(seq), source, target, now, true)
+		spans[1].Operation = calleeOp
+		events = append(events, spans...)
+	}
+
+	const budget = 5
+	for tool := 0; tool < budget*2; tool++ {
+		for i := 0; i < 10; i++ {
+			call("chatty-caller", "chatty-provider", "tool_"+strconv.Itoa(tool))
+		}
+	}
+	quiet := [][2]string{{"web", "auth"}, {"worker", "storage"}, {"api", "web"}}
+	for _, p := range quiet {
+		call(p[0], p[1], "handle")
+	}
+
+	edges, _, _, _, _ := replayWindow(events, budget)
+	if len(edges) != budget {
+		t.Fatalf("replayed %d rows, want the full budget of %d", len(edges), budget)
+	}
+
+	pairs := make(map[string]bool, len(edges))
+	for _, e := range edges {
+		pairs[e.Source+" -> "+e.Target] = true
+	}
+	for _, p := range quiet {
+		if !pairs[p[0]+" -> "+p[1]] {
+			t.Errorf("windowed payload starved out %s -> %s", p[0], p[1])
+		}
+	}
+	if !pairs["chatty-caller -> chatty-provider"] {
+		t.Error("windowed payload dropped the busiest pair")
 	}
 }
 

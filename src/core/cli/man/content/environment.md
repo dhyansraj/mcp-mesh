@@ -367,7 +367,8 @@ export MCP_MESH_TRACE_STREAM_MAXLEN=100000
 
 # In-memory dashboard aggregates (per-agent, per-model, per-edge). Keyed by
 # name, so bounded by age first and by a key ceiling as a backstop against
-# name churn (0 disables the respective bound)
+# name churn (0 disables the respective bound). An edge key costs ~2.1 KB, so
+# the default ceiling admits ~20 MB of edge aggregates
 export MCP_MESH_TELEMETRY_AGGREGATE_RETENTION=24h
 export MCP_MESH_TELEMETRY_AGGREGATE_MAX_ENTRIES=10000
 
