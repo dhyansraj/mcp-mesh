@@ -606,6 +606,7 @@ ui-server-build: ui-build
 	@echo "📦 Copying SPA to embed directory..."
 	@rm -rf cmd/mcp-mesh-ui/dist
 	@cp -r src/ui/dist cmd/mcp-mesh-ui/dist
+	@touch cmd/mcp-mesh-ui/dist/.gitkeep
 	@echo "🔨 Building $(UI_SERVER_NAME) with embedded SPA..."
 	@mkdir -p $(BUILD_DIR)
 	go build $(BUILD_FLAGS) -o $(BUILD_DIR)/$(UI_SERVER_NAME) ./$(UI_SERVER_CMD_DIR)

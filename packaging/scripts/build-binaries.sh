@@ -241,13 +241,18 @@ build_all_binaries() {
         (cd "$PROJECT_ROOT/src/ui" && npm ci --silent && npm run build)
         rm -rf "$PROJECT_ROOT/cmd/mcp-mesh-ui/dist"
         cp -r "$PROJECT_ROOT/src/ui/dist" "$PROJECT_ROOT/cmd/mcp-mesh-ui/dist"
+        # Tracked sentinel; see cmd/mcp-mesh-ui/.gitignore
+        touch "$PROJECT_ROOT/cmd/mcp-mesh-ui/dist/.gitkeep"
         success "Dashboard SPA built and copied to cmd/mcp-mesh-ui/dist/"
     else
         if [[ "${MESHUI_USE_PREBUILT:-}" == "true" ]]; then
-            if [[ -d "$PROJECT_ROOT/cmd/mcp-mesh-ui/dist" ]]; then
+            # Test for index.html, not the directory: the directory is present in
+            # every clone because it carries the .gitkeep that keeps //go:embed
+            # compiling, so its existence says nothing about a build having run.
+            if [[ -f "$PROJECT_ROOT/cmd/mcp-mesh-ui/dist/index.html" ]]; then
                 warn "Using prebuilt SPA from cmd/mcp-mesh-ui/dist/"
             else
-                error "MESHUI_USE_PREBUILT=true but cmd/mcp-mesh-ui/dist/ does not exist"
+                error "MESHUI_USE_PREBUILT=true but cmd/mcp-mesh-ui/dist/ holds no built SPA"
                 exit 1
             fi
         else
