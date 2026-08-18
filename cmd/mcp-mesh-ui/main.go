@@ -54,6 +54,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  DATABASE_URL             - Path to SQLite database or PostgreSQL URL (default: mcp_mesh_registry.db)\n")
 		fmt.Fprintf(os.Stderr, "  MCP_MESH_DISTRIBUTED_TRACING_ENABLED - Enable trace streaming (default: false)\n")
 		fmt.Fprintf(os.Stderr, "  REDIS_URL                - Redis URL for trace streaming (default: redis://localhost:6379)\n")
+		fmt.Fprintf(os.Stderr, "  MCP_MESH_UI_TRACE_CONSUMER_GROUP - Redis consumer group for mesh:trace; give a second meshui its own group so it does not take traces from the first (default: mcp-mesh-ui-dashboard)\n")
 		fmt.Fprintf(os.Stderr, "  TEMPO_URL              - Tempo HTTP query URL (default: http://localhost:3200)\n")
 		fmt.Fprintf(os.Stderr, "  TELEMETRY_ENDPOINT     - OTLP endpoint; Tempo URL auto-derived if TEMPO_URL not set\n")
 		fmt.Fprintf(os.Stderr, "  MCP_MESH_UI_BASE_PATH    - Base path for path-based ingress (default: empty)\n")
@@ -162,7 +163,7 @@ func main() {
 			Enabled:       true,
 			RedisURL:      resolveRedisURL(redisURL),
 			StreamName:    "mesh:trace",
-			ConsumerGroup: "mcp-mesh-ui-dashboard",
+			ConsumerGroup: resolveConsumerGroup(),
 			ConsumerName:  fmt.Sprintf("ui-%s", hostname),
 			BatchSize:     100,
 			BlockTimeout:  2 * time.Second,
@@ -233,6 +234,20 @@ func resolveRedisURL(flagValue string) string {
 		return flagValue
 	}
 	return getEnvDefault("REDIS_URL", "redis://localhost:6379")
+}
+
+// defaultConsumerGroup is the Redis consumer group meshui reads mesh:trace with.
+const defaultConsumerGroup = "mcp-mesh-ui-dashboard"
+
+// resolveConsumerGroup returns the consumer group for the mesh:trace stream.
+//
+// Configurable because Redis hands each stream entry to exactly one consumer
+// within a group: a second meshui run against a live mesh under the default
+// group would take roughly half the running dashboard's traces and XAck them,
+// halving what that dashboard shows for as long as it ran. Give the second
+// reader its own group and both see the whole stream.
+func resolveConsumerGroup() string {
+	return getEnvDefault("MCP_MESH_UI_TRACE_CONSUMER_GROUP", defaultConsumerGroup)
 }
 
 func resolveTempoURL(flagValue string) string {

@@ -52,10 +52,17 @@ func SortEdgeStats(edges []EdgeStats) {
 // a pair with one 1,000-call tool ahead of a pair with ten 500-call ones, and
 // the old payload ranked the second pair five times higher.
 //
-// This bounds the damage; it does not remove it. A consumer that needs a row for
-// every edge it draws needs a budget large enough for them — see
-// edgeStatsStreamLimit in the ui package, which is why the graph's feed and the
-// tables' feed no longer share one number.
+// This bounds the damage; it does not remove it, and the bound has a shape every
+// caller has to size its budget against: FAIRNESS SPENDS THE FIRST `pairs` SLOTS
+// ON ONE ROW EACH. A budget at or below the number of pairs therefore returns
+// exactly one row per pair and no pair's second function at all — coverage
+// without depth, which is what a graph wants and the opposite of what a table
+// wants. A consumer that needs a row for every edge it DRAWS needs a budget
+// above the drawn-edge count (edgeStatsStreamLimit in the ui package); a
+// consumer that wants a route's several FUNCTIONS side by side needs one
+// comfortably above the pair count (trafficMaxLimit, which the Traffic page asks
+// for by name). That is why the graph's feed and the table's feed no longer
+// share one number, and why neither of them is the endpoint default.
 func SelectEdgeStats(edges []EdgeStats, limit int) []EdgeStats {
 	if limit <= 0 || len(edges) <= limit {
 		return edges

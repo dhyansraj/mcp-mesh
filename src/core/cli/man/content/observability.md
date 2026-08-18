@@ -104,6 +104,7 @@ Default credentials: `admin` / `admin`
 | `MCP_MESH_TRACE_STREAM_MAXLEN`         | Producer-side `XADD MAXLEN ~` ceiling on `mesh:trace` (`0` = no cap) | `100000` |
 | `MCP_MESH_TELEMETRY_AGGREGATE_RETENTION` | Age-out window for in-memory dashboard aggregates (`0` = no age pruning) | `24h` |
 | `MCP_MESH_TELEMETRY_AGGREGATE_MAX_ENTRIES` | Key ceiling per aggregate map, LRU eviction (`0` = no ceiling). An edge key costs ~2.1 KB, so the default admits ~20 MB of edge aggregates | `10000` |
+| `MCP_MESH_UI_TRACE_CONSUMER_GROUP`      | Redis consumer group meshui reads `mesh:trace` with. One consumer per group gets each entry, so a second meshui needs its own group or it takes traces from the first | `mcp-mesh-ui-dashboard` |
 
 ## Troubleshooting
 

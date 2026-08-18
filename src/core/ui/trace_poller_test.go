@@ -14,17 +14,16 @@ import (
 // traffic, and it is also what the dashboard's traffic widget reads. Those two
 // want different things from one payload — a graph wants a row for every edge it
 // draws, a widget wants a screenful — which is why the stream has a budget of
-// its own rather than the tables' 20.
+// its own rather than the tables' ceiling.
 
 // TestEdgeStatsStreamBudgetIsNotTableSized pins the relationship rather than the
 // number: whatever edgeStatsStreamLimit is set to, it has to be far above what a
 // table asks for, or the graph is back to being served by a ranking that can
 // starve it.
 func TestEdgeStatsStreamBudgetIsNotTableSized(t *testing.T) {
-	const tableCap = 100 // the ceiling handleTraffic/handleEdgeStats clamp to
-	if edgeStatsStreamLimit <= tableCap {
+	if edgeStatsStreamLimit <= trafficMaxLimit {
 		t.Fatalf("edgeStatsStreamLimit = %d, which is within the tables' ceiling of %d — "+
-			"the graph's feed is sized for a table again", edgeStatsStreamLimit, tableCap)
+			"the graph's feed is sized for a table again", edgeStatsStreamLimit, trafficMaxLimit)
 	}
 }
 
@@ -78,9 +77,16 @@ func TestEdgeStatsStreamBudgetCoversAMeshOfDrawnEdges(t *testing.T) {
 		t.Fatalf("published %d rows, want one per drawn edge (%d)", len(published), 40+120)
 	}
 
-	// Contrast: the table budget could not have done this.
-	tableSized := tracing.SelectEdgeStats(acc.GetEdgeStats(), 20)
-	if len(tableSized) != 20 {
-		t.Fatalf("table-sized selection returned %d rows, want 20", len(tableSized))
+	// Contrast: the table's ceiling could not have done this. It covers all 61
+	// pairs — that is what fairness buys — but it cannot carry a row for each of
+	// the 160 edges the graph draws, which is the difference between a budget
+	// sized for depth in a table and one sized for a graph's coverage.
+	tableSized := tracing.SelectEdgeStats(acc.GetEdgeStats(), trafficMaxLimit)
+	if len(tableSized) != trafficMaxLimit {
+		t.Fatalf("table-ceiling selection returned %d rows, want %d", len(tableSized), trafficMaxLimit)
+	}
+	if len(tableSized) >= len(published) {
+		t.Fatalf("table ceiling (%d rows) is no smaller than the stream's payload (%d rows)",
+			len(tableSized), len(published))
 	}
 }

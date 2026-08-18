@@ -505,6 +505,13 @@ export MCP_MESH_TRACE_STREAM_MAXLEN=100000
 export MCP_MESH_TELEMETRY_AGGREGATE_RETENTION=24h
 export MCP_MESH_TELEMETRY_AGGREGATE_MAX_ENTRIES=10000
 
+# Redis consumer group meshui reads mesh:trace with. Redis hands each stream
+# entry to exactly one consumer within a group, so a second meshui left on the
+# default would take roughly half of a running dashboard's traces and acknowledge
+# them away. Give an extra reader its own group and both see the whole stream.
+# Default: mcp-mesh-ui-dashboard.
+export MCP_MESH_UI_TRACE_CONSUMER_GROUP=mcp-mesh-ui-dashboard
+
 # Trace output options
 export TRACE_PRETTY_OUTPUT=false
 export TRACE_ENABLE_STATS=true
