@@ -20,6 +20,16 @@ const (
 	windowReadBatch  = 1000
 )
 
+// Row budget for /trace/traffic. trafficDefaultLimit is what an ad-hoc caller
+// gets without asking; trafficMaxLimit is the ceiling a request is clamped to,
+// and it is what the Traffic page asks for by name (TRAFFIC_ROW_LIMIT in the
+// SPA's lib/api.ts). The two must stay reachable from the tests that pin the
+// budget's effect, which is why they are named rather than written inline.
+const (
+	trafficDefaultLimit = 20
+	trafficMaxLimit     = 100
+)
+
 // trafficCacheTTL bounds how long a windowed (1h/1d) result is reused. It is
 // deliberately SHORTER than the dashboard's 5s poll interval so consecutive
 // polls from a single viewer see fresh data while concurrent viewers (and
@@ -103,19 +113,27 @@ func replayWindow(events []*tracing.TraceEvent, limit int) (edges []tracing.Edge
 // filter. window=all (default) serves the live all-time aggregates unchanged;
 // window=1h/1d re-aggregate over a bounded XRANGE of the Redis trace stream.
 //
-// This endpoint feeds a TABLE, so a screenful-sized budget is the right budget
-// and the 20/100 below are unchanged. The topology graph does NOT read it — its
-// rows arrive over SSE, on a budget of its own (edgeStatsStreamLimit), because a
-// graph needs a row per edge it draws and a table does not.
+// This endpoint feeds a TABLE, and a table wants DEPTH WITHIN A ROUTE: since
+// #1531 a row is one (caller, provider, function), so the several tools a pair
+// exchanges are the detail the page exists to show. Fair-across-pairs truncation
+// (tracing.SelectEdgeStats) hands out one pass per rank, so a budget at or below
+// the number of pairs resolves to exactly one row per pair — every route on
+// screen, every route showing a single function. A screenful-sized budget is
+// therefore NOT the right budget here any more, and the page asks for
+// trafficMaxLimit rather than taking trafficDefaultLimit.
+//
+// The topology graph does NOT read this endpoint — its rows arrive over SSE, on
+// a budget of its own (edgeStatsStreamLimit), because a graph needs a row per
+// edge it draws and a scrollable table does not.
 func (s *Server) handleTraffic(c *gin.Context) {
-	limit := 20
+	limit := trafficDefaultLimit
 	if l := c.Query("limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
 			limit = parsed
 		}
 	}
-	if limit > 100 {
-		limit = 100
+	if limit > trafficMaxLimit {
+		limit = trafficMaxLimit
 	}
 
 	windowParam := c.Query("window")

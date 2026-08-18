@@ -202,6 +202,104 @@ func TestReplayWindowTruncatesFairlyAcrossPairs(t *testing.T) {
 	}
 }
 
+// TestTrafficBudgetCarriesARoutesFunctions is the server half of a defect whose
+// other half is in the SPA: fair-across-pairs truncation spends its first `pairs`
+// slots on ONE ROW EACH, so a budget at or below the pair count returns exactly
+// one row per pair — coverage without depth. Against a live mesh of 42 pairs the
+// Traffic page's old budget of 20 produced 40 rows over 40 routes with not one
+// route showing a second function, which is the page's entire purpose since
+// #1531.
+//
+// So the budget the page asks for (trafficMaxLimit) has to be large enough that
+// a route's several functions survive the truncation, and this pins that against
+// the measured shape rather than against a number someone hopes is comfortable.
+func TestTrafficBudgetCarriesARoutesFunctions(t *testing.T) {
+	now := time.Now()
+	var events []*tracing.TraceEvent
+	seq := 0
+
+	call := func(source, target, calleeOp string) {
+		seq++
+		id := "t" + strconv.Itoa(seq)
+		spans := makeCall(id, "r"+strconv.Itoa(seq), source, target, now, true)
+		spans[1].Operation = calleeOp
+		events = append(events, spans...)
+	}
+
+	// The measured mesh: 42 pairs, 19 of them multi-function, the busiest with 8.
+	const (
+		pairCount            = 42
+		multiFunctionPairs   = 19
+		busiestPairFunctions = 8
+	)
+	functionsOn := func(pair int) int {
+		if pair == 0 {
+			return busiestPairFunctions
+		}
+		if pair < multiFunctionPairs {
+			return 2
+		}
+		return 1
+	}
+	totalRows := 0
+	for p := 0; p < pairCount; p++ {
+		id := strconv.Itoa(p)
+		for fn := 0; fn < functionsOn(p); fn++ {
+			totalRows++
+			call("caller-"+id, "provider-"+id, "tool_"+id+"_"+strconv.Itoa(fn))
+		}
+	}
+	if totalRows <= pairCount {
+		t.Fatalf("fixture has %d rows over %d pairs and cannot show the defect", totalRows, pairCount)
+	}
+
+	countRows := func(edges []tracing.EdgeStats) (pairs int, deepest int) {
+		perPair := make(map[string]int, len(edges))
+		for _, e := range edges {
+			perPair[e.Source+" -> "+e.Target]++
+		}
+		for _, n := range perPair {
+			if n > deepest {
+				deepest = n
+			}
+		}
+		return len(perPair), deepest
+	}
+
+	// The budget the page asks for: every row survives, so the busiest route
+	// arrives with all 8 of its functions.
+	atCap, _, _, _, _ := replayWindow(events, trafficMaxLimit)
+	pairs, deepest := countRows(atCap)
+	if pairs != pairCount {
+		t.Fatalf("at the page's budget the payload covers %d pairs, want %d", pairs, pairCount)
+	}
+	if deepest != busiestPairFunctions {
+		t.Fatalf("at the page's budget the busiest route shows %d functions, want %d — "+
+			"the Traffic page is back to one row per route", deepest, busiestPairFunctions)
+	}
+	if len(atCap) != totalRows {
+		t.Fatalf("at the page's budget the payload has %d rows, want all %d", len(atCap), totalRows)
+	}
+
+	// The contrast, and the failure as it was measured: the endpoint DEFAULT is
+	// at or below this pair count, so it flattens the same data to one row each.
+	// This is not a bug in the default — it is why the page must not take it.
+	if trafficDefaultLimit > pairCount {
+		t.Skipf("trafficDefaultLimit (%d) now exceeds the measured pair count (%d); "+
+			"the flattening contrast no longer applies", trafficDefaultLimit, pairCount)
+	}
+	atDefault, _, _, _, _ := replayWindow(events, trafficDefaultLimit)
+	if _, deepestAtDefault := countRows(atDefault); deepestAtDefault != 1 {
+		t.Fatalf("at the endpoint default the deepest route shows %d functions, want 1 — "+
+			"fair selection no longer spends its first pass one row per pair, so the "+
+			"reasoning behind the page's budget needs revisiting", deepestAtDefault)
+	}
+	if trafficMaxLimit <= pairCount {
+		t.Fatalf("trafficMaxLimit (%d) is at or below a realistic pair count (%d), so the "+
+			"page's budget buys it exactly one row per route", trafficMaxLimit, pairCount)
+	}
+}
+
 // TestParseWindow covers the accepted values and rejection of unknown windows.
 func TestParseWindow(t *testing.T) {
 	cases := []struct {

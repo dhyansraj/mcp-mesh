@@ -11,7 +11,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Segmented } from "@/components/ui/segmented";
-import { formatBytes, formatTokenCount, getTraffic } from "@/lib/api";
+import { formatBytes, formatTokenCount, getTraffic, TRAFFIC_ROW_LIMIT } from "@/lib/api";
 import { compareEdgeStats, edgeRowKey } from "@/lib/edge-stats";
 import { AgentStat, EdgeStat, ModelStat, TrafficWindow } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -128,7 +128,10 @@ export default function TrafficPage() {
     const load = async (isInitial: boolean) => {
       if (!isInitial) setRefetching(true);
       try {
-        const data = await getTraffic(requestedWindow);
+        // The budget is passed rather than defaulted: it is a property of what
+        // THIS page renders (a route's functions together), and a reader of the
+        // fetch has to be able to see which one it gets — see TRAFFIC_ROW_LIMIT.
+        const data = await getTraffic(requestedWindow, TRAFFIC_ROW_LIMIT);
         if (cancelled || requestedWindow !== timeWindow) return;
 
         setEnabled(data.enabled);

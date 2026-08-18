@@ -212,6 +212,25 @@ export async function getEdgeStats(limit: number = 20): Promise<EdgeStatsRespons
 }
 
 /**
+ * Rows the Traffic page asks /trace/traffic for.
+ *
+ * It is the endpoint's own ceiling (trafficMaxLimit in src/core/ui), picked so
+ * the request cannot be silently clamped to something smaller than it asked for,
+ * and so the page is never the reason a route's second function is missing.
+ *
+ * WHY NOT A SCREENFUL. The old 20 was chosen when one row meant one agent pair.
+ * Since #1531 a row is one (route, function), and the server hands the budget out
+ * fairly across pairs — every pair's busiest function before any pair's second.
+ * A budget at or below the pair count therefore resolves to exactly one row per
+ * route, so a 40-pair mesh rendered 40 single-function rows and the page could
+ * not show the per-function detail it exists for. The budget has to clear the
+ * pair count for a route's functions to appear together, not merely fill a
+ * viewport — this is a scrollable table, and rows below the fold are still
+ * reachable.
+ */
+export const TRAFFIC_ROW_LIMIT = 100;
+
+/**
  * Windowed traffic aggregates. `window=all` returns live all-time stats;
  * "1h"/"1d" return trailing-window aggregates. Element shapes match the
  * live EdgeStat/AgentStat/ModelStat, so the Traffic page reuses the same
@@ -219,7 +238,7 @@ export async function getEdgeStats(limit: number = 20): Promise<EdgeStatsRespons
  */
 export async function getTraffic(
   window: TrafficWindow,
-  limit: number = 20
+  limit: number = TRAFFIC_ROW_LIMIT
 ): Promise<TrafficResponse> {
   const res = await fetch(
     `${API_BASE}/trace/traffic?window=${window}&limit=${limit}`,
