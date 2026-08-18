@@ -55,13 +55,11 @@ async def my_health_check():
     """Custom health check."""
     # Check database connection
     if not db.is_connected():
-        return {"status": "unhealthy", "reason": "db disconnected"}
+        return {"status": "unhealthy", "errors": ["db disconnected"]}
 
-    # Check memory
-    if memory_usage() > 90:
-        return {"status": "degraded", "reason": "high memory"}
-
-    return {"status": "healthy"}
+    # An impairment you can still serve through stays healthy - report it
+    # in `checks` so an operator sees it on /health.
+    return {"status": "healthy", "checks": {"memory_ok": memory_usage() <= 90}}
 
 @mesh.agent(
     name="my-agent",
@@ -81,10 +79,11 @@ public MeshHealth healthCheck() {
         return MeshHealth.unhealthy("db disconnected")
             .withCheck("db_connected", false);
     }
-    if (memoryUsage() > 90) {
-        return MeshHealth.degraded("high memory");
-    }
-    return MeshHealth.healthy().withCheck("db_connected", true);
+    // An impairment you can still serve through stays healthy - report it
+    // in checks so an operator sees it on /health.
+    return MeshHealth.healthy()
+        .withCheck("db_connected", true)
+        .withCheck("memory_ok", memoryUsage() <= 90);
 }
 ```
 
@@ -101,10 +100,12 @@ const agent = mesh(server, {
     if (!db.isConnected()) {
       return { status: "unhealthy", errors: ["db disconnected"] };
     }
-    if (memoryUsage() > 90) {
-      return { status: "degraded", errors: ["high memory"] };
-    }
-    return { status: "healthy", checks: { db_connected: true } };
+    // An impairment you can still serve through stays healthy - report it
+    // in `checks` so an operator sees it on /health.
+    return {
+      status: "healthy",
+      checks: { db_connected: true, memory_ok: memoryUsage() <= 90 },
+    };
   },
 });
 ```
@@ -115,9 +116,17 @@ One check per agent. Returning `boolean` works too: `true` is healthy, `false` u
 
 While the check reports `unhealthy` the agent stops heartbeating. The registry's staleness sweep then marks it unhealthy, dependency resolution stops selecting it, and consumers move to another provider. When the check passes again the heartbeat resumes and the registry restores the agent - no restart, no redeploy. This is what lets a provider whose upstream vendor is down take itself out of rotation.
 
-Only an explicit unhealthy result does that. A check that raises is recorded as `degraded` and keeps heartbeating, in all three runtimes: a bug in the health check must not be able to remove a working agent from the mesh.
+Only an explicit unhealthy result does that. A check that raises keeps heartbeating and stays in dependency resolution, in all three runtimes: a bug in the health check must not be able to remove a working agent from the mesh.
 
-`degraded` shows on the diagnostic surface only, on all three runtimes: the agent keeps heartbeating and stays in dependency resolution, and `/health` answers 503 while `/ready` is unmoved. Nothing probes `/health`, so its status code is free to carry the verdict.
+Those verdicts show on the diagnostic surface only, on all three runtimes: `/health` answers 503 while `/ready` is unmoved. Nothing probes `/health`, so its status code is free to carry the verdict.
+
+### When Every Provider Withdraws
+
+A health check is per-agent, but the failure it reports usually is not. Broken egress, an expired shared credential, a vendor that is down for everyone: each provider of a capability observes it independently and each withdraws itself, so the capability can go from several providers to none within one refresh period.
+
+Mesh does not keep a last provider in rotation to prevent that. Routing to something that has just reported it cannot serve trades an unresolved dependency — fast, and clearly attributable — for a call that is guaranteed to fail slowly at the far end, and it makes the health check a suggestion. Withdrawal is also cheap: the agent keeps running, keeps its resolved dependencies, and re-registers by itself the moment its check passes again, so getting it wrong costs one refresh period. There is deliberately no damping, hysteresis or grace period on it.
+
+It is not silent, though. When the registry withdraws the last healthy provider of a capability it logs a warning naming that capability, so a total outage is something the registry says rather than something you infer from a scatter of consumer errors.
 
 Route (`@mesh.route` / `@MeshRoute` / `mesh.route`) and A2A agents are no longer exempt: a failing check pauses their heartbeat too, and the registry stops advertising the gateway. The hook means the same thing on every agent type - "I am not available" - and mesh does the same thing with it everywhere: it stops wiring that agent. What differs is topology, not meaning. A provider is something others route _to_; a gateway is where requests _enter_, and the ingress it keeps serving was never mesh-routed in the first place.
 
@@ -144,11 +153,10 @@ Never point liveness or startup at `/ready` or `/health`. `/health` reflects you
 
 ### Health States
 
-| State       | Description                 |
-| ----------- | --------------------------- |
-| `healthy`   | Agent is fully operational  |
-| `degraded`  | Agent works but with issues |
-| `unhealthy` | Agent cannot serve requests |
+| State       | Description                                                       |
+| ----------- | ----------------------------------------------------------------- |
+| `healthy`   | Agent can serve. Stays in dependency resolution.                   |
+| `unhealthy` | Agent cannot serve. Withdrawn from dependency resolution.          |
 
 ## Discovery
 
@@ -272,17 +280,21 @@ export DEFAULT_TIMEOUT_THRESHOLD=20
 
 ```python
 async def health():
-    # Check all critical dependencies
+    # Report every probe; decide on the ones you cannot serve without.
     checks = {
         "database": await check_db(),
         "cache": await check_cache(),
         "memory": check_memory(),
     }
 
-    if all(c["ok"] for c in checks.values()):
-        return {"status": "healthy", "checks": checks}
-    return {"status": "degraded", "checks": checks}
+    # A cold cache is slower, not unserving, and a memory warning is not an
+    # outage - both stay healthy and ride along in `checks`.
+    if not checks["database"]["ok"]:
+        return {"status": "unhealthy", "checks": checks, "errors": ["database unreachable"]}
+    return {"status": "healthy", "checks": checks}
 ```
+
+The verdict answers one question — should the mesh keep routing to this agent? — so return `unhealthy` only for the failures that make the answer no. An impairment you can still serve through is `healthy`; put the detail in `checks` and it still reaches `/health` for an operator to read.
 
 ### 2. Handle Failures Gracefully
 

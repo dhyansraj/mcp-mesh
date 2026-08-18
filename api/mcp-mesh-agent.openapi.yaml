@@ -359,10 +359,19 @@ components:
           type: string
           enum: [healthy, degraded, unhealthy, unknown, starting]
           description: |
-            The health check's verdict. `starting` is the placeholder served
-            before the first refresh has run; `unknown` is what a check that
-            returned an unrecognized type is recorded as. Only `healthy` answers
-            200.
+            The health check's verdict. A check ANSWERS with `healthy` or
+            `unhealthy` — the routing contract is binary, and only `unhealthy`
+            withdraws the agent from dependency resolution. The other three are
+            assigned by the runtime and appear here only: `starting` is the
+            placeholder served before the first refresh has run; `unknown` is
+            what a dict carrying an unrecognized status STRING is recorded as;
+            an unrecognized return TYPE, and a check that raised, are recorded
+            as `degraded` instead, so a coding defect in the check cannot
+            withdraw an agent whose upstream is fine. `unknown` is Python-only:
+            TypeScript and Java have no such verdict (both map an unreadable
+            status to `degraded`), so a consumer of this shared schema must
+            accept it but will only ever see it from a Python agent. Only
+            `healthy` answers 200.
         agent:
           type: string
           example: "hello-world"

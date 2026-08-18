@@ -31,6 +31,13 @@ import (
 // Java's, so on Python and TypeScript a cancel branch would be unreachable
 // code — `AbortSignal.timeout` rejects with a "TimeoutError", which is a
 // transport failure and belongs in the unhealthy branch asserted below.
+//
+// RFC #1515 makes the contract binary and takes `degraded` out of the teaching
+// surface entirely, so the branch-scoped bans above are joined by a WHOLE-FILE
+// one (TestScaffoldedAgentsNeverMentionDegraded). Java's interrupt branch was
+// the last selection left: it now restores the interrupt and rethrows, which
+// lands on the runtime's own indeterminate verdict — the same outcome, chosen
+// by the runtime rather than named by the author.
 
 func templatesRoot(t *testing.T) string {
 	t.Helper()
@@ -209,6 +216,72 @@ func TestLlmProviderTemplates_HealthCheckIsWired(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// RFC #1515: `degraded` is out of the teaching surface, scaffold comments
+// included. The per-branch bans above stop the INVERSION; this stops the
+// vocabulary from coming back at all — as a returned value, as advice in a
+// comment, or as the "here is what the runtime does with a throw" aside that
+// three templates carried and that reads, to someone skimming for what to
+// return, like a third option.
+//
+// A whole-file assertion is only possible because nothing legitimate needs the
+// word any more. It is also the only assertion that would have caught the
+// original bug at its source: every template that shipped the inversion
+// mentioned `degraded` in prose first and returned it second.
+//
+// Every template gets this, not just llm-provider — basic, llm-agent,
+// a2a-consumer and api all carry the same health/startup preamble, and a
+// re-added mention in any one of them is a re-added mention. All five
+// templates in all three languages, so the table is the whole matrix.
+func TestScaffoldedAgentsNeverMentionDegraded(t *testing.T) {
+	templates := []struct {
+		language string
+		template string
+		entry    string
+	}{
+		{"python", "basic", "main.py"},
+		{"python", "llm-agent", "main.py"},
+		{"python", "llm-provider", "main.py"},
+		{"python", "a2a-consumer", "main.py"},
+		{"python", "api", "main.py"},
+		{"typescript", "basic", filepath.Join("src", "index.ts")},
+		{"typescript", "llm-agent", filepath.Join("src", "index.ts")},
+		{"typescript", "llm-provider", filepath.Join("src", "index.ts")},
+		{"typescript", "a2a-consumer", filepath.Join("src", "index.ts")},
+		{"typescript", "api", filepath.Join("src", "index.ts")},
+		{"java", "basic", javaEntry},
+		{"java", "llm-agent", javaEntry},
+		{"java", "llm-provider", javaEntry},
+		{"java", "a2a-consumer", javaEntry},
+		{"java", "api", javaEntry},
+	}
+
+	for _, tpl := range templates {
+		t.Run(tpl.language+" "+tpl.template, func(t *testing.T) {
+			ctx := &ScaffoldContext{
+				Name:        "verdict-probe",
+				Description: "verdict probe",
+				Language:    tpl.language,
+				OutputDir:   t.TempDir(),
+				Port:        9400,
+				Model:       "anthropic/claude-sonnet-5",
+				Template:    tpl.template,
+				TemplateDir: templatesRoot(t),
+			}
+			require.NoError(t, NewStaticProvider().Execute(ctx))
+
+			content, err := os.ReadFile(filepath.Join(ctx.OutputDir, ctx.Name, tpl.entry))
+			require.NoError(t, err)
+
+			require.NotContains(t, strings.ToLower(string(content)), "degraded",
+				"a health check answers one binary question — keep routing here, or "+
+					"stop — and `degraded` is the same answer as healthy on every mesh "+
+					"path. Naming it in scaffolded code is what produced the inversion "+
+					"this file exists to catch, so it stays out of the generated "+
+					"output entirely (RFC #1515)")
+		})
 	}
 }
 

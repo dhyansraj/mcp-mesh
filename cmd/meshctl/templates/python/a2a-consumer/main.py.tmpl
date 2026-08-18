@@ -66,10 +66,10 @@ app = FastMCP("{{ toPascalCase .Name }} Bridge")
 # reported by startup_check crash-loops a pod whose configuration was fine.
 #
 # They also disagree about exceptions, deliberately. A health_check that
-# raises is recorded as degraded and keeps heartbeating - a buggy probe must
-# not withdraw a working bridge from a mesh that may have no other one. A
-# startup_check that raises FAILS: at boot an indeterminate answer is not a
-# reason to admit a possibly-misconfigured agent.
+# raises keeps heartbeating - a buggy probe must not withdraw a working
+# bridge from a mesh that may have no other one. A startup_check that raises
+# FAILS: at boot an indeterminate answer is not a reason to admit a
+# possibly-misconfigured agent.
 
 
 async def health_check() -> dict:

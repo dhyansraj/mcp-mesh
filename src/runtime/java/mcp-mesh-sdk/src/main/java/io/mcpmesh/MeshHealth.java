@@ -63,7 +63,21 @@ public record MeshHealth(
      * Impaired but still serving — keeps heartbeating and stays in resolution.
      *
      * @param errors reasons, rendered into {@code /health}; nulls are dropped
+     * @deprecated since 3.7.0 (issue #1515). The question a health check answers
+     *     is binary — stay in dependency resolution, or withdraw — and this
+     *     factory gives the same answer {@link #healthy()} does: the agent
+     *     keeps heartbeating and consumers keep routing to it. It differs only
+     *     in the status code of {@code /health}, which nothing probes.
+     *     <p>Use {@link #healthy()} for an impairment you can serve through,
+     *     recording the detail with {@link #withCheck(String, Object)} so an
+     *     operator still sees it, and {@link #unhealthy(String...)} for one you
+     *     cannot. To report an INDETERMINATE probe — one cut short, so it
+     *     concluded nothing — throw: the runtime records that itself and keeps
+     *     the agent in resolution.
+     *     <p>Behaviour is unchanged and this still compiles and runs; it emits
+     *     a one-time runtime warning. Removal no earlier than 4.0.
      */
+    @Deprecated(since = "3.7.0")
     public static MeshHealth degraded(String... errors) {
         return new MeshHealth(MeshHealthStatus.DEGRADED, null, cleanErrors(errors));
     }
@@ -80,14 +94,57 @@ public record MeshHealth(
     }
 
     /**
-     * Build from a wire status string, mapping anything unrecognized to
-     * {@link MeshHealthStatus#DEGRADED} rather than unhealthy.
+     * The {@link #checks()} key the runtime sets when it could not READ the
+     * status it was given, as opposed to acting on one it could.
+     *
+     * <p>Same key and same {@code false} value TypeScript's
+     * {@code normalizeHealthResult} uses, so {@code /health} reads identically
+     * on both runtimes. It is also what tells the deprecation warning apart
+     * from a real selection: a {@code DEGRADED} carrying this marker is the
+     * runtime's verdict about an unreadable string, not the author's about
+     * their upstream, and warning at them would be pointing at an API they
+     * never used.
+     */
+    public static final String UNREADABLE_STATUS_CHECK = "health_check_status_value";
+
+    /**
+     * Build from a wire status string.
+     *
+     * <p>A value that cannot be read — including null — becomes the runtime's
+     * own indeterminate verdict: {@link MeshHealthStatus#DEGRADED}, so the
+     * agent keeps heartbeating and stays in resolution, carrying
+     * {@link #UNREADABLE_STATUS_CHECK} and an error naming the value so an
+     * operator sees on {@code /health} that the status was the problem.
+     * Deliberately not {@link MeshHealthStatus#UNHEALTHY}: withdrawing an agent
+     * because its status string could not be parsed is a far worse failure than
+     * keeping it.
      *
      * @param status wire value: {@code healthy} / {@code degraded} / {@code unhealthy}
      * @param errors reasons; nulls are dropped
      */
     public static MeshHealth of(String status, String... errors) {
-        return new MeshHealth(MeshHealthStatus.fromWire(status), null, cleanErrors(errors));
+        MeshHealthStatus parsed = MeshHealthStatus.parseWire(status);
+        if (parsed == null) {
+            List<String> reasons = new ArrayList<>(cleanErrors(errors));
+            reasons.add("Unrecognized health status: " + status);
+            return new MeshHealth(
+                MeshHealthStatus.DEGRADED, Map.of(UNREADABLE_STATUS_CHECK, false), reasons);
+        }
+        return new MeshHealth(parsed, null, cleanErrors(errors));
+    }
+
+    /**
+     * Whether this verdict is one the RUNTIME assigned because it could not
+     * read the status it was handed, rather than one the author selected.
+     *
+     * <p>Only {@link #of(String, String...)} produces one — every other route
+     * to {@code DEGRADED} on this type ({@link #degraded(String...)},
+     * {@link #withStatus(MeshHealthStatus)}, the canonical constructor) is a
+     * choice — and it is the one the deprecation warning must skip.
+     */
+    public boolean isUnreadableStatus() {
+        return status == MeshHealthStatus.DEGRADED
+            && Boolean.FALSE.equals(checks.get(UNREADABLE_STATUS_CHECK));
     }
 
     /**

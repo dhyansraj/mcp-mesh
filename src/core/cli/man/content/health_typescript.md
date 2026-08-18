@@ -64,7 +64,7 @@ const agent = mesh(server, {
 });
 ```
 
-One check per agent. Return `{ status, checks, errors }` for full detail, or a `boolean` for the terse form (`true` healthy, `false` unhealthy). `healthCheckTtl` is how often it re-runs (default 15); `MCP_MESH_HEALTH_CHECK_TTL` overrides it.
+One check per agent, sync or async. Return `{ status, checks, errors }` for full detail, or a `boolean` for the terse form (`true` healthy, `false` unhealthy). A status is matched case-insensitively and surrounding whitespace is ignored; omitting it - or passing `null` - means healthy, so a result carrying only `checks` is reporting success. `healthCheckTtl` is how often it re-runs (default 15); `MCP_MESH_HEALTH_CHECK_TTL` overrides it.
 
 The verdict drives `/health`, which answers 200 only while the check reports `healthy` and carries the `checks` and `errors` it returned. It does not drive `/ready`, which reports whether the mesh runtime is up: pausing the heartbeat already withdraws the agent, and a 503 on `/ready` would additionally empty the Service that mesh traffic arrives on. `/livez` never consults it either - a restart cannot fix a vendor outage.
 
@@ -72,9 +72,13 @@ The verdict drives `/health`, which answers 200 only while the check reports `he
 
 While the check reports unhealthy the agent **stops heartbeating**. The registry marks it unhealthy after the staleness window, dependency resolution stops selecting it, and consumers move to another provider. When the check passes again the heartbeat resumes and the registry restores the agent through the `410 Gone` re-register path - no restart. The TTL is the cadence, not the end-to-end latency: it only bounds how long until the next check runs. Withdrawal costs that plus the registry's staleness window once heartbeats stop, and recovery costs it plus the heartbeat resume and re-register round trip.
 
-Report `unhealthy` only for conditions the mesh should route around: the upstream this agent needs is genuinely not serving. A check that **throws**, or that could not reach a conclusion, is recorded as `degraded` and keeps heartbeating - a broken probe says nothing about the upstream, and withdrawing a working agent over one is the worse failure.
+Report `unhealthy` only for conditions the mesh should route around: the upstream this agent needs is genuinely not serving. A check that **throws**, or that could not reach a conclusion, keeps heartbeating and stays in dependency resolution - a broken probe says nothing about the upstream, and withdrawing a working agent over one is the worse failure.
 
-`degraded` shows on the diagnostic surface only, the same way it does on Python and Java: the agent keeps heartbeating and stays in dependency resolution, and `/health` answers 503 while `/ready` is unmoved. Nothing probes `/health`, so its status code is free to carry the verdict; readiness reports the mesh runtime and nothing else.
+Those verdicts show on the diagnostic surface only, the same way they do on Python and Java: `/health` answers 503 while `/ready` is unmoved. Nothing probes `/health`, so its status code is free to carry the verdict; readiness reports the mesh runtime and nothing else.
+
+A health check is per-agent, but the failure it reports usually is not. Broken egress, an expired shared credential, a vendor that is down for everyone: each provider of a capability observes it independently and each withdraws itself, so the capability can go from several providers to none within one refresh period.
+
+Mesh does not keep a last provider in rotation to prevent that. Routing to something that has just reported it cannot serve trades an unresolved dependency - fast, and clearly attributable - for a call that is guaranteed to fail slowly at the far end, and it makes the health check a suggestion. Withdrawal is also cheap: the agent keeps running, keeps its resolved dependencies, and re-registers by itself the moment its check passes again, so getting it wrong costs one refresh period. It is not silent, though: when the registry withdraws the last healthy provider of a capability it logs a warning naming that capability, so a total outage is something the registry says rather than something you infer from a scatter of consumer errors.
 
 A `mesh.route` or A2A gateway runs the check exactly as an MCP agent does, and a failing one pauses its heartbeat too, so the registry stops advertising it. Nothing else changes: the Express server keeps listening, the dependencies it already resolved stay wired, and `/ready` still answers 200 - the pod keeps its Service endpoints and keeps taking ingress. A withdrawn gateway stops being discovered; it does not go dark.
 

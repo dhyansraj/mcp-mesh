@@ -28,7 +28,7 @@ async def my_health_check() -> dict:
 
     Can return:
     - bool: True = HEALTHY, False = UNHEALTHY
-    - dict: {"status": "healthy/degraded/unhealthy", "checks": {...}, "errors": [...]}
+    - dict: {"status": "healthy/unhealthy", "checks": {...}, "errors": [...]}
 
     Returns:
         dict: Health status with checks and errors
@@ -37,7 +37,7 @@ async def my_health_check() -> dict:
 
     checks = {}
     errors = []
-    status = "healthy"  # Can be: "healthy", "degraded", "unhealthy"
+    status = "healthy"  # Can be: "healthy" or "unhealthy"
 
     # Check 1: LLM API Key presence
     api_key = os.getenv("ANTHROPIC_API_KEYS")
@@ -91,14 +91,19 @@ async def my_health_check() -> dict:
                     errors.append(
                         f"LLM API returned unexpected status: {response.status_code}"
                     )
-                    status = "degraded"
+                    # The vendor answered and it is not serving. Unhealthy:
+                    # this is the outage the mesh has to route around, and
+                    # anything else keeps heartbeating and keeps consumers
+                    # pointed here.
+                    status = "unhealthy"
                     print(
                         f"⚠️ LLM API returned unexpected status: {response.status_code}"
                     )
         except Exception as e:
+            # The vendor is not answering at all (DNS, connect, timeout, TLS).
             checks["llm_api_reachable"] = False
             errors.append(f"LLM API unreachable: {str(e)}")
-            status = "degraded"
+            status = "unhealthy"
             print(f"⚠️ LLM API unreachable: {e}")
 
     # Check 3: Any other custom checks

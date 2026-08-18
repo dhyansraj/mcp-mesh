@@ -1485,7 +1485,7 @@ def agent(
     enable_http: bool = True,
     namespace: str = "default",
     heartbeat_interval: int = 5,
-    health_check: Callable[[], Awaitable[Any]] | None = None,
+    health_check: Callable[[], Any] | Callable[[], Awaitable[Any]] | None = None,
     health_check_ttl: int = 15,
     startup_check: Callable[[], Any] | None = None,
     auto_run: bool = True,  # Changed to True by default!
@@ -1512,7 +1512,8 @@ def agent(
             Environment variable: MCP_MESH_NAMESPACE (takes precedence)
         heartbeat_interval: Heartbeat interval in seconds (default: 5)
             Environment variable: MCP_MESH_HEALTH_INTERVAL (takes precedence)
-        health_check: Optional async function that returns HealthStatus
+        health_check: Optional sync or async function returning a bool, a
+            {status, checks, errors} dict, or a HealthStatus
             Called before heartbeat and on /health endpoint with TTL caching
         health_check_ttl: Cache TTL for health check results in seconds (default: 15)
             Reduces expensive health check calls by caching results
@@ -1609,7 +1610,7 @@ def agent(
             raise ValueError("auto_run_interval must be at least 1 second")
 
         if health_check is not None and not callable(health_check):
-            raise ValueError("health_check must be a callable (async function)")
+            raise ValueError("health_check must be a callable (sync or async)")
 
         if not isinstance(health_check_ttl, int):
             raise ValueError("health_check_ttl must be an integer")

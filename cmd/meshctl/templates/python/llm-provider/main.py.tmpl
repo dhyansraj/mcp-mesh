@@ -47,10 +47,10 @@ app = FastMCP("{{ toPascalCase .Name }}")
 # wrong", which is the signal this hook exists to produce.
 #
 # They also disagree about exceptions, deliberately. A health_check that
-# raises is recorded as degraded and keeps heartbeating - a buggy probe must
-# not withdraw a working provider from a mesh that may have no other one. A
-# startup_check that raises FAILS: at boot an indeterminate answer is not a
-# reason to admit a possibly-misconfigured agent.
+# raises keeps heartbeating - a buggy probe must not withdraw a working
+# provider from a mesh that may have no other one. A startup_check that raises
+# FAILS: at boot an indeterminate answer is not a reason to admit a
+# possibly-misconfigured agent.
 {{ if eq .ProbeVendor "anthropic" }}
 async def health_check() -> dict:
     """
@@ -100,7 +100,7 @@ async def health_check() -> dict:
                 else:
                     # The vendor answered and it is not serving. Unhealthy:
                     # this is the outage the mesh has to route around, and
-                    # "degraded" would keep heartbeating and keep consumers
+                    # anything else keeps heartbeating and keeps consumers
                     # pointed here.
                     checks["anthropic_api_reachable"] = False
                     errors.append(f"Anthropic API returned status: {response.status_code}")
@@ -162,7 +162,7 @@ async def health_check() -> dict:
                 else:
                     # The vendor answered and it is not serving. Unhealthy:
                     # this is the outage the mesh has to route around, and
-                    # "degraded" would keep heartbeating and keep consumers
+                    # anything else keeps heartbeating and keeps consumers
                     # pointed here.
                     checks["openai_api_reachable"] = False
                     errors.append(f"OpenAI API returned status: {response.status_code}")
@@ -223,7 +223,7 @@ async def health_check() -> dict:
                 else:
                     # The vendor answered and it is not serving. Unhealthy:
                     # this is the outage the mesh has to route around, and
-                    # "degraded" would keep heartbeating and keep consumers
+                    # anything else keeps heartbeating and keeps consumers
                     # pointed here.
                     checks["gemini_api_reachable"] = False
                     errors.append(f"Gemini API returned status: {response.status_code}")

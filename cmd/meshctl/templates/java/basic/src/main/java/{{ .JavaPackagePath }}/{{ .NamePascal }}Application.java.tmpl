@@ -73,10 +73,10 @@ public class {{ .NamePascal }}Application {
     // fresh Spring context.
     //
     // They also disagree about exceptions, deliberately. A health check that
-    // throws is recorded as DEGRADED and keeps heartbeating - a buggy probe
-    // must not withdraw a working agent from a mesh that may have no other
-    // one. A startup check that throws FAILS: at boot an indeterminate answer
-    // is not a reason to admit a possibly-misconfigured agent.
+    // throws keeps heartbeating - a buggy probe must not withdraw a working
+    // agent from a mesh that may have no other one. A startup check that throws
+    // FAILS: at boot an indeterminate answer is not a reason to admit a
+    // possibly-misconfigured agent.
 
     /** Can this agent serve right now? */
     @MeshHealthCheck(ttlSeconds = 30)

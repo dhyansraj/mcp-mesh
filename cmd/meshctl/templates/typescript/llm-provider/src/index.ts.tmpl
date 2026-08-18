@@ -46,10 +46,10 @@ const server = new FastMCP({
 // wrong", which is the signal this hook exists to produce.
 //
 // They also disagree about exceptions, deliberately. A healthCheck that
-// throws is recorded as "degraded" and keeps heartbeating - a buggy probe
-// must not withdraw a working provider from a mesh that may have no other
-// one. A startupCheck that throws FAILS: at boot an indeterminate answer is
-// not a reason to admit a possibly-misconfigured agent.
+// throws keeps heartbeating - a buggy probe must not withdraw a working
+// provider from a mesh that may have no other one. A startupCheck that throws
+// FAILS: at boot an indeterminate answer is not a reason to admit a
+// possibly-misconfigured agent.
 {{ if .ProbeVendor }}
 /**
  * Ceiling for one probe. `AbortSignal.timeout` rejects with a
@@ -58,8 +58,9 @@ const server = new FastMCP({
  * to route around.
  *
  * If you add cancellation of your own — an `AbortController` you abort on
- * shutdown — handle its "AbortError" separately and report "degraded":
- * a probe you cut short concluded nothing about the vendor.
+ * shutdown — let its "AbortError" propagate instead of reporting a verdict:
+ * a probe you cut short concluded nothing about the vendor, and the runtime
+ * keeps the agent in dependency resolution for a check that threw.
  */
 const HEALTH_PROBE_TIMEOUT_MS = 5_000;
 
@@ -112,8 +113,8 @@ async function healthCheck(): Promise<MeshHealthResult> {
       };
     }
     // The vendor answered and it is not serving. Unhealthy: this is the
-    // outage the mesh has to route around, and "degraded" would keep
-    // heartbeating and keep consumers pointed here.
+    // outage the mesh has to route around, and anything else keeps
+    // heartbeating and keeps consumers pointed here.
     checks.anthropic_api_reachable = false;
     return {
       status: "unhealthy",
@@ -172,8 +173,8 @@ async function healthCheck(): Promise<MeshHealthResult> {
       };
     }
     // The vendor answered and it is not serving. Unhealthy: this is the
-    // outage the mesh has to route around, and "degraded" would keep
-    // heartbeating and keep consumers pointed here.
+    // outage the mesh has to route around, and anything else keeps
+    // heartbeating and keeps consumers pointed here.
     checks.openai_api_reachable = false;
     return {
       status: "unhealthy",
@@ -232,8 +233,8 @@ async function healthCheck(): Promise<MeshHealthResult> {
       };
     }
     // The vendor answered and it is not serving. Unhealthy: this is the
-    // outage the mesh has to route around, and "degraded" would keep
-    // heartbeating and keep consumers pointed here.
+    // outage the mesh has to route around, and anything else keeps
+    // heartbeating and keeps consumers pointed here.
     checks.gemini_api_reachable = false;
     return {
       status: "unhealthy",
@@ -281,8 +282,8 @@ async function healthCheck(): Promise<MeshHealthResult> {
  *       : { status: "unhealthy", errors: [`vendor returned ${response.status}`] };
  *   } catch (err) {
  *     // DNS, connect, timeout and TLS all mean the vendor did not answer:
- *     // a real outage, so "unhealthy". Report "degraded" only for a probe
- *     // YOU cut short (your own AbortController) — that concluded nothing.
+ *     // a real outage, so "unhealthy". A probe YOU cut short (your own
+ *     // AbortController) concluded nothing — rethrow rather than answer.
  *     return { status: "unhealthy", errors: [`vendor unreachable: ${err}`] };
  *   }
  *

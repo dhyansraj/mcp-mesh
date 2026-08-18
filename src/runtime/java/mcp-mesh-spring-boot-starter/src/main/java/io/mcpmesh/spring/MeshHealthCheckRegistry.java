@@ -159,13 +159,66 @@ public class MeshHealthCheckRegistry {
     }
 
     /**
+     * {@code degraded} as a RETURN VALUE is deprecated (issue #1515).
+     *
+     * <p>The question a health check answers is binary: stay in dependency
+     * resolution, or withdraw. {@code DEGRADED} and {@code HEALTHY} are the same
+     * answer to it, so the third word buys a 503 on an endpoint nothing probes
+     * and costs the failure rate of a name that reads like withdrawal to
+     * everyone who picks it when their upstream is down.
+     *
+     * <p>The BEHAVIOUR is unchanged, deliberately: remapping it to
+     * {@code UNHEALTHY} would fix the common intent and silently withdraw every
+     * agent whose author used the word correctly.
+     *
+     * <p>Warned once per process, not once per refresh — the check re-runs every
+     * TTL (15s by default), and a per-tick line would be several thousand
+     * identical warnings a day from an agent doing what its author intended.
+     */
+    private static volatile boolean degradedReturnWarned = false;
+
+    private static void warnDegradedReturnOnce() {
+        if (degradedReturnWarned) {
+            return;
+        }
+        degradedReturnWarned = true;
+        log.warn("@MeshHealthCheck returned degraded — this agent stays in dependency "
+            + "resolution and consumers will keep routing to it. Return "
+            + "MeshHealth.unhealthy(...) to withdraw.");
+    }
+
+    /** Re-arm the once-per-process deprecation warning. Tests only. */
+    static void resetDegradedReturnWarning() {
+        degradedReturnWarned = false;
+    }
+
+    /**
      * Convert a health-check return value. The accepted shapes are enforced at
      * boot by {@link MeshHealthCheckBeanPostProcessor}, so the fallback here is
      * defence in depth, not a supported path — and it degrades rather than
      * withdrawing.
+     *
+     * <p>The runtime-assigned {@code DEGRADED} below does NOT warn — nothing the
+     * author can act on happened. Only a {@code DEGRADED} the author SELECTED
+     * does, and this is the single chokepoint for that:
+     * {@link MeshHealth#degraded(String...)},
+     * {@code withStatus(MeshHealthStatus.DEGRADED)},
+     * {@code new MeshHealth(DEGRADED, ...)} and
+     * {@link MeshHealth#of(String, String...)} given a readable
+     * {@code "degraded"} all pass through here.
+     *
+     * <p>{@code of()} is the one route that can reach the {@link MeshHealth}
+     * branch WITHOUT a selection: it maps a status string it cannot read to
+     * {@code DEGRADED} too, so {@code return MeshHealth.of(vendorStatus)} with
+     * {@code vendorStatus} of {@code "down"} would otherwise warn an author
+     * about {@code degraded()}, an API they never called. Those verdicts carry
+     * {@link MeshHealth#UNREADABLE_STATUS_CHECK} and are skipped here.
      */
     static MeshHealth coerce(Object raw) {
         if (raw instanceof MeshHealth health) {
+            if (health.status() == MeshHealthStatus.DEGRADED && !health.isUnreadableStatus()) {
+                warnDegradedReturnOnce();
+            }
             return health;
         }
         if (raw instanceof Boolean ok) {

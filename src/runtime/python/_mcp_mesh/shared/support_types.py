@@ -22,6 +22,15 @@ class HealthStatusType(str, Enum):  # noqa: UP042
     but ``"healthy"`` under ``StrEnum``, so the swap would silently change
     any interpolated/serialized value. That is a behaviour change, not a
     style fix.
+
+    ``HEALTHY`` and ``UNHEALTHY`` are the two verdicts a health check
+    answers with; they are the whole routing contract. ``DEGRADED`` and
+    ``UNKNOWN`` are what the RUNTIME records when it has no verdict it can
+    trust — a check that raised, an unusable return type, an unreadable
+    status string — and both keep the agent in dependency resolution.
+    Selecting ``DEGRADED`` from a health check is deprecated (issue #1515):
+    it is indistinguishable from ``HEALTHY`` on every mesh path, so
+    ``_parse_health_result`` warns and keeps the agent serving.
     """
 
     HEALTHY = "healthy"

@@ -62,13 +62,18 @@ async def health_check() -> dict:
                     errors.append("OpenAI API key is invalid")
                     status = "unhealthy"
                 else:
+                    # The vendor answered and it is not serving. Unhealthy:
+                    # this is the outage the mesh has to route around, and
+                    # anything else keeps heartbeating and keeps consumers
+                    # pointed here.
                     checks["openai_api_reachable"] = False
                     errors.append(f"OpenAI API returned status: {response.status_code}")
-                    status = "degraded"
+                    status = "unhealthy"
         except Exception as e:
+            # The vendor is not answering at all (DNS, connect, timeout, TLS).
             checks["openai_api_reachable"] = False
             errors.append(f"OpenAI API unreachable: {str(e)}")
-            status = "degraded"
+            status = "unhealthy"
 
     return {
         "status": status,

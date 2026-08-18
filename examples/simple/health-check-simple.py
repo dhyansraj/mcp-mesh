@@ -22,7 +22,7 @@ async def simple_health_check() -> dict:
 
     Can return:
     - bool: True = HEALTHY, False = UNHEALTHY
-    - dict: {"status": "healthy/degraded/unhealthy", "checks": {...}, "errors": [...]}
+    - dict: {"status": "healthy/unhealthy", "checks": {...}, "errors": [...]}
 
     Returns:
         dict: Health status with checks and errors
@@ -31,7 +31,7 @@ async def simple_health_check() -> dict:
 
     checks = {}
     errors = []
-    status = "healthy"  # Can be: "healthy", "degraded", "unhealthy"
+    status = "healthy"  # Can be: "healthy" or "unhealthy"
 
     # Check 1: Required environment variables
     required_vars = ["ANTHROPIC_API_KEY"]  # Add your required vars here
@@ -40,9 +40,11 @@ async def simple_health_check() -> dict:
             checks[f"env_{var.lower()}"] = True
             print(f"✅ {var} is configured")
         else:
+            # A missing credential means this agent cannot serve, so it should
+            # be withdrawn from dependency resolution until it is set.
             checks[f"env_{var.lower()}"] = False
             errors.append(f"{var} not set")
-            status = "degraded"
+            status = "unhealthy"
             print(f"⚠️ {var} is not configured")
 
     # Check 2: Disk space (example)
@@ -55,9 +57,13 @@ async def simple_health_check() -> dict:
             checks["disk_space"] = True
             print(f"✅ Disk space OK ({free_gb:.1f}GB free)")
         else:
+            # An impairment this agent can still serve through: the verdict
+            # stays healthy and the detail rides along in `checks` and
+            # `errors`, both of which an operator reads on /health. Reporting
+            # unhealthy here would withdraw an agent that is answering calls
+            # perfectly well.
             checks["disk_space"] = False
             errors.append(f"Low disk space: {free_gb:.1f}GB")
-            status = "degraded"
             print(f"⚠️ Low disk space: {free_gb:.1f}GB")
     except Exception as e:
         checks["disk_space"] = False

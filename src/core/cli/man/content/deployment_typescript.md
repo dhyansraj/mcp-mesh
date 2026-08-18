@@ -231,7 +231,7 @@ There are four of them, and Kubernetes probes must not share one:
 - `/ready` - `readinessProbe`. Whether the mesh runtime is up. Your `healthCheck` does not reach it: a failing check pauses the heartbeat and the registry stops resolving to this agent, which is the whole withdrawal, and a 503 here would also empty the Service that mesh traffic arrives on.
 - `/health` - no probe. Your `healthCheck`'s verdict plus the `checks` and `errors` it returned, answering 200 only while it reports `healthy`. An agent with no `healthCheck` - or one whose first run has not finished - is healthy, so it is unaffected.
 
-`/health` answers 503 while the check reports `degraded` or `unhealthy`, so pointing liveness at it turns a vendor outage into a pod restart, which cannot fix it. Probe Wiring below has the manifest.
+`/health` answers 503 whenever the check is not reporting `healthy`, so pointing liveness at it turns a vendor outage into a pod restart, which cannot fix it. Probe Wiring below has the manifest.
 
 Pass a `healthCheck` to `mesh()` to say what "able to serve" means for this agent:
 
@@ -256,7 +256,7 @@ const agent = mesh(server, {
 });
 ```
 
-While the check returns unhealthy the agent stops heartbeating, the registry withdraws it, and consumers resolve to another provider - restored automatically when the check passes, with no restart. Returning `boolean` works too: `true` is healthy, `false` unhealthy. A check that throws is recorded as `degraded` and keeps heartbeating, so a bug in the check cannot take a working agent out of the mesh. `MCP_MESH_HEALTH_CHECK_TTL` overrides `healthCheckTtl` (default 15s).
+While the check returns unhealthy the agent stops heartbeating, the registry withdraws it, and consumers resolve to another provider - restored automatically when the check passes, with no restart. Returning `boolean` works too: `true` is healthy, `false` unhealthy. A check that throws keeps heartbeating, so a bug in the check cannot take a working agent out of the mesh. `MCP_MESH_HEALTH_CHECK_TTL` overrides `healthCheckTtl` (default 15s).
 
 Route (`mesh.route`) and A2A agents are no exception: a `healthCheck` declared in the `meshExpress` config pauses the heartbeat too, so the registry stops advertising the gateway. It keeps serving the ingress it already had - `/ready` reports the mesh runtime on every agent type, so the pod keeps its Service endpoints.
 

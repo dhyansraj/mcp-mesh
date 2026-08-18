@@ -5,9 +5,12 @@ Consolidates health check storage, caching, and Kubernetes endpoint response
 generation into a single module.
 """
 
+import asyncio
+import inspect
 import logging
 import os
 import re
+import threading
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -184,6 +187,85 @@ def clear_health_check_result() -> None:
 
 
 # =============================================================================
+# `degraded` as a RETURN VALUE is deprecated (issue #1515)
+# =============================================================================
+#
+# The contract a health check answers is binary: stay in dependency
+# resolution, or withdraw. `degraded` and `healthy` are the same answer to
+# it — both keep the heartbeat alive and both keep consumers routing here —
+# so the third word buys a 503 on an endpoint nothing probes, and costs the
+# failure rate of a name that reads like withdrawal to everyone who picks it
+# when their upstream is down. The reference templates themselves picked it
+# wrong in all three runtimes.
+#
+# The BEHAVIOUR is unchanged, deliberately. Remapping `degraded` to
+# `unhealthy` would fix the common intent and silently withdraw every agent
+# whose author used the word correctly, so this warns and waits.
+#
+# The internal HealthStatusType.DEGRADED survives: a check that raises and a
+# check that returns an unusable type both need a verdict that is neither
+# trusted-healthy nor withdraw. Those paths do NOT warn — nothing the author
+# can act on happened. Only a verdict the author SELECTED reaches here.
+_degraded_return_deprecation_logged = False
+_degraded_return_lock = threading.Lock()
+
+
+def _warn_degraded_return_once() -> None:
+    """Warn that a selected ``degraded`` no longer differs from ``healthy``.
+
+    Once per process, not once per refresh. The check re-runs every TTL (15s
+    by default), so a per-call warning would be several thousand identical
+    lines a day from an agent that is doing exactly what its author intended
+    — which trains operators to filter the line rather than read it.
+    """
+    global _degraded_return_deprecation_logged
+    with _degraded_return_lock:
+        if _degraded_return_deprecation_logged:
+            return
+        _degraded_return_deprecation_logged = True
+    logger.warning(
+        "health_check returned `degraded` — this agent stays in dependency "
+        "resolution and consumers will keep routing to it. Return `False` to "
+        "withdraw."
+    )
+
+
+def _reset_degraded_return_warning() -> None:
+    """Re-arm the once-per-process warning. Tests only."""
+    global _degraded_return_deprecation_logged
+    with _degraded_return_lock:
+        _degraded_return_deprecation_logged = False
+
+
+# A null status is a defect in the same shape as a selected `degraded`: it
+# recurs identically on every refresh, so it gets the same treatment. At the
+# 15s default a per-tick line is ~5,760 identical warnings a day.
+_null_status_warning_logged = False
+_null_status_lock = threading.Lock()
+
+
+def _warn_null_status_once() -> None:
+    """Warn that a present-but-null status was read as healthy. Once."""
+    global _null_status_warning_logged
+    with _null_status_lock:
+        if _null_status_warning_logged:
+            return
+        _null_status_warning_logged = True
+    logger.warning(
+        "Health check returned a null status — treating it as healthy "
+        "(an absent status already means healthy). Return 'healthy' or "
+        "'unhealthy' if a verdict was intended."
+    )
+
+
+def _reset_null_status_warning() -> None:
+    """Re-arm the once-per-process warning. Tests only."""
+    global _null_status_warning_logged
+    with _null_status_lock:
+        _null_status_warning_logged = False
+
+
+# =============================================================================
 # TTL-Based Health Cache
 # =============================================================================
 
@@ -195,7 +277,7 @@ _max_cache_size = 100
 
 async def get_health_status_with_cache(
     agent_id: str,
-    health_check_fn: Callable[[], Awaitable[Any]] | None,
+    health_check_fn: Callable[[], Any] | Callable[[], Awaitable[Any]] | None,
     agent_config: dict[str, Any],
     startup_context: dict[str, Any],
     ttl: int = 15,
@@ -205,12 +287,12 @@ async def get_health_status_with_cache(
 
     User health check can return:
     - bool: True = HEALTHY, False = UNHEALTHY
-    - dict: {"status": "healthy/degraded/unhealthy", "checks": {...}, "errors": [...]}
+    - dict: {"status": "healthy/unhealthy", "checks": {...}, "errors": [...]}
     - HealthStatus: Full object
 
     Args:
         agent_id: Unique identifier for the agent
-        health_check_fn: Optional async function for health check
+        health_check_fn: Optional sync or async function for health check
         agent_config: Agent configuration dict
         startup_context: Full startup context with capabilities
         ttl: Cache TTL in seconds (default: 15)
@@ -254,17 +336,43 @@ async def get_health_status_with_cache(
 
 async def _execute_health_check(
     agent_id: str,
-    health_check_fn: Callable[[], Awaitable[Any]] | None,
+    health_check_fn: Callable[[], Any] | Callable[[], Awaitable[Any]] | None,
     agent_config: dict[str, Any],
     startup_context: dict[str, Any],
 ) -> HealthStatus:
-    """Execute health check function and build HealthStatus."""
+    """Execute health check function and build HealthStatus.
+
+    Sync and async checks are both accepted, matching ``run_startup_check``.
+    A bare ``await health_check_fn()`` raised ``TypeError`` on a ``def``
+    check, which the handler below recorded as DEGRADED — so an author who
+    forgot ``async`` got a check that appeared to run, never reported a real
+    verdict, and could never withdraw the agent (issue #1517).
+
+    A sync check runs on a worker thread, not inline. ``run_startup_check``
+    can call one inline because it runs once, at boot; this runs every TTL for
+    the life of the process, and the natural sync probe is a blocking
+    ``requests.get(vendor, timeout=5)``. Inline, that stalls whichever loop the
+    refresh was scheduled on — and for ``api``/``a2a`` gateways
+    (``health_refresh.py``) that is the HEARTBEAT thread's loop, so a slow
+    probe would delay the very heartbeats whose absence withdraws the agent.
+    Accepting sync checks without offloading them would have invited exactly
+    that.
+    """
     capabilities = _get_capabilities(startup_context, agent_config)
 
     if health_check_fn:
         try:
             logger.debug(f"Executing health check for agent '{agent_id}'")
-            user_result = await health_check_fn()
+            if inspect.iscoroutinefunction(health_check_fn):
+                user_result = await health_check_fn()
+            else:
+                user_result = await asyncio.to_thread(health_check_fn)
+                if inspect.isawaitable(user_result):
+                    # A `def` that returns an awaitable: a lambda wrapping an
+                    # async call, an object with an async __call__. Building
+                    # the coroutine off-loop is harmless; awaiting it here runs
+                    # it on this loop, which is where it belongs.
+                    user_result = await user_result
             status_type, checks, errors = _parse_health_result(user_result)
 
             logger.info(f"Health check for '{agent_id}': {status_type.value}")
@@ -319,18 +427,39 @@ def _parse_health_result(
         errors = [] if user_result else ["Health check returned False"]
 
     elif isinstance(user_result, dict):
-        status_str = user_result.get("status", "healthy").lower()
+        raw_status = user_result.get("status", "healthy")
+        if raw_status is None:
+            # An explicit None is treated exactly like an absent key, which
+            # already defaults to healthy here and in TypeScript — a result
+            # carrying only `checks` is reporting success. It still warns:
+            # `"status": None` is far likelier to be an unset variable than an
+            # intent, and the warning is what separates the two cases without
+            # changing routing. Left unhandled it called None.lower(), raised,
+            # and landed on DEGRADED (issue #1517).
+            _warn_null_status_once()
+            raw_status = "healthy"
+        # Stripped, matching TypeScript's `toStatus` and Java's
+        # `MeshHealthStatus.fromWire`, which have always trimmed. This one is a
+        # ROUTING change, not just a parsing tidy-up: `{"status": " unhealthy "}`
+        # used to fall through to UNKNOWN, which keeps heartbeating, so an agent
+        # that had declared itself unable to serve stayed in resolution. It now
+        # withdraws, which is what it asked for.
+        status_str = raw_status.strip().lower()
         status_map = {
             "healthy": HealthStatusType.HEALTHY,
             "degraded": HealthStatusType.DEGRADED,
             "unhealthy": HealthStatusType.UNHEALTHY,
         }
         status_type = status_map.get(status_str, HealthStatusType.UNKNOWN)
+        if status_type is HealthStatusType.DEGRADED:
+            _warn_degraded_return_once()
         checks = user_result.get("checks", {})
         errors = user_result.get("errors", [])
 
     elif isinstance(user_result, HealthStatus):
         status_type = user_result.status
+        if status_type is HealthStatusType.DEGRADED:
+            _warn_degraded_return_once()
         checks = user_result.checks
         errors = user_result.errors
 

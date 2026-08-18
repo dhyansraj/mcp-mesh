@@ -65,15 +65,20 @@ async def claude_health_check() -> dict:
                     errors.append("Anthropic API key is invalid")
                     status = "unhealthy"
                 else:
+                    # The vendor answered and it is not serving. Unhealthy:
+                    # this is the outage the mesh has to route around, and
+                    # anything else keeps heartbeating and keeps consumers
+                    # pointed here.
                     checks["anthropic_api_reachable"] = False
                     errors.append(
                         f"Anthropic API returned unexpected status: {response.status_code}"
                     )
-                    status = "degraded"
+                    status = "unhealthy"
         except Exception as e:
+            # The vendor is not answering at all (DNS, connect, timeout, TLS).
             checks["anthropic_api_reachable"] = False
             errors.append(f"Anthropic API unreachable: {str(e)}")
-            status = "degraded"
+            status = "unhealthy"
 
     return {
         "status": status,

@@ -17,6 +17,7 @@ import {
   resolveHealthCheckTtlFromEnv,
   startHealthCheckLoop,
   describeThrown,
+  __resetNullStatusWarning,
   DEFAULT_HEALTH_CHECK_TTL_SECONDS,
   HEALTH_CHECK_TTL_ENV,
   type MeshHealthStatus,
@@ -48,6 +49,55 @@ describe("normalizeHealthResult — verdict table", () => {
       "healthy",
     );
     expect(normalizeHealthResult({}).status).toBe("healthy");
+  });
+
+  // Issue #1517: a present-but-null status is the same verdict as an absent
+  // one — Python reached `degraded` here by raising on `None.lower()` — but
+  // it warns, because `{ status: undefined }` is far likelier to be an unset
+  // variable than an intent. The warning is what separates the two cases
+  // without changing routing.
+  describe("a present-but-null status is healthy, and warns", () => {
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      __resetNullStatusWarning();
+      warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    });
+    afterEach(() => {
+      warnSpy.mockRestore();
+      __resetNullStatusWarning();
+    });
+
+    it.each([
+      ["null", null],
+      ["undefined", undefined],
+    ])("%s status is healthy and warns", (_label, status) => {
+      const verdict = normalizeHealthResult({
+        status: status as unknown as string,
+        checks: { api: true },
+      });
+      expect(verdict.status).toBe("healthy");
+      expect(verdict.checks).toEqual({ api: true });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(String(warnSpy.mock.calls[0][0])).toContain("null status");
+    });
+
+    it("an absent status does not warn", () => {
+      expect(normalizeHealthResult({ checks: { api: true } }).status).toBe(
+        "healthy",
+      );
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    // Same repetition profile as the `degraded` deprecation ten lines away,
+    // so the same dedup: a check re-runs every TTL, and at the 15s default an
+    // undeduplicated line is ~5,760 identical warnings a day.
+    it("warns once per process, not once per refresh", () => {
+      for (let i = 0; i < 5; i++) {
+        expect(normalizeHealthResult({ status: null }).status).toBe("healthy");
+      }
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("carries checks and errors through untouched", () => {
