@@ -108,7 +108,11 @@ describe("the graph joins a stat to the edge that produced it", () => {
       makeStat({ source: "caller", target: "prov", target_function: "broken_tool", error_rate: 100, error_count: 10 }),
     ]);
 
-    expect(merged[0].style?.stroke).toBe(EDGE_HEAT_COLORS.clean);
+    // The healthy one keeps its KIND colour rather than being repainted green
+    // (issue #1530) — heat speaks only when there is an error to report. What
+    // this test is really pinning is still the isolation: the broken sibling's
+    // 100% did not reach it.
+    expect(merged[0].style?.stroke).toBe(EDGE_COLORS.dependency);
     expect(merged[1].style?.stroke).toBe(EDGE_HEAT_COLORS.failing);
   });
 
@@ -243,8 +247,9 @@ describe("one edge standing for several provider functions", () => {
     expect(String(merged[0].label)).toContain("109");
     expect(String(merged[0].label)).not.toContain("505");
 
-    // 5 errors in 100 calls is 5%, which is elevated — neither the clean edge
-    // the fast tool alone would paint nor the failing one the slow tool would.
+    // 5 errors in 100 calls is 5%, which is elevated — neither the untouched
+    // stroke the fast tool alone would leave nor the failing one the slow tool
+    // would paint.
     expect(merged[0].style?.stroke).toBe(EDGE_HEAT_COLORS.elevated);
   });
 
@@ -357,7 +362,9 @@ describe("replica grouping still lines the two sides up", () => {
       makeStat({ source: "caller", target: "prov", target_function: "run_report", avg_latency_ms: 42 }),
     ]);
     expect(String(merged[0].label)).toMatch(/42/);
-    expect(merged[0].style?.stroke).toBe(EDGE_HEAT_COLORS.clean);
+    // Matched, and error-free, so the latency reached the label while the kind
+    // colour stayed put.
+    expect(merged[0].style?.stroke).toBe(EDGE_COLORS.dependency);
   });
 });
 

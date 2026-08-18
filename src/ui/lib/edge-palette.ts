@@ -5,7 +5,9 @@
 // longer emitted (issue #1521).
 //
 // The traffic-heat scale at the foot of this file is a second, deliberately
-// separate axis. Read its note before merging anything into `EDGE_COLORS`.
+// separate axis. Read its note before merging anything into `EDGE_COLORS`. It
+// now paints only over an edge with errors, so both palettes reach the screen
+// at once and both are in the legend (issue #1530).
 //
 // The legend swatches read these values as INLINE STYLES. That is not a
 // stylistic choice: the swatches were arbitrary-value classes, which are literal
@@ -62,29 +64,71 @@ export const EDGE_LEGEND: EdgeLegendEntry[] = [
 
 /**
  * The traffic-heat scale. A SEPARATE AXIS from `EDGE_COLORS`, kept apart on
- * purpose — do not fold the two together on the grounds that they share two
- * values.
+ * purpose — do not fold the two together, and do not reach for a value from one
+ * while writing the other.
  *
  * `EDGE_COLORS` answers WHAT AN EDGE IS, which is a fact about the topology and
  * changes when the mesh is rewired. These answer HOW IT IS GOING, which is a
  * fact about the last window of calls and changes while nothing is rewired at
- * all. That `clean` and `failing` happen to hold the same two hexes as
- * `dependency` and `unavailable` is a coincidence of taste, not a shared
- * meaning: if the dependency stroke were ever restyled, a healthy edge under
- * traffic should not move with it, and a single constant would drag it along.
+ * all.
  *
- * These have no legend row — `elevated` in particular is a colour the legend
- * cannot explain — because they are painted OVER the palette above by
- * `mergeEdgeStatsIntoEdges` in components/topology/TopologyGraph.tsx. That the
- * heat scale overrides edge kind at all is a known and separate question; the
- * legend contract asserted in `__tests__/topology-edges.test.tsx` is therefore
- * scoped to the builder, and says so.
+ * NO VALUE HERE SHARES A HEX WITH `EDGE_COLORS`, and that is a requirement now
+ * rather than an accident. `failing` held the same red as `unavailable` until
+ * both axes started appearing in the key together, at which point a reader
+ * looking at a red edge had two rows and no way to choose between them — and a
+ * caption saying which one wins settles precedence, not identity. So heat has a
+ * ramp of its own, amber then a warmer step, in a hue no edge kind occupies,
+ * and red is left meaning exactly one thing.
+ *
+ * That ramp also orders the two axes the way you want them read. An edge whose
+ * provider is unavailable is in worse shape than one still succeeding nine
+ * times in ten, so the unavailable stroke outranking the failing one is the
+ * correct reading rather than a compromise the palette forced.
+ *
+ * ONLY ERRORS PAINT (issue #1530). `mergeEdgeStatsIntoEdges` in
+ * components/topology/TopologyGraph.tsx used to repaint every edge that carried
+ * any traffic at all, a zero error rate included — so wherever tracing is on,
+ * the palette above was thrown away almost everywhere in order to report a
+ * state almost every edge is in. One measured mesh ran 2,495 calls with 1 error
+ * across 326 edges, every one of them sampled at 0.000. An edge with no errors
+ * now keeps its kind stroke, and only an edge with errors takes a colour from
+ * here, because at that point the error is the more urgent fact.
+ *
+ * So both values below are reachable on screen, and both have a legend row.
+ * `__tests__/topology-edges.test.tsx` asserts that against the MERGED strokes
+ * rather than against the builder alone, and in the direction that matters here
+ * — is this row a colour anything paints? — against only the strokes the merge
+ * CHANGED, so no row can be satisfied by an edge kind that happens to match.
+ *
+ * There is deliberately no third value for the healthy case. It had one, and it
+ * lost its last consumer the moment a clean edge stopped being repainted;
+ * keeping it would have left a green nothing draws and a legend row saying so.
  */
 export const EDGE_HEAT_COLORS = {
-  /** No errors observed on this edge. */
-  clean: "#22c55e",
   /** Errors, but under the threshold that counts as failing. */
   elevated: "#eab308",
-  /** Failing often enough to be the first thing you should look at. */
-  failing: "#ef4444",
+  /**
+   * Failing often enough to be the first thing you should look at — but still
+   * a step below `unavailable`, which is why it is not that red.
+   */
+  failing: "#f97316",
 } as const;
+
+export type EdgeHeatKey = keyof typeof EDGE_HEAT_COLORS;
+
+/**
+ * The heat rows of the legend, in render order. The same two-way contract
+ * `EDGE_LEGEND` carries, over this axis: every colour HEAT can put on screen is
+ * named here, and every row here is a colour heat actually paints. The second
+ * direction is checked against the strokes the merge CHANGED rather than every
+ * stroke it emits — a row that named a colour only some edge kind draws would
+ * otherwise pass while heat never painted it at all.
+ *
+ * The boundary in the labels is the one `getEdgeHeatColor` applies, and it is a
+ * PERCENTAGE of an edge's calls — see the note on that function for why the
+ * unit is the load-bearing part.
+ */
+export const EDGE_HEAT_LEGEND: { key: EdgeHeatKey; label: string }[] = [
+  { key: "elevated", label: "Errors under 10%" },
+  { key: "failing", label: "Errors 10% or more" },
+];
