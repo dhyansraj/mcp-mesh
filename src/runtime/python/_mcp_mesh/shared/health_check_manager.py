@@ -438,19 +438,40 @@ def _parse_health_result(
             # and landed on DEGRADED (issue #1517).
             _warn_null_status_once()
             raw_status = "healthy"
-        # Stripped, matching TypeScript's `toStatus` and Java's
-        # `MeshHealthStatus.fromWire`, which have always trimmed. This one is a
-        # ROUTING change, not just a parsing tidy-up: `{"status": " unhealthy "}`
-        # used to fall through to UNKNOWN, which keeps heartbeating, so an agent
-        # that had declared itself unable to serve stayed in resolution. It now
-        # withdraws, which is what it asked for.
-        status_str = raw_status.strip().lower()
-        status_map = {
-            "healthy": HealthStatusType.HEALTHY,
-            "degraded": HealthStatusType.DEGRADED,
-            "unhealthy": HealthStatusType.UNHEALTHY,
-        }
-        status_type = status_map.get(status_str, HealthStatusType.UNKNOWN)
+        if isinstance(raw_status, str):
+            # Stripped, matching TypeScript's `toStatus` and Java's
+            # `MeshHealthStatus.fromWire`, which have always trimmed. This one is
+            # a ROUTING change, not just a parsing tidy-up:
+            # `{"status": " unhealthy "}` used to fall through to UNKNOWN, which
+            # keeps heartbeating, so an agent that had declared itself unable to
+            # serve stayed in resolution. It now withdraws, which is what it
+            # asked for.
+            status_str = raw_status.strip().lower()
+            status_map = {
+                "healthy": HealthStatusType.HEALTHY,
+                "degraded": HealthStatusType.DEGRADED,
+                "unhealthy": HealthStatusType.UNHEALTHY,
+            }
+            status_type = status_map.get(status_str, HealthStatusType.UNKNOWN)
+        else:
+            # A status that is not a string at all — `{"status": 503}`,
+            # `{"status": True}` — is unreadable in exactly the way an
+            # unrecognized string is, so it gets the same verdict: UNKNOWN, which
+            # keeps the agent heartbeating. TypeScript's `toStatus` already
+            # returns null for a non-string and Java's `parseWire` already fails
+            # to match one, so this is the shape the other two runtimes have.
+            #
+            # It used to call `.strip()` on the value, raise, and be recorded by
+            # the handler in `_execute_health_check` as a check that FAILED —
+            # the same routing outcome by accident, reported as an exception the
+            # author cannot find in their own code (issue #1517).
+            #
+            # Silent here, like the unrecognized-string case it joins: this
+            # recurs identically on every refresh, and the UNKNOWN verdict is
+            # already reported by `logger.info` above and warned about once per
+            # tick by `publish_health_status_to_core`. A third line would be the
+            # same defect said three times, 5,760 times a day.
+            status_type = HealthStatusType.UNKNOWN
         if status_type is HealthStatusType.DEGRADED:
             _warn_degraded_return_once()
         checks = user_result.get("checks", {})

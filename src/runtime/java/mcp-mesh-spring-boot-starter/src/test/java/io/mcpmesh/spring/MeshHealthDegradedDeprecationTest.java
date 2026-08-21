@@ -123,6 +123,46 @@ class MeshHealthDegradedDeprecationTest {
         assertEquals(1, deprecationWarnings().size());
     }
 
+    // ONCE has to mean once on the runtime that can actually race. Health
+    // checks run on the scheduler's thread and on whichever thread serves
+    // /health, so a check-then-assign on a plain flag interleaves and logs
+    // twice — the deduplication that justifies warning at all stops holding
+    // on exactly the multi-threaded runtime. Python guards the same flag with
+    // a lock and TypeScript is single-threaded; this is the compareAndSet.
+    @Test
+    void warnsOnceUnderConcurrentCallers() throws Exception {
+        int threads = 16;
+        var start = new java.util.concurrent.CountDownLatch(1);
+        var done = new java.util.concurrent.CountDownLatch(threads);
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(threads);
+        var failures = new java.util.concurrent.CopyOnWriteArrayList<Throwable>();
+
+        try {
+            for (int i = 0; i < threads; i++) {
+                pool.execute(() -> {
+                    try {
+                        start.await();
+                        MeshHealthCheckRegistry.coerce(MeshHealth.degraded("upstream slow"));
+                    } catch (Throwable t) {
+                        failures.add(t);
+                    } finally {
+                        done.countDown();
+                    }
+                });
+            }
+            start.countDown();
+            assertTrue(done.await(10, java.util.concurrent.TimeUnit.SECONDS),
+                "concurrent coerce calls did not finish");
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertEquals(List.of(), failures, failures.toString());
+        assertEquals(1, deprecationWarnings().size(),
+            "two callers both passed the check before either assigned, so the "
+                + "once-per-process warning fired twice");
+    }
+
     // The indeterminate paths keep the internal state and say nothing: the
     // runtime assigned that verdict, so there is nothing for the author to fix.
     @Test

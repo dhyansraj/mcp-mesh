@@ -58,8 +58,14 @@ export interface MeshHealthResult {
    * carries only `checks` is reporting success (Python parity:
    * `user_result.get("status", "healthy")`). A present-but-null status
    * means the same, and warns.
+   *
+   * `null` is in the type because the runtime handles it deliberately, not
+   * by accident: `{ status: undefined }` is what a check with an unset
+   * variable returns, and the type has to be able to describe the value
+   * {@link normalizeHealthResult} documents a verdict for. Leaving it out
+   * only forced a cast at every call site that constructed the case.
    */
-  status?: MeshHealthStatus | string;
+  status?: MeshHealthStatus | string | null;
   /** Named sub-probes, surfaced verbatim for operators. */
   checks?: Record<string, unknown>;
   /** Human-readable reasons, surfaced verbatim for operators. */

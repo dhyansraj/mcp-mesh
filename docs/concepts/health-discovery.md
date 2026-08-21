@@ -153,10 +153,14 @@ Never point liveness or startup at `/ready` or `/health`. `/health` reflects you
 
 ### Health States
 
-| State       | Description                                                       |
-| ----------- | ----------------------------------------------------------------- |
-| `healthy`   | Agent can serve. Stays in dependency resolution.                   |
-| `unhealthy` | Agent cannot serve. Withdrawn from dependency resolution.          |
+What a check returns is one of two answers:
+
+| State       | Description                                               |
+| ----------- | --------------------------------------------------------- |
+| `healthy`   | Agent can serve. Stays in dependency resolution.           |
+| `unhealthy` | Agent cannot serve. Withdrawn from dependency resolution.  |
+
+What you can OBSERVE on `/health` is wider, because the runtime reports its own state there too: `starting` before the first refresh has run, and `degraded` (Python may also report `unknown`) where it recorded a verdict it could not trust - a check that raised, returned an unusable type, or answered with a status it could not read. Those are not a third answer to route on: everything that is not `unhealthy` stays in dependency resolution. `degraded` is also still accepted as a return value, deprecated since 3.7 and removed no earlier than 4.0; it warns once and routes exactly like `healthy`.
 
 ## Discovery
 

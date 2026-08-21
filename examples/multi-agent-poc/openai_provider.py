@@ -44,9 +44,9 @@ async def openai_health_check() -> dict:
 
     # Check 2: API connectivity (lightweight GET request to models endpoint)
     if api_key:
-        try:
-            import httpx
+        import httpx
 
+        try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 # Use GET /models endpoint which is lightweight
                 response = await client.get(
@@ -65,17 +65,22 @@ async def openai_health_check() -> dict:
                     errors.append("OpenAI API key is invalid")
                     status = "unhealthy"
                 else:
-                    # The vendor answered and it is not serving. Unhealthy:
-                    # this is the outage the mesh has to route around, and
-                    # anything else keeps heartbeating and keeps consumers
-                    # pointed here.
-                    checks["openai_api_reachable"] = False
+                    # The vendor ANSWERED, so it is reachable — it is just not
+                    # serving. Unhealthy: this is the outage the mesh has to route
+                    # around, and anything else keeps heartbeating and keeps
+                    # consumers pointed here.
+                    checks["openai_api_reachable"] = True
                     errors.append(
                         f"OpenAI API returned unexpected status: {response.status_code}"
                     )
                     status = "unhealthy"
-        except Exception as e:
+        except httpx.RequestError as e:
             # The vendor is not answering at all (DNS, connect, timeout, TLS).
+            # Transport failures ONLY: anything else raised in here is a defect
+            # in this probe, and it propagates rather than being reported as a
+            # vendor outage — the runtime records an indeterminate verdict and
+            # keeps this agent serving. A broken probe must not be able to
+            # withdraw a working provider.
             checks["openai_api_reachable"] = False
             errors.append(f"OpenAI API unreachable: {str(e)}")
             status = "unhealthy"

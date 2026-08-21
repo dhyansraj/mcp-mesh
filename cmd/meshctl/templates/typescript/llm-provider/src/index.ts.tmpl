@@ -67,6 +67,23 @@ const HEALTH_PROBE_TIMEOUT_MS = 5_000;
 function describeError(err: unknown): string {
   return err instanceof Error ? err.message || err.name : String(err);
 }
+
+/**
+ * Whether a thrown value is the vendor failing to ANSWER, as opposed to a
+ * defect in this probe.
+ *
+ * `fetch` rejects with a TypeError when no response was ever received - DNS,
+ * connect, TLS - and with a "TimeoutError" when the deadline above fires.
+ * Anything else concluded nothing about the vendor: a typo, a helper that
+ * throws, an "AbortError" from cancellation of your own. Those are rethrown,
+ * and the runtime records its own indeterminate verdict, which keeps this
+ * agent in dependency resolution. A broken probe must not be able to withdraw
+ * a working provider.
+ */
+function isVendorUnreachable(err: unknown): boolean {
+  if (err instanceof TypeError) return true;
+  return (err as { name?: string } | null | undefined)?.name === "TimeoutError";
+}
 {{ end }}
 {{- if eq .ProbeVendor "anthropic" }}
 /**
@@ -112,18 +129,19 @@ async function healthCheck(): Promise<MeshHealthResult> {
         errors: ["Anthropic API key is invalid"],
       };
     }
-    // The vendor answered and it is not serving. Unhealthy: this is the
-    // outage the mesh has to route around, and anything else keeps
-    // heartbeating and keeps consumers pointed here.
-    checks.anthropic_api_reachable = false;
+    // The vendor ANSWERED, so it is reachable - it is just not serving.
+    // Unhealthy: this is the outage the mesh has to route around, and
+    // anything else keeps heartbeating and keeps consumers pointed here.
+    checks.anthropic_api_reachable = true;
     return {
       status: "unhealthy",
       checks,
       errors: [`Anthropic API returned status: ${response.status}`],
     };
   } catch (err) {
-    checks.anthropic_api_reachable = false;
+    if (!isVendorUnreachable(err)) throw err;
     // The vendor is not answering at all (DNS, connect, timeout, TLS).
+    checks.anthropic_api_reachable = false;
     return {
       status: "unhealthy",
       checks,
@@ -172,18 +190,19 @@ async function healthCheck(): Promise<MeshHealthResult> {
         errors: ["OpenAI API key is invalid"],
       };
     }
-    // The vendor answered and it is not serving. Unhealthy: this is the
-    // outage the mesh has to route around, and anything else keeps
-    // heartbeating and keeps consumers pointed here.
-    checks.openai_api_reachable = false;
+    // The vendor ANSWERED, so it is reachable - it is just not serving.
+    // Unhealthy: this is the outage the mesh has to route around, and
+    // anything else keeps heartbeating and keeps consumers pointed here.
+    checks.openai_api_reachable = true;
     return {
       status: "unhealthy",
       checks,
       errors: [`OpenAI API returned status: ${response.status}`],
     };
   } catch (err) {
-    checks.openai_api_reachable = false;
+    if (!isVendorUnreachable(err)) throw err;
     // The vendor is not answering at all (DNS, connect, timeout, TLS).
+    checks.openai_api_reachable = false;
     return {
       status: "unhealthy",
       checks,
@@ -232,18 +251,19 @@ async function healthCheck(): Promise<MeshHealthResult> {
         errors: ["Google API key is invalid"],
       };
     }
-    // The vendor answered and it is not serving. Unhealthy: this is the
-    // outage the mesh has to route around, and anything else keeps
-    // heartbeating and keeps consumers pointed here.
-    checks.gemini_api_reachable = false;
+    // The vendor ANSWERED, so it is reachable - it is just not serving.
+    // Unhealthy: this is the outage the mesh has to route around, and
+    // anything else keeps heartbeating and keeps consumers pointed here.
+    checks.gemini_api_reachable = true;
     return {
       status: "unhealthy",
       checks,
       errors: [`Gemini API returned status: ${response.status}`],
     };
   } catch (err) {
-    checks.gemini_api_reachable = false;
+    if (!isVendorUnreachable(err)) throw err;
     // The vendor is not answering at all (DNS, connect, timeout, TLS).
+    checks.gemini_api_reachable = false;
     return {
       status: "unhealthy",
       checks,
@@ -333,7 +353,8 @@ async function startupCheck(): Promise<MeshHealthResult> {
       },
       signal: AbortSignal.timeout(HEALTH_PROBE_TIMEOUT_MS),
     });
-  } catch {
+  } catch (err) {
+    if (!isVendorUnreachable(err)) throw err;
     // The vendor could not be reached at all (DNS, connect, timeout, TLS).
     // An outage, not a misconfiguration: startup PASSES and healthCheck
     // withdraws this agent for as long as it lasts. Failing here would
@@ -391,7 +412,8 @@ async function startupCheck(): Promise<MeshHealthResult> {
       headers: { Authorization: `Bearer ${apiKey}` },
       signal: AbortSignal.timeout(HEALTH_PROBE_TIMEOUT_MS),
     });
-  } catch {
+  } catch (err) {
+    if (!isVendorUnreachable(err)) throw err;
     // The vendor could not be reached at all (DNS, connect, timeout, TLS).
     // An outage, not a misconfiguration: startup PASSES and healthCheck
     // withdraws this agent for as long as it lasts. Failing here would
@@ -449,7 +471,8 @@ async function startupCheck(): Promise<MeshHealthResult> {
       `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
       { signal: AbortSignal.timeout(HEALTH_PROBE_TIMEOUT_MS) },
     );
-  } catch {
+  } catch (err) {
+    if (!isVendorUnreachable(err)) throw err;
     // The vendor could not be reached at all (DNS, connect, timeout, TLS).
     // An outage, not a misconfiguration: startup PASSES and healthCheck
     // withdraws this agent for as long as it lasts. Failing here would

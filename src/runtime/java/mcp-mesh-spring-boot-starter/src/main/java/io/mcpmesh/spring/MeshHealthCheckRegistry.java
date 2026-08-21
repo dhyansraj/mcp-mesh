@@ -11,6 +11,7 @@ import java.lang.reflect.Method;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Holds the agent's single {@link MeshHealthCheck} and the latest verdict it
@@ -174,14 +175,20 @@ public class MeshHealthCheckRegistry {
      * <p>Warned once per process, not once per refresh — the check re-runs every
      * TTL (15s by default), and a per-tick line would be several thousand
      * identical warnings a day from an agent doing what its author intended.
+     *
+     * <p>An {@link AtomicBoolean} rather than a volatile flag: health checks run
+     * on the scheduler's thread and on whichever thread serves {@code /health},
+     * so a check-then-assign can interleave and log twice. Python guards the
+     * same flag with a lock and TypeScript is single-threaded; ONCE has to mean
+     * once here too, or the deduplication that justifies warning at all stops
+     * holding on exactly the multi-threaded runtime.
      */
-    private static volatile boolean degradedReturnWarned = false;
+    private static final AtomicBoolean degradedReturnWarned = new AtomicBoolean(false);
 
     private static void warnDegradedReturnOnce() {
-        if (degradedReturnWarned) {
+        if (!degradedReturnWarned.compareAndSet(false, true)) {
             return;
         }
-        degradedReturnWarned = true;
         log.warn("@MeshHealthCheck returned degraded — this agent stays in dependency "
             + "resolution and consumers will keep routing to it. Return "
             + "MeshHealth.unhealthy(...) to withdraw.");
@@ -189,7 +196,7 @@ public class MeshHealthCheckRegistry {
 
     /** Re-arm the once-per-process deprecation warning. Tests only. */
     static void resetDegradedReturnWarning() {
-        degradedReturnWarned = false;
+        degradedReturnWarned.set(false);
     }
 
     /**

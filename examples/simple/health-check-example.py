@@ -52,11 +52,11 @@ async def my_health_check() -> dict:
 
     # Check 2: Test LLM API connectivity with a lightweight HTTP request
     if api_key:
-        try:
-            # Simple HTTP HEAD request to check API reachability
-            # This is fast and doesn't consume credits
-            import httpx
+        # Simple HTTP HEAD request to check API reachability
+        # This is fast and doesn't consume credits
+        import httpx
 
+        try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 # Simple HEAD request to check if endpoint exists
                 # This is the fastest way to test connectivity without consuming credits
@@ -87,20 +87,25 @@ async def my_health_check() -> dict:
                     status = "unhealthy"
                     print("❌ LLM API key is invalid (401)")
                 else:
-                    checks["llm_api_reachable"] = False
+                    # The vendor ANSWERED, so it is reachable — it is just not
+                    # serving. Unhealthy: this is the outage the mesh has to route
+                    # around, and anything else keeps heartbeating and keeps
+                    # consumers pointed here.
+                    checks["llm_api_reachable"] = True
                     errors.append(
                         f"LLM API returned unexpected status: {response.status_code}"
                     )
-                    # The vendor answered and it is not serving. Unhealthy:
-                    # this is the outage the mesh has to route around, and
-                    # anything else keeps heartbeating and keeps consumers
-                    # pointed here.
                     status = "unhealthy"
                     print(
                         f"⚠️ LLM API returned unexpected status: {response.status_code}"
                     )
-        except Exception as e:
+        except httpx.RequestError as e:
             # The vendor is not answering at all (DNS, connect, timeout, TLS).
+            # Transport failures ONLY: anything else raised in here is a defect
+            # in this probe, and it propagates rather than being reported as a
+            # vendor outage — the runtime records an indeterminate verdict and
+            # keeps this agent serving. A broken probe must not be able to
+            # withdraw a working provider.
             checks["llm_api_reachable"] = False
             errors.append(f"LLM API unreachable: {str(e)}")
             status = "unhealthy"

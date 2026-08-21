@@ -73,7 +73,7 @@ describe("normalizeHealthResult — verdict table", () => {
       ["undefined", undefined],
     ])("%s status is healthy and warns", (_label, status) => {
       const verdict = normalizeHealthResult({
-        status: status as unknown as string,
+        status,
         checks: { api: true },
       });
       expect(verdict.status).toBe("healthy");

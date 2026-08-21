@@ -78,9 +78,9 @@ async def health_check() -> dict:
 
     # Check API connectivity (uses /v1/models - free, no tokens consumed)
     if api_key:
-        try:
-            import httpx
+        import httpx
 
+        try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(
                     "https://api.anthropic.com/v1/models",
@@ -98,15 +98,20 @@ async def health_check() -> dict:
                     errors.append("Anthropic API key is invalid")
                     status = "unhealthy"
                 else:
-                    # The vendor answered and it is not serving. Unhealthy:
-                    # this is the outage the mesh has to route around, and
-                    # anything else keeps heartbeating and keeps consumers
-                    # pointed here.
-                    checks["anthropic_api_reachable"] = False
+                    # The vendor ANSWERED, so it is reachable — it is just not
+                    # serving. Unhealthy: this is the outage the mesh has to route
+                    # around, and anything else keeps heartbeating and keeps
+                    # consumers pointed here.
+                    checks["anthropic_api_reachable"] = True
                     errors.append(f"Anthropic API returned status: {response.status_code}")
                     status = "unhealthy"
-        except Exception as e:
+        except httpx.RequestError as e:
             # The vendor is not answering at all (DNS, connect, timeout, TLS).
+            # Transport failures ONLY: anything else raised in here is a defect
+            # in this probe, and it propagates rather than being reported as a
+            # vendor outage — the runtime records an indeterminate verdict and
+            # keeps this agent serving. A broken probe must not be able to
+            # withdraw a working provider.
             checks["anthropic_api_reachable"] = False
             errors.append(f"Anthropic API unreachable: {str(e)}")
             status = "unhealthy"
@@ -143,9 +148,9 @@ async def health_check() -> dict:
 
     # Check API connectivity
     if api_key:
-        try:
-            import httpx
+        import httpx
 
+        try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(
                     "https://api.openai.com/v1/models",
@@ -160,15 +165,20 @@ async def health_check() -> dict:
                     errors.append("OpenAI API key is invalid")
                     status = "unhealthy"
                 else:
-                    # The vendor answered and it is not serving. Unhealthy:
-                    # this is the outage the mesh has to route around, and
-                    # anything else keeps heartbeating and keeps consumers
-                    # pointed here.
-                    checks["openai_api_reachable"] = False
+                    # The vendor ANSWERED, so it is reachable — it is just not
+                    # serving. Unhealthy: this is the outage the mesh has to route
+                    # around, and anything else keeps heartbeating and keeps
+                    # consumers pointed here.
+                    checks["openai_api_reachable"] = True
                     errors.append(f"OpenAI API returned status: {response.status_code}")
                     status = "unhealthy"
-        except Exception as e:
+        except httpx.RequestError as e:
             # The vendor is not answering at all (DNS, connect, timeout, TLS).
+            # Transport failures ONLY: anything else raised in here is a defect
+            # in this probe, and it propagates rather than being reported as a
+            # vendor outage — the runtime records an indeterminate verdict and
+            # keeps this agent serving. A broken probe must not be able to
+            # withdraw a working provider.
             checks["openai_api_reachable"] = False
             errors.append(f"OpenAI API unreachable: {str(e)}")
             status = "unhealthy"
@@ -205,9 +215,9 @@ async def health_check() -> dict:
 
     # Check API connectivity (uses /v1beta/models - metadata only, no tokens consumed)
     if api_key:
-        try:
-            import httpx
+        import httpx
 
+        try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(
                     f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}",
@@ -221,15 +231,20 @@ async def health_check() -> dict:
                     errors.append("Google API key is invalid")
                     status = "unhealthy"
                 else:
-                    # The vendor answered and it is not serving. Unhealthy:
-                    # this is the outage the mesh has to route around, and
-                    # anything else keeps heartbeating and keeps consumers
-                    # pointed here.
-                    checks["gemini_api_reachable"] = False
+                    # The vendor ANSWERED, so it is reachable — it is just not
+                    # serving. Unhealthy: this is the outage the mesh has to route
+                    # around, and anything else keeps heartbeating and keeps
+                    # consumers pointed here.
+                    checks["gemini_api_reachable"] = True
                     errors.append(f"Gemini API returned status: {response.status_code}")
                     status = "unhealthy"
-        except Exception as e:
+        except httpx.RequestError as e:
             # The vendor is not answering at all (DNS, connect, timeout, TLS).
+            # Transport failures ONLY: anything else raised in here is a defect
+            # in this probe, and it propagates rather than being reported as a
+            # vendor outage — the runtime records an indeterminate verdict and
+            # keeps this agent serving. A broken probe must not be able to
+            # withdraw a working provider.
             checks["gemini_api_reachable"] = False
             errors.append(f"Gemini API unreachable: {str(e)}")
             status = "unhealthy"
@@ -299,9 +314,9 @@ async def startup_check() -> dict:
     # the startup path is acceptable because a startupProbe stops polling once
     # it passes - this runs a handful of times, not every ten seconds forever.
     checks = {"anthropic_api_key_present": True}
-    try:
-        import httpx
+    import httpx
 
+    try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(
                 "https://api.anthropic.com/v1/models",
@@ -310,13 +325,17 @@ async def startup_check() -> dict:
                     "x-api-key": api_key,
                 },
             )
-    except Exception:
+    except httpx.RequestError:
         # The vendor could not be reached at all (DNS, connect, timeout, TLS).
         # An outage, not a misconfiguration: startup PASSES and health_check
         # withdraws this agent for as long as it lasts. Failing here would
         # crash-loop a correctly configured pod, and would dilute
         # CrashLoopBackOff from "your configuration is wrong" into "something
         # somewhere is unwell".
+        #
+        # Transport failures ONLY. A defect in this probe is not an outage, so
+        # it propagates and fails startup — which is what a check that reached
+        # no conclusion should do at boot.
         checks["anthropic_api_reachable"] = False
         return {"status": "healthy", "checks": checks, "errors": []}
 
@@ -360,21 +379,25 @@ async def startup_check() -> dict:
     # the startup path is acceptable because a startupProbe stops polling once
     # it passes - this runs a handful of times, not every ten seconds forever.
     checks = {"openai_api_key_present": True}
-    try:
-        import httpx
+    import httpx
 
+    try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(
                 "https://api.openai.com/v1/models",
                 headers={"Authorization": f"Bearer {api_key}"},
             )
-    except Exception:
+    except httpx.RequestError:
         # The vendor could not be reached at all (DNS, connect, timeout, TLS).
         # An outage, not a misconfiguration: startup PASSES and health_check
         # withdraws this agent for as long as it lasts. Failing here would
         # crash-loop a correctly configured pod, and would dilute
         # CrashLoopBackOff from "your configuration is wrong" into "something
         # somewhere is unwell".
+        #
+        # Transport failures ONLY. A defect in this probe is not an outage, so
+        # it propagates and fails startup — which is what a check that reached
+        # no conclusion should do at boot.
         checks["openai_api_reachable"] = False
         return {"status": "healthy", "checks": checks, "errors": []}
 
@@ -418,20 +441,24 @@ async def startup_check() -> dict:
     # the startup path is acceptable because a startupProbe stops polling once
     # it passes - this runs a handful of times, not every ten seconds forever.
     checks = {"google_api_key_present": True}
-    try:
-        import httpx
+    import httpx
 
+    try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(
                 f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}",
             )
-    except Exception:
+    except httpx.RequestError:
         # The vendor could not be reached at all (DNS, connect, timeout, TLS).
         # An outage, not a misconfiguration: startup PASSES and health_check
         # withdraws this agent for as long as it lasts. Failing here would
         # crash-loop a correctly configured pod, and would dilute
         # CrashLoopBackOff from "your configuration is wrong" into "something
         # somewhere is unwell".
+        #
+        # Transport failures ONLY. A defect in this probe is not an outage, so
+        # it propagates and fails startup — which is what a check that reached
+        # no conclusion should do at boot.
         checks["gemini_api_reachable"] = False
         return {"status": "healthy", "checks": checks, "errors": []}
 
