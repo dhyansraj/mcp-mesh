@@ -261,7 +261,12 @@ func TestVariantCorpusLeavesNoLiteralMarkup(t *testing.T) {
 				!numberedListRe.MatchString(line) {
 				continue
 			}
-			if !strings.Contains(line, "**") {
+			// inlineBoldRe accepts both markdown spellings, so the pre-filter
+			// has to as well: filtering on "**" alone would mean a page that
+			// switched to __bold__ was never checked. No variant page uses the
+			// underscore form today, which is precisely why the gap would go
+			// unnoticed until one did.
+			if !strings.Contains(line, "**") && !strings.Contains(line, "__") {
 				continue
 			}
 			for _, m := range inlineBoldRe.FindAllStringSubmatch(line, -1) {
@@ -269,7 +274,11 @@ func TestVariantCorpusLeavesNoLiteralMarkup(t *testing.T) {
 				if text == "" {
 					text = m[2]
 				}
-				if strings.Contains(body, "**"+text+"**") {
+				// m[0] is the delimiters as written, which is what would show
+				// up in the body if the renderer left it alone. Rebuilding it
+				// from the capture would look for the asterisk form of an
+				// underscore span and find nothing.
+				if strings.Contains(body, m[0]) {
 					t.Errorf("%s:%d bold %q rendered literally on a list line\n src: %q",
 						page.name, i+1, text, line)
 				}

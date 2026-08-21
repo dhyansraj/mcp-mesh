@@ -39,7 +39,9 @@ def served():
 
 def _doc(tmp_path: pathlib.Path, name: str, body: str) -> pathlib.Path:
     path = tmp_path / name
-    path.write_text(body)
+    # The checker reads every document as UTF-8; a fixture written in the
+    # platform default would be a different document on a machine that has one.
+    path.write_text(body, encoding="utf-8")
     return path
 
 
@@ -118,7 +120,7 @@ def test_dependency_claim_evidence_is_read_from_the_build_file():
     claim = next(c for c in cdc.DEPENDENCY_CLAIMS if c.term == "actuator")
     pom = ROOT / claim.build_file
     assert pom.exists(), "the starter POM moved; the claim has no evidence"
-    assert claim.evidence.lower() not in pom.read_text().lower(), (
+    assert claim.evidence.lower() not in pom.read_text(encoding="utf-8").lower(), (
         "the starter now declares Actuator. That is a product change: the "
         "pages that say it does not have to change with it, and this check "
         "stops applying."
@@ -242,7 +244,7 @@ def test_no_ready_handler_consults_the_verdict():
 def test_handler_bodies_are_located_and_bounded(fact):
     """A body the extractor cannot find, or one that swallowed the file, would
     make `check_handler_facts` assert nothing while reporting ok."""
-    text = (ROOT / fact.site).read_text()
+    text = (ROOT / fact.site).read_text(encoding="utf-8")
     body = cdc._handler_body(text, fact.handler)
     assert body is not None
     lines = body.splitlines()
@@ -273,7 +275,7 @@ def test_supplement_sites_still_prove_their_paths():
     assert cdc.check_supplement_sites(ROOT) == []
 
 
-def test_supplement_with_stale_evidence_fails(tmp_path):
+def test_supplement_with_stale_evidence_fails(monkeypatch):
     stale = cdc.Supplement(
         path="/nowhere",
         runtime="python",
@@ -281,27 +283,36 @@ def test_supplement_with_stale_evidence_fails(tmp_path):
         site="scripts/check_doc_claims.py",
         evidence="this string is not in the checker",
     )
-    original = cdc.SUPPLEMENTS
-    cdc.SUPPLEMENTS = (stale,)
-    try:
-        assert cdc.check_supplement_sites(ROOT)
-    finally:
-        cdc.SUPPLEMENTS = original
+    monkeypatch.setattr(cdc, "SUPPLEMENTS", (stale,))
+    assert cdc.check_supplement_sites(ROOT)
+
+
+def test_probe_doc_globs_all_match_something():
+    """Check C's doc half is a maintained list too, and it rots the same way.
+
+    Two of these patterns named pages that had never existed
+    (`docs/python/mesh-decorators.md`), so the Python and Java surfaces of the
+    probe contract were being reported ok without being read.
+    """
+    assert cdc.check_probe_doc_globs(ROOT) == []
+
+
+def test_probe_doc_glob_that_matches_nothing_fails(monkeypatch):
+    monkeypatch.setattr(cdc, "PROBE_DOC_GLOBS", ("docs/no/such/page.md",))
+    assert cdc.check_probe_doc_globs(ROOT)
 
 
 def test_illustrative_exemptions_are_all_still_used():
     assert cdc.check_illustrative_still_used(cdc.iter_docs(ROOT), ROOT) == []
 
 
-def test_unused_illustrative_exemption_fails(tmp_path):
-    original = cdc.ILLUSTRATIVE_PATHS
-    cdc.ILLUSTRATIVE_PATHS = (
-        cdc.IllustrativePath(path="/no-doc-curls-this", why="fixture"),
+def test_unused_illustrative_exemption_fails(monkeypatch):
+    monkeypatch.setattr(
+        cdc,
+        "ILLUSTRATIVE_PATHS",
+        (cdc.IllustrativePath(path="/no-doc-curls-this", why="fixture"),),
     )
-    try:
-        assert cdc.check_illustrative_still_used(cdc.iter_docs(ROOT), ROOT)
-    finally:
-        cdc.ILLUSTRATIVE_PATHS = original
+    assert cdc.check_illustrative_still_used(cdc.iter_docs(ROOT), ROOT)
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +336,46 @@ def test_path_matcher(pattern, path, want):
     assert bool(cdc.path_matcher(pattern).match(path)) is want
 
 
+GO_TWO_GROUPS = """\
+func register(engine *gin.Engine) {
+	api := engine.Group("/api")
+	api.GET("/foo", h)
+	admin := engine.Group("/admin")
+	admin.GET("/bar", h)
+	engine.GET("/api/ui-health", h)
+}
+"""
+
+
+def test_go_prefixes_compose_only_with_their_own_routes():
+    """Crossing every prefix with every literal conjures paths nothing serves.
+
+    An inventory that is too large is the one failure check A cannot survive: a
+    `curl` to a path nothing serves passes because the cross-product invented
+    it. Nothing in `src/core` has two groups today, so this is the shape that
+    would have made it live.
+    """
+    assert cdc._go_paths(GO_TWO_GROUPS) == {
+        "/api/foo",
+        "/admin/bar",
+        "/api/ui-health",
+    }
+
+
+def test_go_nested_groups_compose():
+    assert cdc._go_paths(
+        'api := engine.Group("/api")\nv1 := api.Group("/v1")\nv1.GET("/agents", h)\n'
+    ) == {"/api/v1/agents"}
+
+
+def test_go_inventory_holds_the_real_meshui_prefix():
+    """`server.go` is the one file with a group; its routes must be prefixed."""
+    go_paths = cdc.collect_served_paths(ROOT)["go"]
+    assert "/api/agents" in go_paths
+    assert "/api/ui-health" in go_paths
+    assert "/api/api/ui-health" not in go_paths
+
+
 @pytest.mark.parametrize(
     "url,host,path",
     [
@@ -337,14 +388,61 @@ def test_split_url(url, host, path):
     assert cdc.split_url(url) == (host, path)
 
 
-def test_external_hosts_are_not_checked(tmp_path, served):
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://upstream.example.com/agents/forecast",
+        # A dotted name with a port is still somebody else's server. Reading it
+        # as local does not merely check too much: `/actuator/health` is served
+        # by nothing here, so it FAILS, and the message tells the reader to add
+        # a Supplement for a path this repo cannot serve.
+        "https://registry.example.com:8443/actuator/health",
+        "https://api.anthropic.com:443/v1/messages",
+    ],
+)
+def test_external_hosts_are_not_checked(tmp_path, served, url):
     """Somebody else's server is not this repo's claim to make."""
+    doc = _doc(tmp_path, "a2a.md", f"```bash\ncurl {url}\n```\n")
+    assert cdc.check_curl_paths([doc], ROOT, served) == []
+
+
+@pytest.mark.parametrize(
+    "host,want",
+    [
+        ("localhost", True),
+        ("localhost:8000", True),
+        ("127.0.0.1:8080", True),
+        ("0.0.0.0:9090", True),
+        ("host.docker.internal", True),
+        ("host.docker.internal:8080", True),
+        ("[::1]", True),
+        ("[::1]:8080", True),
+        # A single-label name is a container or a hosts entry, not a domain.
+        ("myhost:9000", True),
+        ("registry:8000", True),
+        ("mcp-core-mcp-mesh-registry:8000", True),
+        ("${REGISTRY_HOST}", True),
+        ("${REGISTRY_HOST}:8000", True),
+        ("<agent-host>:8080", True),
+        ("registry.example.com:8443", False),
+        ("api.anthropic.com:443", False),
+        ("raw.githubusercontent.com", False),
+        ("registry.mcp-mesh.local", False),
+        ("trip-planner.local", False),
+    ],
+)
+def test_local_host_classification(host, want):
+    assert bool(cdc.LOCAL_HOST_RE.match(host)) is want
+
+
+def test_a_local_host_with_a_port_is_still_checked(tmp_path, served):
+    """The narrowing must not have taken the port-bearing local form with it."""
     doc = _doc(
         tmp_path,
-        "a2a.md",
-        "```bash\ncurl https://upstream.example.com/agents/forecast\n```\n",
+        "networking.md",
+        "```bash\ncurl http://registry:8000/not-a-real-path\n```\n",
     )
-    assert cdc.check_curl_paths([doc], ROOT, served) == []
+    assert len(cdc.check_curl_paths([doc], ROOT, served)) == 1
 
 
 def test_curl_folds_shell_continuations(tmp_path, served):

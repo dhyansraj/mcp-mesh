@@ -143,7 +143,15 @@ GO_ROUTE_RE = re.compile(
     r"\.(?:GET|POST|PUT|DELETE|HEAD|PATCH|OPTIONS|Handle|HandleFunc)\("
     r'\s*(?:[A-Za-z_.]+\s*\+\s*)?"(/[^"]*)"'
 )
-GO_GROUP_RE = re.compile(r'\.Group\(\s*"(/[^"]*)"')
+# The same registration, with the receiver it was called on. A group prefix
+# scopes the routes registered ON the group, so the receiver is what says
+# which those are -- see `_go_paths`.
+GO_RECEIVER_ROUTE_RE = re.compile(
+    r"\b(\w+)\.(?:GET|POST|PUT|DELETE|HEAD|PATCH|OPTIONS|Handle|HandleFunc)\("
+    r'\s*(?:[A-Za-z_.]+\s*\+\s*)?"(/[^"]*)"'
+)
+# `api := engine.Group("/api")`: binder, parent, prefix.
+GO_GROUP_ASSIGN_RE = re.compile(r'(\w+)\s*:?=\s*([\w.]+)\.Group\(\s*"(/[^"]*)"')
 
 # Python: FastAPI/Starlette decorators and imperative registration, plus the
 # `X_PATH = "/livez"` module constants the probe endpoints are registered from
@@ -191,6 +199,67 @@ def _strip_comment_lines(text: str, markers: tuple[str, ...]) -> str:
     return "\n".join(kept)
 
 
+def _go_group_prefixes(text: str) -> dict[str, str]:
+    """Map each group binder in a file to the full prefix it scopes with.
+
+    Nested groups compose (`v1 := api.Group("/v1")` scopes with `/api/v1`),
+    resolved by walking each binder back to a receiver that is not itself a
+    group.
+    """
+    raw = {
+        m.group(1): (m.group(2), m.group(3))
+        for m in GO_GROUP_ASSIGN_RE.finditer(text)
+    }
+    resolved: dict[str, str] = {}
+    for binder in raw:
+        parts: list[str] = []
+        cursor = binder
+        seen: set[str] = set()
+        while cursor in raw and cursor not in seen:
+            seen.add(cursor)
+            parent, prefix = raw[cursor]
+            parts.append(prefix)
+            cursor = parent
+        full = "/"
+        for prefix in reversed(parts):
+            full = _join(full, prefix)
+        resolved[binder] = full
+    return resolved
+
+
+def _go_paths(text: str) -> set[str]:
+    """Return the paths a Go file registers, prefixes applied to their own routes.
+
+    Crossing every group prefix in a file with every route literal in it
+    invents paths: a file holding groups `/api` and `/admin` and routes `/foo`
+    and `/bar` would claim to serve `/api/bar` and `/admin/foo`. Nothing in
+    `src/core` has two groups today, so the cross-product invents nothing --
+    but an over-permissive inventory is the one thing check A cannot afford,
+    because a `curl` to a path nothing serves passes on a conjured entry.
+
+    The gin idiom binds the prefix to a receiver, so the receiver is a reliable
+    reading of which routes a prefix scopes: `api := engine.Group("/api")`
+    followed by `api.GET("/agents")` serves `/api/agents`, and
+    `engine.GET("/api/ui-health")` in the same file serves only itself.
+    """
+    prefixes = _go_group_prefixes(text)
+    paths: set[str] = set()
+    scoped: set[str] = set()
+    for m in GO_RECEIVER_ROUTE_RE.finditer(text):
+        receiver, route = m.group(1), m.group(2)
+        if receiver in prefixes:
+            paths.add(_join(prefixes[receiver], route))
+            scoped.add(route)
+        else:
+            paths.add(route)
+    # A registration whose receiver is not a plain identifier -- a chained
+    # `Group("/x").GET(...)`, say -- enters unprefixed rather than vanishing.
+    # Reading it as unscoped is the same reading as before; dropping it would
+    # shrink the inventory, which is the failure INVENTORY_ANCHORS exists for.
+    paths |= set(GO_ROUTE_RE.findall(text)) - scoped
+    return paths
+
+
 def collect_served_paths(root: Path) -> dict[str, set[str]]:
     """Return {runtime: {path pattern}} for everything this repo serves.
 
@@ -209,14 +278,14 @@ def collect_served_paths(root: Path) -> dict[str, set[str]]:
     def bucket(path: Path, default: str) -> str:
         return "examples" if "examples" in path.parts else default
 
+    # `examples/` holds no Go source: every example agent is Python, TypeScript
+    # or Java. If one ever serves routes, this walk has to grow an `examples`
+    # root the way the other three runtimes have, or a doc curling it fails.
     for path in sorted((root / "src" / "core").rglob("*.go")):
         if not _is_source_of_interest(path):
             continue
         text = _strip_comment_lines(path.read_text(encoding="utf-8"), ("//",))
-        literals = set(GO_ROUTE_RE.findall(text))
-        prefixes = set(GO_GROUP_RE.findall(text))
-        found["go"] |= literals
-        found["go"] |= {_join(p, lit) for p in prefixes for lit in literals}
+        found[bucket(path, "go")] |= _go_paths(text)
 
     py_roots = [root / "src" / "runtime" / "python", root / "examples"]
     for py_root in py_roots:
@@ -363,9 +432,24 @@ def path_matcher(pattern: str) -> re.Pattern[str]:
 
 # Only hosts that mean "something you are running". An external host is
 # somebody else's contract and this repo cannot assert anything about it.
+#
+# The last alternative is deliberately dot-free. A dotted name with a port is
+# somebody's domain -- `registry.example.com:8443`, `api.anthropic.com:443` --
+# and reading it as local does not merely check too much: it FAILS, and tells
+# the reader to add a Supplement for a path this repo cannot serve. Dotted
+# names that are local are spelled out above; everything else needs a
+# single-label host (`registry:8000`, `myhost:9000`) or a placeholder
+# (`${REGISTRY_HOST}:8000`, `<agent>:8080`).
+LOCAL_HOST_ALTERNATIVES = (
+    r"localhost",
+    r"127\.0\.0\.1",
+    r"0\.0\.0\.0",
+    r"\[[0-9A-Fa-f:]+\]",
+    r"host\.docker\.internal",
+    r"[\w$%{}<>-]+",
+)
 LOCAL_HOST_RE = re.compile(
-    r"^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|host\.docker\.internal|"
-    r"[\w.$%{}<>-]+:\d+|\$\{?[A-Z_]+\}?)$"
+    r"^(?:" + "|".join(LOCAL_HOST_ALTERNATIVES) + r")(?::\d+)?$"
 )
 URL_RE = re.compile(r"https?://[^\s'\"`)\\|]+")
 
@@ -918,9 +1002,9 @@ PROBE_DOC_GLOBS = (
     "src/core/cli/man/content/health*.md",
     "src/core/cli/man/content/deployment*.md",
     "docs/concepts/health-discovery.md",
-    "docs/python/mesh-decorators.md",
+    "docs/python/decorators.md",
     "docs/typescript/mesh-functions.md",
-    "docs/java/mesh-annotations.md",
+    "docs/java/annotations.md",
     "docs/tutorial/day-10-whats-next.md",
     "helm/mcp-mesh-agent/README.md",
 )
@@ -932,6 +1016,32 @@ def probe_docs(root: Path) -> list[Path]:
         for path in sorted(root.glob(pattern)):
             out.setdefault(path, None)
     return list(out)
+
+
+def check_probe_doc_globs(root: Path) -> list[Finding]:
+    """A pattern that matches nothing narrows check C's doc half in silence.
+
+    `PROBE_DOC_GLOBS` is a maintained list like SUPPLEMENTS and
+    ILLUSTRATIVE_PATHS, and it rots the same way: rename or move
+    `docs/concepts/health-discovery.md` and the page stops being scanned while
+    the run stays green -- the exact shape of rot the rest of this file guards
+    against. The wildcards can go stale too: `content/health*.md` covers three
+    variant pages by name, and a renamed corpus takes them all out at once.
+    """
+    findings = []
+    for pattern in PROBE_DOC_GLOBS:
+        if not any(root.glob(pattern)):
+            findings.append(
+                Finding(
+                    "scripts/check_doc_claims.py",
+                    0,
+                    f"PROBE_DOC_GLOBS lists {pattern!r}, which now matches no "
+                    f"file. The page it stands for is no longer scanned for "
+                    f"probe coupling. Point the pattern at where the prose "
+                    f"moved, or drop it if the page is gone.",
+                )
+            )
+    return findings
 
 
 PROBE_PATH_RE = re.compile("|".join(re.escape(p) for p in PROBE_PATHS))
@@ -1055,6 +1165,7 @@ CHECKS = (
     ("illustrative-path exemptions", lambda r, d, s: check_illustrative_still_used(d, r)),
     ("dependency claims", lambda r, d, s: check_dependency_claims(d, r)),
     ("probe handler facts", lambda r, d, s: check_handler_facts(r)),
+    ("probe doc globs", lambda r, d, s: check_probe_doc_globs(r)),
     ("probe verdict coupling", lambda r, d, s: check_verdict_coupling(r)),
 )
 
