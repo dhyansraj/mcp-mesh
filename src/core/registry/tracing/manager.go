@@ -167,11 +167,32 @@ func NewTracingManager(config *TracingConfig) (*TracingManager, error) {
 			}
 		}
 
-		// Create stream-through processor and wrap with accumulator
-		streamProcessor := NewStreamThroughProcessor(otlpExporter)
-		accumulator := NewTraceAccumulator(200, manager.logger)
-		manager.accumulator = accumulator
-		manager.processor = NewMultiProcessor(manager.logger, streamProcessor, accumulator)
+		// Export and nothing else. Deliberately NO TraceAccumulator here
+		// (#1540): nothing on the registry side ever read one. Every manager
+		// method that consults tm.accumulator — ListTraces, SearchTraces,
+		// GetTraceCount, GetRecentTraces, GetEdgeStats, GetAgentActivity,
+		// GetTotalFinalized, GetTotalErrors, GetAccumulator — is called only
+		// from src/core/ui, and meshui builds its own manager through
+		// NewAccumulatorOnlyManager with its own accumulator, consumer and
+		// consumer group. The registry's four /trace/* routes reach none of
+		// them: /trace/status and /trace/info answer from GetInfo (config +
+		// consumer + correlator), /trace/stats returns nil unconditionally,
+		// and /trace/:trace_id answers from Tempo in this mode.
+		//
+		// It was also a trap. The accumulator is fed from a Redis consumer
+		// group, and Redis hands each stream entry to exactly one consumer in
+		// a group, so at N registry replicas each accumulator would hold
+		// roughly 1/N of the mesh's traffic. Wiring any registry route to it —
+		// the obvious move, with the data right there on the manager — would
+		// have under-reported by about the replica count, silently. Leaving
+		// the field nil means that route has to go and find a real source.
+		//
+		// The nil is what the tm.accumulator == nil guards throughout this
+		// file were already written for, so the manager's API shape is
+		// unchanged: the list/search/count methods return empty as they did
+		// when tracing was off, and GetRecentTraces/GetEdgeStats fall through
+		// to Tempo, which sees every replica's spans rather than one's.
+		manager.processor = NewStreamThroughProcessor(otlpExporter)
 
 	} else {
 		// Use traditional correlation approach for other exporters
@@ -222,6 +243,7 @@ func (tm *TracingManager) Start() error {
 		return nil
 	}
 
+	// Nil on the registry path since #1540 — only meshui accumulates.
 	if tm.accumulator != nil {
 		tm.accumulator.Start()
 	}
@@ -263,7 +285,9 @@ func (tm *TracingManager) trimLoop() {
 }
 
 // Stop stops the tracing manager. The consumer is stopped first so that
-// in-flight spans can still be processed by the accumulator before it shuts down.
+// in-flight spans can still be processed by the accumulator before it shuts
+// down. Since #1540 only meshui's manager has an accumulator; the registry's
+// takes the nil branch and stops consumer, processor and exporter alone.
 func (tm *TracingManager) Stop() error {
 	if !tm.enabled {
 		return nil

@@ -62,8 +62,12 @@ type AggregateBounds struct {
 var defaultAggregateBounds = LoadAggregateBoundsFromEnv()
 
 // DefaultAggregateBounds returns the process-wide aggregate bounds derived
-// from the environment at init time. Both the registry and meshui construct
-// their aggregate maps from this.
+// from the environment at init time.
+//
+// Since #1540 the only process that builds an aggregate map is MESHUI — both
+// its TraceAccumulator and its MetricsProcessor. The registry exports spans to
+// Tempo and aggregates nothing, so these bounds no longer describe any registry
+// memory. That is why the docs call them dashboard aggregates.
 func DefaultAggregateBounds() AggregateBounds {
 	return defaultAggregateBounds
 }
