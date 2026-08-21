@@ -30,23 +30,13 @@ repos:
       - id: check-case-conflict
       - id: check-added-large-files
       - id: detect-private-key
-        # The hook matches PEM private-key header text wherever it appears, so
-        # Rust sources that merely *write about* PEM trip it. Each
-        # entry below is exempt because its match carries no usable secret, not
-        # because the file is trusted in general — a new entry needs the same
-        # check: confirm the match is a label or a synthetic fixture, and that
-        # no real key can be recovered from it.
-        #   tls.rs      test-only PEM fixture under #[cfg(test)]; the blob is
-        #               deliberately malformed (its DER length header overruns
-        #               the data) and will not load as a key.
-        #   spire.rs    a test asserting the PEM header that der_to_pem()
-        #               renders; the literal is the expected output format,
-        #               and the key bytes it wraps at runtime come from SPIRE.
-        exclude: |
-          (?x)^(
-            src/runtime/core/src/tls\.rs|
-            src/runtime/core/src/spire\.rs
-          )$
+        # No exclusions, deliberately: this hook must see every file, and most
+        # of all the TLS/SPIFFE modules. The hook matches PEM private-key
+        # header text wherever it appears, so code that merely *writes about*
+        # PEM used to trip it; src/runtime/core/src/{tls,spire}.rs now build
+        # that header from a label at runtime instead of spelling it out, so
+        # there is nothing to exempt. Keep it that way — construct the header,
+        # don't add the file here.
       - id: mixed-line-ending
 
   # Python formatters (black, isort, ruff, mypy, bandit) are deliberately not

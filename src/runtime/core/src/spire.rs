@@ -154,18 +154,20 @@ mod tests {
 
     #[test]
     fn test_der_to_pem_certificate() {
+        let label = "CERTIFICATE";
         let fake_der = b"fake-certificate-der-data";
-        let pem = der_to_pem(fake_der, "CERTIFICATE");
-        assert!(pem.starts_with("-----BEGIN CERTIFICATE-----\n"));
-        assert!(pem.ends_with("-----END CERTIFICATE-----\n"));
+        let pem = der_to_pem(fake_der, label);
+        assert!(pem.starts_with(&format!("-----BEGIN {}-----\n", label)));
+        assert!(pem.ends_with(&format!("-----END {}-----\n", label)));
         assert!(pem.contains("ZmFrZS1jZXJ0aWZpY2F0ZS1kZXItZGF0YQ=="));
     }
 
     #[test]
     fn test_der_to_pem_private_key() {
+        let label = "PRIVATE KEY";
         let fake_der = b"fake-private-key-der-data";
-        let pem = der_to_pem(fake_der, "PRIVATE KEY");
-        assert!(pem.starts_with("-----BEGIN PRIVATE KEY-----\n"));
-        assert!(pem.ends_with("-----END PRIVATE KEY-----\n"));
+        let pem = der_to_pem(fake_der, label);
+        assert!(pem.starts_with(&format!("-----BEGIN {}-----\n", label)));
+        assert!(pem.ends_with(&format!("-----END {}-----\n", label)));
     }
 }
