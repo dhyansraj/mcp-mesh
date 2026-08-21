@@ -31,6 +31,13 @@ import (
 // Java's, so on Python and TypeScript a cancel branch would be unreachable
 // code — `AbortSignal.timeout` rejects with a "TimeoutError", which is a
 // transport failure and belongs in the unhealthy branch asserted below.
+//
+// RFC #1515 makes the contract binary and takes `degraded` out of the teaching
+// surface entirely, so the branch-scoped bans above are joined by a WHOLE-FILE
+// one (TestScaffoldedAgentsNeverMentionDegraded). Java's interrupt branch was
+// the last selection left: it now restores the interrupt and rethrows, which
+// lands on the runtime's own indeterminate verdict — the same outcome, chosen
+// by the runtime rather than named by the author.
 
 func templatesRoot(t *testing.T) string {
 	t.Helper()
@@ -91,7 +98,7 @@ var javaEntry = filepath.Join(
 // on purpose — they are what makes this guard a matrix rather than nine
 // hand-written cases.
 const (
-	outageMarker    = "vendor answered and it is not serving"
+	outageMarker    = "vendor ANSWERED, so it is reachable"
 	transportMarker = "The vendor is not answering at all"
 )
 
@@ -109,17 +116,23 @@ type runtimeProbe struct {
 	bannedVerdict string
 	// Text proving the check is actually wired to the agent.
 	wiring []string
+	// Text proving the probe's error handling is narrowed to transport
+	// failures, and text proving it is not catch-all.
+	narrowHandler string
+	broadHandler  string
 }
 
 var runtimeProbes = []runtimeProbe{
 	{
 		language:      "python",
 		entry:         "main.py",
-		outageEnd:     "except Exception",
+		outageEnd:     "except httpx.RequestError",
 		transportEnd:  "return {",
 		wantVerdict:   `status = "unhealthy"`,
 		bannedVerdict: `status = "degraded"`,
 		wiring:        []string{"health_check=health_check", "health_check_ttl="},
+		narrowHandler: "except httpx.RequestError",
+		broadHandler:  "except Exception",
 	},
 	{
 		language:      "typescript",
@@ -129,17 +142,22 @@ var runtimeProbes = []runtimeProbe{
 		wantVerdict:   `status: "unhealthy"`,
 		bannedVerdict: `status: "degraded"`,
 		wiring:        []string{"  healthCheck,", "healthCheckTtl:"},
+		// TypeScript cannot name a transport failure in the catch clause, so
+		// the narrowing is the rethrow on the first line of the handler.
+		narrowHandler: "if (!isVendorUnreachable(err)) throw err;",
 	},
 	{
 		language: "java",
 		entry:    javaEntry,
 		// Java's transport branch is the LAST catch, after the
-		// InterruptedException one that is legitimately degraded.
+		// InterruptedException one, which restores the interrupt and rethrows.
 		outageEnd:     "catch (InterruptedException",
 		transportEnd:  "\n    }",
 		wantVerdict:   "MeshHealthStatus.UNHEALTHY",
 		bannedVerdict: "MeshHealthStatus.DEGRADED",
 		wiring:        []string{"@MeshHealthCheck(ttlSeconds ="},
+		narrowHandler: "catch (IOException e)",
+		broadHandler:  "catch (Exception e)",
 	},
 }
 
@@ -195,6 +213,84 @@ func TestLlmProviderTemplates_TransportFailureIsUnhealthy(t *testing.T) {
 	}
 }
 
+// The two branches disagree about REACHABILITY, and the disagreement is the
+// point: a vendor that answers with a 503 is reachable and not serving, while
+// one that never answers is not reachable at all. Reporting the first as
+// unreachable puts a claim on /health that the probe just disproved — the
+// connection succeeded — and it did so in the same function that gets 401
+// right two lines above.
+//
+// Both branches still report unhealthy; only the sub-check differs. That is
+// what makes this a separate guard from the two above rather than a widening
+// of them.
+func TestLlmProviderTemplates_VendorOutageReportsReachable(t *testing.T) {
+	// The rendered `reachable` sub-check, per runtime: false in the transport
+	// branch, true in the outage branch.
+	reachableTrue := map[string]string{
+		"python":     `_api_reachable"] = True`,
+		"typescript": "_api_reachable = true;",
+		"java":       `_api_reachable", true)`,
+	}
+	reachableFalse := map[string]string{
+		"python":     `_api_reachable"] = False`,
+		"typescript": "_api_reachable = false;",
+		"java":       `_api_reachable", false)`,
+	}
+
+	for _, rt := range runtimeProbes {
+		for _, vendor := range probeVendors {
+			t.Run(rt.language+" "+vendor.name, func(t *testing.T) {
+				content := renderProvider(t, rt.language, vendor.model, rt.entry)
+
+				outage := section(t, content, outageMarker, rt.outageEnd)
+				require.Contains(t, outage, reachableTrue[rt.language],
+					"the vendor ANSWERED in this branch, so it is reachable — the "+
+						"failure is the status it answered with, which the error string "+
+						"already carries")
+				require.NotContains(t, outage, reachableFalse[rt.language],
+					"reporting unreachable for a vendor that just answered contradicts "+
+						"the 401 branch of the same probe and misleads whoever reads "+
+						"/health during an outage")
+
+				transport := section(t, content, transportMarker, rt.transportEnd)
+				require.Contains(t, transport, reachableFalse[rt.language],
+					"nothing answered in this branch: this is the one case that is "+
+						"genuinely unreachable")
+			})
+		}
+	}
+}
+
+// A catch-all handler reports a DEFECT IN THE PROBE as a vendor outage, and a
+// vendor outage withdraws the agent. So a typo in the probe — a NameError, a
+// ReferenceError — would take a provider whose vendor is perfectly healthy out
+// of dependency resolution, permanently, because it recurs on every refresh.
+//
+// The runtime already refuses to do that: an exception that escapes a health
+// check is recorded as the indeterminate verdict, which keeps the agent
+// serving (issue #1477). The templates have to LET it escape to get that, so
+// each one names the transport failure it means and rethrows the rest.
+func TestLlmProviderTemplates_ProbeHandlersAreNarrow(t *testing.T) {
+	for _, rt := range runtimeProbes {
+		for _, vendor := range probeVendors {
+			t.Run(rt.language+" "+vendor.name, func(t *testing.T) {
+				content := renderProvider(t, rt.language, vendor.model, rt.entry)
+
+				require.Contains(t, content, rt.narrowHandler,
+					"the probe must answer only for the failure it can actually "+
+						"recognize — the vendor not answering — and let a defect in "+
+						"itself propagate to the runtime's indeterminate verdict")
+				if rt.broadHandler != "" {
+					require.NotContains(t, content, rt.broadHandler,
+						"a catch-all handler turns a bug in this probe into a vendor "+
+							"outage, and a vendor outage withdraws a working provider "+
+							"from the mesh")
+				}
+			})
+		}
+	}
+}
+
 // The scaffolded agent must actually WIRE the check up — a correct
 // healthCheck that nothing calls withdraws nothing.
 func TestLlmProviderTemplates_HealthCheckIsWired(t *testing.T) {
@@ -209,6 +305,72 @@ func TestLlmProviderTemplates_HealthCheckIsWired(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// RFC #1515: `degraded` is out of the teaching surface, scaffold comments
+// included. The per-branch bans above stop the INVERSION; this stops the
+// vocabulary from coming back at all — as a returned value, as advice in a
+// comment, or as the "here is what the runtime does with a throw" aside that
+// three templates carried and that reads, to someone skimming for what to
+// return, like a third option.
+//
+// A whole-file assertion is only possible because nothing legitimate needs the
+// word any more. It is also the only assertion that would have caught the
+// original bug at its source: every template that shipped the inversion
+// mentioned `degraded` in prose first and returned it second.
+//
+// Every template gets this, not just llm-provider — basic, llm-agent,
+// a2a-consumer and api all carry the same health/startup preamble, and a
+// re-added mention in any one of them is a re-added mention. All five
+// templates in all three languages, so the table is the whole matrix.
+func TestScaffoldedAgentsNeverMentionDegraded(t *testing.T) {
+	templates := []struct {
+		language string
+		template string
+		entry    string
+	}{
+		{"python", "basic", "main.py"},
+		{"python", "llm-agent", "main.py"},
+		{"python", "llm-provider", "main.py"},
+		{"python", "a2a-consumer", "main.py"},
+		{"python", "api", "main.py"},
+		{"typescript", "basic", filepath.Join("src", "index.ts")},
+		{"typescript", "llm-agent", filepath.Join("src", "index.ts")},
+		{"typescript", "llm-provider", filepath.Join("src", "index.ts")},
+		{"typescript", "a2a-consumer", filepath.Join("src", "index.ts")},
+		{"typescript", "api", filepath.Join("src", "index.ts")},
+		{"java", "basic", javaEntry},
+		{"java", "llm-agent", javaEntry},
+		{"java", "llm-provider", javaEntry},
+		{"java", "a2a-consumer", javaEntry},
+		{"java", "api", javaEntry},
+	}
+
+	for _, tpl := range templates {
+		t.Run(tpl.language+" "+tpl.template, func(t *testing.T) {
+			ctx := &ScaffoldContext{
+				Name:        "verdict-probe",
+				Description: "verdict probe",
+				Language:    tpl.language,
+				OutputDir:   t.TempDir(),
+				Port:        9400,
+				Model:       "anthropic/claude-sonnet-5",
+				Template:    tpl.template,
+				TemplateDir: templatesRoot(t),
+			}
+			require.NoError(t, NewStaticProvider().Execute(ctx))
+
+			content, err := os.ReadFile(filepath.Join(ctx.OutputDir, ctx.Name, tpl.entry))
+			require.NoError(t, err)
+
+			require.NotContains(t, strings.ToLower(string(content)), "degraded",
+				"a health check answers one binary question — keep routing here, or "+
+					"stop — and `degraded` is the same answer as healthy on every mesh "+
+					"path. Naming it in scaffolded code is what produced the inversion "+
+					"this file exists to catch, so it stays out of the generated "+
+					"output entirely (RFC #1515)")
+		})
 	}
 }
 

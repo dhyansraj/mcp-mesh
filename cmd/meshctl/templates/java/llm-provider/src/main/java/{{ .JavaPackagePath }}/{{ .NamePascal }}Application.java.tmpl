@@ -25,6 +25,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
      (providerTagsByFamily) so the three language templates cannot drift. */}}
 {{- if $probeVendor }}
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -99,10 +100,10 @@ public class {{ .NamePascal }}Application {
     // configuration is wrong", which is the signal this hook exists to produce.
     //
     // They also disagree about exceptions, deliberately. A health check that
-    // throws is recorded as DEGRADED and keeps heartbeating — a buggy probe
-    // must not withdraw a working provider from a mesh that may have no other
-    // one. A startup check that throws FAILS: at boot an indeterminate answer
-    // is not a reason to admit a possibly-misconfigured agent.
+    // throws keeps heartbeating — a buggy probe must not withdraw a working
+    // provider from a mesh that may have no other one. A startup check that throws
+    // FAILS: at boot an indeterminate answer is not a reason to admit a
+    // possibly-misconfigured agent.
 {{ if eq $probeVendor "anthropic" }}
     private static final HttpClient HTTP = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(5))
@@ -148,24 +149,30 @@ public class {{ .NamePascal }}Application {
                     .withCheck("anthropic_api_key_valid", false)
                     .withError("Anthropic API key is invalid");
             }
-            // The vendor answered and it is not serving. Unhealthy: this is the
-            // outage the mesh has to route around, and DEGRADED would keep
-            // heartbeating and keep consumers pointed here.
+            // The vendor ANSWERED, so it is reachable - it is just not serving.
+            // Unhealthy: this is the outage the mesh has to route around, and
+            // anything else keeps heartbeating and keeps consumers pointed here.
             return health
                 .withStatus(io.mcpmesh.MeshHealthStatus.UNHEALTHY)
-                .withCheck("anthropic_api_reachable", false)
+                .withCheck("anthropic_api_reachable", true)
                 .withError("Anthropic API returned status: " + status);
         } catch (InterruptedException e) {
-            // Degraded, deliberately: the probe was cut short, which says
-            // nothing about the vendor. Withdrawing on an indeterminate
-            // result would take the agent out on shutdown or thread interrupt.
+            // Indeterminate, deliberately: the probe was cut short, which says
+            // nothing about the vendor. Restore the interrupt and rethrow -
+            // the runtime keeps the agent in dependency resolution for a check
+            // that threw, so an answer here is one this probe never reached.
+            // Withdrawing on it would take the agent out on shutdown or thread
+            // interrupt.
             Thread.currentThread().interrupt();
-            return health
-                .withStatus(io.mcpmesh.MeshHealthStatus.DEGRADED)
-                .withCheck("anthropic_api_reachable", false)
-                .withError("Anthropic API probe interrupted");
-        } catch (Exception e) {
+            throw new IllegalStateException("Anthropic API probe interrupted", e);
+        } catch (IOException e) {
             // The vendor is not answering at all (DNS, connect, timeout, TLS).
+            // IOException ONLY: that is what HttpClient.send throws when the
+            // request never got a response. Anything else raised in here is a
+            // defect in this probe, and it propagates rather than being
+            // reported as a vendor outage - the runtime records an
+            // indeterminate verdict and keeps this agent serving. A broken
+            // probe must not be able to withdraw a working provider.
             return health
                 .withStatus(io.mcpmesh.MeshHealthStatus.UNHEALTHY)
                 .withCheck("anthropic_api_reachable", false)
@@ -214,24 +221,30 @@ public class {{ .NamePascal }}Application {
                     .withCheck("openai_api_key_valid", false)
                     .withError("OpenAI API key is invalid");
             }
-            // The vendor answered and it is not serving. Unhealthy: this is the
-            // outage the mesh has to route around, and DEGRADED would keep
-            // heartbeating and keep consumers pointed here.
+            // The vendor ANSWERED, so it is reachable - it is just not serving.
+            // Unhealthy: this is the outage the mesh has to route around, and
+            // anything else keeps heartbeating and keeps consumers pointed here.
             return health
                 .withStatus(io.mcpmesh.MeshHealthStatus.UNHEALTHY)
-                .withCheck("openai_api_reachable", false)
+                .withCheck("openai_api_reachable", true)
                 .withError("OpenAI API returned status: " + status);
         } catch (InterruptedException e) {
-            // Degraded, deliberately: the probe was cut short, which says
-            // nothing about the vendor. Withdrawing on an indeterminate
-            // result would take the agent out on shutdown or thread interrupt.
+            // Indeterminate, deliberately: the probe was cut short, which says
+            // nothing about the vendor. Restore the interrupt and rethrow -
+            // the runtime keeps the agent in dependency resolution for a check
+            // that threw, so an answer here is one this probe never reached.
+            // Withdrawing on it would take the agent out on shutdown or thread
+            // interrupt.
             Thread.currentThread().interrupt();
-            return health
-                .withStatus(io.mcpmesh.MeshHealthStatus.DEGRADED)
-                .withCheck("openai_api_reachable", false)
-                .withError("OpenAI API probe interrupted");
-        } catch (Exception e) {
+            throw new IllegalStateException("OpenAI API probe interrupted", e);
+        } catch (IOException e) {
             // The vendor is not answering at all (DNS, connect, timeout, TLS).
+            // IOException ONLY: that is what HttpClient.send throws when the
+            // request never got a response. Anything else raised in here is a
+            // defect in this probe, and it propagates rather than being
+            // reported as a vendor outage - the runtime records an
+            // indeterminate verdict and keeps this agent serving. A broken
+            // probe must not be able to withdraw a working provider.
             return health
                 .withStatus(io.mcpmesh.MeshHealthStatus.UNHEALTHY)
                 .withCheck("openai_api_reachable", false)
@@ -282,24 +295,30 @@ public class {{ .NamePascal }}Application {
                     .withCheck("google_api_key_valid", false)
                     .withError("Google API key is invalid");
             }
-            // The vendor answered and it is not serving. Unhealthy: this is the
-            // outage the mesh has to route around, and DEGRADED would keep
-            // heartbeating and keep consumers pointed here.
+            // The vendor ANSWERED, so it is reachable - it is just not serving.
+            // Unhealthy: this is the outage the mesh has to route around, and
+            // anything else keeps heartbeating and keeps consumers pointed here.
             return health
                 .withStatus(io.mcpmesh.MeshHealthStatus.UNHEALTHY)
-                .withCheck("gemini_api_reachable", false)
+                .withCheck("gemini_api_reachable", true)
                 .withError("Gemini API returned status: " + status);
         } catch (InterruptedException e) {
-            // Degraded, deliberately: the probe was cut short, which says
-            // nothing about the vendor. Withdrawing on an indeterminate
-            // result would take the agent out on shutdown or thread interrupt.
+            // Indeterminate, deliberately: the probe was cut short, which says
+            // nothing about the vendor. Restore the interrupt and rethrow -
+            // the runtime keeps the agent in dependency resolution for a check
+            // that threw, so an answer here is one this probe never reached.
+            // Withdrawing on it would take the agent out on shutdown or thread
+            // interrupt.
             Thread.currentThread().interrupt();
-            return health
-                .withStatus(io.mcpmesh.MeshHealthStatus.DEGRADED)
-                .withCheck("gemini_api_reachable", false)
-                .withError("Gemini API probe interrupted");
-        } catch (Exception e) {
+            throw new IllegalStateException("Gemini API probe interrupted", e);
+        } catch (IOException e) {
             // The vendor is not answering at all (DNS, connect, timeout, TLS).
+            // IOException ONLY: that is what HttpClient.send throws when the
+            // request never got a response. Anything else raised in here is a
+            // defect in this probe, and it propagates rather than being
+            // reported as a vendor outage - the runtime records an
+            // indeterminate verdict and keeps this agent serving. A broken
+            // probe must not be able to withdraw a working provider.
             return health
                 .withStatus(io.mcpmesh.MeshHealthStatus.UNHEALTHY)
                 .withCheck("gemini_api_reachable", false)
@@ -375,13 +394,17 @@ public class {{ .NamePascal }}Application {
             return MeshHealth.healthy()
                 .withCheck("anthropic_api_key_present", true)
                 .withCheck("anthropic_api_reachable", false);
-        } catch (Exception e) {
+        } catch (IOException e) {
             // The vendor could not be reached at all (DNS, connect, timeout,
             // TLS). An outage, not a misconfiguration: startup PASSES and the
             // health check withdraws this agent for as long as it lasts.
             // Failing here would crash-loop a correctly configured pod, and
             // would dilute CrashLoopBackOff from "your configuration is wrong"
             // into "something somewhere is unwell".
+            //
+            // IOException ONLY. A defect in this probe is not an outage, so it
+            // propagates and fails startup - which is what a check that
+            // reached no conclusion should do at boot.
             return MeshHealth.healthy()
                 .withCheck("anthropic_api_key_present", true)
                 .withCheck("anthropic_api_reachable", false);
@@ -440,13 +463,17 @@ public class {{ .NamePascal }}Application {
             return MeshHealth.healthy()
                 .withCheck("openai_api_key_present", true)
                 .withCheck("openai_api_reachable", false);
-        } catch (Exception e) {
+        } catch (IOException e) {
             // The vendor could not be reached at all (DNS, connect, timeout,
             // TLS). An outage, not a misconfiguration: startup PASSES and the
             // health check withdraws this agent for as long as it lasts.
             // Failing here would crash-loop a correctly configured pod, and
             // would dilute CrashLoopBackOff from "your configuration is wrong"
             // into "something somewhere is unwell".
+            //
+            // IOException ONLY. A defect in this probe is not an outage, so it
+            // propagates and fails startup - which is what a check that
+            // reached no conclusion should do at boot.
             return MeshHealth.healthy()
                 .withCheck("openai_api_key_present", true)
                 .withCheck("openai_api_reachable", false);
@@ -505,13 +532,17 @@ public class {{ .NamePascal }}Application {
             return MeshHealth.healthy()
                 .withCheck("google_api_key_present", true)
                 .withCheck("gemini_api_reachable", false);
-        } catch (Exception e) {
+        } catch (IOException e) {
             // The vendor could not be reached at all (DNS, connect, timeout,
             // TLS). An outage, not a misconfiguration: startup PASSES and the
             // health check withdraws this agent for as long as it lasts.
             // Failing here would crash-loop a correctly configured pod, and
             // would dilute CrashLoopBackOff from "your configuration is wrong"
             // into "something somewhere is unwell".
+            //
+            // IOException ONLY. A defect in this probe is not an outage, so it
+            // propagates and fails startup - which is what a check that
+            // reached no conclusion should do at boot.
             return MeshHealth.healthy()
                 .withCheck("google_api_key_present", true)
                 .withCheck("gemini_api_reachable", false);

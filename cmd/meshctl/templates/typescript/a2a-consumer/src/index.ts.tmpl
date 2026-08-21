@@ -66,10 +66,10 @@ const server = new FastMCP({
 // reported by startupCheck crash-loops a pod whose configuration was fine.
 //
 // They also disagree about exceptions, deliberately. A healthCheck that
-// throws is recorded as "degraded" and keeps heartbeating - a buggy probe
-// must not withdraw a working bridge from a mesh that may have no other one.
-// A startupCheck that throws FAILS: at boot an indeterminate answer is not a
-// reason to admit a possibly-misconfigured agent.
+// throws keeps heartbeating - a buggy probe must not withdraw a working
+// bridge from a mesh that may have no other one. A startupCheck that throws
+// FAILS: at boot an indeterminate answer is not a reason to admit a
+// possibly-misconfigured agent.
 
 /** Can this bridge serve right now? */
 async function healthCheck(): Promise<MeshHealthResult> {

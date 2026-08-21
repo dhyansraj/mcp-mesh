@@ -354,6 +354,35 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // is plain prose and adds none. Prose throughout, so the list goldens hold.
 // The `docs/tutorial/day-10-whats-next.md` twin carries the same correction at
 // tutorial length and is not sampled here.
+// Issue #1517: +2 / +0 / +0, both in `health.md`'s one-paragraph description of
+// what a check may return, which now states the parsing rules the runtimes
+// agreed on: `None` (the new span) reads as an absent status, and a result
+// carrying only `checks` (the second span) is reporting success. "sync or
+// async", case-insensitivity and whitespace trimming are prose and add none.
+// The `_typescript` variant gained the same sentence with `null` in place of
+// `None`, and as ever moves nothing here — these constants sample the default
+// variant alone.
+// Issue #1515: -2 / +0 / +0, both of them the word `degraded` leaving
+// `health.md`'s "Only an Explicit Unhealthy Withdraws the Agent" section. RFC
+// #1515 makes the return contract binary, so per the project's deprecation
+// convention the value comes out of the teaching surface entirely and the
+// runtime warning is the discovery path. Both paragraphs keep their meaning and
+// state it as a consequence instead: a check that raises "keeps heartbeating
+// and stays in dependency resolution", and "those verdicts" show on the
+// diagnostic surface only. No span is added in either — the removals are the
+// whole delta. The `_java` and `_typescript` variants lost the same two,
+// `deployment_java.md` one and `deployment_typescript.md` two (one of them the
+// `degraded`/`unhealthy` pair in "answers 503 while the check reports ...",
+// which becomes the single `healthy` of "whenever the check is not reporting
+// ..."). None of those five files are sampled here — these constants sample
+// the default variant alone, and `deployment.md` is untouched.
+//
+// The same issue ADDS a "When Every Provider Withdraws" section to all three
+// health pages — the answer to RFC #1515's open question 1 (no floor, and a
+// registry warning when a capability drops to zero providers), recorded where
+// the operator who sees that warning will look. It is deliberately span-free:
+// it names no identifier, no endpoint and no env var, only behaviour, so the
+// three goldens below are unmoved by it.
 const (
 	wantInlineCodeSpans = 1769
 	wantListCodeSpans   = 522

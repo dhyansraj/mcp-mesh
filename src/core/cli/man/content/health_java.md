@@ -60,9 +60,17 @@ The verdict drives `/health`, which answers 503 while unhealthy and carries the 
 
 ### Only an Explicit Unhealthy Withdraws the Agent
 
-A check that **throws** is recorded as `degraded`, not unhealthy, and keeps heartbeating. A bug in a health check must not be able to remove a working agent from the mesh. Return `false` or `MeshHealth.unhealthy(...)` to actually withdraw.
+A check that **throws** keeps heartbeating and stays in dependency resolution, and so does one whose return value cannot be read. A bug in a health check must not be able to remove a working agent from the mesh. Return `false` or `MeshHealth.unhealthy(...)` to actually withdraw.
 
-`degraded` shows on the diagnostic surface only, the same way it does on Python: the agent keeps heartbeating and stays in dependency resolution, and `/health` answers 503 while `/ready` is unmoved. Nothing probes `/health`, so its status code is free to carry the verdict; readiness reports the mesh runtime and nothing else.
+Those verdicts show on the diagnostic surface only, the same way they do on Python: `/health` answers 503 while `/ready` is unmoved. Nothing probes `/health`, so its status code is free to carry the verdict; readiness reports the mesh runtime and nothing else.
+
+### When Every Provider Withdraws
+
+A health check is per-agent, but the failure it reports usually is not. Broken egress, an expired shared credential, a vendor that is down for everyone: each provider of a capability observes it independently and each withdraws itself, so the capability can go from several providers to none within one refresh period.
+
+Mesh does not keep a last provider in rotation to prevent that. Routing to something that has just reported it cannot serve trades an unresolved dependency - fast, and clearly attributable - for a call that is guaranteed to fail slowly at the far end, and it makes the health check a suggestion. Withdrawal is also cheap: the agent keeps running, keeps its resolved dependencies, and re-registers by itself the moment its check passes again, so getting it wrong costs one refresh period.
+
+It is not silent, though. When the registry withdraws the last healthy provider of a capability it logs a warning naming that capability, so a total outage is something the registry says rather than something you infer from a scatter of consumer errors.
 
 ### Route and A2A Agents
 

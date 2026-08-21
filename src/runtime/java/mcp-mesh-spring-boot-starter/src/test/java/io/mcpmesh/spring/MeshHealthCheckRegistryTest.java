@@ -17,6 +17,11 @@ import static org.junit.jupiter.api.Assertions.*;
  * agent. A check that throws, or whose verdict cannot be read, is DEGRADED —
  * it keeps heartbeating.
  */
+// MeshHealth.degraded is deprecated (issue #1515) and still exercised here: the
+// deprecation promises source compatibility until 4.0, so the paths that carry a
+// degraded verdict have to keep working. Suppressed rather than rewritten so the
+// promise stays under test.
+@SuppressWarnings("deprecation")
 class MeshHealthCheckRegistryTest {
 
     static class Checks {

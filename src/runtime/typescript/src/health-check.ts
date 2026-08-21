@@ -34,7 +34,18 @@
  * wiring that agent. What differs is topology, not meaning.
  */
 
-/** The verdict vocabulary shared by all three runtimes. */
+/**
+ * The verdict vocabulary shared by all three runtimes.
+ *
+ * `"healthy"` and `"unhealthy"` are the two answers a check gives; they are
+ * the whole routing contract. `"degraded"` is what the RUNTIME records when
+ * it has no verdict it can trust — a check that threw, one that missed its
+ * deadline, an unusable return type, an unreadable status string — and it
+ * keeps the agent in dependency resolution. Returning it from a `healthCheck`
+ * is deprecated (issue #1515): it is indistinguishable from `"healthy"` on
+ * every mesh path, so {@link normalizeHealthResult} warns and keeps the agent
+ * serving.
+ */
 export type MeshHealthStatus = "healthy" | "degraded" | "unhealthy";
 
 /**
@@ -43,11 +54,18 @@ export type MeshHealthStatus = "healthy" | "degraded" | "unhealthy";
  */
 export interface MeshHealthResult {
   /**
-   * `"healthy"`, `"degraded"` or `"unhealthy"`. Omitted means healthy —
-   * a result that carries only `checks` is reporting success (Python
-   * parity: `user_result.get("status", "healthy")`).
+   * `"healthy"` or `"unhealthy"`. Omitted means healthy — a result that
+   * carries only `checks` is reporting success (Python parity:
+   * `user_result.get("status", "healthy")`). A present-but-null status
+   * means the same, and warns.
+   *
+   * `null` is in the type because the runtime handles it deliberately, not
+   * by accident: `{ status: undefined }` is what a check with an unset
+   * variable returns, and the type has to be able to describe the value
+   * {@link normalizeHealthResult} documents a verdict for. Leaving it out
+   * only forced a cast at every call site that constructed the case.
    */
-  status?: MeshHealthStatus | string;
+  status?: MeshHealthStatus | string | null;
   /** Named sub-probes, surfaced verbatim for operators. */
   checks?: Record<string, unknown>;
   /** Human-readable reasons, surfaced verbatim for operators. */
@@ -60,7 +78,8 @@ export interface MeshHealthResult {
  * Return `unhealthy` only for conditions the mesh should route AROUND —
  * the upstream this agent needs is genuinely not serving. An
  * indeterminate probe (cancelled, cut short) says nothing about the
- * upstream and must be `degraded`, which keeps the heartbeat alive.
+ * upstream, so let it throw: the runtime keeps the agent in dependency
+ * resolution rather than withdrawing it on a conclusion never reached.
  */
 export type MeshHealthCheck = () =>
   | boolean
@@ -99,12 +118,71 @@ export function describeThrown(err: unknown): string {
 }
 
 /**
+ * `degraded` as a RETURN VALUE is deprecated (issue #1515).
+ *
+ * The contract a health check answers is binary: stay in dependency
+ * resolution, or withdraw. `degraded` and `healthy` are the same answer to
+ * it, so the third word buys a 503 on an endpoint nothing probes and costs
+ * the failure rate of a name that reads like withdrawal to everyone who
+ * picks it when their upstream is down.
+ *
+ * The BEHAVIOUR is unchanged, deliberately: remapping it to `unhealthy`
+ * would fix the common intent and silently withdraw every agent whose
+ * author used the word correctly.
+ *
+ * Warned once per process, not once per refresh — the check re-runs every
+ * TTL (15s by default), and a per-tick line would be several thousand
+ * identical warnings a day from an agent doing what its author intended.
+ */
+let degradedReturnWarned = false;
+
+function warnDegradedReturnOnce(): void {
+  if (degradedReturnWarned) return;
+  degradedReturnWarned = true;
+  console.warn(
+    `[mesh-health] healthCheck returned 'degraded' — this agent stays in ` +
+      `dependency resolution and consumers will keep routing to it. Return ` +
+      `false to withdraw.`,
+  );
+}
+
+/** Re-arm the once-per-process deprecation warning. Tests only. */
+export function __resetDegradedReturnWarning(): void {
+  degradedReturnWarned = false;
+}
+
+/**
+ * A null status is a defect in the same shape as a selected `degraded`: it
+ * recurs identically on every refresh, so it gets the same dedup. At the 15s
+ * default TTL a per-tick line is ~5,760 identical warnings a day.
+ */
+let nullStatusWarned = false;
+
+function warnNullStatusOnce(): void {
+  if (nullStatusWarned) return;
+  nullStatusWarned = true;
+  console.warn(
+    `[mesh-health] health check returned a null status — treating it as ` +
+      `healthy (an absent status already means healthy). Return ` +
+      `'healthy' or 'unhealthy' if a verdict was intended.`,
+  );
+}
+
+/** Re-arm the once-per-process null-status warning. Tests only. */
+export function __resetNullStatusWarning(): void {
+  nullStatusWarned = false;
+}
+
+/**
  * Convert whatever a health check returned into a verdict.
  *
  * Never throws. Anything unrecognized becomes `degraded`, NOT
  * `unhealthy`: an unparseable result is a reporting defect, and
  * withdrawing a working agent from the mesh over one is a far worse
  * failure than keeping it. Same rule as Java's `MeshHealthCheckRegistry.coerce`.
+ *
+ * Those runtime-assigned `degraded` verdicts do NOT warn — nothing the
+ * author can act on happened. Only a `degraded` the author SELECTED does.
  */
 export function normalizeHealthResult(raw: unknown): HealthVerdict {
   if (typeof raw === "boolean") {
@@ -121,11 +199,17 @@ export function normalizeHealthResult(raw: unknown): HealthVerdict {
   if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
     const result = raw as MeshHealthResult;
     const rawStatus = result.status;
+    const nullish = rawStatus === undefined || rawStatus === null;
     // A result with no `status` is reporting success (Python parity).
-    const status =
-      rawStatus === undefined || rawStatus === null
-        ? "healthy"
-        : toStatus(rawStatus);
+    //
+    // A status that is PRESENT and nullish is treated the same way — the same
+    // verdict Python reaches — but warns: `{ status: undefined }` is far
+    // likelier to be an unset variable than an intent, and the warning is what
+    // separates the two cases without changing routing (issue #1517).
+    if (nullish && "status" in result) {
+      warnNullStatusOnce();
+    }
+    const status = nullish ? "healthy" : toStatus(rawStatus);
     if (status === null) {
       return {
         status: "degraded",
@@ -133,6 +217,7 @@ export function normalizeHealthResult(raw: unknown): HealthVerdict {
         errors: [`Unrecognized health status: ${describeThrown(rawStatus)}`],
       };
     }
+    if (status === "degraded") warnDegradedReturnOnce();
     return {
       status,
       checks: isPlainRecord(result.checks) ? result.checks : {},

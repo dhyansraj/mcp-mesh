@@ -44,10 +44,10 @@ const server = new FastMCP({
 // startupCheck crash-loops a pod whose configuration was fine all along.
 //
 // They also disagree about exceptions, deliberately. A healthCheck that
-// throws is recorded as "degraded" and keeps heartbeating - a buggy probe
-// must not withdraw a working agent from a mesh that may have no other one. A
-// startupCheck that throws FAILS: at boot an indeterminate answer is not a
-// reason to admit a possibly-misconfigured agent.
+// throws keeps heartbeating - a buggy probe must not withdraw a working
+// agent from a mesh that may have no other one. A startupCheck that throws
+// FAILS: at boot an indeterminate answer is not a reason to admit a
+// possibly-misconfigured agent.
 //
 // Neither one belongs on the LLM provider this agent resolves through. The
 // provider holds the vendor credential and probes the vendor itself; this

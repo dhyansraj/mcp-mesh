@@ -111,6 +111,9 @@ func (h *AgentHealthMonitor) checkUnhealthyAgents() {
 	// Individual updates needed because Ent's UpdateDefault(time.Now) would
 	// auto-bump updated_at in a batch update, making agents appear recently seen.
 	var agentsUpdated, racesLost int
+	// Only the race-winners: an agent whose heartbeat beat us is still serving,
+	// so counting it here would report an outage that did not happen.
+	var withdrawn []string
 	for _, a := range agentsToUpdate {
 		won, err := h.markAgentUnhealthyIfUnchanged(ctx, a)
 		if err != nil {
@@ -124,6 +127,7 @@ func (h *AgentHealthMonitor) checkUnhealthyAgents() {
 			continue
 		}
 		agentsUpdated++
+		withdrawn = append(withdrawn, a.ID)
 
 		// Flip all resolution rows that point at this now-offline provider to
 		// unavailable so consumer-side state stays consistent (see
@@ -141,6 +145,12 @@ func (h *AgentHealthMonitor) checkUnhealthyAgents() {
 	} else {
 		h.logger.Info("Health monitor: marked %d agents as unhealthy", agentsUpdated)
 	}
+
+	// RFC #1515 open question 1. A shared failure withdraws every provider of a
+	// capability at once, and mesh does not floor that — see capability_outage.go
+	// for why no floor belongs anywhere. It does report it: this runs only after
+	// a withdrawal actually landed, so a steady-state mesh never reaches it.
+	h.reportCapabilitiesLeftWithoutProvider(ctx, withdrawn)
 }
 
 // markAgentUnhealthyIfUnchanged flips a single agent to unhealthy using an

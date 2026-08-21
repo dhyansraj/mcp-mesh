@@ -10,7 +10,16 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** {@link MeshHealth} construction rules (issue #1474). */
+/**
+ * {@link MeshHealth} construction rules (issue #1474).
+ *
+ * <p>{@link MeshHealth#degraded} is deprecated (issue #1515) and still under
+ * test on purpose: the deprecation promises source compatibility until 4.0, so
+ * the factory has to keep constructing exactly what it always did. The
+ * suppression is what keeps that promise visible instead of drowning the build
+ * in notices about a call this class exists to make.
+ */
+@SuppressWarnings("deprecation")
 class MeshHealthTest {
 
     @Test
@@ -112,6 +121,39 @@ class MeshHealthTest {
         assertEquals(MeshHealthStatus.DEGRADED, MeshHealthStatus.fromWire(null));
         assertEquals(MeshHealthStatus.UNHEALTHY, MeshHealthStatus.fromWire(" UNHEALTHY "));
         assertEquals("unhealthy", MeshHealthStatus.UNHEALTHY.wireValue());
+    }
+
+    // The verdict is the same DEGRADED either way; what differs is whether the
+    // runtime can tell it assigned it. `fromWire` folds the two together, so
+    // `of()` parses instead — otherwise `MeshHealth.of(vendorStatus)` with an
+    // unreadable string warns the author about MeshHealth.degraded(), an API
+    // they never called (issue #1515).
+    @Test
+    void anUnreadableStatusIsMarkedAsTheRuntimesOwnVerdict() {
+        MeshHealth health = MeshHealth.of("mostly fine", "vendor said so");
+
+        assertEquals(MeshHealthStatus.DEGRADED, health.status());
+        assertTrue(health.isUnreadableStatus());
+        assertEquals(false, health.checks().get(MeshHealth.UNREADABLE_STATUS_CHECK));
+        // The caller's own reasons survive; the parse failure is appended.
+        assertEquals(List.of("vendor said so", "Unrecognized health status: mostly fine"),
+            health.errors());
+
+        assertTrue(MeshHealth.of(null).isUnreadableStatus());
+        assertNull(MeshHealthStatus.parseWire("mostly fine"));
+        assertNull(MeshHealthStatus.parseWire(null));
+    }
+
+    @Test
+    void aReadableStatusIsNotMarked() {
+        assertFalse(MeshHealth.of(" DeGrAdEd ").isUnreadableStatus());
+        assertEquals(MeshHealthStatus.DEGRADED, MeshHealth.of(" DeGrAdEd ").status());
+        assertFalse(MeshHealth.of("healthy").isUnreadableStatus());
+        assertFalse(MeshHealth.unhealthy("down").isUnreadableStatus());
+        assertFalse(MeshHealth.degraded("slow").isUnreadableStatus());
+        assertTrue(MeshHealth.of("mostly fine").checks().containsKey(
+            MeshHealth.UNREADABLE_STATUS_CHECK));
+        assertTrue(MeshHealth.of("healthy").checks().isEmpty());
     }
 
     @Test

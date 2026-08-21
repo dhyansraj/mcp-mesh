@@ -138,7 +138,9 @@ class MyAgent:
     pass
 ```
 
-One check per agent. Return a `{"status", "checks", "errors"}` dict for full detail, or a `bool` for the terse form (`True` healthy, `False` unhealthy). `health_check_ttl` is how often it re-runs (default 15); `MCP_MESH_HEALTH_CHECK_TTL` overrides it.
+One check per agent, sync or async. Return a `{"status", "checks", "errors"}` dict for full detail, or a `bool` for the terse form (`True` healthy, `False` unhealthy). A status is matched case-insensitively and surrounding whitespace is ignored; omitting it - or passing `None` - means healthy, so a result carrying only `checks` is reporting success. `health_check_ttl` is how often it re-runs (default 15); `MCP_MESH_HEALTH_CHECK_TTL` overrides it.
+
+A sync check is run on a worker thread, so a blocking probe cannot stall the loop it was scheduled on - which for a route or A2A gateway is the heartbeat loop. Keep it thread-safe: an async check is awaited on the calling loop and is the one to use for anything loop-affine, such as a connection pool built in the agent's lifespan.
 
 ### What a Failing Check Does
 
@@ -150,9 +152,17 @@ The verdict drives `/health`, which answers 200 only while the check reports `he
 
 ### Only an Explicit Unhealthy Withdraws the Agent
 
-A check that **raises** is recorded as `degraded`, not unhealthy, and keeps heartbeating. So is one that returns something other than a dict, a `bool` or a `HealthStatus`. A bug in a health check must not be able to remove a working agent from the mesh. Return `False` or `{"status": "unhealthy"}` to actually withdraw.
+A check that **raises** keeps heartbeating and stays in dependency resolution. So does one that returns something other than a dict, a `bool` or a `HealthStatus`. A bug in a health check must not be able to remove a working agent from the mesh. Return `False` or `{"status": "unhealthy"}` to actually withdraw.
 
-`degraded` shows on the diagnostic surface only: the agent keeps heartbeating and stays in dependency resolution, and `/health` answers 503 while `/ready` is unmoved. Nothing probes `/health`, so its status code is free to carry the verdict; readiness reports the mesh runtime and nothing else.
+Those verdicts show on the diagnostic surface only: `/health` answers 503 while `/ready` is unmoved. Nothing probes `/health`, so its status code is free to carry the verdict; readiness reports the mesh runtime and nothing else.
+
+### When Every Provider Withdraws
+
+A health check is per-agent, but the failure it reports usually is not. Broken egress, an expired shared credential, a vendor that is down for everyone: each provider of a capability observes it independently and each withdraws itself, so the capability can go from several providers to none within one refresh period.
+
+Mesh does not keep a last provider in rotation to prevent that. Routing to something that has just reported it cannot serve trades an unresolved dependency - fast, and clearly attributable - for a call that is guaranteed to fail slowly at the far end, and it makes the health check a suggestion. Withdrawal is also cheap: the agent keeps running, keeps its resolved dependencies, and re-registers by itself the moment its check passes again, so getting it wrong costs one refresh period.
+
+It is not silent, though. When the registry withdraws the last healthy provider of a capability it logs a warning naming that capability, so a total outage is something the registry says rather than something you infer from a scatter of consumer errors.
 
 ### Route and A2A Agents
 

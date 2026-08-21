@@ -289,14 +289,14 @@ export interface AgentConfig {
    *
    * While it reports `unhealthy` the agent stops heartbeating, so the
    * registry withdraws it from dependency resolution and consumers fail
-   * over to a surviving provider. Reporting `healthy` (or `degraded`)
-   * again restores it — the process keeps running throughout.
+   * over to a surviving provider. Reporting `healthy` again restores it —
+   * the process keeps running throughout.
    *
    * Return `unhealthy` only for conditions the mesh should route AROUND:
    * the upstream this agent needs is genuinely not serving. A check that
-   * throws, or that could not reach a conclusion, is `degraded` and keeps
-   * the heartbeat alive — a broken probe says nothing about the upstream,
-   * and withdrawing a working agent over one is the worse failure.
+   * throws, or that could not reach a conclusion, keeps the heartbeat
+   * alive — a broken probe says nothing about the upstream, and
+   * withdrawing a working agent over one is the worse failure.
    *
    * Honoured on EVERY agent type since RFC #1502 — MCP agents
    * (`mesh(server, ...)`) and `mesh.route` gateways (`meshExpress`) alike.
