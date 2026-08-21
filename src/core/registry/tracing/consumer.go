@@ -1023,7 +1023,7 @@ func DefaultStreamConsumerConfig() *StreamConsumerConfig {
 	return &StreamConsumerConfig{
 		RedisURL:      redisURL,
 		StreamName:    "mesh:trace", // Matches Python publisher
-		ConsumerGroup: "mcp-mesh-registry-processors",
+		ConsumerGroup: TraceConsumerGroupFromEnv(),
 		ConsumerName:  "", // Will be auto-generated
 		BatchSize:     batchSize,
 		BlockTimeout:  5 * time.Second,

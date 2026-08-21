@@ -512,6 +512,13 @@ export MCP_MESH_TELEMETRY_AGGREGATE_MAX_ENTRIES=10000
 # Default: mcp-mesh-ui-dashboard.
 export MCP_MESH_UI_TRACE_CONSUMER_GROUP=mcp-mesh-ui-dashboard
 
+# The same knob for the registry, which reads the stream through its own group.
+# A second registry process pointed at a live mesh and left on the default
+# would take roughly half of the running registry's span events and acknowledge
+# them away. Give the extra reader its own group and both see the whole stream.
+# Default: mcp-mesh-registry-processors.
+export MCP_MESH_TRACE_CONSUMER_GROUP=mcp-mesh-registry-processors
+
 # Trace output options
 export TRACE_PRETTY_OUTPUT=false
 export TRACE_ENABLE_STATS=true

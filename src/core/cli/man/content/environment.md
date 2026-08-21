@@ -378,6 +378,11 @@ export MCP_MESH_TELEMETRY_AGGREGATE_MAX_ENTRIES=10000
 # (default: mcp-mesh-ui-dashboard)
 export MCP_MESH_UI_TRACE_CONSUMER_GROUP=mcp-mesh-ui-dashboard
 
+# The same knob for the registry. A second registry process pointed at a live
+# mesh needs its own group or it takes span events away from the running one
+# (default: mcp-mesh-registry-processors)
+export MCP_MESH_TRACE_CONSUMER_GROUP=mcp-mesh-registry-processors
+
 # Header propagation across agents (comma-separated prefixes)
 export MCP_MESH_PROPAGATE_HEADERS=x-request-id,x-trace
 
