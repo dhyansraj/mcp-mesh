@@ -29,6 +29,53 @@ const (
 	trimTickInterval      = 5 * time.Minute
 )
 
+// DefaultTraceConsumerGroup is the Redis consumer group the registry reads
+// mesh:trace with. Single source of truth: every registry-side config that
+// needs the group resolves it through TraceConsumerGroupFromEnv, so the
+// default cannot drift between the manager and the raw consumer config.
+const DefaultTraceConsumerGroup = "mcp-mesh-registry-processors"
+
+// TraceConsumerGroupFromEnv returns the Redis consumer group the registry
+// reads mesh:trace with, from MCP_MESH_TRACE_CONSUMER_GROUP.
+//
+// Configurable because Redis hands each stream entry to exactly one consumer
+// within a group. A second registry process pointed at a live mesh under the
+// default group would take roughly half the running registry's span events
+// and XAck them, so neither process sees the whole stream. Give the extra
+// reader its own group and both do. Unset or empty keeps the historical
+// default, so existing deployments are unchanged.
+func TraceConsumerGroupFromEnv() string {
+	if group := os.Getenv("MCP_MESH_TRACE_CONSUMER_GROUP"); group != "" {
+		return group
+	}
+	return DefaultTraceConsumerGroup
+}
+
+// singleReaderWarning returns the startup warning for correlation mode, or ""
+// when the exporter streams spans through to a shared backend.
+//
+// Correlation mode assembles each trace in THIS process's memory and answers
+// GET /trace/:trace_id (what `meshctl trace` calls) from that memory. A
+// process cannot know its own replica count, but it can say that the mode it
+// just entered assumes a single reader: with more than one registry replica,
+// Redis splits mesh:trace across the replicas' shared consumer group and each
+// one completes a different fragment of the same logical trace, so the answer
+// depends on which replica the Service picked.
+//
+// Stream-through (otlp/telemetry) has no such assumption — the spans go to
+// Tempo, which reassembles by trace ID no matter which replica delivered
+// them — so the warning stays silent for the default exporter.
+func singleReaderWarning(streamThroughMode bool, exporterType string) string {
+	if streamThroughMode {
+		return ""
+	}
+	return fmt.Sprintf("⚠️  Correlation mode (TRACE_EXPORTER_TYPE=%s) correlates spans in this process's memory "+
+		"and assumes a single registry reader. With more than one replica on this Redis, each one completes a "+
+		"fragment of every trace and GET /trace/:trace_id (meshctl trace) answers from whichever replica served "+
+		"the request. Use the default otlp exporter for a multi-replica registry.",
+		exporterType)
+}
+
 // TracingManager manages the entire distributed tracing pipeline
 type TracingManager struct {
 	config            *TracingConfig
@@ -157,6 +204,9 @@ func NewTracingManager(config *TracingConfig) (*TracingManager, error) {
 	manager.consumer = consumer
 
 	manager.logger.Printf("Distributed tracing: enabled, exporter=%s, mode=%s, endpoint=%s", config.ExporterType, mode, config.TelemetryEndpoint)
+	if warning := singleReaderWarning(manager.streamThroughMode, config.ExporterType); warning != "" {
+		manager.logger.Print(warning)
+	}
 	if config.TraceRetention > 0 {
 		manager.logger.Printf("Trace stream retention: %s (XTRIM MINID on connect and every %s; override via MCP_MESH_TRACE_RETENTION)",
 			config.TraceRetention, trimTickInterval)
@@ -542,7 +592,7 @@ func DefaultTracingConfig() *TracingConfig {
 		Enabled:             enabled,
 		RedisURL:            redisURL,
 		StreamName:          "mesh:trace", // Matches Python publisher
-		ConsumerGroup:       "mcp-mesh-registry-processors",
+		ConsumerGroup:       TraceConsumerGroupFromEnv(),
 		ConsumerName:        "", // Will be auto-generated
 		BatchSize:           batchSize,
 		BlockTimeout:        5 * time.Second,

@@ -187,15 +187,23 @@ Drain state is **per-replica** (in-memory, not shared). In a multi-replica deplo
 
 ## High Availability
 
-The registry supports multiple replicas for high availability. All replicas share the same PostgreSQL database — no additional configuration is needed.
+The registry supports multiple replicas for high availability. All replicas share the same PostgreSQL database, and registration needs no additional configuration. Tracing does, in one mode — see below.
 
 ### How It Works
 
 - All agent state (registrations, heartbeats, capabilities) is stored in PostgreSQL
-- No in-memory state affects cross-replica consistency
+- No in-memory registration state affects cross-replica consistency
 - Heartbeat updates use optimistic locking to prevent concurrent update conflicts
 - Each replica runs an independent health monitor against the shared database
 - Startup cleanup only evicts agents that haven't heartbeated to any replica within the threshold
+
+### Tracing at More Than One Replica
+
+The default exporter is replica-safe. Every replica streams the spans it consumes straight through to Tempo, which reassembles a trace by its ID however the spans were split on the way in.
+
+Correlation mode is not. Under `TRACE_EXPORTER_TYPE=console` or `json` a replica assembles each trace in its own memory, and Redis hands each trace-stream entry to exactly one consumer in the shared consumer group — so at N replicas every logical trace completes as N fragments, and `meshctl trace <id>` returns whichever fragment the replica behind the Service happens to hold, or nothing at all. Stay at one replica in those modes, or export through Tempo. The registry warns at startup whenever correlation mode is active.
+
+To read the trace stream from a second process without taking entries from the running registry, give it its own consumer group with `MCP_MESH_TRACE_CONSUMER_GROUP`. A distinct consumer *name* does not help — the group is the unit of distribution.
 
 ### Kubernetes Deployment
 

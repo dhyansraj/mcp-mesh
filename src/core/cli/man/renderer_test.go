@@ -383,8 +383,21 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // the operator who sees that warning will look. It is deliberately span-free:
 // it names no identifier, no endpoint and no env var, only behaviour, so the
 // three goldens below are unmoved by it.
+// Issue #1536: +4 / +0 / +0, all four in a new "Tracing at More Than One
+// Replica" section in `registry.md`. That page claimed multi-replica needed no
+// additional configuration, which holds for the default stream-through
+// exporter (Tempo reassembles by trace ID) and not for correlation mode, which
+// correlates in one process's memory. The added spans are
+// `TRACE_EXPORTER_TYPE=console`, `json`, `meshctl trace <id>` and
+// `MCP_MESH_TRACE_CONSUMER_GROUP`, all in prose. The section's own bullet-free
+// shape plus the one edited bullet above it ("No in-memory registration
+// state", a word added to existing prose) leave both list goldens unmoved.
+// The same issue documents `MCP_MESH_TRACE_CONSUMER_GROUP` in
+// `observability.md` as a table row and in `environment.md` inside the bash
+// fence; renderStyled takes other branches for both, so neither is sampled
+// here.
 const (
-	wantInlineCodeSpans = 1769
+	wantInlineCodeSpans = 1773
 	wantListCodeSpans   = 522
 	wantMarkupListLines = 448
 )

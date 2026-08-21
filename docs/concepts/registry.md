@@ -204,6 +204,18 @@ services:
 > rolling-restart procedure and [Long-Running Jobs](jobs.md) for how
 > claims/leases survive replica rotation.
 
+> **Correlation-mode tracing assumes one replica.** The default exporter is
+> replica-safe: each replica streams the spans it consumes straight through to
+> Tempo, which reassembles a trace by its ID however the spans were split on
+> the way in. Under `TRACE_EXPORTER_TYPE=console` or `json` a replica instead
+> assembles each trace in its own memory, and Redis hands each trace-stream
+> entry to exactly one consumer in the shared consumer group — so at N
+> replicas every logical trace completes as N fragments, and `meshctl trace`
+> answers from whichever fragment the replica behind the load balancer holds.
+> Stay at one instance in those modes, or export through Tempo. The registry
+> warns at startup whenever correlation mode is active. See
+> [Observability](../07-observability.md).
+
 ## Troubleshooting
 
 ### Agent Not Registering

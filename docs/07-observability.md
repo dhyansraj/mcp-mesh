@@ -65,6 +65,7 @@ export TEMPO_URL=http://localhost:3200
 | `MCP_MESH_TELEMETRY_AGGREGATE_RETENTION` | `24h` | Age-out window for the in-memory per-agent / per-model / per-edge dashboard aggregates (`0` disables age pruning) |
 | `MCP_MESH_TELEMETRY_AGGREGATE_MAX_ENTRIES` | `10000` | Hard key ceiling per aggregate map, evicting least-recently-seen first (`0` disables the ceiling). An edge key costs ~2.1 KB, so the default admits ~20 MB of edge aggregates |
 | `MCP_MESH_UI_TRACE_CONSUMER_GROUP` | `mcp-mesh-ui-dashboard` | Redis consumer group meshui reads `mesh:trace` with. Redis delivers each entry to one consumer per group, so a second meshui on the default group takes traces from a running dashboard — give an extra reader its own group |
+| `MCP_MESH_TRACE_CONSUMER_GROUP` | `mcp-mesh-registry-processors` | The same knob for the registry. Point a second registry process at a live mesh to diagnose it and this is what keeps it from taking half the running registry's span events |
 
 See the [environment variables reference](environment-variables.md) for the full list.
 

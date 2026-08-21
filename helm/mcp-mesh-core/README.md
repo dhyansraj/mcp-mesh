@@ -578,8 +578,8 @@ mcp-mesh-registry:
   replicaCount: 3
 ```
 
-That is the only required change. At more than one replica the chart
-automatically adds:
+That is the only required change, with one exception for non-default tracing
+noted below. At more than one replica the chart automatically adds:
 
 - **Soft topology spread** across zones and nodes (`ScheduleAnyway`,
   `maxSkew: 1`) — a no-op on single-node clusters, replica spreading
@@ -605,6 +605,18 @@ mcp-mesh-registry:
 Multi-replica and autoscaling require an external database — with
 `registry.database.type=sqlite` the template fails, since sqlite is a
 single-writer local file.
+
+Correlation-mode tracing is the exception to "stateless". The chart's default
+exporter (`registry.observability.exporterType: otlp`) is replica-safe: every
+replica streams the spans it consumes straight through to Tempo, which
+reassembles a trace by its ID however the spans were split on the way in.
+Override the exporter to `console` or `json` and each replica instead
+assembles traces in its own memory, while Redis hands each `mesh:trace` entry
+to exactly one consumer in the shared consumer group — so at N replicas every
+logical trace completes as N fragments and `meshctl trace <id>` answers from
+whichever fragment the replica behind the Service holds. Keep the registry at
+one replica in those modes, or leave the exporter at `otlp`. The registry
+warns at startup whenever correlation mode is active.
 
 ## Architecture
 
