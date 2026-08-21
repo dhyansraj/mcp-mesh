@@ -252,6 +252,11 @@ MEDIUM-POST-MULTI-AGENT-POC.md
 # Helm chart dependency packages (regenerate with: helm dependency update)
 helm/*/charts/*.tgz
 
+# mcp-mesh-ui declares `dependencies: []`, so its lock file records nothing but
+# a digest and a timestamp that change on every `helm dependency update`. Charts
+# with real dependencies (mcp-mesh-core) keep their lock file tracked.
+helm/mcp-mesh-ui/Chart.lock
+
 # Helm chart files copied during release (generated from observability/)
 helm/mcp-mesh-grafana/files/
 helm/mcp-mesh-tempo/files/
@@ -291,9 +296,19 @@ docs/downloads/
 # Dashboard & UI
 src/ui/dist/
 src/ui/node_modules/
-mcp-mesh-ui
 uisample/
 dump.rdb
+
+# The blanket `dist/` rule above hides this directory outright, which also makes
+# the negations in cmd/mcp-mesh-ui/.gitignore unreachable — git never descends
+# into an excluded directory. Re-open it here so that file can do its job; it
+# still ignores the whole build output apart from the .gitkeep that keeps
+# `//go:embed all:dist` compiling.
+!cmd/mcp-mesh-ui/dist/
+
+# TypeScript incremental build cache. Machine- and path-specific, rewritten by
+# every `tsc` run (including `--noEmit`), and regenerated on demand.
+*.tsbuildinfo
 
 # Homepage scroll section — BUILT, never committed.
 # At 531KB the bundle exceeds this repo's 500KB large-file limit, and

@@ -30,7 +30,13 @@ repos:
       - id: check-case-conflict
       - id: check-added-large-files
       - id: detect-private-key
-        exclude: '^src/runtime/core/src/tls\.rs$'
+        # No exclusions, deliberately: this hook must see every file, and most
+        # of all the TLS/SPIFFE modules. The hook matches PEM private-key
+        # header text wherever it appears, so code that merely *writes about*
+        # PEM used to trip it; src/runtime/core/src/{tls,spire}.rs now build
+        # that header from a label at runtime instead of spelling it out, so
+        # there is nothing to exempt. Keep it that way — construct the header,
+        # don't add the file here.
       - id: mixed-line-ending
 
   # Python formatters (black, isort, ruff, mypy, bandit) are deliberately not

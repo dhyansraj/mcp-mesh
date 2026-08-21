@@ -122,7 +122,11 @@ func NewServer(config *UIConfig, entService *registry.EntService, tracingManager
 	// same-origin /api requests, and the Go server proxies them to the registry.
 	rawIndex, err := fs.ReadFile(subFS, "index.html")
 	if err != nil {
-		log.Fatalf("ui: failed to read embedded index.html: %v", err)
+		// The dashboard build output is not committed; cmd/mcp-mesh-ui/dist holds
+		// only a .gitkeep until something builds it. A binary produced by a plain
+		// `go build` in a fresh checkout lands here.
+		log.Fatalf("ui: no dashboard build is embedded in this binary (%v). "+
+			"Build it with `make ui-server-build`, which compiles the SPA and embeds it.", err)
 	}
 	configuredIndex := string(rawIndex)
 	// Inject <base> tag so relative asset paths (./assets/...) resolve correctly
