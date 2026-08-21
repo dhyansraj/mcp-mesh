@@ -396,6 +396,19 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // `observability.md` as a table row and in `environment.md` inside the bash
 // fence; renderStyled takes other branches for both, so neither is sampled
 // here.
+//
+// Issue #1500: the sentence most annotations above end on — that the `_java`
+// and `_typescript` files are invisible here, so a review of them cannot lean
+// on this test — is still true of THESE constants and no longer true of this
+// package. `variant_corpus_test.go` renders all 34 variant pages and carries
+// its own single golden; a variant-only edit moves that one, not these. The
+// three below stay default-variant on purpose, so their history remains a
+// readable record of one corpus rather than a sum of two.
+//
+// Neither file says anything about whether the prose is TRUE. That is
+// `scripts/check_doc_claims.py`, which can read the four runtimes' source and
+// the starter's POM; a test in this package cannot, and #1499 shipped three
+// false claims through a green run here.
 const (
 	wantInlineCodeSpans = 1773
 	wantListCodeSpans   = 522

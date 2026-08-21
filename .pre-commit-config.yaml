@@ -147,3 +147,36 @@ repos:
         files: ^src/core/registry/.*\.go$
         exclude: ^src/core/registry/generated/.*$
         description: "🤖 Validates Go code compiles with generated handlers"
+
+  # 5. Doc claims against the code they describe (#1500)
+  #
+  # Runs on a doc edit OR on an edit to the evidence — a route registration,
+  # the starter's POM, a probe handler. Both directions matter: #1499 was a
+  # doc that was never true, and the RFC #1502 case was a doc that stopped
+  # being true when the runtime changed under it.
+  #
+  # `pass_filenames: false` because the check is whole-corpus by nature: the
+  # served-path inventory has to be built from every runtime whichever file
+  # was touched, and a per-file run would report a curl as unserved simply
+  # because the file defining the route was not staged.
+  - repo: local
+    hooks:
+      - id: check-doc-claims
+        name: Check Doc Claims Against Code
+        entry: python3 scripts/check_doc_claims.py
+        language: system
+        pass_filenames: false
+        files: >-
+          (?x)^(
+            src/core/cli/man/content/.*\.md|
+            docs/.*\.md|
+            helm/[^/]+/README\.md|
+            README\.md|
+            src/core/.*\.go|
+            src/runtime/python/.*\.py|
+            src/runtime/typescript/src/.*\.ts|
+            src/runtime/java/.*\.(java|xml)|
+            examples/.*\.(py|ts|java)|
+            scripts/check_doc_claims\.py
+          )$
+        description: "🤖 Man pages and docs may not assert what the code does not do"

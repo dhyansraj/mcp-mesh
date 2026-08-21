@@ -394,6 +394,16 @@ jobs:
       - name: Run the direct entry point
         run: python3 scripts/test_bump_version.py
 
+      # Issue #1500: the man pages and docs/ assert things about the four
+      # runtimes and nothing connected them, so #1499 shipped three false
+      # Actuator claims — one of them a `curl` that 404s — through a fully
+      # green build. The check runs here rather than in a docs job because its
+      # evidence is source: Go/Python/TypeScript/Java route registrations, the
+      # starter's POM, and the probe handlers themselves. Stdlib only, under a
+      # second. Its own tests are collected by the pytest step above.
+      - name: Check doc claims against the code they describe
+        run: python3 scripts/check_doc_claims.py
+
   # Issue #1407: a version bump must not re-resolve the Rust dependency graph.
   # The bump reminder used to say `cargo generate-lockfile`, which does exactly
   # that, so v3.2.3 and v3.3.1 each shipped six third-party crate moves — the
