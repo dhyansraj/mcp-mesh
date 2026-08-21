@@ -9,14 +9,25 @@
 // The provider's matching capability decides `dep` colour; nothing reads the
 // consumer's type.
 //
-// The last block renders the legend. Everything before it compares modules and
-// builder output with each other, which is half the palette contract — the
-// half that cannot see a swatch written back to a literal colour.
+// The colours a person sees are the builder's output AFTER the traffic merge,
+// so one block asserts against that rather than against the builder (#1530),
+// and the last one renders the legend. The middle blocks compare modules and
+// builder output with each other, which is only part of the palette contract —
+// they cannot see a swatch written back to a literal colour, and they could not
+// see the merge painting over every stroke they had just checked.
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
-import type { Agent, Capability, DependencyResolution } from "../lib/types";
+import type { Edge } from "@xyflow/react";
+import type { Agent, Capability, DependencyResolution, EdgeStat } from "../lib/types";
 import { buildGraphFromAgents } from "../lib/topology";
-import { EDGE_COLORS, EDGE_HEAT_COLORS, EDGE_LEGEND } from "../lib/edge-palette";
+import { mergeEdgeStatsIntoEdges } from "../components/topology/TopologyGraph";
+import { extractAgentName, formatDuration } from "../lib/api";
+import {
+  EDGE_COLORS,
+  EDGE_HEAT_COLORS,
+  EDGE_HEAT_LEGEND,
+  EDGE_LEGEND,
+} from "../lib/edge-palette";
 import { EdgeLegend } from "../components/topology/EdgeLegend";
 
 function makeAgent(overrides: Partial<Agent> = {}): Agent {
@@ -501,26 +512,20 @@ describe("the legend and the builder cannot drift apart", () => {
     new Set(buildGraphFromAgents(everyBranch).edges.map((e) => e.style?.stroke as string));
 
   it("every colour the BUILDER emits has a legend row", () => {
-    // Scoped to the builder on purpose, and it is not the whole screen: the
-    // traffic-heat scale in TopologyGraph.tsx paints over these strokes, and
-    // one of its three values has no legend row and no way to acquire one from
-    // this palette. The next assertion states that rather than leaving this one
-    // to be read as a claim about what is rendered.
+    // Half the contract. The other half — every colour the MERGE emits, which
+    // is what a person actually looks at — is the block below, and was where
+    // `elevated` used to escape the key entirely (issue #1530).
     const legend = new Set<string>(EDGE_LEGEND.map((e) => EDGE_COLORS[e.key]));
     expect([...emitted()].filter((c) => !legend.has(c))).toEqual([]);
   });
 
-  it("the heat scale is outside the legend contract, deliberately and knowingly", () => {
-    // Heat is a second axis (see lib/edge-palette.ts) and is NOT expected to
-    // have rows. Pinned so that its absence stays a recorded decision rather
-    // than something the suite silently overlooks: `elevated` is a seventh
-    // colour a reader of the graph has no key for, which is a question about
-    // the override, tracked on its own.
-    const legend = new Set<string>(EDGE_LEGEND.map((e) => EDGE_COLORS[e.key]));
-    expect(legend.has(EDGE_HEAT_COLORS.elevated)).toBe(false);
-    // The other two collide with palette entries by taste, not by meaning, so
-    // no assertion is made about them either way.
-    expect(Object.values(EDGE_COLORS)).not.toContain(EDGE_HEAT_COLORS.elevated);
+  it("the two axes have no colour in common", () => {
+    // Not just separate modules: disjoint sets. A hex in both puts two rows in
+    // the key for one stroke, and a reader has no way to tell which of the two
+    // they are looking at — which is what `failing` and `unavailable` did until
+    // the heat scale moved off that red (see lib/edge-palette.ts).
+    const kinds = new Set<string>(Object.values(EDGE_COLORS));
+    expect(Object.values(EDGE_HEAT_COLORS).filter((c) => kinds.has(c))).toEqual([]);
   });
 
   it("every legend row names a colour the builder can emit", () => {
@@ -545,6 +550,242 @@ describe("the legend and the builder cannot drift apart", () => {
   });
 });
 
+// What the graph is actually STROKED with, which is the builder's output after
+// mergeEdgeStatsIntoEdges has had it (issue #1530).
+//
+// The builder's colours were never the last word: the merge repainted any edge
+// with a stat row, a zero error rate included, so on any mesh with tracing on
+// the kind palette was thrown away nearly everywhere — and the colour it was
+// replaced with, `clean`, said only "this one is fine", which was true of
+// nearly every edge. Now heat paints ONLY over an edge with errors, so both
+// axes are legible at once and the legend can cover both.
+//
+// These assertions are deliberately made against the merge rather than the
+// builder: the previous contract was scoped to the builder and passed happily
+// while `elevated` was on screen with nothing in the key to explain it.
+describe("the colours the merge actually puts on screen", () => {
+  /** Every edge kind, each carrying an mcp_tool so a stat row can join to it. */
+  const everyKindUnderTraffic: Agent[] = [
+    makeAgent({
+      id: "caller-11111111",
+      name: "caller",
+      dependency_resolutions: [
+        { ...dep("reports", "prov-22222222"), mcp_tool: "fn_reports" },
+        { ...dep("bulk_export", "prov-22222222"), mcp_tool: "fn_bulk_export" },
+        { ...dep("broken", "prov-22222222", "unavailable"), mcp_tool: "fn_broken" },
+        { ...dep("pending", "prov-22222222", "unresolved"), mcp_tool: "fn_pending" },
+      ],
+      llm_tool_resolutions: [
+        {
+          function_name: "plan",
+          filter_capability: "reports",
+          status: "available",
+          provider_agent_id: "prov-22222222",
+          mcp_tool: "fn_reports",
+        },
+      ],
+      llm_provider_resolutions: [
+        {
+          function_name: "plan",
+          required_capability: "llm",
+          status: "available",
+          provider_agent_id: "model-33333333",
+          mcp_tool: "fn_llm",
+        },
+      ],
+    }),
+    provider("prov-22222222", "prov", [
+      cap("reports"),
+      cap("bulk_export", true),
+      cap("broken"),
+      cap("pending"),
+    ]),
+    provider("model-33333333", "model", [cap("llm")]),
+  ];
+
+  const AVG_LATENCY_MS = 5;
+  /**
+   * Large enough that every rate below is a whole number of errors: at a
+   * hundred calls, 9.99% is not a count anything could have recorded, and
+   * `error_count` would have had to round to a figure disagreeing with
+   * `error_rate`. Nothing reads the count today — the merge weights the rate
+   * the row reports — but TopologyGraph.tsx keeps the option of deriving one
+   * from the other open, and a boundary fixture whose two fields describe
+   * different meshes would flip bands silently on the day it is taken.
+   */
+  const CALL_COUNT = 10_000;
+  /** Every band and both sides of the boundary, in percent. */
+  const RATES = [0, 0.5, 9.99, 10, 100];
+
+  /** One stat row per (base source, base target, function) an edge joins on. */
+  function rowsAt(errorRate: number, edges: Edge[]): EdgeStat[] {
+    const rows = new Map<string, EdgeStat>();
+    for (const edge of edges) {
+      for (const fn of (edge.data?.targetFunctions as string[]) ?? []) {
+        const source = extractAgentName(edge.source);
+        const target = extractAgentName(edge.target);
+        rows.set(`${source}|${target}|${fn}`, {
+          source,
+          target,
+          target_function: fn,
+          call_count: CALL_COUNT,
+          error_count: (CALL_COUNT * errorRate) / 100,
+          error_rate: errorRate,
+          avg_latency_ms: AVG_LATENCY_MS,
+          p99_latency_ms: 9,
+          max_latency_ms: 12,
+          min_latency_ms: 1,
+        });
+      }
+    }
+    return [...rows.values()];
+  }
+
+  /** Stroke by edge id, before and after the merge, at one error rate. */
+  function strokesAt(errorRate: number) {
+    const { edges } = buildGraphFromAgents(everyKindUnderTraffic);
+    const merged = mergeEdgeStatsIntoEdges(edges, rowsAt(errorRate, edges));
+    const byId = (list: Edge[]) =>
+      Object.fromEntries(list.map((e) => [e.id, e.style?.stroke as string]));
+    return { built: byId(edges), merged: byId(merged), builtEdges: edges, mergedEdges: merged };
+  }
+
+  /**
+   * The strokes HEAT put on the graph, and only those: each merged edge's
+   * stroke against the same edge's built stroke, keeping the ones that changed.
+   *
+   * Derived rather than read off the merged output, because the property being
+   * asserted is about what the merge paints and must not depend on which hexes
+   * the two palettes happen to hold. A union of every merged stroke lets an
+   * edge KIND stand in for a heat colour that shares its value — which is what
+   * made the reverse legend check below pass for `failing` while heat had
+   * painted nothing at all.
+   */
+  function heatStrokes(rates: number[]): Set<string> {
+    const painted = new Set<string>();
+    for (const rate of rates) {
+      const { built, merged } = strokesAt(rate);
+      for (const [id, stroke] of Object.entries(merged)) {
+        if (stroke !== built[id]) painted.add(stroke);
+      }
+    }
+    return painted;
+  }
+
+  it("every kind of edge in the fixture really does pick up its stat row", () => {
+    // Otherwise the tests below would pass by joining to nothing. Two tells,
+    // both written only for a matched edge: the latency appended to the label,
+    // asserted as the whole string rather than by looking for a digit in it,
+    // and a stroke width where the builder set none.
+    const { builtEdges, mergedEdges } = strokesAt(0);
+    expect(mergedEdges).toHaveLength(6);
+    mergedEdges.forEach((edge, i) => {
+      expect(String(edge.label)).toBe(
+        `${String(builtEdges[i].label)}  ${formatDuration(AVG_LATENCY_MS)}`
+      );
+      expect(builtEdges[i].style?.strokeWidth).toBeUndefined();
+      expect(edge.style?.strokeWidth).toBeGreaterThan(1);
+    });
+  });
+
+  it("an edge with no errors keeps the colour its KIND gave it", () => {
+    const { built, merged } = strokesAt(0);
+    // Every kind, by id, unchanged — not merely "some green survived".
+    expect(merged).toEqual(built);
+    expect(new Set(Object.values(merged))).toEqual(
+      new Set([
+        EDGE_COLORS.dependency,
+        EDGE_COLORS.job,
+        EDGE_COLORS.llmTool,
+        EDGE_COLORS.llmProvider,
+        EDGE_COLORS.unavailable,
+        EDGE_COLORS.unresolved,
+      ])
+    );
+  });
+
+  it("an edge with errors is repainted whatever kind it is", () => {
+    // Including the MeshJob edge, whose colour #1521 added and which the old
+    // merge meant a reader could never see under traffic — and which now, quite
+    // deliberately, still yields to an error.
+    const { built, merged } = strokesAt(50);
+    expect(new Set(Object.values(merged))).toEqual(new Set([EDGE_HEAT_COLORS.failing]));
+    expect(merged).not.toEqual(built);
+  });
+
+  it("bands on either side of the ten-percent boundary", () => {
+    // The unit is a percentage, 0-100, on both registry paths that emit it.
+    //
+    // Read off RATES rather than from its own literals, so that this is also
+    // the record of what the two legend checks below cover: they union over the
+    // same list, and a band dropped from it would leave them asserting less
+    // while still passing.
+    const strokeOf = (rate: number) => {
+      const { merged } = strokesAt(rate);
+      return merged["dep|caller-11111111|prov-22222222|reports"];
+    };
+    expect(RATES.map(strokeOf)).toEqual([
+      EDGE_COLORS.dependency, // 0 — no errors, so the kind colour stands
+      EDGE_HEAT_COLORS.elevated, // 0.5
+      EDGE_HEAT_COLORS.elevated, // 9.99, the last rate under the boundary
+      EDGE_HEAT_COLORS.failing, // 10, the boundary itself
+      EDGE_HEAT_COLORS.failing, // 100
+    ]);
+  });
+
+  it("a rate that reports nothing paints nothing", () => {
+    // Defensive: the field is required and both server paths populate it. What
+    // is being pinned is the DIRECTION of the failure — a rate that is negative
+    // or not a number at all must fall out as nothing to say, not through both
+    // band comparisons and into the colour reserved for the worst edges on the
+    // graph, which is where the natural way of writing the guard sends it.
+    for (const rate of [-1, Number.NaN]) {
+      const { built, merged } = strokesAt(rate);
+      expect(merged).toEqual(built);
+    }
+  });
+
+  it("every colour the MERGE can emit has a legend row", () => {
+    // The contract the old one was scoped short of. The union over the whole
+    // range of error rates is every stroke that can reach a person, and the
+    // union of the two legends is every colour the key explains. Every stroke
+    // is the right set in THIS direction: an unexplained colour is unexplained
+    // whichever axis put it there.
+    const key = new Set<string>([
+      ...EDGE_LEGEND.map((e) => EDGE_COLORS[e.key]),
+      ...EDGE_HEAT_LEGEND.map((e) => EDGE_HEAT_COLORS[e.key]),
+    ]);
+    const reachable = new Set<string>();
+    for (const rate of RATES) {
+      for (const stroke of Object.values(strokesAt(rate).merged)) reachable.add(stroke);
+    }
+    expect([...reachable].filter((c) => !key.has(c))).toEqual([]);
+  });
+
+  it("every heat row names a colour the merge actually paints", () => {
+    // The other direction, which is what caught the stale row in #1521, and the
+    // one that is easy to write vacuously: over every merged stroke, a heat row
+    // is satisfied by any edge KIND holding the same colour, with heat never
+    // having run. Over the strokes the merge CHANGED it says what it means —
+    // remove a branch from `getEdgeHeatColor` and this fails, whatever the two
+    // palettes contain.
+    //
+    // A row for the healthy case would fail here too: nothing repaints a clean
+    // edge any more, so no stroke it could name is ever one the merge changed.
+    // That is why `EDGE_HEAT_COLORS` no longer holds a value for it.
+    const painted = heatStrokes(RATES);
+    expect(
+      EDGE_HEAT_LEGEND.filter((e) => !painted.has(EDGE_HEAT_COLORS[e.key])).map((e) => e.label)
+    ).toEqual([]);
+  });
+
+  it("the heat legend shows every heat colour there is", () => {
+    expect(EDGE_HEAT_LEGEND.map((e) => e.key).sort()).toEqual(
+      Object.keys(EDGE_HEAT_COLORS).sort()
+    );
+  });
+});
+
 // Everything above this line is data: two modules and a builder, compared with
 // each other. None of it renders anything, so none of it can see the half of
 // the contract that reaches a person — the swatches. Restating a colour there
@@ -558,6 +799,9 @@ describe("the legend a person actually sees", () => {
   };
 
   const swatchFor = (key: string) => screen.getByTestId(`edge-legend-swatch-${key}`);
+  // A separate id space, because the two key sets are unrelated and could one
+  // day hold the same word — see the note on the element itself.
+  const heatSwatchFor = (key: string) => screen.getByTestId(`edge-legend-heat-swatch-${key}`);
 
   it("renders one row per legend entry, labels and all", () => {
     render(<EdgeLegend />);
@@ -576,6 +820,27 @@ describe("the legend a person actually sees", () => {
         : swatch.style.backgroundColor;
       expect(painted).toBe(asRendered(EDGE_COLORS[entry.key]));
     }
+  });
+
+  it("renders the heat rows too, in the heat colours", () => {
+    // `elevated` was a colour on screen with no row at all (issue #1530): a
+    // reader saw it and the key could not tell them what it was.
+    render(<EdgeLegend />);
+    for (const entry of EDGE_HEAT_LEGEND) {
+      expect(screen.getByText(entry.label)).toBeInTheDocument();
+      expect(heatSwatchFor(entry.key).style.backgroundColor).toBe(
+        asRendered(EDGE_HEAT_COLORS[entry.key])
+      );
+    }
+  });
+
+  it("says that an error colour supersedes the kind rows", () => {
+    // The two groups are disjoint colours, so the caption is not there to break
+    // a tie — it is there because an erroring edge shows nothing of its kind,
+    // and without saying so the key reads as six rows describing every edge on
+    // screen when in fact any of them can be missing.
+    render(<EdgeLegend />);
+    expect(screen.getByText(/overrides/i)).toBeInTheDocument();
   });
 
   it("carries no colour of its own — every swatch reads it from the palette", () => {
@@ -600,6 +865,9 @@ describe("the legend a person actually sees", () => {
       // Empty means the colour arrived some other way — a literal class, most
       // likely — and the assertion above it would then be comparing nothing.
       expect(painted).not.toBe("");
+    }
+    for (const entry of EDGE_HEAT_LEGEND) {
+      expect(heatSwatchFor(entry.key).style.backgroundColor).not.toBe("");
     }
   });
 });

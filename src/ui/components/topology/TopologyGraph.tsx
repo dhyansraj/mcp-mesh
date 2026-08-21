@@ -71,10 +71,28 @@ function getForwardNeighborIds(
 }
 
 // Traffic heat, NOT edge kind. The scale is its own axis and its own constant
-// (lib/edge-palette.ts) for the reasons written there; two of its three values
-// coinciding with palette entries is not a duplication to collapse.
-function getEdgeHeatColor(errorRate: number): string {
-  if (errorRate === 0) return EDGE_HEAT_COLORS.clean;
+// (lib/edge-palette.ts) for the reasons written there, and it shares no value
+// with the kind palette — a stroke from here can never be read as a kind.
+//
+// `null` MEANS SAY NOTHING, and an edge with no errors gets it (issue #1530).
+// The caller then leaves that edge's kind stroke alone, because "this one is
+// fine" is true of nearly every edge on a healthy mesh and is not worth the
+// only channel that can say what an edge is. Errors do take the channel: at
+// that point the error is the more urgent of the two facts.
+function getEdgeHeatColor(errorRate: number): string | null {
+  // Negated rather than `<= 0` so that zero, a negative and a rate that is not
+  // a number at all all come out as nothing to say. Written the other way
+  // round, a non-finite value fails both comparisons below and leaves with the
+  // loudest colour on the scale — the one outcome a rate reporting nothing
+  // must not produce. The field is required and both server paths populate it,
+  // so this is a guard rather than a case that is expected to arise.
+  if (!(errorRate > 0)) return null;
+  // THE UNIT IS A PERCENTAGE, 0-100. Both registry paths that emit this field
+  // multiply the ratio by 100 before sending it (tracing/manager.go,
+  // tracing/accumulator.go), and the Traffic table prints it with a % sign
+  // against this same boundary. Were it a fraction instead, every real rate
+  // would land under 10 and `failing` would be unreachable — so the unit, not
+  // the number, is what makes both bands appear.
   if (errorRate < 10) return EDGE_HEAT_COLORS.elevated;
   return EDGE_HEAT_COLORS.failing;
 }
@@ -197,12 +215,19 @@ export function mergeEdgeStatsIntoEdges(edges: Edge[], edgeStats: EdgeStat[]): E
     const baseLabel = (edge.data?.originalLabel as string) || edge.label || "";
     const mergedLabel = baseLabel ? `${baseLabel}  ${formatDuration(stat.avgLatencyMs)}` : `${formatDuration(stat.avgLatencyMs)}`;
 
+    // Only an erroring edge is repainted; a clean one keeps the stroke the
+    // builder gave it and is still marked as carrying traffic by the two
+    // channels that do not collide with kind — the latency in its label and its
+    // width. Spreading `edge.style` first is what preserves the kind colour, so
+    // do not lift `stroke` out of the conditional.
+    const heat = getEdgeHeatColor(stat.errorRate);
+
     return {
       ...edge,
       label: mergedLabel,
       style: {
         ...edge.style,
-        stroke: getEdgeHeatColor(stat.errorRate),
+        ...(heat === null ? {} : { stroke: heat }),
         // Relative to the busiest EDGE now, not the busiest pair, which is
         // the same change of denominator the rest of this merge makes.
         strokeWidth: computeStrokeWidth(stat.callCount, maxCallCount),
