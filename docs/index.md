@@ -83,7 +83,7 @@ The same agent, in each language.
     <dependency>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-        <version>3.6.0</version>
+        <version>3.7.0</version>
     </dependency>
     ```
 

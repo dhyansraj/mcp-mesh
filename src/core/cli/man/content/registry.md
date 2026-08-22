@@ -210,7 +210,7 @@ To read the trace stream from a second process without taking entries from the r
 ```bash
 # Scale registry replicas
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 3.6.0 \
+  --version 3.7.0 \
   -n mcp-mesh --create-namespace \
   --set registry.replicas=3
 ```
