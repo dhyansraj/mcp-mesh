@@ -30,6 +30,7 @@ test:
     handler: wait
     type: http
     url: "https://localhost:8000/health"
+    ca_cert: "${env:HOME}/.mcp-mesh/tls/ca.pem"
     timeout: 15
     interval: 2
 
