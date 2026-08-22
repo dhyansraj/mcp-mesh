@@ -1,6 +1,54 @@
 # MCP Mesh Release Notes
 
-[Unreleased changes](https://github.com/dhyansraj/mcp-mesh/compare/v3.6.0...HEAD)
+[Unreleased changes](https://github.com/dhyansraj/mcp-mesh/compare/v3.7.0...HEAD)
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.6.0...v3.7.0)
+
+## v3.7.0 (2026-08-22)
+
+`health_check` is a routing answer, not a health taxonomy (#1539). It accepted three verdicts and had two behaviours — `healthy` and `degraded` were identical on every path, and only `unhealthy` withdrew. The contract is now binary: return true to keep the agent in dependency resolution, false to withdraw it. Returning a dict or object to populate `checks` and `errors` still works and still reaches `/health`; it just never affects routing. Alongside it, the dashboard's topology and traffic views tell the truth about which function is being called, and registry tracing gains a read-only consumer group.
+
+> **⚠️ Two things are easy to miss.** Python now trims the status string, which is a genuine routing change, and selecting `degraded` now emits a deprecation warning. Both in Notes.
+
+### 🩺 Health
+
+- **The `health_check` contract is binary (#1539, closes #1515, #1516, #1517).** True keeps the agent in dependency resolution, false withdraws it. `degraded` still behaves exactly as it did — see Notes.
+- **⚠️ Python trims the status string.** `{"status": " unhealthy "}` previously parsed as `UNKNOWN` and kept the agent in resolution; it now withdraws. TypeScript and Java already trimmed, so only Python moves.
+- **A sync `health_check` runs instead of silently degrading (#1539).** `def` instead of `async def` raised `TypeError`, which was recorded as degraded — a check that appeared to run and could never fire. Sync checks are now accepted and run on a worker thread, so a blocking probe cannot stall the heartbeat loop.
+- **A null status is treated as absent** and warned about once per process, rather than read as a verdict (#1539).
+- **Probe handlers narrowed to transport errors (#1539)**, so a bug in a probe no longer withdraws a working provider.
+- **Sixteen provider examples now withdraw on a vendor outage (#1539).** They mapped it to `degraded`, which keeps the heartbeat alive — the registry never aged the agent out, and failover was defeated.
+
+### 📊 Dashboard
+
+- **Topology edges are coloured by what is being called, not who is calling (#1529).** The "API dependency" colour is gone — an API agent cannot be a resolution target — and a MeshJob colour is added.
+- **Traffic stats are keyed by callee function, not just agent pair (#1532).** Several edges between two agents no longer collapse into one blended average. Latency percentiles now come from a fixed-bucket histogram rather than a per-key sample reservoir.
+- **The Traffic page shows a function column (#1533)**, and its row budget no longer collapses to one row per route.
+- **Traffic heat only repaints an edge when there are errors (#1537).** It used to overwrite every edge colour including healthy ones, hiding the palette.
+- **`MCP_MESH_UI_TRACE_CONSUMER_GROUP` lets a second meshui read a live mesh (#1533)** without taking traces from the running dashboard.
+
+### 🔭 Registry tracing
+
+- **`MCP_MESH_TRACE_CONSUMER_GROUP` does the same for the registry (#1541).** It also documents that `TRACE_EXPORTER_TYPE=console|json` assumes a single replica: the correlator is per-trace stateful, so replicas fragment traces. The default `otlp` path is unaffected.
+- **The registry no longer builds a trace accumulator nothing read (#1543)** — roughly 21 MB per replica and a duplicate processing pass per span.
+
+### 🌐 Website
+
+- **A scroll-driven topology animation on the mcp-mesh.ai homepage (#1523)**, built from the real dashboard components, then prerendered to drop React and React Flow at 8.5× smaller (#1525). Its prose now ships in the served HTML so it reaches crawlers and screen readers (#1527), and the dashboard ships the Geist fonts it has always declared (#1528). No runtime impact.
+
+### 🔧 Maintenance
+
+- **The docs demo no longer pollutes the dashboard's Tailwind scan (#1526).**
+- **Generated files are no longer tracked, and `pre-commit run --all-files` runs clean (#1538).**
+- **Man-page claims are checked against the code they describe (#1542).**
+- **The integration suite is adapted to tsuite 0.8.0 (#1544).**
+
+### ⚠️ Notes
+
+- **⚠️ Python now trims the status string, and that changes routing.** A status with surrounding whitespace — `{"status": " unhealthy "}` — used to parse as `UNKNOWN` and keep the agent in dependency resolution; it now withdraws. This is the divergence fix working as intended: TypeScript and Java have always trimmed. It is the only routing behaviour that moves in this release.
+- **⚠️ Selecting `degraded` now warns, naming the consequence.** The behaviour is unchanged: a `degraded` agent keeps heartbeating and stays in resolution, exactly as before. Remapping it would silently withdraw agents whose authors used it correctly, so the warning comes first and the behaviour does not follow in this release. Java's `MeshHealth.degraded(...)` is `@Deprecated`, with removal no earlier than 4.0.
+- **Returning a dict or object from `health_check` still works.** `checks` and `errors` are still populated and still reach `/health`; only the routing decision is now taken from true/false.
+- **No upgrade ordering is required.** Nothing in this release needs the chart and the runtime images to move together.
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.5.2...v3.6.0)
 

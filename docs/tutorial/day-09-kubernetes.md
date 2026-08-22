@@ -212,7 +212,7 @@ and Grafana as a single Helm release:
 
 ```shell
 $ helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-    --version 3.6.0 \
+    --version 3.7.0 \
     -n trip-planner \
     -f helm/values-core.yaml \
     --wait --timeout 5m
@@ -250,7 +250,7 @@ $ for agent in "${AGENTS[@]}"; do
     echo "Installing $agent..."
     helm install "$agent" \
       oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-      --version 3.6.0 \
+      --version 3.7.0 \
       -n trip-planner \
       -f "helm/values-${agent}.yaml"
   done

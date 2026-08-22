@@ -146,7 +146,7 @@ field that broke CI while local environments stayed green (#1453).
 
 ## :star: Project Status
 
-- **Latest Release**: v3.6.0
+- **Latest Release**: v3.7.0
 - **Languages**: Python 3.11+, TypeScript/Node.js 18+, and Java 17+ (runtime), Go 1.23+ (registry)
 - **Status**: Production-ready, actively developed
 
