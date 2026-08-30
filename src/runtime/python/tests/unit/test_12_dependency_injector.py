@@ -1863,13 +1863,12 @@ class TestPrescriptiveDiagnosticsAndStrictDI:
     # Skip reasons resolve hints the same way eligibility does
     # ------------------------------------------------------------------
 
-    def test_skip_reason_string_annotation_hint_failure_is_explicit(self, caplog):
-        """A valid-looking `db: "McpMeshTool"` whose name cannot be
-        resolved (TYPE_CHECKING-only import) made eligibility fall back to
-        "no eligible parameters"; the skip reason must report that
-        hint-resolution failure — not the self-contradictory
-        'annotated as McpMeshTool, not McpMeshTool' read off the raw
-        annotation string."""
+    def test_unresolvable_string_annotation_naming_mesh_tool_is_eligible(self, caplog):
+        """A valid-looking `db: "McpMeshTool"` whose name is not importable at
+        module scope (TYPE_CHECKING-only import) used to fall back to "no
+        eligible parameters". Since #1548 the last rung of the resolution
+        ladder matches the annotation by name, so the parameter the developer
+        spelled correctly binds — and no skip diagnostic fires at all."""
         ns: dict = {}
         exec(
             "def f(a, db: 'McpMeshTool' = None):\n    return db\n",
@@ -1880,20 +1879,16 @@ class TestPrescriptiveDiagnosticsAndStrictDI:
         with caplog.at_level(logging.WARNING):
             result = analyze_injection_strategy(f, ["cap0"])
 
-        assert result == []
-        text = caplog.text
-        assert "type hints could not be resolved" in text
-        assert "TYPE_CHECKING" in text
-        assert "annotated as McpMeshTool, not McpMeshTool" not in text
+        assert result == [1]
+        assert "Skipping injection" not in caplog.text
+        assert "annotated as McpMeshTool, not McpMeshTool" not in caplog.text
 
-    def test_skip_reason_optional_mesh_tool_not_misreported_under_hint_failure(
-        self, caplog
-    ):
+    def test_optional_mesh_tool_survives_unresolvable_sibling(self, caplog):
         """An eager Optional[McpMeshTool] param sharing a function with an
-        unresolvable forward ref: hints fail wholesale, so eligibility
-        skipped BOTH. The Optional[McpMeshTool] reason must state the
-        hint failure, not render the raw annotation as
-        'annotated as Union/Optional..., not McpMeshTool'."""
+        unresolvable forward ref. ``get_type_hints`` is all-or-nothing so it
+        fails wholesale, but the per-parameter rung of the #1548 ladder
+        resolves the Optional[McpMeshTool] on its own — the sibling no longer
+        blinds it."""
         from typing import Optional as _Optional
 
         from mesh.types import McpMeshTool
@@ -1909,12 +1904,29 @@ class TestPrescriptiveDiagnosticsAndStrictDI:
         with caplog.at_level(logging.WARNING):
             result = analyze_injection_strategy(f, ["cap0"])
 
+        assert result == [1]
+        assert "Skipping injection" not in caplog.text
+
+    def test_skip_reason_unresolvable_annotation_is_explicit(self, caplog):
+        """The residual diagnostic case: NO parameter is mesh-typed and one
+        annotation cannot be resolved to a type. The skip reason must name that
+        resolution failure rather than rendering the raw annotation string as a
+        type the developer never wrote."""
+        ns: dict = {}
+        exec(
+            "def f(a, db: 'SomeAppType' = None, c: int = 0):\n    return db\n",
+            ns,
+        )
+        f = ns["f"]
+
+        with caplog.at_level(logging.WARNING):
+            result = analyze_injection_strategy(f, ["cap0"])
+
         assert result == []
         text = caplog.text
-        assert "type hints could not be resolved" in text
-        # No reason may claim any parameter is annotated as something
-        # other than McpMeshTool — the hints never resolved.
-        assert "not McpMeshTool" not in text
+        assert "could not be resolved" in text
+        assert "TYPE_CHECKING" in text
+        assert "annotated as SomeAppType" not in text
 
     def test_string_annotation_that_resolves_is_eligible_no_skip_warning(self, caplog):
         """Parity check: when the string annotation DOES resolve, the

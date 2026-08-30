@@ -4,6 +4,7 @@ Function signature analysis for MCP Mesh dependency injection.
 
 import inspect
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Optional, get_type_hints
@@ -35,8 +36,178 @@ def _get_original_func(func: Any) -> Any:
     return original
 
 
+#: Bare identifiers inside a string annotation, e.g. ``"mesh.MeshLlmAgent | None"``
+#: → ``["mesh", "MeshLlmAgent", "None"]``.
+_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+#: ``typing.get_type_hints`` key for the return annotation. Cannot collide with
+#: a parameter name — ``return`` is a keyword.
+_RETURN_KEY = "return"
+
+
+def resolve_param_annotations(func: Any) -> dict[str, Any]:
+    """Resolve a callable's parameter annotations to runtime type objects.
+
+    The single resolution step in front of every annotation-identity check in
+    the runtime — the ``McpMeshTool`` / ``McpMeshAgent`` / ``MeshJob`` /
+    service-view scans in this module and the ``MeshLlmAgent`` scan in
+    ``mesh.decorators`` — so the two surfaces cannot drift apart again
+    (issue #1548).
+
+    Under ``from __future__ import annotations`` (PEP 563) every annotation in
+    the module is a **string**, so comparing ``param.annotation`` to a class is
+    unconditionally False and a correctly written parameter goes undetected.
+    ``typing.get_type_hints`` undoes the stringification and (on every Python
+    this package supports, ``>=3.11``) returns the bare class without wrapping
+    a ``= None`` default in ``Optional`` — the auto-``Optional`` behaviour was
+    removed in 3.11 — so the existing ``== SomeClass`` comparisons keep working
+    once the annotation is resolved.
+
+    Resolution degrades in three steps and **never raises**. A module that
+    imports today must still import afterwards: turning an unresolvable
+    annotation into an import failure would be a worse version of the bug being
+    fixed.
+
+    1. function-wide :func:`typing.get_type_hints`;
+    2. per-parameter evaluation against the defining module's globals, because
+       ``get_type_hints`` is all-or-nothing — one ``TYPE_CHECKING``-only import
+       or dangling forward reference on ANY parameter (or the return
+       annotation) would otherwise blind the resolvable siblings;
+    3. the annotation exactly as written. Under PEP 563 that is a string, which
+       the ``_is_*_type`` predicates still match by name (see
+       :func:`_annotation_mentions`).
+
+    Returns:
+        Mapping of parameter name to resolved annotation. Unannotated
+        parameters are omitted, so callers can treat "absent" as untyped. The
+        return annotation is NOT included — use
+        :func:`resolve_return_annotation`.
+    """
+    resolved = _resolve_param_annotations(func)[0]
+    resolved.pop(_RETURN_KEY, None)
+    return resolved
+
+
+def resolve_return_annotation(func: Any) -> Any:
+    """Resolve a callable's **return** annotation through the same ladder as
+    :func:`resolve_param_annotations`.
+
+    Returns ``inspect.Signature.empty`` when the callable declares no return
+    annotation, matching ``inspect.Signature.return_annotation`` so callers can
+    swap one for the other. Never raises.
+
+    Same #1548 exposure as the parameters: under PEP 563 the raw return
+    annotation is the *string* ``"ChatResponse"``, which silently becomes the
+    ``@mesh.llm`` output type — failing the Pydantic-model check that drives
+    structured output.
+    """
+    resolved, _ = _resolve_param_annotations(func)
+    return resolved.get(_RETURN_KEY, inspect.Signature.empty)
+
+
+def _resolve_param_annotations(func: Any) -> tuple[dict[str, Any], bool]:
+    """Body of :func:`resolve_param_annotations`, additionally reporting
+    whether function-wide :func:`typing.get_type_hints` succeeded.
+
+    The flag is for callers that warn about degraded resolution (the RFC #1280
+    service-view scan); everything else wants the mapping alone.
+    """
+    func = _get_original_func(func)
+    try:
+        sig = inspect.signature(func)
+    except (TypeError, ValueError):
+        return {}, False
+
+    hints_ok = True
+    try:
+        hints = get_type_hints(func)
+    except Exception as e:
+        # NameError for an unimportable name, TypeError for a malformed
+        # annotation, anything else a __getattr__ on the module raises: all
+        # non-fatal, all handled by the per-parameter pass below.
+        logger.debug(
+            "resolve_param_annotations: get_type_hints failed for %s (%s); "
+            "falling back to per-parameter resolution",
+            getattr(func, "__qualname__", getattr(func, "__name__", "?")),
+            e,
+        )
+        hints = {}
+        hints_ok = False
+
+    globalns = getattr(func, "__globals__", None)
+    if globalns is None:
+        import sys
+
+        module = getattr(func, "__module__", None)
+        globalns = getattr(sys.modules.get(module), "__dict__", {}) if module else {}
+
+    def _resolve_one(name: str, raw: Any) -> Any:
+        if name in hints:
+            return hints[name]
+        if not isinstance(raw, str):
+            return raw
+        try:
+            return eval(raw, globalns)  # noqa: S307 - module-scoped
+        except Exception:
+            # Step 3: keep the string. The predicates match it by name so a
+            # parameter the developer spelled correctly still binds.
+            return raw
+
+    resolved: dict[str, Any] = {}
+    for name, param in sig.parameters.items():
+        if param.annotation is inspect.Parameter.empty:
+            continue
+        resolved[name] = _resolve_one(name, param.annotation)
+    if sig.return_annotation is not inspect.Signature.empty:
+        resolved[_RETURN_KEY] = _resolve_one(_RETURN_KEY, sig.return_annotation)
+    return resolved, hints_ok
+
+
+def _annotation_mentions(param_type: Any, *names: str) -> bool:
+    """Whether an **unresolved string** annotation names one of ``names``.
+
+    Last-resort arm of the resolution ladder in
+    :func:`resolve_param_annotations`: only strings reach here, and only when
+    both the function-wide and the per-parameter resolution failed — i.e. the
+    named type is not importable at module scope (a ``TYPE_CHECKING``-only
+    import being the realistic case). Matching the bare identifier is the same
+    class of heuristic as the long-standing ``__name__``-based fallbacks below,
+    applied to the one shape those cannot see.
+    """
+    if not isinstance(param_type, str):
+        return False
+    return any(token in names for token in _IDENTIFIER_RE.findall(param_type))
+
+
+def describe_unresolved_annotations(func: Any) -> str:
+    """Render the parameters whose annotations stayed strings after
+    :func:`resolve_param_annotations`, or ``""`` when every annotation resolved.
+
+    Used to append an accurate cause to "no parameter of type X" errors: a
+    string annotation means the name was not importable at module scope, which
+    is nothing like the "you forgot the parameter" the bare message implies.
+    """
+    unresolved = [
+        f"{name}: {value!r}"
+        for name, value in resolve_param_annotations(func).items()
+        if isinstance(value, str)
+    ]
+    if not unresolved:
+        return ""
+    return (
+        f" Note: the annotation(s) {', '.join(unresolved)} could not be resolved "
+        f"to a type. Under `from __future__ import annotations` every annotation "
+        f"is a string, and the name must be importable at module scope — not "
+        f"only under `if TYPE_CHECKING:`."
+    )
+
+
 def _is_mesh_tool_type(param_type: Any) -> bool:
     """Check if a type is McpMeshTool or deprecated McpMeshAgent."""
+    # Unresolved PEP 563 / forward-reference string (issue #1548).
+    if _annotation_mentions(param_type, "McpMeshTool", "McpMeshAgent"):
+        return True
+
     # Direct McpMeshTool type
     if (
         param_type == McpMeshTool
@@ -77,6 +248,10 @@ def _is_mesh_tool_type(param_type: Any) -> bool:
 
 def _is_mesh_llm_type(param_type: Any) -> bool:
     """Check if a type is MeshLlmAgent."""
+    # Unresolved PEP 563 / forward-reference string (issue #1548).
+    if _annotation_mentions(param_type, "MeshLlmAgent"):
+        return True
+
     # Direct MeshLlmAgent type
     if param_type == MeshLlmAgent or (
         hasattr(param_type, "__name__") and param_type.__name__ == "MeshLlmAgent"
@@ -102,6 +277,10 @@ def _is_mesh_job_type(param_type: Any) -> bool:
     ``Optional[MeshJob]`` / ``MeshJob | None`` unions per the resolver
     contract (``MESHJOB_DDDI_CONTRACT.md`` → "Optional / Union types").
     """
+    # Unresolved PEP 563 / forward-reference string (issue #1548).
+    if _annotation_mentions(param_type, "MeshJob"):
+        return True
+
     # Direct MeshJob type
     if param_type == MeshJob or (
         hasattr(param_type, "__name__") and param_type.__name__ == "MeshJob"
@@ -170,60 +349,25 @@ def analyze_service_view_params(func: Any) -> list:
     except (TypeError, ValueError):
         return []
 
-    try:
-        type_hints = get_type_hints(func)
-    except Exception:
-        # get_type_hints is all-or-nothing: one unresolvable annotation (e.g. a
-        # TYPE_CHECKING-only import under ``from __future__ import annotations``)
-        # breaks it for the WHOLE function — including ordinary view-free tools.
-        # Fall back to per-parameter resolution so a resolvable view isn't
-        # silently lost, and warn ONLY when a view is actually recovered (never
-        # for a view-free function whose hints happen to fail elsewhere).
-        return _recover_view_params_per_param(func, sig)
+    # Shared resolution ladder (#1548). ``get_type_hints`` is all-or-nothing:
+    # one unresolvable annotation (e.g. a TYPE_CHECKING-only import under
+    # ``from __future__ import annotations``) breaks it for the WHOLE function —
+    # including ordinary view-free tools. The resolver falls back to
+    # per-parameter resolution so a resolvable view isn't silently lost; we warn
+    # ONLY when a view is actually recovered that way (never for a view-free
+    # function whose hints happen to fail elsewhere), per RFC #1280's
+    # "don't spam" scoping.
+    resolved_annotations, hints_ok = _resolve_param_annotations(func)
 
     result: list = []
     for i, param_name in enumerate(sig.parameters.keys()):
-        if param_name not in type_hints:
+        if param_name not in resolved_annotations:
             continue
-        meta = _service_view_meta(type_hints[param_name])
-        if meta is not None:
-            result.append((i, param_name, meta))
-    return result
-
-
-def _recover_view_params_per_param(func: Any, sig: inspect.Signature) -> list:
-    """Best-effort per-parameter view detection when function-wide
-    :func:`get_type_hints` fails.
-
-    Resolves each parameter's annotation individually against the function's
-    module globals, so a view whose class IS importable survives a sibling
-    parameter's unresolvable annotation. Emits a single WARNING **only when a
-    view is recovered here** — that both names the ``from __future__`` cause AND
-    stays silent for ordinary view-free tools (whose hints fail for unrelated
-    reasons), satisfying RFC #1280's "don't spam" scoping.
-    """
-    import sys
-
-    module = getattr(func, "__module__", None)
-    globalns = getattr(sys.modules.get(module), "__dict__", {}) if module else {}
-
-    result: list = []
-    for i, (param_name, param) in enumerate(sig.parameters.items()):
-        raw = param.annotation
-        if raw is inspect.Parameter.empty:
-            continue
-        if isinstance(raw, str):
-            try:
-                resolved = eval(raw, globalns)  # noqa: S307 - module-scoped, best-effort
-            except Exception:
-                continue
-        else:
-            resolved = raw
-        meta = _service_view_meta(resolved)
+        meta = _service_view_meta(resolved_annotations[param_name])
         if meta is not None:
             result.append((i, param_name, meta))
 
-    if result:
+    if result and not hints_ok:
         logger.warning(
             "analyze_service_view_params: function '%s' has @mesh.service view "
             "parameter(s) %s but function-wide type-hint resolution failed "
@@ -260,22 +404,26 @@ def _scan_params(
     classifier predicate and whether positions (0-indexed) or names are
     returned (``want="positions"`` or ``want="names"``).
 
+    Annotations are resolved through :func:`resolve_param_annotations` (#1548)
+    so a module using ``from __future__ import annotations`` — where every
+    annotation is a string — is classified the same as one without it.
+
     The broad ``except Exception`` is intentional: any introspection failure
-    (unresolvable forward refs, missing imports, weird callables) is logged
-    at WARNing and yields an empty list so registration can proceed — the
+    (weird callables, a signature that cannot be taken at all) is logged at
+    WARNing and yields an empty list so registration can proceed — the
     function is still invokable as a plain tool, the typed slots just won't
     bind. Do NOT narrow this.
     """
     try:
         func = _get_original_func(func)
-        type_hints = get_type_hints(func)
+        resolved_annotations = resolve_param_annotations(func)
         sig = inspect.signature(func)
 
         result: list = []
         for i, param_name in enumerate(sig.parameters.keys()):
-            if param_name not in type_hints:
+            if param_name not in resolved_annotations:
                 continue
-            if predicate(type_hints[param_name]):
+            if predicate(resolved_annotations[param_name]):
                 result.append(i if want == "positions" else param_name)
         return result
 
@@ -351,17 +499,9 @@ def analyze_mesh_job_signature(func: Any) -> MeshJobResolution:
             parameter (Phase 1 disallows; future revisions may relax).
     """
     func = _get_original_func(func)
-    try:
-        type_hints = get_type_hints(func)
-    except Exception as e:
-        # If we can't resolve type hints (forward refs, missing imports),
-        # fall back to empty resolution — same defensive posture as the
-        # legacy positional analysers above. The caller can still invoke
-        # the function as a plain tool; jobs just won't bind.
-        logger.warning(
-            f"analyze_mesh_job_signature: get_type_hints failed for {func}: {e}"
-        )
-        return MeshJobResolution()
+    # Shared resolution ladder (#1548) — never raises, and classifies a
+    # ``from __future__ import annotations`` module the same as a plain one.
+    resolved_annotations = resolve_param_annotations(func)
 
     sig = inspect.signature(func)
     mesh_tool_positions: list[int] = []
@@ -369,9 +509,9 @@ def analyze_mesh_job_signature(func: Any) -> MeshJobResolution:
     mesh_job_param_name: str | None = None
 
     for i, (param_name, _param) in enumerate(sig.parameters.items()):
-        if param_name not in type_hints:
+        if param_name not in resolved_annotations:
             continue
-        param_type = type_hints[param_name]
+        param_type = resolved_annotations[param_name]
 
         # MeshTool: assigns next positional slot, increments the counter
         # (the counter being len(mesh_tool_positions)).
@@ -657,12 +797,10 @@ def get_context_parameter_name(
         sig = inspect.signature(func)
         param_names = list(sig.parameters.keys())
 
-        # Get type hints (may fail for some functions)
-        type_hints = {}
-        try:
-            type_hints = get_type_hints(func)
-        except Exception:
-            pass  # Continue without type hints
+        # Resolved annotations (shared ladder, #1548 — never raises; an
+        # annotation that stays a string simply fails the issubclass checks
+        # below and falls through to convention-based detection).
+        type_hints = resolve_param_annotations(func)
 
         # Strategy 1: Explicit name (highest priority)
         if explicit_name is not None:

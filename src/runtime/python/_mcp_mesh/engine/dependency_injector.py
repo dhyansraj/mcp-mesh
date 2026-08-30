@@ -356,41 +356,29 @@ def _describe_skipped_params(func: Callable, params: list[inspect.Parameter]) ->
     the warning names every skipped parameter and WHY it was skipped
     (untyped vs annotated with a non-injectable type).
 
-    Reasons are classified with the SAME type resolution the eligibility
-    scan uses (``get_type_hints`` on the original function) — raw
+    Reasons are classified with the SAME type resolution the eligibility scan
+    uses (``resolve_param_annotations`` on the original function, #1548) — raw
     ``p.annotation`` values are strings under
     ``from __future__ import annotations`` and would misreport a perfectly
     valid ``db: "McpMeshTool"`` as the self-contradictory "annotated as
-    McpMeshTool, not McpMeshTool". When the hints themselves cannot be
-    resolved (TYPE_CHECKING-only imports, dangling forward references) —
-    which is exactly the condition that made the eligibility scan fall back
-    to "no eligible parameters" — the reason states that failure explicitly
-    instead of misdiagnosing the annotation.
+    McpMeshTool, not McpMeshTool". An annotation the resolver could not turn
+    into a type (TYPE_CHECKING-only imports, dangling forward references) stays
+    a string, and the reason states that failure explicitly instead of
+    misdiagnosing the annotation.
     """
-    from typing import get_type_hints
+    from .signature_analyzer import (
+        _is_mesh_tool_type,
+        resolve_param_annotations,
+    )
 
-    from .signature_analyzer import _get_original_func, _is_mesh_tool_type
-
-    hints: dict[str, Any] | None = None
-    try:
-        hints = get_type_hints(_get_original_func(func))
-    except Exception:
-        # Same failure the eligibility scan (``_scan_params``) swallowed —
-        # report it as the skip reason below rather than guessing from raw
-        # annotations.
-        hints = None
+    resolved_annotations = resolve_param_annotations(func)
 
     parts = []
     for p in params:
         if p.annotation is inspect.Parameter.empty:
             parts.append(f"'{p.name}' (untyped)")
-        elif hints is None:
-            parts.append(
-                f"'{p.name}' (type hints could not be resolved — check "
-                f"TYPE_CHECKING imports / forward references)"
-            )
         else:
-            resolved = hints.get(p.name)
+            resolved = resolved_annotations.get(p.name)
             if resolved is None:
                 parts.append(f"'{p.name}' (untyped)")
             elif _is_mesh_tool_type(resolved):
@@ -399,6 +387,12 @@ def _describe_skipped_params(func: Callable, params: list[inspect.Parameter]) ->
                 # if a future skew ever puts one here, never emit the
                 # contradictory "annotated as McpMeshTool, not McpMeshTool".
                 parts.append(f"'{p.name}' (McpMeshTool)")
+            elif isinstance(resolved, str):
+                parts.append(
+                    f"'{p.name}' (annotation {resolved!r} could not be resolved "
+                    f"to a type — check TYPE_CHECKING imports / forward "
+                    f"references)"
+                )
             else:
                 ann_name = getattr(resolved, "__name__", None) or str(resolved)
                 parts.append(f"'{p.name}' (annotated as {ann_name}, not McpMeshTool)")
