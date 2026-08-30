@@ -36,15 +36,21 @@ func TestVendorToModel(t *testing.T) {
 	assert.Equal(t, "", VendorToModel("unknown"))
 }
 
+// The tag a consumer pins with is asserted WITHOUT its operator here: a
+// provider declares plain tags, and this assertion used to read
+// `Contains(tags, "+claude")` — it passed against the buggy value that issue
+// #1546 is about. The operator-free contract itself is guarded in
+// llm_provider_tags_test.go.
 func TestVendorToProviderTags(t *testing.T) {
 	for _, v := range []string{"claude", "openai", "gemini", "litellm-fallback"} {
 		tags := VendorToProviderTags(v)
 		require.NotEmpty(t, tags, "expected tags for %s", v)
 		assert.Contains(t, tags, "llm")
 	}
-	assert.Contains(t, VendorToProviderTags("claude"), "+claude")
-	assert.Contains(t, VendorToProviderTags("openai"), "+openai")
-	assert.Contains(t, VendorToProviderTags("gemini"), "+gemini")
+	assert.Contains(t, VendorToProviderTags("claude"), "claude")
+	assert.Contains(t, VendorToProviderTags("openai"), "openai")
+	assert.Contains(t, VendorToProviderTags("gemini"), "gemini")
+	assert.Contains(t, VendorToProviderTags("litellm-fallback"), "fallback")
 }
 
 func TestVendorToConsumerTag(t *testing.T) {
@@ -205,7 +211,10 @@ func TestRunScaffoldLLMProvider_DryRun_Python(t *testing.T) {
 	output := out.String()
 	assert.Contains(t, output, "Dry-run")
 	assert.Contains(t, output, "anthropic/claude-sonnet-5")
-	assert.Contains(t, output, "+claude")
+	// The provider declares plain tags. This used to assert "+claude" on the
+	// rendered file, which is the buggy value from issue #1546 — a provider tag
+	// spelled with an operator that no consumer pin can ever match.
+	assert.Contains(t, output, `tags=["llm","claude","anthropic","provider"]`)
 }
 
 func TestRunScaffoldLLMConsumer_DryRun_Python(t *testing.T) {

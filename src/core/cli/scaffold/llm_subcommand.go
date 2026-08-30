@@ -25,11 +25,25 @@ var vendorToModel = map[string]string{
 
 // vendorToProviderTags maps a vendor shortcut to the discovery tags applied to the
 // generated `@mesh.llm_provider` so consumers can pin to it via `+claude`, `+openai`, etc.
+//
+// These are PLAIN tags, never operator-prefixed. `+`/`-` are a consumer-side
+// construct (`meshctl man tags`): the matcher strips the operator from what the
+// consumer asked for and then compares it to the provider's tags with exact
+// string equality, so a provider tag of `"+fallback"` is a literal tag spelled
+// with a plus and matches nothing a consumer can write. Issue #1546 — the
+// generated `litellm-fallback` provider carried only `"+fallback"`, so the
+// `+fallback` pin the scaffold itself prints for the consumer scored zero. A
+// preferred tag has no penalty when absent, so nothing failed: the consumer just
+// resolved to whichever provider won on other criteria.
+//
+// For the big-3 these must stay in step with providerTagsByFamily, which is what
+// the same templates render when no tags are passed in — see
+// TestVendorProviderTagsMatchModelFamilyTags.
 var vendorToProviderTags = map[string][]string{
-	"claude":           {"llm", "claude", "anthropic", "provider", "+claude"},
-	"openai":           {"llm", "openai", "gpt", "provider", "+openai"},
-	"gemini":           {"llm", "gemini", "google", "provider", "+gemini"},
-	"litellm-fallback": {"llm", "provider", "+fallback"},
+	"claude":           {"llm", "claude", "anthropic", "provider"},
+	"openai":           {"llm", "openai", "gpt", "provider"},
+	"gemini":           {"llm", "gemini", "google", "provider"},
+	"litellm-fallback": {"llm", "provider", "fallback"},
 }
 
 // vendorToConsumerTag is the single discovery tag a consumer should request to pin a provider.
