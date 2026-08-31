@@ -12,9 +12,11 @@ import os
 import re
 import threading
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from datetime import UTC, datetime
 from typing import Any
+
+from pydantic import TypeAdapter, ValidationError
 
 from .support_types import HealthStatus, HealthStatusType
 
@@ -47,8 +49,14 @@ _INTEGER_RE = re.compile(r"^[+-]?\d+$", re.ASCII)
 # warning stays one readable line.
 _WARNING_VALUE_LIMIT = 32
 
+# An exception message is not a value being identified, it IS the explanation,
+# so it gets room to be one — still bounded, for the same reason.
+_WARNING_MESSAGE_LIMIT = 200
 
-def _for_warning(value: Any, *, quote: bool = False) -> str:
+
+def _for_warning(
+    value: Any, *, quote: bool = False, limit: int = _WARNING_VALUE_LIMIT
+) -> str:
     """Render a value for a rejection message without raising or flooding the log.
 
     Interpolating a value is not safe by default here. Python 3.11 caps
@@ -72,8 +80,8 @@ def _for_warning(value: Any, *, quote: bool = False) -> str:
             return f"<{type(value).__name__} with ~{digits} digits>"
         return f"<unprintable {type(value).__name__}>"
 
-    if len(text) > _WARNING_VALUE_LIMIT:
-        return f"{text[:_WARNING_VALUE_LIMIT]}… ({len(text)} chars)"
+    if len(text) > limit:
+        return f"{text[:limit]}… ({len(text)} chars)"
     return text
 
 
@@ -266,6 +274,187 @@ def _reset_null_status_warning() -> None:
 
 
 # =============================================================================
+# Unusable `checks` / `errors` payloads (issue #1556)
+# =============================================================================
+
+# ``HealthStatus.checks`` is ``dict[str, bool]``, so Pydantic raises on a value
+# it cannot read as one — `checks["disk_space"] = "ok"`. That raise happened
+# while BUILDING the result, outside the handler that catches a failing check,
+# so it escaped the whole health path: it took down `fastapi-server-setup`, and
+# with it the agent's registration. The pod then served /livez and /startupz
+# with 200 while never appearing in the registry — absent rather than unhealthy.
+#
+# A wrong value type inside `checks` is an authoring mistake in the same class
+# as a check that raises or returns the wrong type (#1477, #1539), and gets the
+# same treatment: the agent keeps serving and the mistake is reported.
+#
+# What it does NOT do is invent a verdict. `status` is read independently and is
+# perfectly readable here; overriding it would keep an agent that declared
+# itself `unhealthy` in dependency resolution because of an unrelated typo in
+# `checks`. The verdict stands, the unusable detail is dropped and described.
+#
+# Validated through Pydantic rather than `isinstance(v, bool)` so everything
+# that works today keeps working identically: `1`, `0` and `"true"` are all
+# values the model already coerces, and only what it would have REJECTED is
+# treated as unusable here.
+_CHECK_VALUE_ADAPTER = TypeAdapter(bool)
+
+_unusable_checks_warning_logged = False
+_unusable_checks_lock = threading.Lock()
+
+
+def _as_text(value: Any) -> str:
+    """Render a value as an error string without raising.
+
+    ``errors`` entries are human-readable text, so ``str()`` is faithful to
+    what the author meant by putting an exception object in the list. A broken
+    ``__str__`` must not be the thing that takes the agent down.
+    """
+    try:
+        return str(value)
+    except Exception:
+        return f"<unprintable {type(value).__name__}>"
+
+
+def _describe_exception(exc: BaseException) -> str:
+    """Name a raise in a rejection message, without raising in turn.
+
+    ``_as_text`` survives a broken ``__str__`` and ``_for_warning`` caps the
+    length, so an exception carrying a megabyte of context is still one line.
+    """
+    text = _for_warning(_as_text(exc), limit=_WARNING_MESSAGE_LIMIT)
+    return f"{type(exc).__name__}: {text}"
+
+
+def _sanitize_checks(raw: Any) -> tuple[dict[str, bool], list[str]]:
+    """Split ``checks`` into what the result can carry and what it cannot.
+
+    Returns ``(checks, rejections)``. ``rejections`` is empty for every payload
+    that already worked; when it is not, each entry names the offending check
+    and its type so the operator can find it in their own code.
+
+    ``isinstance(raw, Mapping)`` passes for any Mapping subclass, including one
+    that computes its entries on demand — so reading it is itself a user code
+    path that can raise, in the same place and with the same consequence as the
+    wrong value type this function exists for. Reading is guarded twice, at two
+    different granularities:
+
+    * enumerating the mapping is all-or-nothing. A mapping that raises part way
+      through has no defined content: what survived is an artifact of iteration
+      order, so keeping it would put a different subset of the checks on
+      /health from one TTL to the next. The whole map is dropped and the raise
+      reported, which is what the non-Mapping branch above already does.
+    * one entry is a boundary the author recognises, so a single unreadable
+      entry costs only that entry — exactly like a single non-bool value.
+    """
+    if raw is None:
+        return {}, []
+
+    if not isinstance(raw, Mapping):
+        return {}, [
+            f"Unusable `checks`: expected a dict of name -> bool, got "
+            f"{type(raw).__name__}."
+        ]
+
+    try:
+        # Materialized here so a generator that raises half way through counts
+        # as an enumeration failure rather than aborting the loop below.
+        items = list(raw.items())
+    except Exception as e:
+        return {}, [
+            f"Unusable `checks`: reading the {type(raw).__name__} raised "
+            f"{_describe_exception(e)}."
+        ]
+
+    checks: dict[str, bool] = {}
+    rejections: list[str] = []
+    for item in items:
+        name = "<unreadable>"
+        try:
+            key, value = item
+            name = key if isinstance(key, str) else _as_text(key)
+            checks[name] = _CHECK_VALUE_ADAPTER.validate_python(value)
+        except ValidationError:
+            rejections.append(
+                f"Unusable check '{name}': {_for_warning(value, quote=True)} is "
+                f"a {type(value).__name__}, not a bool."
+            )
+        except Exception as e:
+            # Broad, and deliberately not narrowed to ValidationError: the
+            # message has to describe what happened, and "raised TypeError" is
+            # a different fact from "is a str, not a bool".
+            rejections.append(
+                f"Unusable check '{name}': reading it raised {_describe_exception(e)}."
+            )
+    return checks, rejections
+
+
+def _sanitize_errors(raw: Any) -> list[str]:
+    """Coerce ``errors`` into the ``list[str]`` the result carries.
+
+    ``errors`` is ``list[StrictStr]``, so an exception object in the list — or
+    a bare string instead of a list — raised in exactly the same place as an
+    unusable ``checks`` value. Stringifying is lossless for text and is what
+    the author meant, so this coerces quietly rather than reporting.
+
+    ``isinstance(raw, Iterable)`` has the same reach as the Mapping test above:
+    it passes for anything with an ``__iter__``, and consuming it runs user
+    code that can raise. When it does there is nothing left to carry, so the
+    raise itself becomes the one error — visible on /health, which is where an
+    operator looks for what the check reported.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return [raw]
+    if isinstance(raw, Iterable):
+        try:
+            entries = list(raw)
+        except Exception as e:
+            return [
+                f"Unusable `errors`: reading the {type(raw).__name__} raised "
+                f"{_describe_exception(e)}."
+            ]
+        return [e if isinstance(e, str) else _as_text(e) for e in entries]
+    return [_as_text(raw)]
+
+
+def _warn_unusable_checks_once(agent_id: str, rejections: list[str]) -> None:
+    """Warn that part of ``checks`` was dropped. Once per process.
+
+    Once, for the reason the neighbouring warnings are: the check re-runs every
+    TTL, so a per-tick line is thousands of copies a day of one typo. The
+    rejection also rides along in the result's ``errors``, which /health shows
+    on every request — the log is the discovery surface, /health is the durable
+    one.
+    """
+    global _unusable_checks_warning_logged
+    with _unusable_checks_lock:
+        if _unusable_checks_warning_logged:
+            return
+        _unusable_checks_warning_logged = True
+    logger.warning(
+        # Not "that are not booleans": a `checks` mapping that RAISED when it
+        # was read reaches here too, and did not report a non-boolean anything.
+        # The rejections carry the specific fact; this line must not contradict
+        # them with a diagnosis of its own.
+        "Health check for '%s' reported check results the runtime could not "
+        "use: %s The agent keeps serving and its status is unchanged; the "
+        "unusable entries are dropped and reported on /health. `checks` maps a "
+        "check name to True or False.",
+        agent_id,
+        " ".join(rejections),
+    )
+
+
+def _reset_unusable_checks_warning() -> None:
+    """Re-arm the once-per-process warning. Tests only."""
+    global _unusable_checks_warning_logged
+    with _unusable_checks_lock:
+        _unusable_checks_warning_logged = False
+
+
+# =============================================================================
 # TTL-Based Health Cache
 # =============================================================================
 
@@ -389,17 +578,59 @@ async def _execute_health_check(
         checks = {}
         errors = []
 
-    return HealthStatus(
-        agent_name=agent_id,
-        status=status_type,
-        capabilities=capabilities,
-        checks=checks,
-        errors=errors,
-        timestamp=datetime.now(UTC),
-        version=agent_config.get("version", "1.0.0"),
-        metadata=agent_config,
-        uptime_seconds=0,
-    )
+    # `checks` and `errors` come straight from the user's check, so they are the
+    # two fields that can carry a shape the model refuses (issue #1556). Reading
+    # them here keeps the refusal from escaping as an exception that no health
+    # handler catches — see the module notes above `_sanitize_checks`.
+    checks, rejections = _sanitize_checks(checks)
+    errors = _sanitize_errors(errors)
+    if rejections:
+        _warn_unusable_checks_once(agent_id, rejections)
+        # Named like `health_check_return_type` / `health_check_execution`: a
+        # runtime-owned check that reports what the runtime found, rather than
+        # a fabricated verdict for the check whose value was unreadable.
+        checks["health_check_checks_type"] = False
+        errors.extend(rejections)
+
+    try:
+        return HealthStatus(
+            agent_name=agent_id,
+            status=status_type,
+            capabilities=capabilities,
+            checks=checks,
+            errors=errors,
+            timestamp=datetime.now(UTC),
+            version=agent_config.get("version", "1.0.0"),
+            metadata=agent_config,
+            uptime_seconds=0,
+        )
+    except ValidationError as e:
+        # The two user-supplied fields are already sanitized, so reaching here
+        # means a runtime-derived field (a capability list, a version) is the
+        # unreadable one. The invariant is what matters: building the result
+        # never raises, because the caller of this function is a pipeline step
+        # whose failure makes the agent vanish rather than report.
+        logger.warning(
+            "Could not build the health result for '%s' (%s) — reporting the "
+            "verdict without its detail.",
+            agent_id,
+            e,
+        )
+        try:
+            safe_capabilities = [_as_text(c) for c in capabilities] or ["default"]
+        except TypeError:
+            safe_capabilities = ["default"]
+        return HealthStatus(
+            agent_name=_as_text(agent_id),
+            status=status_type,
+            capabilities=safe_capabilities,
+            checks={"health_check_result_build": False},
+            errors=[f"Could not build the health result: {e}"],
+            timestamp=datetime.now(UTC),
+            version=None,
+            metadata=None,
+            uptime_seconds=0,
+        )
 
 
 def _get_capabilities(

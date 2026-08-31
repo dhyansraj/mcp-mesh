@@ -396,6 +396,27 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // `observability.md` as a table row and in `environment.md` inside the bash
 // fence; renderStyled takes other branches for both, so neither is sampled
 // here.
+// Issue #1556: +6 / +0 / +0, one added paragraph in `health.md` saying what a
+// `checks` value may be. The page had described the result's `status` in
+// detail and never the map beside it, and a non-bool in there — a status
+// string, a nested dict, both of which this repo's own docs showed — used to
+// escape the health path as a validation error and leave the agent serving
+// `/livez` and `/startupz` 200 while registering nowhere. The runtime now
+// drops the value and reports it, so the page states the type. The six spans
+// are `checks`, the `True`/`False` it maps to, `"ok"` as the value that is
+// neither (the nested dict beside it is named in prose and adds none),
+// `errors` where the rejection lands, and the `health_check_checks_type:
+// False` entry that marks it. The closing clause — the verdict the check
+// returned still stands — is prose and adds none, and is the one place this
+// deviates from #1539's "read the verdict, do not override it": a typo in
+// `checks` must not re-admit an agent that returned unhealthy. Prose, not a
+// list item, so the two list goldens hold.
+//
+// The marker is Python's alone (`health_check_checks_type` exists in
+// `health_check_manager.py` and in no other runtime), so the `_java` and
+// `_typescript` health pages did not get the sentence and the variant golden
+// in `variant_corpus_test.go` is unmoved — the case the note below describes,
+// in reverse.
 //
 // Issue #1500: the sentence most annotations above end on — that the `_java`
 // and `_typescript` files are invisible here, so a review of them cannot lean
@@ -410,7 +431,7 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // the starter's POM; a test in this package cannot, and #1499 shipped three
 // false claims through a green run here.
 const (
-	wantInlineCodeSpans = 1774
+	wantInlineCodeSpans = 1780
 	wantListCodeSpans   = 522
 	wantMarkupListLines = 448
 )

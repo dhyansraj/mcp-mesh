@@ -24,7 +24,9 @@ class TestFastAPIServerSetupStep:
         step = FastAPIServerSetupStep()
 
         assert step.name == "fastapi-server-setup"
-        assert step.required is False  # Optional - may not have FastMCP instances
+        # Required (#1556): nothing to mount is a success/skip here, so a
+        # FAILED result means the agent cannot serve.
+        assert step.required is True
         assert (
             step.description
             == "Prepare FastAPI app with K8s endpoints and mount FastMCP servers"
