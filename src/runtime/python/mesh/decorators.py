@@ -3200,8 +3200,14 @@ def llm(
         resolved_config.update(kwargs)
 
         # Step 2: Extract output type from return annotation
-        sig = inspect.signature(func)
-        return_annotation = sig.return_annotation
+        #
+        # Resolved through the shared ladder (#1548): under
+        # ``from __future__ import annotations`` the raw return annotation is a
+        # string, which would become the LLM output type verbatim and fail the
+        # Pydantic-model check that drives structured output.
+        from _mcp_mesh.engine.signature_analyzer import resolve_return_annotation
+
+        return_annotation = resolve_return_annotation(func)
 
         # Issue #645 Phase 1: detect Stream[str] up front. When the function
         # is a streaming tool, the LLM-output type is implicitly str (the
@@ -3278,20 +3284,30 @@ def llm(
             resolved_config["provider"] = resolved_provider
 
         # Step 3: Find MeshLlmAgent parameter
-        from mesh.types import MeshLlmAgent
+        #
+        # Delegated to the shared scanner (#1548) rather than comparing raw
+        # ``param.annotation`` here: that comparison is False for every
+        # parameter in a module using ``from __future__ import annotations``
+        # (PEP 563 makes annotations strings), so a correctly declared
+        # ``llm: mesh.MeshLlmAgent`` was rejected by the error below. Sharing
+        # ``_is_mesh_llm_type`` with the McpMeshTool/MeshJob scans also stops
+        # the two implementations of this check drifting apart again.
+        from _mcp_mesh.engine.signature_analyzer import (
+            describe_unresolved_annotations,
+            get_llm_agent_parameter_names,
+        )
 
-        llm_params = []
-        for param_name, param in sig.parameters.items():
-            if param.annotation == MeshLlmAgent or (
-                hasattr(param.annotation, "__origin__")
-                and param.annotation.__origin__ == MeshLlmAgent
-            ):
-                llm_params.append(param_name)
+        llm_params = get_llm_agent_parameter_names(func)
 
         if not llm_params:
+            # The note is empty unless an annotation stayed a string. When it
+            # is not, it names the real cause instead of leaving the message
+            # restating a requirement the developer has already met.
+            unresolved_note = describe_unresolved_annotations(func)
             raise ValueError(
                 f"Function '{func.__name__}' decorated with @mesh.llm must have at least one parameter "
                 f"of type 'mesh.MeshLlmAgent'. Example: def {func.__name__}(..., llm: mesh.MeshLlmAgent = None)"
+                f"{unresolved_note}"
             )
 
         if len(llm_params) > 1:
