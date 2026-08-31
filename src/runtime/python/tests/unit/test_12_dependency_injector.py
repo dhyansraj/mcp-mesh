@@ -2144,3 +2144,204 @@ class TestStrictDIDecorationFailureRegistryCleanup:
         # returned wrapper, not the original.
         assert tools["no_params_tool"].function is wrapped
         assert tools["no_params_tool"].function is not original
+
+
+class TestTaskToolJobSlotIsNotAnUnfilledSlot:
+    """Issue #1550: a ``@mesh.tool(task=True)`` producer's ``MeshJob``
+    parameter is bound by the job-dispatch layer, not by positional
+    pairing — ``maybe_dispatch_as_job`` sets a ``JobController`` when an
+    ``X-Mesh-Job-Id`` rides the call and an explicit ``None`` when the
+    task tool is invoked directly (the documented direct-call contract).
+    Both happen AFTER dependency injection, so neither pairing diagnostic
+    can see the outcome and neither may report the slot as one that "will
+    remain None": that message names the exact failure a MeshJob author
+    fears (dead ``update_progress``, unrenewed lease) and its remediation
+    — add the job to ``dependencies=[...]``, or drop the ``MeshJob``
+    annotation — would damage a working producer.
+
+    The exemption is scoped to the JOB SLOT, and only on a task tool. An
+    unpaired ``McpMeshTool`` parameter on the same function is still a
+    real misconfiguration and is still reported; a ``MeshJob`` slot on a
+    NON-task tool is genuinely pairing's to fill (with a
+    ``MeshJobSubmitter``) and is still reported when no dependency
+    reaches it.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_strict_cache(self):
+        from _mcp_mesh.engine import strict_di
+        from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+
+        DecoratorRegistry.clear_all()
+        strict_di._reset_strict_di_cache()
+        yield
+        DecoratorRegistry.clear_all()
+        strict_di._reset_strict_di_cache()
+
+    @staticmethod
+    def _enable_strict(monkeypatch):
+        from _mcp_mesh.engine import strict_di
+
+        monkeypatch.setenv("MCP_MESH_STRICT_DI", "true")
+        strict_di._reset_strict_di_cache()
+
+    @staticmethod
+    def _as_task_tool(func):
+        """Stamp the ``task=True`` metadata exactly as ``@mesh.tool``
+        does (``mesh/decorators.py`` sets ``_mesh_tool_metadata`` on the
+        target BEFORE building the injection wrapper), which is what
+        ``job_dispatch.is_task_tool`` reads."""
+        from _mcp_mesh.engine.job_dispatch import is_task_tool
+
+        func._mesh_tool_metadata = {"capability": "long_work", "task": True}
+        assert is_task_tool(func) is True
+        return func
+
+    @staticmethod
+    def _prep(func, dependencies, kwargs=None):
+        """Drive _prepare_injection_kwargs like the runtime wrapper does."""
+        import logging as _log
+
+        from _mcp_mesh.engine.dependency_injector import _prepare_injection_kwargs
+        from _mcp_mesh.engine.signature_analyzer import get_mesh_agent_positions
+
+        return _prepare_injection_kwargs(
+            func,
+            kwargs or {},
+            get_mesh_agent_positions(func),
+            dependencies,
+            [None] * len(dependencies),
+            lambda _key: None,
+            _log.getLogger("test"),
+        )
+
+    # ------------------------------------------------------------------
+    # Call-time diagnostic (permissive mode — the reported symptom)
+    # ------------------------------------------------------------------
+
+    def test_task_tool_with_only_a_job_slot_warns_about_nothing(self, caplog):
+        """The reported false positive: the ONLY eligible slot is the
+        MeshJob the dispatch layer owns, so nothing is unfilled and no
+        warning may be emitted at all."""
+        from mesh import MeshJob
+
+        async def long_work(payload: str, job: MeshJob = None):
+            return payload
+
+        self._as_task_tool(long_work)
+
+        with caplog.at_level(logging.WARNING):
+            self._prep(long_work, [])
+
+        assert "will remain None" not in caplog.text
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+    def test_task_tool_still_reports_an_unfilled_tool_slot_only(self, caplog):
+        """A task tool can ALSO have an unpaired McpMeshTool parameter —
+        a genuine misconfiguration. It is still reported, and the report
+        names only that slot, never the job."""
+        from mesh import MeshJob
+        from mesh.types import McpMeshTool
+
+        async def long_work(db: McpMeshTool = None, job: MeshJob = None):
+            return (db, job)
+
+        self._as_task_tool(long_work)
+
+        with caplog.at_level(logging.WARNING):
+            self._prep(long_work, [])
+
+        text = caplog.text
+        assert "injection-eligible parameters (McpMeshTool/MeshJob)" in text
+        assert "will remain None" in text
+        assert "['db']" in text
+        # The job slot must not be named among the unfilled parameters.
+        assert "'job'" not in text
+
+    def test_non_task_tool_job_slot_is_still_reported(self, caplog):
+        """Control: without ``task=True`` nothing binds the MeshJob slot
+        outside pairing, so the existing diagnostic is unchanged."""
+        from mesh import MeshJob
+
+        async def consumer(payload: str, job: MeshJob = None):
+            return payload
+
+        with caplog.at_level(logging.WARNING):
+            self._prep(consumer, [])
+
+        text = caplog.text
+        assert "injection-eligible parameter (McpMeshTool/MeshJob)" in text
+        assert "['job']" in text
+
+    def test_caller_supplied_job_on_a_task_tool_is_left_alone(self):
+        """The exemption is diagnostic-only: it must not disturb the
+        documented contract that a caller may pass a fake for any
+        injectable slot."""
+        from mesh import MeshJob
+
+        async def long_work(payload: str, job: MeshJob = None):
+            return payload
+
+        self._as_task_tool(long_work)
+        fake = object()
+
+        final_kwargs, _count = self._prep(
+            long_work, [], kwargs={"payload": "x", "job": fake}
+        )
+
+        assert final_kwargs["job"] is fake
+
+    # ------------------------------------------------------------------
+    # Decoration-time promotion under MCP_MESH_STRICT_DI
+    # ------------------------------------------------------------------
+
+    def test_strict_di_accepts_a_correctly_written_task_producer(self, monkeypatch):
+        """Harder failure than the warning: under MCP_MESH_STRICT_DI the
+        same flawed check REFUSED DECORATION of a correct task producer,
+        so the agent could not start at all."""
+        import mesh
+
+        self._enable_strict(monkeypatch)
+
+        @mesh.tool(capability="long_work", task=True)
+        async def long_work(payload: str, job: mesh.MeshJob = None):
+            return payload
+
+        from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+
+        assert "long_work" in DecoratorRegistry.get_mesh_tools()
+
+    def test_strict_di_still_raises_for_an_unpaired_tool_slot(self, monkeypatch):
+        """Strict mode keeps promoting the genuine misconfiguration, and
+        the raised message names only the McpMeshTool slot."""
+        from _mcp_mesh.engine.strict_di import StrictDIError
+        from mesh import MeshJob
+        from mesh.types import McpMeshTool
+
+        async def long_work(db: McpMeshTool = None, job: MeshJob = None):
+            return (db, job)
+
+        self._as_task_tool(long_work)
+        self._enable_strict(monkeypatch)
+
+        with pytest.raises(StrictDIError) as exc:
+            analyze_injection_strategy(long_work, [])
+
+        assert "['db']" in str(exc.value)
+        assert "'job'" not in str(exc.value)
+
+    def test_strict_di_still_raises_for_a_non_task_job_slot(self, monkeypatch):
+        """Control: a non-task MeshJob slot with no dependency to pair
+        against is still a strict-mode failure."""
+        from _mcp_mesh.engine.strict_di import StrictDIError
+        from mesh import MeshJob
+
+        async def consumer(payload: str, job: MeshJob = None):
+            return payload
+
+        self._enable_strict(monkeypatch)
+
+        with pytest.raises(StrictDIError) as exc:
+            analyze_injection_strategy(consumer, [])
+
+        assert "['job']" in str(exc.value)
