@@ -364,9 +364,12 @@ class TestTheStepIsRequired:
         pipeline = MeshPipeline(name="test")
         pipeline.add_step(step)
 
-        with patch.object(
-            step, "_create_fastapi_app", side_effect=Exception("no fastapi")
-        ), patch.dict(os.environ, {"MCP_MESH_HTTP_ENABLED": "true"}):
+        with (
+            patch.object(
+                step, "_create_fastapi_app", side_effect=Exception("no fastapi")
+            ),
+            patch.dict(os.environ, {"MCP_MESH_HTTP_ENABLED": "true"}),
+        ):
             result = await pipeline.execute()
 
         assert result.status == PipelineStatus.FAILED
