@@ -2636,9 +2636,14 @@ def _native_dispatch_fallback_reason(vendor: str) -> str | None:
 
     ``native_dispatch_blocker()`` rather than ``has_native()`` because the
     latter fires two once-per-process log latches meant to mark the first
-    dispatch decision, and registration is not one.
+    dispatch decision, and registration is not one. ``probe_handler()`` rather
+    than ``get_handler()`` for the same reason one level up (issue #1558):
+    ``get_handler`` logs "✅ Selected <handler> for vendor: <vendor>" on a cache
+    MISS, so warming the cache here silently relocates that record from the
+    first dispatch to import time and downgrades every dispatch after it to
+    DEBUG.
     """
-    blocker = ProviderHandlerRegistry.get_handler(vendor).native_dispatch_blocker()
+    blocker = ProviderHandlerRegistry.probe_handler(vendor).native_dispatch_blocker()
     if blocker is None:
         return None
 
