@@ -683,6 +683,45 @@ class BaseProviderHandler(ABC):
         """
         return
 
+    def native_dispatch_blocker(self) -> str | None:
+        """Why this handler will NOT dispatch natively, or None if it will.
+
+        The same verdict ``has_native()`` reaches, with the reason kept and
+        none of the logging. Returns a stable identifier, never user copy:
+
+          * ``"no-adapter"``   — the handler ships no native module at all
+            (``_native_module()`` is None), so the vendor is a LiteLLM vendor;
+          * ``"disabled-by-env"`` — ``MCP_MESH_NATIVE_LLM`` in {0,false,no,off},
+            the explicit opt-out, which wins over SDK availability;
+          * ``"sdk-missing"``  — a native adapter is wired up but the vendor
+            SDK is not importable here;
+          * ``None``           — native dispatch will really happen.
+
+        Silence is the point, not an accident. ``has_native()`` fires two
+        one-time latches (the dispatch-status DEBUG log and the fallback INFO
+        log), both of which are meant to mark the first *dispatch* decision.
+        Callers that ask this question outside a dispatch — the #1551 startup
+        assertion in ``mesh.helpers.llm_provider`` — would otherwise burn
+        those latches at import time, moving the records away from the event
+        they describe and re-arming them under tests that assert on them.
+
+        Note the SDK probe is a real (cached) import of the vendor SDK, so
+        asking early front-loads an import the first dispatch would do anyway.
+        """
+        native = self._native_module()
+        if native is None:
+            return "no-adapter"
+
+        flag = os.environ.get("MCP_MESH_NATIVE_LLM", "").strip().lower()
+        # Explicit opt-out wins over SDK availability.
+        if flag in ("0", "false", "no", "off"):
+            return "disabled-by-env"
+
+        if not native.is_available():
+            return "sdk-missing"
+
+        return None
+
     def has_native(self) -> bool:
         """Return True if this handler can dispatch via a native vendor SDK.
 
@@ -691,6 +730,11 @@ class BaseProviderHandler(ABC):
         ``MCP_MESH_NATIVE_LLM`` in {0,false,no,off} as an explicit opt-out that
         wins over SDK availability, and returns False (with a one-time fallback
         log) when the SDK is not importable.
+
+        This is the *dispatch-decision* form: the verdict comes from
+        ``native_dispatch_blocker()`` and everything added here is logging.
+        Callers that only want the verdict should use that instead — see its
+        docstring for why the difference matters.
         """
         native = self._native_module()
         if native is None:
@@ -701,20 +745,16 @@ class BaseProviderHandler(ABC):
         # is actually made — the most useful signal for ``--debug`` runs.
         self._log_dispatch_status()
 
-        flag = os.environ.get("MCP_MESH_NATIVE_LLM", "").strip().lower()
-        # Explicit opt-out wins over SDK availability.
-        if flag in ("0", "false", "no", "off"):
-            return False
+        blocker = self.native_dispatch_blocker()
 
-        if not native.is_available():
+        if blocker == "sdk-missing":
             # Skip the log call entirely once it has already fired — the
             # function dedupes internally, but on the no-native hot path
             # avoiding the call frame altogether is cheaper still.
             if not native.is_fallback_logged():
                 native.log_fallback_once()
-            return False
 
-        return True
+        return blocker is None
 
     async def complete(
         self,

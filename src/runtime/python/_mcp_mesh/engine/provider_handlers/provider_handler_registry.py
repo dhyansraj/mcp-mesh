@@ -185,6 +185,36 @@ class ProviderHandlerRegistry:
         }
 
     @classmethod
+    def native_dispatch_vendors(cls) -> frozenset[str]:
+        """The vendor prefixes that dispatch through a bundled native SDK.
+
+        Derived, not declared: a handler ships a native adapter exactly when it
+        overrides ``_native_module`` (the base returns ``None``, which is what
+        keeps ``has_native()`` False and sends the vendor down the LiteLLM
+        path). Reading the override rather than keeping a second list means a
+        new native handler cannot be added without this set following it.
+
+        Deliberately class-level. It answers "is a native adapter *wired up*
+        for this vendor", not "would this call dispatch natively right now" —
+        the latter is ``has_native()`` / ``native_dispatch_blocker()``, which
+        additionally import the vendor SDK and honour ``MCP_MESH_NATIVE_LLM``.
+        Callers that need a cheap, side-effect-free, env-independent verdict
+        want this one; the #1551 startup assertion in
+        ``mesh.helpers.llm_provider`` asks both, in that order, because a
+        vendor with an adapter wired up can still fall back at runtime.
+
+        A vendor added at runtime via ``register()`` appears here only if its
+        handler actually overrides ``_native_module``; a plain
+        ``BaseProviderHandler`` subclass does not, and correctly stays on the
+        LiteLLM path.
+        """
+        return frozenset(
+            vendor
+            for vendor, handler_class in cls._handlers.items()
+            if handler_class._native_module is not BaseProviderHandler._native_module
+        )
+
+    @classmethod
     def clear_cache(cls) -> None:
         """
         Clear cached handler instances.

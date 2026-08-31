@@ -410,7 +410,7 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // the starter's POM; a test in this package cannot, and #1499 shipped three
 // false claims through a green run here.
 const (
-	wantInlineCodeSpans = 1773
+	wantInlineCodeSpans = 1774
 	wantListCodeSpans   = 522
 	wantMarkupListLines = 448
 )

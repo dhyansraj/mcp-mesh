@@ -39,7 +39,18 @@ logger = logging.getLogger(__name__)
 _MAX_ITERATIONS_UNSET = object()
 
 
-def _require_litellm(model: str | None = None, vendor: str | None = None) -> Any:
+_LITELLM_PATH_EXPLANATION = (
+    "mcp-mesh bundles native SDK adapters for Anthropic, OpenAI and Gemini; "
+    "every other vendor/model dispatches through LiteLLM."
+)
+
+
+def _require_litellm(
+    model: str | None = None,
+    vendor: str | None = None,
+    subject: str = "This request",
+    explanation: str = _LITELLM_PATH_EXPLANATION,
+) -> Any:
     """Import and return the ``litellm`` module, or raise actionable guidance.
 
     LiteLLM is an OPTIONAL dependency (issue #1383). The big-3 vendors
@@ -48,6 +59,16 @@ def _require_litellm(model: str | None = None, vendor: str | None = None) -> Any
     GenericHandler/LiteLLM path genuinely needs the package. Call this at the
     point of genuine use — never at function top — so a big-3-only install
     stays fully functional without litellm present.
+
+    ``subject`` names what needs the package, and exists solely because the
+    #1551 startup check calls this before any request exists — "This request"
+    would be describing something that has not happened. ``explanation`` says
+    WHY this model is on the LiteLLM path, and exists because the default
+    sentence ("every other vendor/model dispatches through LiteLLM") is a lie
+    for a big-3 model that fell back — the one case where the reader most
+    needs to be told what actually happened. Both default to the wording the
+    six dispatch-time call sites already had, so their messages stay
+    byte-identical.
     """
     try:
         import litellm
@@ -81,10 +102,8 @@ def _require_litellm(model: str | None = None, vendor: str | None = None) -> Any
             target = f" for vendor '{vendor}'"
 
         raise ImportError(
-            f"This request{target} requires the optional LiteLLM provider path, "
-            "but the 'litellm' package is not installed. mcp-mesh bundles native "
-            "SDK adapters for Anthropic, OpenAI and Gemini; every other "
-            "vendor/model dispatches through LiteLLM.\n"
+            f"{subject}{target} requires the optional LiteLLM provider path, "
+            f"but the 'litellm' package is not installed. {explanation}\n"
             f"  Install it with:  pip install '{pin}'\n"
             f"  Containerized agents: add  {pin}  to your agent's "
             "requirements.txt so the image build includes it."
@@ -2541,6 +2560,106 @@ def _infer_big3_vendor_from_bare_name(model: str) -> str | None:
     return None
 
 
+def _is_native_dispatch_model(model: str | None) -> bool:
+    """Whether ``model`` dispatches through a bundled native SDK adapter.
+
+    The two branches are the two ways a model names its vendor, and each
+    defers to the component that already owns that question:
+
+      * an explicit ``vendor/`` prefix is looked up in
+        ``ProviderHandlerRegistry.native_dispatch_vendors()`` — the registry
+        owns the vendor→handler table, so no vendor list is restated here;
+      * a bare name goes through ``_infer_big3_vendor_from_bare_name``, the
+        same normalization ``llm_provider`` applies before dispatch.
+
+    An empty/unset model is reported as native: nothing is known about it, and
+    a guess must not fail an agent that would have worked.
+
+    This is a *static* verdict about the declared model, and stays that way on
+    purpose: the Go duplicate below runs in ``meshctl``, which can see neither
+    this process's environment nor its installed SDKs, so anything runtime-
+    dependent added here would drift the two halves apart by construction.
+    Hence it does not consult ``MCP_MESH_NATIVE_LLM`` or whether the vendor
+    SDK imports. That runtime question belongs to the handler
+    (``native_dispatch_blocker()`` / ``has_native()``) and is asked separately
+    — per dispatch, and once at registration by the #1551 startup assertion,
+    which composes the two rather than folding one into the other.
+
+    !! CROSS-LANGUAGE DUPLICATE (issue #1383) !!
+    ``meshctl scaffold`` re-implements this as ``IsNativeDispatchModel`` in
+    ``src/core/cli/scaffold/model_dispatch.go`` so it can decide whether a
+    generated ``requirements.txt`` needs the optional ``mcp-mesh[litellm]``
+    pin with no Python available. ``TestGoNativeVendorsMatchPythonRegistry``
+    there fails the Go build if the vendor halves drift apart.
+    """
+    if not model or not model.strip():
+        return True
+
+    name = model.lower().strip()
+    if "/" in name:
+        vendor = name.split("/", 1)[0]
+        return vendor in ProviderHandlerRegistry.native_dispatch_vendors()
+    return _infer_big3_vendor_from_bare_name(name) is not None
+
+
+def _model_requires_litellm(model: str | None) -> bool:
+    """Whether ``model`` needs the optional LiteLLM provider path (#1383).
+
+    The Python-side twin of the scaffold's ``RequiresLiteLLM``: what that
+    decides at scaffold time (does this agent's ``requirements.txt`` need the
+    pin) is what this decides at decoration time (was the pin actually there).
+    """
+    return not _is_native_dispatch_model(model)
+
+
+def _native_dispatch_fallback_reason(vendor: str) -> str | None:
+    """Why a *natively-adapted* vendor would still dispatch through LiteLLM.
+
+    Returns a sentence for the error message, or None when native dispatch
+    really will happen. The verdict is the handler's
+    ``native_dispatch_blocker()`` — the same one ``has_native()`` reaches at
+    dispatch time — so this asks about the process the provider is actually
+    running in, not about the model string.
+
+    This is the half of the #1551 check that ``_model_requires_litellm``
+    deliberately cannot answer (see its docstring: that predicate is a
+    cross-language duplicate and must stay environment-independent). Both
+    blockers it reports as fallback are ordinary first-call failures when
+    ``litellm`` is also absent:
+
+      * ``MCP_MESH_NATIVE_LLM=0`` — the operator asked for the LiteLLM path
+        explicitly, so the extra it needs is no longer optional for them;
+      * the vendor SDK is not importable — anthropic/openai/google-genai are
+        base dependencies, so this is already a damaged or hand-pruned
+        install; native dispatch is off the table and LiteLLM is the only
+        remaining path.
+
+    ``native_dispatch_blocker()`` rather than ``has_native()`` because the
+    latter fires two once-per-process log latches meant to mark the first
+    dispatch decision, and registration is not one.
+    """
+    blocker = ProviderHandlerRegistry.get_handler(vendor).native_dispatch_blocker()
+    if blocker is None:
+        return None
+
+    if blocker == "disabled-by-env":
+        return (
+            f"MCP_MESH_NATIVE_LLM disables native SDK dispatch for this "
+            f"process, so even '{vendor}' — which ships a bundled adapter — "
+            f"dispatches through LiteLLM."
+        )
+    if blocker == "sdk-missing":
+        return (
+            f"mcp-mesh bundles a native SDK adapter for '{vendor}', but that "
+            f"vendor SDK is not importable here, so this provider falls back "
+            f"to LiteLLM."
+        )
+    return (
+        f"Vendor '{vendor}' resolves to a handler with no bundled native SDK "
+        f"adapter, so this provider dispatches through LiteLLM."
+    )
+
+
 def _sanitize_sampling_params(
     completion_args: dict[str, Any], effective_model: str
 ) -> None:
@@ -2690,10 +2809,15 @@ def llm_provider(
 
     Raises:
         RuntimeError: If FastMCP 'app' not found in module
-        ImportError: At call time, if the model routes to the LiteLLM
-            long-tail path and ``litellm`` is not installed. Anthropic,
-            OpenAI and Gemini models dispatch through the bundled native SDK
-            adapters and do not require it.
+        ImportError: At decoration time, if ``model`` will dispatch through
+            LiteLLM and ``litellm`` is not installed — the agent fails to
+            start rather than registering and failing on a consumer's first
+            call (issue #1551). That covers the long-tail path, and also an
+            Anthropic/OpenAI/Gemini model whose native dispatch is
+            unavailable: ``MCP_MESH_NATIVE_LLM`` disabling it, or the vendor
+            SDK not importable. A big-3 model dispatching natively — the
+            default — does not require it. A model supplied per-request by a
+            consumer is still checked at call time.
     """
 
     def decorator(func):
@@ -2723,12 +2847,24 @@ def llm_provider(
                 f"✅ Extracted vendor '{vendor}' from model '{model}' "
                 f"using LiteLLM detection"
             )
-        except (ImportError, AttributeError, ValueError, KeyError) as e:
-            # Fallback: try to extract from model prefix
-            # ImportError: litellm not installed
-            # AttributeError: get_llm_provider doesn't exist
-            # ValueError: invalid model format
-            # KeyError: model not in provider mapping
+        except Exception as e:
+            # Fallback: extract from the model prefix, then (below) the RFC
+            # #1100 Gap #1 bare-name inference. Reasons this probe fails:
+            # litellm not installed, get_llm_provider missing or renamed, an
+            # invalid model format, a model absent from the provider mapping.
+            #
+            # Broad on purpose. It is a best-effort PROBE with two fallbacks
+            # behind it, so no failure of it is a reason to refuse to build the
+            # provider. It used to catch a four-exception tuple
+            # (ImportError/AttributeError/ValueError/KeyError) and litellm
+            # raises outside it: ``get_llm_provider`` reports an unresolvable
+            # bare name as ``litellm.BadRequestError``, an
+            # ``openai.APIStatusError`` subclass that is not a ValueError. So
+            # the two names Gap #1 exists FOR — ``claude-3-haiku``,
+            # ``gemini-3-pro`` — crashed at decoration with a litellm error
+            # about an LLM provider not being provided, and only for users who
+            # HAD litellm installed; without it the ModuleNotFoundError was
+            # caught and the inference ran correctly.
             #
             # Since #1383 litellm is an optional extra, so "not installed" is
             # the DEFAULT state of a big-3 install, not a degradation — logging
@@ -2791,6 +2927,62 @@ def llm_provider(
                 f"'unknown'. It will dispatch through the LiteLLM long-tail "
                 f"path, which needs: pip install 'mcp-mesh[litellm]'"
             )
+
+        # Issue #1551: a provider whose DECLARED model takes the LiteLLM path
+        # knows at decoration time that it can never serve a request. Without
+        # this, it registers, reports healthy, wins dependency resolution, and
+        # surfaces the ImportError on a consumer's call path instead of its
+        # own — the failure mode #1502 exists to prevent.
+        #
+        # Deliberately narrow, on both sides:
+        #
+        #  * A big-3 model that will really dispatch natively never reaches
+        #    ``_require_litellm`` here, so the optional dependency stays
+        #    genuinely optional (#1383). The guard is the model predicate,
+        #    evaluated first and importing nothing.
+        #  * The DECLARED model only. A consumer may override the model per
+        #    request, so the six lazy ``_require_litellm`` call sites remain
+        #    the check for what is actually dispatched; this one cannot
+        #    replace them and does not try to.
+        #
+        # The second branch closes the hole the first one leaves. "Needs
+        # LiteLLM" is two questions, and only one of them is about the model:
+        # a big-3 model ALSO takes the LiteLLM path when native dispatch is
+        # switched off (``MCP_MESH_NATIVE_LLM=0``) or when the vendor SDK is
+        # not importable. Those agents fail on a consumer's first call for
+        # exactly the reason #1551 reports. They are asked separately, not
+        # folded into ``_model_requires_litellm``: that predicate is a
+        # cross-language duplicate of the scaffolder's ``IsNativeDispatchModel``,
+        # which runs in ``meshctl`` where neither the environment nor the
+        # installed SDKs of the eventual agent process are visible. An
+        # env-dependent predicate could not be mirrored there, and the sync
+        # test guarding the two halves would be guarding a lie.
+        #
+        # ``_require_litellm`` (not a bare import) so the actionable message
+        # and — the part easy to lose — the transitive-import distinction are
+        # the same here as at call time: a broken ``tokenizers`` propagates
+        # untouched rather than being relabelled as a missing ``litellm`` and
+        # sending the author to an install command that is already satisfied.
+        _startup_subject = "This agent's LLM provider"
+        if _model_requires_litellm(model):
+            _require_litellm(
+                model=model,
+                vendor=vendor,
+                subject=_startup_subject,
+            )
+        elif model and model.strip():
+            # Unset/blank models are skipped for the same reason
+            # ``_is_native_dispatch_model`` calls them native: nothing is known
+            # about what they will dispatch, and refusing to start on a guess
+            # is worse than the lazy call-site check standing behind this one.
+            _fallback_reason = _native_dispatch_fallback_reason(vendor)
+            if _fallback_reason is not None:
+                _require_litellm(
+                    model=model,
+                    vendor=vendor,
+                    subject=_startup_subject,
+                    explanation=_fallback_reason,
+                )
 
         def _prepare_provider_request(
             request: MeshLlmRequest,
