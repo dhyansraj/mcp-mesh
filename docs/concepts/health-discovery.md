@@ -118,6 +118,8 @@ While the check reports `unhealthy` the agent stops heartbeating. The registry's
 
 Only an explicit unhealthy result does that. A check that raises keeps heartbeating and stays in dependency resolution, in all three runtimes: a bug in the health check must not be able to remove a working agent from the mesh.
 
+`checks` maps a check name to `true` or `false`. A value that is not one - a status string, a nested object - is dropped and reported in `errors` alongside a `health_check_checks_type: false` entry, rather than changing the verdict the check returned.
+
 Those verdicts show on the diagnostic surface only, on all three runtimes: `/health` answers 503 while `/ready` is unmoved. Nothing probes `/health`, so its status code is free to carry the verdict.
 
 ### When Every Provider Withdraws
@@ -285,6 +287,7 @@ export DEFAULT_TIMEOUT_THRESHOLD=20
 ```python
 async def health():
     # Report every probe; decide on the ones you cannot serve without.
+    # Each helper returns True or False - `checks` is a map of name to bool.
     checks = {
         "database": await check_db(),
         "cache": await check_cache(),
@@ -293,7 +296,7 @@ async def health():
 
     # A cold cache is slower, not unserving, and a memory warning is not an
     # outage - both stay healthy and ride along in `checks`.
-    if not checks["database"]["ok"]:
+    if not checks["database"]:
         return {"status": "unhealthy", "checks": checks, "errors": ["database unreachable"]}
     return {"status": "healthy", "checks": checks}
 ```

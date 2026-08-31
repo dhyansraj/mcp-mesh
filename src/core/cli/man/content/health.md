@@ -154,6 +154,8 @@ The verdict drives `/health`, which answers 200 only while the check reports `he
 
 A check that **raises** keeps heartbeating and stays in dependency resolution. So does one that returns something other than a dict, a `bool` or a `HealthStatus`. A bug in a health check must not be able to remove a working agent from the mesh. Return `False` or `{"status": "unhealthy"}` to actually withdraw.
 
+`checks` maps a check name to `True` or `False`. A value that is not one - `"ok"`, a nested dict - is dropped and reported in `errors` alongside a `health_check_checks_type: False` entry, and the verdict the check returned still stands.
+
 Those verdicts show on the diagnostic surface only: `/health` answers 503 while `/ready` is unmoved. Nothing probes `/health`, so its status code is free to carry the verdict; readiness reports the mesh runtime and nothing else.
 
 ### When Every Provider Withdraws

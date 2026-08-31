@@ -15,6 +15,45 @@ from .startup_pipeline import StartupPipeline
 logger = logging.getLogger(__name__)
 
 
+def abort_agent_process(reason: str, log: logging.Logger = logger) -> None:
+    """Terminate an auto-run MCP agent that cannot serve. Never returns.
+
+    Killing the process is the only honest option here, and raising is not one
+    (issue #1556). This runs on the ``DebounceCoordinator``'s ``threading.Timer``
+    thread, while the ``@mesh.agent`` decorator's immediate uvicorn runs on a
+    NON-daemon thread of its own: an exception raised here dies inside the timer
+    thread and uvicorn keeps serving. That is how "Auto-run enabled but no
+    FastAPI app prepared - exiting" came to be logged by a process that then
+    stayed up indefinitely — answering /livez and /startupz with 200, /ready and
+    /health with 503, and never registering. Under Kubernetes that pod passes
+    liveness, passes startup, never becomes ready, and is never restarted.
+
+    Exiting instead makes the pod restart with the cause in its logs, which is
+    the difference between an agent that is visibly broken and one that looks
+    like it was never deployed.
+
+    ``os._exit`` for the reason ``dual_module_check`` uses it: it is the only
+    process-wide immediate exit available from a non-main thread. It skips
+    finalizers, so the diagnostic is logged and flushed first — and nothing has
+    served traffic at this point, so there is no in-flight state to drain.
+    """
+    log.error(f"💀 {reason}")
+    log.error(
+        "Exiting: this agent cannot serve. Staying up would keep answering "
+        "liveness and startup probes for an agent that will never register."
+    )
+    # Flushed, not `logging.shutdown()`: `os._exit` skips buffer flushing, and
+    # the whole point of exiting here is that the reason reaches the pod's logs.
+    # Closing the handlers would additionally silence anything that runs after
+    # this — which, whenever `os._exit` is patched out, is a test suite.
+    for handler in list(logging.getLogger().handlers) + list(log.handlers):
+        try:
+            handler.flush()
+        except Exception:
+            pass
+    os._exit(1)
+
+
 def wait_for_proven_serving(
     started_check: Any,
     label: str,
@@ -257,6 +296,17 @@ class DebounceCoordinator:
                         f"❌ {pipeline_type.upper()} pipeline failed during startup; "
                         f"aborting: {err_detail}"
                     )
+                    if pipeline_type == "mcp":
+                        # mesh owns this whole process, so aborting means
+                        # exiting — a raise would only kill the timer thread
+                        # and leave the immediate uvicorn serving probes for an
+                        # agent that never registered (issue #1556). An `api` /
+                        # `a2a` service owns its own uvicorn and its own app, so
+                        # a mesh failure there stays a raise.
+                        abort_agent_process(
+                            f"MCP pipeline failed during startup: {err_detail}",
+                            self.logger,
+                        )
                     raise RuntimeError(
                         f"{pipeline_type.upper()} pipeline failed: {err_detail}"
                     )
@@ -478,9 +528,27 @@ class DebounceCoordinator:
                             bound_socket=bound_socket,
                             server_holder=server_holder,
                         )
+                elif pipeline_context.get("http_transport_disabled"):
+                    # Asked for no HTTP server, so having no app to run is the
+                    # configuration doing what it says. Nothing to serve and
+                    # nothing to abort: the process ends on its own.
+                    self.logger.info(
+                        "🏁 HTTP transport is disabled (MCP_MESH_HTTP_ENABLED) — "
+                        "no server to run"
+                    )
                 else:
-                    self.logger.warning(
-                        "⚠️ Auto-run enabled but no FastAPI app prepared - exiting"
+                    # Reachable when the pipeline reports success/partial and
+                    # still leaves no app to serve. The line used to say
+                    # "exiting" and then return, leaving the process alive
+                    # (issue #1556) — now it exits, and says which half is
+                    # missing rather than always blaming the app.
+                    missing = (
+                        "no FastAPI app was prepared"
+                        if not fastapi_app
+                        else "no server binding configuration was resolved"
+                    )
+                    abort_agent_process(
+                        f"Auto-run is enabled but {missing}.", self.logger
                     )
             else:
                 # Single execution mode (for testing/debugging)

@@ -17,8 +17,22 @@ class FastAPIServerSetupStep(PipelineStep):
 
     def __init__(self):
         super().__init__(
+            # Required (issue #1556). This step used to be optional, for
+            # "may not have FastMCP instances to mount" — but having nothing to
+            # mount has never been a FAILURE here. Zero FastMCP servers is a
+            # SUCCESS: the step still builds the FastAPI app, with the minimal
+            # lifespan and the K8s endpoints. Discovering none is reported one
+            # step earlier, by `fastmcp-server-discovery`, as SKIPPED. And
+            # `MCP_MESH_HTTP_ENABLED=false` returns SKIPPED below, which the
+            # pipeline exempts from the required-step abort by design.
+            #
+            # So the flag only ever covered the OTHER case: tried to set the
+            # server up and could not. There is no agent shape that can serve
+            # without this step, so continuing past it produced an agent that
+            # never registered, never became ready, and never restarted —
+            # absent instead of failed. Whatever fails in here is fatal.
             name="fastapi-server-setup",
-            required=False,  # Optional - may not have FastMCP instances to mount
+            required=True,
             description="Prepare FastAPI app with K8s endpoints and mount FastMCP servers",
         )
 
@@ -42,6 +56,10 @@ class FastAPIServerSetupStep(PipelineStep):
             if not self._is_http_enabled():
                 result.status = PipelineStatus.SKIPPED
                 result.message = "HTTP transport disabled"
+                # Recorded so the orchestrator can tell "asked for no server"
+                # from "could not build one" when it finds no app to run — the
+                # first is a configuration, the second is fatal (issue #1556).
+                result.add_context("http_transport_disabled", True)
                 self.logger.info("⚠️ HTTP transport disabled via MCP_MESH_HTTP_ENABLED")
                 return result
 
@@ -795,11 +813,11 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
             self.logger.error(
                 f"❌ SERVER REUSE: Failed to mount on existing server: {e}"
             )
-            result.status = (
-                result.PipelineStatus.FAILED
-                if hasattr(result, "PipelineStatus")
-                else "failed"
-            )
+            # `result.PipelineStatus` never existed, so this always fell through
+            # to the string "failed". It compared unequal to every enum member,
+            # which happened to read as a failure — and left `result.status` a
+            # string that `__str__` and any `.value` read would raise on.
+            result.status = PipelineStatus.FAILED
             result.message = f"Server reuse failed: {e}"
             result.add_error(str(e))
 
