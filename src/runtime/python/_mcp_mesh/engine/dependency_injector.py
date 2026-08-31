@@ -463,6 +463,36 @@ def _format_unfilled_slots_message(
     )
 
 
+def _job_slots_bound_outside_pairing(
+    func: Callable, mesh_job_positions: Iterable[int]
+) -> set[int]:
+    """MeshJob positions that positional pairing never fills (issue #1550).
+
+    On a ``@mesh.tool(task=True)`` producer the MeshJob slot belongs to
+    the job-dispatch layer, which binds it AFTER dependency injection has
+    run: a ``JobController`` when ``X-Mesh-Job-Id`` rides the call, an
+    explicit ``None`` when the task tool is invoked directly (the
+    documented direct-call contract — not a misconfiguration). Neither
+    outcome is visible from the pairing diagnostics, so they must not
+    report the slot as one that "will remain None".
+
+    Returns the positions to omit from the unfilled-slot REPORT only.
+    Callers must leave ``eligible_positions`` itself untouched — it drives
+    injection, and shrinking it would shift every dep→param pairing.
+    """
+    positions = set(mesh_job_positions)
+    if not positions:
+        return set()
+    try:
+        # Lazy import: mirrors the existing ``maybe_dispatch_as_job``
+        # call sites below — ``job_dispatch`` is imported inside functions
+        # here so the two modules never form a module-level cycle.
+        from .job_dispatch import is_task_tool
+    except Exception:  # noqa: BLE001
+        return set()
+    return positions if is_task_tool(func) else set()
+
+
 def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[int]:
     """
     Analyze function signature and determine McpMeshTool injection positions.
@@ -574,13 +604,30 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
             set(mesh_positions)
             | ({mesh_job_index} if mesh_job_index is not None else set())
         )
-        if len(dependencies) < len(typed_eligible_positions):
+        # Issue #1550: a task=True producer's MeshJob slot is bound by the
+        # job-dispatch layer, never by pairing — promoting it here made
+        # strict mode REFUSE DECORATION of a correctly-written task tool.
+        # Exempt only that slot: an unpaired McpMeshTool parameter on the
+        # same function is still a real misconfiguration and still raises.
+        _exempt = _job_slots_bound_outside_pairing(
+            func, {mesh_job_index} if mesh_job_index is not None else set()
+        )
+        untouched_positions = [
+            pos
+            for pos in typed_eligible_positions[len(dependencies) :]
+            if pos not in _exempt
+        ]
+        if untouched_positions:
             raise StrictDIError(
                 _format_unfilled_slots_message(
                     func_name,
                     typed_eligible_positions,
                     dependencies,
                     [p.name for p in params],
+                    unfilled_param_names=[
+                        params[pos].name if pos < len(params) else f"<arg {pos}>"
+                        for pos in untouched_positions
+                    ],
                 )
             )
 
@@ -808,13 +855,21 @@ def _prepare_injection_kwargs(
     if len(eligible_positions) > len(dependencies):
         unfilled_message = None
         try:
+            # Issue #1550: on a task=True tool the MeshJob slot is filled by
+            # the job-dispatch layer AFTER this point, so it is never
+            # "unfilled" — reported here it named the exact failure mode a
+            # MeshJob author fears and prescribed a fix that would break the
+            # producer. Excluded from the REPORT only: ``eligible_positions``
+            # still drives injection below, unchanged.
+            job_exempt = _job_slots_bound_outside_pairing(func, mesh_job_positions)
             # ``params`` above is resolved from the same original signature
             # the positions came from (#1105), so positions line up — and
             # the message builder bounds-guards regardless.
             genuinely_unfilled = [
                 params[pos] if pos < len(params) else f"<arg {pos}>"
                 for pos in eligible_positions[len(dependencies) :]
-                if not (
+                if pos not in job_exempt
+                and not (
                     pos < len(params)
                     and params[pos] in final_kwargs
                     and final_kwargs.get(params[pos]) is not None
