@@ -42,9 +42,12 @@ export OPENAI_API_KEY=sk-...
     For containerized agents, add `mcp-mesh[litellm]==<version>` to the
     agent's `requirements.txt` so the image build picks it up — `meshctl
     scaffold` writes that pin for you when the selected model is not
-    Anthropic, OpenAI, Gemini or Vertex AI. Without it the agent starts and
-    registers normally and fails on its first LLM call, with an error naming
-    the extra. `vertex_ai/*` is native despite the long-tail-looking name: it
+    Anthropic, OpenAI, Gemini or Vertex AI. Without it the agent refuses to
+    start, with an error naming the extra: a provider knows its model at
+    decoration time, so a configuration that can never serve fails at boot
+    instead of on a consumer's first call. A model a consumer overrides per
+    request is still checked when it is dispatched.
+    `vertex_ai/*` is native despite the long-tail-looking name: it
     runs the same Gemini models through the same bundled SDK, only the auth
     differs (ADC / Workload Identity instead of an AI Studio API key).
 
