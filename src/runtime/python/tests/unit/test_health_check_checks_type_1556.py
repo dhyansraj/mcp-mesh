@@ -23,6 +23,7 @@ through:
 """
 
 import os
+from collections.abc import Mapping
 from typing import Any
 from unittest.mock import patch
 
@@ -158,7 +159,7 @@ class TestTheOperatorIsToldOnce:
         finally:
             _reset_warning()
 
-        lines = [r for r in caplog.records if "not booleans" in r.getMessage()]
+        lines = [r for r in caplog.records if "could not use" in r.getMessage()]
         assert len(lines) == 1
         assert "disk_space" in lines[0].getMessage()
 
@@ -306,6 +307,188 @@ class TestErrorsHasTheSameExposure:
         status = await run_check(health_check)
 
         assert status.errors == ["503", "None"]
+
+
+class TestReadingThePayloadCanItselfRaise:
+    """A ``checks``/``errors`` container that raises when it is READ.
+
+    ``isinstance(raw, Mapping)`` and ``isinstance(raw, Iterable)`` pass for any
+    subclass, so ``raw.items()`` and ``iter(raw)`` are user code — a mapping
+    that computes its entries on demand, or one backed by something that can
+    fail. Both sanitizers run OUTSIDE the handler that catches a failing check,
+    so a raise there escaped into ``fastapi-server-setup`` exactly like the
+    Pydantic one did: an absent agent from a health-check authoring problem,
+    the thing this whole change exists to make impossible.
+    """
+
+    @pytest.mark.asyncio
+    async def test_checks_mapping_whose_items_raises(self):
+        class LazyChecks(Mapping):
+            def items(self):
+                raise RuntimeError("probe results were never computed")
+
+            def __getitem__(self, key):
+                raise RuntimeError("probe results were never computed")
+
+            def __iter__(self):
+                raise RuntimeError("probe results were never computed")
+
+            def __len__(self):
+                return 0
+
+        async def health_check() -> dict:
+            return {"status": "healthy", "checks": LazyChecks()}
+
+        status = await run_check(health_check)
+
+        assert status.status == HealthStatusType.HEALTHY
+        assert status.checks == {"health_check_checks_type": False}
+        reported = " ".join(status.errors)
+        assert "LazyChecks" in reported
+        assert "RuntimeError" in reported
+        assert "never computed" in reported
+
+    @pytest.mark.asyncio
+    async def test_a_mapping_that_raises_part_way_loses_the_whole_map(self):
+        """All-or-nothing, on purpose.
+
+        What survived a half-finished enumeration is an artifact of iteration
+        order, not a subset the author would recognise, and it would differ
+        between one TTL and the next. "None of them, because your mapping
+        raised" is a report; a nondeterministic subset is not.
+        """
+
+        class HalfChecks(Mapping):
+            def items(self):
+                yield ("db", True)
+                raise RuntimeError("cursor died")
+
+            def __getitem__(self, key):
+                raise KeyError(key)
+
+            def __iter__(self):
+                return iter(())
+
+            def __len__(self):
+                return 1
+
+        async def health_check() -> dict:
+            return {"checks": HalfChecks()}
+
+        status = await run_check(health_check)
+
+        assert "db" not in status.checks
+        assert status.checks == {"health_check_checks_type": False}
+
+    @pytest.mark.asyncio
+    async def test_one_unreadable_entry_costs_only_that_entry(self):
+        """An entry is a boundary the author recognises, unlike iteration order.
+
+        So a single bad entry is treated like a single non-bool value: dropped
+        and named, with its neighbours untouched.
+        """
+
+        class MalformedItems(Mapping):
+            def items(self):
+                return [("db", True), ("cache",), ("queue", False)]
+
+            def __getitem__(self, key):
+                raise KeyError(key)
+
+            def __iter__(self):
+                return iter(("db", "cache", "queue"))
+
+            def __len__(self):
+                return 3
+
+        async def health_check() -> dict:
+            return {"checks": MalformedItems()}
+
+        status = await run_check(health_check)
+
+        assert status.checks["db"] is True
+        assert status.checks["queue"] is False
+        assert status.checks["health_check_checks_type"] is False
+        assert len([e for e in status.errors if "Unusable check" in e]) == 1
+
+    @pytest.mark.asyncio
+    async def test_the_message_says_what_happened(self):
+        """A raise is not a type mismatch, and must not be described as one."""
+
+        class LazyChecks(Mapping):
+            def items(self):
+                raise ConnectionError("redis is down")
+
+            def __getitem__(self, key):
+                raise KeyError(key)
+
+            def __iter__(self):
+                return iter(())
+
+            def __len__(self):
+                return 0
+
+        async def health_check() -> dict:
+            return {"checks": LazyChecks()}
+
+        status = await run_check(health_check)
+
+        reported = " ".join(status.errors)
+        assert "ConnectionError: redis is down" in reported
+        assert "not a bool" not in reported
+
+    @pytest.mark.asyncio
+    async def test_errors_iterable_whose_iter_raises(self):
+        class LazyErrors:
+            def __iter__(self):
+                raise RuntimeError("error log was rotated away")
+
+        async def health_check() -> dict:
+            return {"status": "unhealthy", "errors": LazyErrors()}
+
+        status = await run_check(health_check)
+
+        # The verdict still stands — an unreadable detail never re-decides it.
+        assert status.status == HealthStatusType.UNHEALTHY
+        reported = " ".join(status.errors)
+        assert "LazyErrors" in reported
+        assert "rotated away" in reported
+
+    @pytest.mark.asyncio
+    async def test_the_startup_seed_still_produces_a_result(self):
+        """The crash site: the call ``_add_k8s_endpoints`` makes at startup.
+
+        If this raises, the pipeline step dies and the agent never registers —
+        which is the whole failure mode, reached through a different door.
+        """
+
+        class LazyChecks(Mapping):
+            def items(self):
+                raise RuntimeError("probe results were never computed")
+
+            def __getitem__(self, key):
+                raise KeyError(key)
+
+            def __iter__(self):
+                return iter(())
+
+            def __len__(self):
+                return 0
+
+        async def health_check() -> dict:
+            return {"status": "healthy", "checks": LazyChecks()}
+
+        result = await refresh_health_once(
+            agent_name="checks-agent",
+            health_check_fn=health_check,
+            agent_config=AGENT_CONFIG,
+            startup_context={},
+            ttl_seconds=15,
+            publish_to_core=False,
+        )
+
+        assert result["status"] == "healthy"
+        assert result["checks"]["health_check_checks_type"] is False
 
 
 class TestTheStepIsRequired:

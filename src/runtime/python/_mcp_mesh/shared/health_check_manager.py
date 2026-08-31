@@ -49,8 +49,14 @@ _INTEGER_RE = re.compile(r"^[+-]?\d+$", re.ASCII)
 # warning stays one readable line.
 _WARNING_VALUE_LIMIT = 32
 
+# An exception message is not a value being identified, it IS the explanation,
+# so it gets room to be one — still bounded, for the same reason.
+_WARNING_MESSAGE_LIMIT = 200
 
-def _for_warning(value: Any, *, quote: bool = False) -> str:
+
+def _for_warning(
+    value: Any, *, quote: bool = False, limit: int = _WARNING_VALUE_LIMIT
+) -> str:
     """Render a value for a rejection message without raising or flooding the log.
 
     Interpolating a value is not safe by default here. Python 3.11 caps
@@ -74,8 +80,8 @@ def _for_warning(value: Any, *, quote: bool = False) -> str:
             return f"<{type(value).__name__} with ~{digits} digits>"
         return f"<unprintable {type(value).__name__}>"
 
-    if len(text) > _WARNING_VALUE_LIMIT:
-        return f"{text[:_WARNING_VALUE_LIMIT]}… ({len(text)} chars)"
+    if len(text) > limit:
+        return f"{text[:limit]}… ({len(text)} chars)"
     return text
 
 
@@ -310,12 +316,36 @@ def _as_text(value: Any) -> str:
         return f"<unprintable {type(value).__name__}>"
 
 
+def _describe_exception(exc: BaseException) -> str:
+    """Name a raise in a rejection message, without raising in turn.
+
+    ``_as_text`` survives a broken ``__str__`` and ``_for_warning`` caps the
+    length, so an exception carrying a megabyte of context is still one line.
+    """
+    text = _for_warning(_as_text(exc), limit=_WARNING_MESSAGE_LIMIT)
+    return f"{type(exc).__name__}: {text}"
+
+
 def _sanitize_checks(raw: Any) -> tuple[dict[str, bool], list[str]]:
     """Split ``checks`` into what the result can carry and what it cannot.
 
     Returns ``(checks, rejections)``. ``rejections`` is empty for every payload
     that already worked; when it is not, each entry names the offending check
     and its type so the operator can find it in their own code.
+
+    ``isinstance(raw, Mapping)`` passes for any Mapping subclass, including one
+    that computes its entries on demand — so reading it is itself a user code
+    path that can raise, in the same place and with the same consequence as the
+    wrong value type this function exists for. Reading is guarded twice, at two
+    different granularities:
+
+    * enumerating the mapping is all-or-nothing. A mapping that raises part way
+      through has no defined content: what survived is an artifact of iteration
+      order, so keeping it would put a different subset of the checks on
+      /health from one TTL to the next. The whole map is dropped and the raise
+      reported, which is what the non-Mapping branch above already does.
+    * one entry is a boundary the author recognises, so a single unreadable
+      entry costs only that entry — exactly like a single non-bool value.
     """
     if raw is None:
         return {}, []
@@ -326,16 +356,35 @@ def _sanitize_checks(raw: Any) -> tuple[dict[str, bool], list[str]]:
             f"{type(raw).__name__}."
         ]
 
+    try:
+        # Materialized here so a generator that raises half way through counts
+        # as an enumeration failure rather than aborting the loop below.
+        items = list(raw.items())
+    except Exception as e:
+        return {}, [
+            f"Unusable `checks`: reading the {type(raw).__name__} raised "
+            f"{_describe_exception(e)}."
+        ]
+
     checks: dict[str, bool] = {}
     rejections: list[str] = []
-    for key, value in raw.items():
-        name = key if isinstance(key, str) else _as_text(key)
+    for item in items:
+        name = "<unreadable>"
         try:
+            key, value = item
+            name = key if isinstance(key, str) else _as_text(key)
             checks[name] = _CHECK_VALUE_ADAPTER.validate_python(value)
         except ValidationError:
             rejections.append(
                 f"Unusable check '{name}': {_for_warning(value, quote=True)} is "
                 f"a {type(value).__name__}, not a bool."
+            )
+        except Exception as e:
+            # Broad, and deliberately not narrowed to ValidationError: the
+            # message has to describe what happened, and "raised TypeError" is
+            # a different fact from "is a str, not a bool".
+            rejections.append(
+                f"Unusable check '{name}': reading it raised {_describe_exception(e)}."
             )
     return checks, rejections
 
@@ -347,13 +396,26 @@ def _sanitize_errors(raw: Any) -> list[str]:
     a bare string instead of a list — raised in exactly the same place as an
     unusable ``checks`` value. Stringifying is lossless for text and is what
     the author meant, so this coerces quietly rather than reporting.
+
+    ``isinstance(raw, Iterable)`` has the same reach as the Mapping test above:
+    it passes for anything with an ``__iter__``, and consuming it runs user
+    code that can raise. When it does there is nothing left to carry, so the
+    raise itself becomes the one error — visible on /health, which is where an
+    operator looks for what the check reported.
     """
     if raw is None:
         return []
     if isinstance(raw, str):
         return [raw]
     if isinstance(raw, Iterable):
-        return [e if isinstance(e, str) else _as_text(e) for e in raw]
+        try:
+            entries = list(raw)
+        except Exception as e:
+            return [
+                f"Unusable `errors`: reading the {type(raw).__name__} raised "
+                f"{_describe_exception(e)}."
+            ]
+        return [e if isinstance(e, str) else _as_text(e) for e in entries]
     return [_as_text(raw)]
 
 
@@ -372,10 +434,14 @@ def _warn_unusable_checks_once(agent_id: str, rejections: list[str]) -> None:
             return
         _unusable_checks_warning_logged = True
     logger.warning(
-        "Health check for '%s' reported check results that are not booleans: "
-        "%s The agent keeps serving and its status is unchanged; the unusable "
-        "entries are dropped and reported on /health. `checks` maps a check "
-        "name to True or False.",
+        # Not "that are not booleans": a `checks` mapping that RAISED when it
+        # was read reaches here too, and did not report a non-boolean anything.
+        # The rejections carry the specific fact; this line must not contradict
+        # them with a diagnosis of its own.
+        "Health check for '%s' reported check results the runtime could not "
+        "use: %s The agent keeps serving and its status is unchanged; the "
+        "unusable entries are dropped and reported on /health. `checks` maps a "
+        "check name to True or False.",
         agent_id,
         " ".join(rejections),
     )
