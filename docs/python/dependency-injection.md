@@ -111,8 +111,8 @@ For LLM agent injection in `@mesh.llm` decorated functions:
 
 ```python
 @mesh.llm(...)
-def smart_tool(ctx: Context, llm: mesh.MeshLlmAgent = None):
-    response = llm("Process this request")
+async def smart_tool(ctx: Context, llm: mesh.MeshLlmAgent = None):
+    response = await llm("Process this request")
 ```
 
 ## Graceful Degradation

@@ -164,8 +164,8 @@ Enables LLM-powered tools with automatic tool discovery.
     capability="smart_assistant",
     description="LLM-powered assistant",
 )
-def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> AssistResponse:
-    return llm("Help the user with their request")
+async def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> AssistResponse:
+    return await llm("Help the user with their request")
 ```
 
 **Note**: Response format is determined by return type: `-> str` for text, `-> PydanticModel` for JSON. Use `response_model` to make the LLM emit a focused subset (validated against that model) while the return annotation still drives the tool's `outputSchema`; when omitted, the LLM schema falls back to the return annotation.

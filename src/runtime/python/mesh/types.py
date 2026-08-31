@@ -401,12 +401,12 @@ class MeshLlmAgent(Protocol):
             model="claude-3-5-sonnet-20241022"
         )
         @mesh.tool(capability="chat")
-        def chat(message: str, llm: MeshLlmAgent = None) -> ChatResponse:
+        async def chat(message: str, llm: MeshLlmAgent = None) -> ChatResponse:
             # Optional: Override system prompt
             llm.set_system_prompt("You are a helpful document assistant.")
 
             # Execute automatic agentic loop
-            return llm(message)
+            return await llm(message)
 
     Configuration Hierarchy:
         - Provider always comes from the decorator's ``provider={...}`` filter
@@ -435,7 +435,7 @@ class MeshLlmAgent(Protocol):
         """
         ...
 
-    def __call__(self, message: str | list[dict[str, Any]], **kwargs) -> Any:
+    async def __call__(self, message: str | list[dict[str, Any]], **kwargs) -> Any:
         """
         Execute automatic agentic loop and return typed response.
 
@@ -462,7 +462,7 @@ class MeshLlmAgent(Protocol):
             ToolExecutionError: If tool execution fails during agentic loop
 
         Example (single-turn):
-            response = llm("Analyze this document: /path/to/file.pdf")
+            response = await llm("Analyze this document: /path/to/file.pdf")
             # Returns ChatResponse(answer="...", confidence=0.95)
 
         Example (multi-turn):
@@ -471,7 +471,7 @@ class MeshLlmAgent(Protocol):
                 {"role": "assistant", "content": "I'd be happy to help! What do you need?"},
                 {"role": "user", "content": "How do I read a file?"}
             ]
-            response = llm(messages)
+            response = await llm(messages)
             # Returns ChatResponse with contextual answer
         """
         ...
@@ -544,8 +544,8 @@ try:
                 context_param="ctx"
             )
             @mesh.tool(capability="chat")
-            def chat(message: str, ctx: ChatContext, llm: MeshLlmAgent = None):
-                return llm(message)  # Template auto-rendered with ctx!
+            async def chat(message: str, ctx: ChatContext, llm: MeshLlmAgent = None):
+                return await llm(message)  # Template auto-rendered with ctx!
 
         Field Descriptions in LLM Chains:
             When a specialist LLM agent has MeshContextModel parameters, the Field
@@ -637,8 +637,8 @@ class MeshLlmRequest:
 
         Consumer side (future with provider=dict):
             @mesh.llm(provider={"capability": "llm", "tags": ["claude"]})
-            def chat(message: str, llm: MeshLlmAgent = None):
-                return llm(message)  # Converts to MeshLlmRequest internally
+            async def chat(message: str, llm: MeshLlmAgent = None):
+                return await llm(message)  # Converts to MeshLlmRequest internally
 
     Attributes:
         messages: List of message dicts with "role" and "content" keys (and optionally "tool_calls")
