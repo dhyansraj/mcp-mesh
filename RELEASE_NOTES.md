@@ -1,6 +1,21 @@
 # MCP Mesh Release Notes
 
-[Unreleased changes](https://github.com/dhyansraj/mcp-mesh/compare/v3.7.0...HEAD)
+[Unreleased changes](https://github.com/dhyansraj/mcp-mesh/compare/v3.7.1...HEAD)
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.7.0...v3.7.1)
+
+## v3.7.1 (2026-08-31)
+
+Six fixes, every one a first-week report against 3.7.0. Three are the same shape — something failed silently instead of saying so: an agent that registered nowhere while its probes answered 200, a provider that waited until its first LLM call to report a missing dependency, and two diagnostics that other fixes in this release removed as a side effect. All Python. No wire-protocol, registry-schema, dependency-resolution or declaration-syntax changes.
+
+### 🐍 Python
+
+- **Annotations are resolved before injectable types are matched (#1552, closes #1548).** Under `from __future__ import annotations` every annotation is a string, so `@mesh.llm` rejected a parameter typed exactly as its own error message demanded, and a string return annotation silently stopped configuring structured output while warning that a perfectly good model was not a `BaseModel`.
+- **A task tool's job slot is no longer reported as an unfilled dependency (#1553, closes #1550).** A `@mesh.tool(task=True)` producer with a `MeshJob` parameter was told on every call that the parameter would remain `None` — the dispatcher fills it either way — and under `MCP_MESH_STRICT_DI` the same check stopped the producer from being decorated at all.
+- **The Python scaffold and the `MeshLlmAgent` Protocol await the injected agent (#1554, closes #1549).** Both declared a sync call against an `async def`, so anything other than `return llm(...)` as the final statement got a coroutine rather than a result. The same sync form was corrected in the README template, docs and man pages that taught it.
+- **A provider whose model needs LiteLLM now fails at startup when it is absent (#1555, closes #1551).** It used to register healthy, be resolved by consumers, and fail on its first call, though the model is known at decoration time; native Anthropic, OpenAI and Gemini models never reach the import, so the extra stays optional.
+- **A non-bool value in a health check's `checks` dict made the agent absent rather than unhealthy (#1557, closes #1556).** `{"disk_space": "ok"}` escaped the whole health path, leaving a process that answered `/livez` and `/startupz` 200, never registered and was never restarted. Unusable values are now dropped and named in `errors`, and a failure in that startup step exits instead of serving probes for an agent that will never register.
+- **Two operator signals are restored (#1559, closes #1558).** #1552 silenced the warning for an unresolvable type hint and #1555 consumed the log line naming which provider handler serves a vendor — both removed as a side effect, both caught by a full integration run rather than review. Runtime behaviour is unchanged either way.
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.6.0...v3.7.0)
 

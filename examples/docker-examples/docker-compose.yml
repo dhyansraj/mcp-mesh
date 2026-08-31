@@ -2,12 +2,12 @@
 # Demonstrates Go registry + Python agents architecture using published Docker images
 #
 # Services:
-# - registry: Go-based registry with SQLite storage (mcpmesh/registry:3.7.0)
-# - hello-world-agent: Python agent with greeting capabilities (mcpmesh/python-runtime:3.7.0)
-# - system-agent: Python agent with system monitoring capabilities (mcpmesh/python-runtime:3.7.0)
-# - fastmcp-agent: FastMCP service with mesh integration (mcpmesh/python-runtime:3.7.0)
-# - dependent-agent: Service that depends on fastmcp-agent (mcpmesh/python-runtime:3.7.0)
-# - fastapi-app: FastAPI application with mesh integration (mcpmesh/python-runtime:3.7.0)
+# - registry: Go-based registry with SQLite storage (mcpmesh/registry:3.7.1)
+# - hello-world-agent: Python agent with greeting capabilities (mcpmesh/python-runtime:3.7.1)
+# - system-agent: Python agent with system monitoring capabilities (mcpmesh/python-runtime:3.7.1)
+# - fastmcp-agent: FastMCP service with mesh integration (mcpmesh/python-runtime:3.7.1)
+# - dependent-agent: Service that depends on fastmcp-agent (mcpmesh/python-runtime:3.7.1)
+# - fastapi-app: FastAPI application with mesh integration (mcpmesh/python-runtime:3.7.1)
 #
 # Usage:
 #   docker-compose up
@@ -69,7 +69,7 @@ services:
 
   # Go-based registry service (built locally)
   registry:
-    image: mcpmesh/registry:3.7.0
+    image: mcpmesh/registry:3.7.1
     container_name: mcp-mesh-registry
     ports:
       - "8000:8000"
@@ -115,7 +115,7 @@ services:
 
   # Hello World Python agent - built locally
   hello-world-agent:
-    image: mcpmesh/python-runtime:3.7.0
+    image: mcpmesh/python-runtime:3.7.1
     container_name: mcp-mesh-hello-world
     hostname: hello-world-agent
     ports:
@@ -168,7 +168,7 @@ services:
 
   # System Agent Python service - built locally
   system-agent:
-    image: mcpmesh/python-runtime:3.7.0
+    image: mcpmesh/python-runtime:3.7.1
     container_name: mcp-mesh-system-agent
     hostname: system-agent
     ports:
@@ -221,7 +221,7 @@ services:
 
   # FastMCP Agent with mesh integration - built locally
   fastmcp-agent:
-    image: mcpmesh/python-runtime:3.7.0
+    image: mcpmesh/python-runtime:3.7.1
     container_name: mcp-mesh-fastmcp-agent
     hostname: fastmcp-agent
     ports:
@@ -274,7 +274,7 @@ services:
 
   # Dependent Agent that uses FastMCP agent's time service - built locally
   dependent-agent:
-    image: mcpmesh/python-runtime:3.7.0
+    image: mcpmesh/python-runtime:3.7.1
     container_name: mcp-mesh-dependent-agent
     hostname: dependent-agent
     ports:
@@ -327,7 +327,7 @@ services:
 
   # FastAPI App with mesh integration - built locally
   fastapi-app:
-    image: mcpmesh/python-runtime:3.7.0
+    image: mcpmesh/python-runtime:3.7.1
     container_name: mcp-mesh-fastapi-app
     hostname: fastapi-app
     ports:
@@ -380,7 +380,7 @@ services:
 
   # Simple FastAPI Router App (Maya-style APIRouter pattern) - built locally
   simple-router-app:
-    image: mcpmesh/python-runtime:3.7.0
+    image: mcpmesh/python-runtime:3.7.1
     container_name: mcp-mesh-simple-router-app
     hostname: simple-router-app
     ports:
@@ -433,7 +433,7 @@ services:
 
   # LLM With Deps Agent - demonstrates both static dependencies AND LLM provider
   llm-with-deps-agent:
-    image: mcpmesh/python-runtime:3.7.0
+    image: mcpmesh/python-runtime:3.7.1
     container_name: mcp-mesh-llm-with-deps
     hostname: llm-with-deps-agent
     ports:
@@ -485,7 +485,7 @@ services:
 
   # OpenAI LLM Provider - Provides OpenAI GPT API access to mesh
   openai-provider:
-    image: mcpmesh/python-runtime:3.7.0
+    image: mcpmesh/python-runtime:3.7.1
     container_name: mcp-mesh-openai-provider
     hostname: openai-provider
     ports:
@@ -539,7 +539,7 @@ services:
 
   # Claude LLM Provider - Provides Anthropic Claude API access to mesh
   claude-provider:
-    image: mcpmesh/python-runtime:3.7.0
+    image: mcpmesh/python-runtime:3.7.1
     container_name: mcp-mesh-claude-provider
     hostname: claude-provider
     ports:
