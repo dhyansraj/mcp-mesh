@@ -5,6 +5,7 @@ Function signature analysis for MCP Mesh dependency injection.
 import inspect
 import logging
 import re
+import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Optional, get_type_hints
@@ -179,17 +180,30 @@ def _annotation_mentions(param_type: Any, *names: str) -> bool:
     return any(token in names for token in _IDENTIFIER_RE.findall(param_type))
 
 
-def describe_unresolved_annotations(func: Any) -> str:
+def describe_unresolved_annotations(
+    func: Any, resolved: dict[str, Any] | None = None
+) -> str:
     """Render the parameters whose annotations stayed strings after
     :func:`resolve_param_annotations`, or ``""`` when every annotation resolved.
 
     Used to append an accurate cause to "no parameter of type X" errors: a
     string annotation means the name was not importable at module scope, which
     is nothing like the "you forgot the parameter" the bare message implies.
+
+    ``resolved`` lets a caller that already ran the ladder pass its mapping in
+    rather than resolve twice; omitted, it is computed here. A mapping that
+    still carries the ``return`` key (i.e. one from
+    :func:`_resolve_param_annotations`, which does not drop it) reports the
+    **return** annotation too, labelled "return type" so a message listing only
+    that one still reads as an annotation. An unresolvable return is the same
+    authoring error — see :func:`resolve_return_annotation` for what a
+    surviving string does to an ``@mesh.llm`` output type.
     """
+    if resolved is None:
+        resolved = resolve_param_annotations(func)
     unresolved = [
-        f"{name}: {value!r}"
-        for name, value in resolve_param_annotations(func).items()
+        f"{'return type' if name == _RETURN_KEY else name}: {value!r}"
+        for name, value in resolved.items()
         if isinstance(value, str)
     ]
     if not unresolved:
@@ -200,6 +214,75 @@ def describe_unresolved_annotations(func: Any) -> str:
         f"is a string, and the name must be importable at module scope — not "
         f"only under `if TYPE_CHECKING:`."
     )
+
+
+#: Functions already reported by :func:`_warn_unresolved_annotations`, keyed by
+#: IDENTITY. The function object is the stable key: the only caller is
+#: :func:`_scan_params`, which unwraps to the original with
+#: :func:`_get_original_func` BEFORE warning, so the several scans of one
+#: function (once per predicate at decoration, then again on every
+#: dependency-resolution pass) all present the same object however it was
+#: wrapped. ``module.qualname`` would be the collision-prone key, not the safe
+#: one: every closure a factory returns shares one qualname
+#: (``make.<locals>.handler``), and a function built by ``exec`` has
+#: ``__module__`` None — so ten broken generated tools would report as one.
+#: Under-reporting a second authoring error is the silence this warning exists
+#: to remove. Weak, so latching a function does not keep it alive; process-wide,
+#: like the other warn-once latches in the runtime.
+_unresolved_warned: weakref.WeakSet[Any] = weakref.WeakSet()
+
+
+def _warn_unresolved_annotations(func: Any, resolved: dict[str, Any]) -> None:
+    """Warn ONCE per function when an annotation survived the resolution ladder
+    as a bare string.
+
+    Restores the operator signal #1552 removed (issue #1558). Before it,
+    ``get_type_hints`` raised on an unresolvable annotation and the caller's
+    ``except`` logged "Failed to analyze signature for …"; the ladder's last
+    rung — match the annotation as written — means such a parameter now reaches
+    the classifier as a string, matches no mesh type, and is skipped in
+    silence. Keeping that rung is right (without it a ``TYPE_CHECKING``-only
+    import hard-fails at import, which is #1548 relocated), but a broken type
+    hint is an authoring error the author has to be told about.
+
+    Warn-once, not warn-per-scan: this is a startup-time authoring error whose
+    text does not change, and the scan runs several times per function (once
+    per predicate, then again on every dependency-resolution pass). Warning
+    every time would repeat one message for the life of the process.
+
+    The message deliberately keeps the historical "Failed to analyze signature
+    for <func>" prefix: it is the same condition being reported, in the same
+    words operators and the tc24 integration test already grep for.
+
+    ``resolved`` is the mapping from :func:`_resolve_param_annotations`, return
+    annotation included: one message covers every unresolvable annotation on the
+    signature, parameters and return alike.
+
+    Never raises. It is a diagnostic hanging off a scan whose result is a
+    function's typed DI slots; letting it fail that scan would turn a logging
+    call into a functional outage (#1558).
+    """
+    try:
+        if not any(isinstance(value, str) for value in resolved.values()):
+            return
+
+        if func in _unresolved_warned:
+            return
+        try:
+            _unresolved_warned.add(func)
+        except TypeError:
+            # Not weak-referenceable (a ``__slots__`` callable, say). Without a
+            # latch entry the same error is reported on every scan — the right
+            # side to fail on, since the alternative is not reporting it.
+            pass
+
+        logger.warning(
+            "Failed to analyze signature for %s:%s",
+            func,
+            describe_unresolved_annotations(func, resolved),
+        )
+    except Exception as e:
+        logger.debug("Unresolved-annotation diagnostic failed for %r: %s", func, e)
 
 
 def _is_mesh_tool_type(param_type: Any) -> bool:
@@ -404,9 +487,12 @@ def _scan_params(
     classifier predicate and whether positions (0-indexed) or names are
     returned (``want="positions"`` or ``want="names"``).
 
-    Annotations are resolved through :func:`resolve_param_annotations` (#1548)
-    so a module using ``from __future__ import annotations`` — where every
-    annotation is a string — is classified the same as one without it.
+    Annotations are resolved through the ladder behind
+    :func:`resolve_param_annotations` (#1548) so a module using ``from
+    __future__ import annotations`` — where every annotation is a string — is
+    classified the same as one without it. An annotation the ladder could not
+    resolve is reported once per function by
+    :func:`_warn_unresolved_annotations` rather than skipped in silence (#1558).
 
     The broad ``except Exception`` is intentional: any introspection failure
     (weird callables, a signature that cannot be taken at all) is logged at
@@ -416,7 +502,13 @@ def _scan_params(
     """
     try:
         func = _get_original_func(func)
-        resolved_annotations = resolve_param_annotations(func)
+        # The private resolver, because it keeps the ``return`` key: an
+        # unresolvable RETURN annotation is the same authoring error as an
+        # unresolvable parameter, and the diagnostic below is the only thing
+        # that reports it now that ``get_type_hints`` no longer raises out of
+        # here. The key cannot shadow a parameter — ``return`` is a keyword —
+        # so the classification loop is unaffected by carrying it.
+        resolved_annotations = _resolve_param_annotations(func)[0]
         sig = inspect.signature(func)
 
         result: list = []
@@ -425,12 +517,19 @@ def _scan_params(
                 continue
             if predicate(resolved_annotations[param_name]):
                 result.append(i if want == "positions" else param_name)
-        return result
 
     except Exception as e:
         # If we can't analyze the signature, return empty list
         logger.warning(f"Failed to analyze signature for {func}: {e}")
         return []
+
+    # Deliberately outside the ``try`` (#1558): the scan's result is already
+    # final here, so no failure of a *diagnostic* can reach the ``except``
+    # above and drop every typed DI slot on this function. The callee is
+    # additionally raise-proof; both, because a logging call must not be able
+    # to become an outage.
+    _warn_unresolved_annotations(func, resolved_annotations)
+    return result
 
 
 @dataclass(frozen=True)

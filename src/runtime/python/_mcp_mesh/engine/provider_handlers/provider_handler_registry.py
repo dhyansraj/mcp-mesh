@@ -135,8 +135,7 @@ class ProviderHandlerRegistry:
             # Get generic fallback
             handler = ProviderHandlerRegistry.get_handler("unknown")
         """
-        # Normalize vendor name (handle None, empty string)
-        vendor = (vendor or "unknown").lower().strip()
+        vendor = cls._normalize_vendor(vendor)
 
         # Check cache first
         if vendor in cls._instances:
@@ -144,28 +143,73 @@ class ProviderHandlerRegistry:
             return cls._instances[vendor]
 
         # Get handler class (or fallback to Generic)
+        handler_class = cls._handler_class(vendor)
         if vendor in cls._handlers:
-            handler_class = cls._handlers[vendor]
             logger.info(f"✅ Selected {handler_class.__name__} for vendor: {vendor}")
+        elif vendor != "unknown":
+            logger.warning(
+                f"⚠️  No specific handler for vendor '{vendor}', using GenericHandler"
+            )
         else:
-            handler_class = GenericHandler
-            if vendor != "unknown":
-                logger.warning(
-                    f"⚠️  No specific handler for vendor '{vendor}', using GenericHandler"
-                )
-            else:
-                logger.debug("Using GenericHandler for unknown vendor")
+            logger.debug("Using GenericHandler for unknown vendor")
 
         # Instantiate and cache
-        handler = (
-            handler_class()
-            if handler_class != GenericHandler
-            else GenericHandler(vendor)
-        )
+        handler = cls._instantiate(handler_class, vendor)
         cls._instances[vendor] = handler
 
         logger.debug(f"🆕 Instantiated handler: {handler}")
         return handler
+
+    @classmethod
+    def probe_handler(cls, vendor: str | None = None) -> BaseProviderHandler:
+        """Get a handler instance for a question asked OUTSIDE a dispatch.
+
+        Same handler :meth:`get_handler` would return, with neither of its two
+        side effects: the cache is not warmed and the "✅ Selected …" INFO line
+        is not emitted. Returns the cached singleton when one already exists,
+        otherwise a transient instance (handlers are stateless — per-request
+        state lives in ContextVars precisely because they are cached as
+        singletons — so a throwaway answers the same questions).
+
+        Why the side effects matter (issue #1558). The selection line is the
+        once-per-vendor record of *which handler will serve*, and it fires on
+        cache miss — so it lands wherever the FIRST caller happens to be. A
+        startup-time question that warms the cache moves that record from the
+        dispatch it describes to import time, and every later dispatch takes
+        the cache-hit branch and logs at DEBUG, which an operator's log does
+        not capture. The #1551 startup assertion in ``mesh.helpers.llm_provider``
+        is exactly such a caller.
+
+        Same shape of reasoning as ``native_dispatch_blocker()`` vs
+        ``has_native()`` in ``BaseProviderHandler``: asking a dispatch-time
+        question early must not consume the dispatch-time record.
+        """
+        vendor = cls._normalize_vendor(vendor)
+        cached = cls._instances.get(vendor)
+        if cached is not None:
+            return cached
+        return cls._instantiate(cls._handler_class(vendor), vendor)
+
+    @staticmethod
+    def _normalize_vendor(vendor: str | None) -> str:
+        """Normalize a vendor name (handles None and empty string)."""
+        return (vendor or "unknown").lower().strip()
+
+    @classmethod
+    def _handler_class(cls, vendor: str) -> type[BaseProviderHandler]:
+        """Handler class registered for a NORMALIZED vendor, else GenericHandler."""
+        return cls._handlers.get(vendor, GenericHandler)
+
+    @classmethod
+    def _instantiate(
+        cls, handler_class: type[BaseProviderHandler], vendor: str
+    ) -> BaseProviderHandler:
+        """Construct a handler. GenericHandler alone needs the vendor name."""
+        return (
+            handler_class()
+            if handler_class is not GenericHandler
+            else GenericHandler(vendor)
+        )
 
     @classmethod
     def list_vendors(cls) -> dict[str, str]:
