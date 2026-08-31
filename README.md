@@ -115,9 +115,9 @@ app = FastMCP("ClaudeWeather")
     provider={"capability": "llm", "tags": ["+claude"]},
 )
 @mesh.tool(capability="weather", tags=["+claude"])
-def weather(destination: str, dates: str,
-            llm: mesh.MeshLlmAgent = None) -> Forecast:
-    return llm(f"Forecast for {destination} on {dates}")
+async def weather(destination: str, dates: str,
+                  llm: mesh.MeshLlmAgent = None) -> Forecast:
+    return await llm(f"Forecast for {destination} on {dates}")
 
 @mesh.agent(name="claude-weather", auto_run=True)
 class Agent: pass

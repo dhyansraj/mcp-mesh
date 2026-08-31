@@ -86,8 +86,8 @@ Other agents can use this provider with the `@mesh.llm` decorator:
     context_param="ctx",
 )
 @mesh.tool(...)
-def my_llm_tool(ctx: MyContext, llm: mesh.MeshLlmAgent = None):
-    return llm("Process this request")
+async def my_llm_tool(ctx: MyContext, llm: mesh.MeshLlmAgent = None):
+    return await llm("Process this request")
 ```
 
 ## Project Structure

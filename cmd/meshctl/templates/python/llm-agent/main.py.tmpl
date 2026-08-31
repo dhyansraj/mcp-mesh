@@ -117,7 +117,7 @@ class {{ toPascalCase .Name }}Response(BaseModel):
     version="1.0.0",
     tags={{ if .Tags }}{{ toJSON .Tags }}{{ else }}["llm"]{{ end }},
 )
-def {{ toSnakeCase .Name }}(
+async def {{ toSnakeCase .Name }}(
     {{ .ContextParam }}: {{ toPascalCase .Name }}Context,
     llm: mesh.MeshLlmAgent = None,
 ){{ if eq .ResponseFormat "json" }} -> {{ toPascalCase .Name }}Response{{ else }} -> str{{ end }}:
@@ -132,9 +132,9 @@ def {{ toSnakeCase .Name }}(
         {{ if eq .ResponseFormat "json" }}Structured response with processing results{{ else }}Processing result as text{{ end }}
     """
     # To pass media (images, PDFs) to the LLM:
-    # return llm("Analyze this image", media=["file:///tmp/photo.png"])
-    # return llm("What is this?", media=[(png_bytes, "image/png")])
-    return llm("Process the input based on the context provided")
+    # return await llm("Analyze this image", media=["file:///tmp/photo.png"])
+    # return await llm("What is this?", media=[(png_bytes, "image/png")])
+    return await llm("Process the input based on the context provided")
 
 
 @mesh.agent(
