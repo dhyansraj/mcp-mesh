@@ -196,10 +196,12 @@ class ProviderHandlerRegistry:
 
         Deliberately class-level. It answers "is a native adapter *wired up*
         for this vendor", not "would this call dispatch natively right now" —
-        the latter is ``has_native()``, which additionally imports the vendor
-        SDK and honours ``MCP_MESH_NATIVE_LLM``. Callers that need a cheap,
-        side-effect-free, env-independent verdict (e.g. the startup assertion
-        in ``mesh.helpers.llm_provider``) want this one.
+        the latter is ``has_native()`` / ``native_dispatch_blocker()``, which
+        additionally import the vendor SDK and honour ``MCP_MESH_NATIVE_LLM``.
+        Callers that need a cheap, side-effect-free, env-independent verdict
+        want this one; the #1551 startup assertion in
+        ``mesh.helpers.llm_provider`` asks both, in that order, because a
+        vendor with an adapter wired up can still fall back at runtime.
 
         A vendor added at runtime via ``register()`` appears here only if its
         handler actually overrides ``_native_module``; a plain

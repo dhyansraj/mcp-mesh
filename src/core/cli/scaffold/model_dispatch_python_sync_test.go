@@ -1,6 +1,7 @@
 package scaffold
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -56,8 +57,9 @@ func TestGoNativeVendorsMatchPythonRegistry(t *testing.T) {
 	require.Len(t, blockMatch, 2,
 		"could not locate the _handlers mapping in %s", registryPath)
 
-	entryRe := regexp.MustCompile(`"([\w_]+)":\s*(\w+)`)
-	entries := entryRe.FindAllStringSubmatch(blockMatch[1], -1)
+	entries, err := parsePythonHandlerEntries(blockMatch[1])
+	require.NoError(t, err,
+		"could not read the _handlers mapping in %s: %v", registryPath, err)
 	require.NotEmpty(t, entries, "parsed no vendors out of the _handlers mapping")
 
 	// A handler ships a native adapter exactly when it overrides
@@ -67,7 +69,7 @@ func TestGoNativeVendorsMatchPythonRegistry(t *testing.T) {
 	pythonNative := map[string]bool{}
 	nativeByClass := map[string]bool{}
 	for _, e := range entries {
-		vendor, class := e[1], e[2]
+		vendor, class := e.vendor, e.handlerClass
 
 		isNative, seen := nativeByClass[class]
 		if !seen {
@@ -103,6 +105,117 @@ func TestGoNativeVendorsMatchPythonRegistry(t *testing.T) {
 			"mcp-mesh[litellm] pin, and since #1551 such an agent fails to "+
 			"start. A vendor present only here pins an extra it never loads.",
 		"src/core/cli/scaffold/model_dispatch.go", registryPath)
+}
+
+// TestPythonHandlerEntriesRejectUnreadableLines is the test for the test above.
+//
+// TestGoNativeVendorsMatchPythonRegistry compares a set it RECONSTRUCTS, so its
+// green is only worth as much as the reconstruction: an entry it cannot read is
+// an entry it does not compare, and nothing about the result would say so. The
+// forms below are not hypothetical Python — they are ordinary things a
+// maintainer might write in that mapping — and each one must stop the run
+// rather than shrink the set it is checking.
+func TestPythonHandlerEntriesRejectUnreadableLines(t *testing.T) {
+	unreadable := map[string]string{
+		"parenthesized value":  `"anthropic": (ClaudeHandler),`,
+		"call expression":      `"anthropic": pick_handler(),`,
+		"attribute access":     `"anthropic": handlers.ClaudeHandler,`,
+		"conditional value":    `"anthropic": ClaudeHandler if x else GenericHandler,`,
+		"value on next line":   `"anthropic":`,
+		"dict spread":          `**_EXTRA_HANDLERS,`,
+		"two entries one line": `"anthropic": ClaudeHandler, "openai": OpenAIHandler,`,
+		"single-quoted key":    `'anthropic': ClaudeHandler,`,
+	}
+
+	for name, line := range unreadable {
+		t.Run(name, func(t *testing.T) {
+			block := "\n        \"openai\": OpenAIHandler,\n        " + line + "\n"
+
+			entries, err := parsePythonHandlerEntries(block)
+
+			require.Error(t, err,
+				"parsed %q as if the mapping held only the entries it "+
+					"recognized. The vendor on that line would be missing from "+
+					"the reconstructed set and the drift comparison would pass "+
+					"without it — the failure this guard exists to make "+
+					"impossible.", line)
+			require.Nil(t, entries)
+			require.Contains(t, err.Error(), strings.TrimSpace(line),
+				"the error must name the line that could not be read")
+		})
+	}
+}
+
+// The forms the parser does accept, pinned so "reject everything" is not a way
+// to pass the test above. `"gemini": GeminiHandler,  # comment` is the shape
+// two of the four real entries are written in today.
+func TestPythonHandlerEntriesReadsTheFormsTheRegistryUses(t *testing.T) {
+	block := "\n" +
+		"        # Built-in vendor mappings.\n" +
+		"        \"anthropic\": ClaudeHandler,\n" +
+		"\n" +
+		"        \"gemini\": GeminiHandler,  # Google AI Studio (GOOGLE_API_KEY)\n" +
+		"        \"vertex_ai\": GeminiHandler\n"
+
+	entries, err := parsePythonHandlerEntries(block)
+
+	require.NoError(t, err)
+	require.Equal(t, []pythonHandlerEntry{
+		{vendor: "anthropic", handlerClass: "ClaudeHandler"},
+		{vendor: "gemini", handlerClass: "GeminiHandler"},
+		{vendor: "vertex_ai", handlerClass: "GeminiHandler"},
+	}, entries)
+}
+
+// pythonHandlerEntry is one `"vendor": HandlerClass,` line of the Python
+// registry's `_handlers` mapping.
+type pythonHandlerEntry struct {
+	vendor       string
+	handlerClass string
+}
+
+// handlerEntryRe matches a whole entry LINE, anchored at both ends, with an
+// optional trailing comma and an optional trailing `# comment`.
+var handlerEntryRe = regexp.MustCompile(`^"([\w_]+)":\s*(\w+),?(?:\s*#.*)?$`)
+
+// parsePythonHandlerEntries reads every entry out of the `_handlers` block,
+// and fails on any line it cannot read rather than skipping it.
+//
+// That distinction is the whole function. A `FindAllStringSubmatch` over the
+// block returns only what matched and says nothing about the rest, so an entry
+// written in a form the pattern does not cover — a parenthesized or
+// multi-line value, a call expression, a `**` spread, a conditional insert —
+// is silently dropped. That vendor never enters the reconstructed set, and the
+// comparison against nativeVendorPrefixes then passes while never having
+// checked it: a guard reporting green about a vendor it did not see is worse
+// than no guard, because it also stops anyone from looking.
+//
+// Blank lines and whole-line comments are the only things skipped. Anything
+// else is an error naming the offending line, so the fix (write the entry
+// plainly, or teach the parser the new form) is a decision someone makes on
+// purpose.
+func parsePythonHandlerEntries(block string) ([]pythonHandlerEntry, error) {
+	var entries []pythonHandlerEntry
+	for _, rawLine := range strings.Split(block, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		m := handlerEntryRe.FindStringSubmatch(line)
+		if m == nil {
+			return nil, fmt.Errorf(
+				"unreadable line in the _handlers mapping:\n  %s\n"+
+					"Every entry must parse here — an unparsed one is dropped "+
+					"from the reconstructed vendor set, and the drift check "+
+					"then passes without ever having compared that vendor. "+
+					"Either write it as a plain `\"vendor\": HandlerClass,` "+
+					"line, or teach parsePythonHandlerEntries the new form",
+				line)
+		}
+		entries = append(entries, pythonHandlerEntry{vendor: m[1], handlerClass: m[2]})
+	}
+	return entries, nil
 }
 
 func sortedKeys(m map[string]bool) []string {

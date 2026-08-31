@@ -17,6 +17,14 @@ them are the ones easy to regress:
     must propagate untouched. Relabelling it as a missing ``litellm`` sends
     the author to an install command that is already satisfied and cannot
     help, while hiding the real cause.
+
+The model is only half the question. A big-3 model ALSO dispatches through
+LiteLLM when native dispatch is unavailable in the process —
+``MCP_MESH_NATIVE_LLM`` switching it off, or the vendor SDK failing to import —
+and such a provider fails on a consumer's first call for the same reason. That
+half is asked at the registration site rather than inside the model predicate,
+which is a cross-language duplicate that must stay environment-independent;
+``TestNativeDispatchUnavailable`` below pins it.
 """
 
 from __future__ import annotations
@@ -31,6 +39,18 @@ import pytest
 # ---------------------------------------------------------------------------
 # Harness
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _native_dispatch_default(monkeypatch):
+    """Every test starts from the default: native dispatch ON.
+
+    ``MCP_MESH_NATIVE_LLM`` is a real operator knob, so a developer running the
+    suite with it exported would otherwise flip the big-3 cases into the
+    LiteLLM path and make them fail for a reason that has nothing to do with
+    the code under test. Tests that want the opt-out set it themselves.
+    """
+    monkeypatch.delenv("MCP_MESH_NATIVE_LLM", raising=False)
 
 
 @contextmanager
@@ -81,6 +101,27 @@ def _hide_litellm(monkeypatch):
     what CPython actually sets.
     """
     monkeypatch.setitem(sys.modules, "litellm", None)
+
+
+def _disable_native_dispatch(monkeypatch, value: str = "0"):
+    """The documented opt-out: force every vendor down the LiteLLM path."""
+    monkeypatch.setenv("MCP_MESH_NATIVE_LLM", value)
+
+
+def _hide_vendor_sdk(monkeypatch, vendor: str = "anthropic"):
+    """The vendor's native SDK is not importable in this process.
+
+    Patched at the adapter's ``is_available`` rather than by hiding the module,
+    because that probe caches its result in a closure cell — a later
+    ``sys.modules`` edit would not be seen. This is the state a damaged or
+    hand-pruned install is in: anthropic/openai/google-genai are base
+    dependencies, so it is not reachable by choosing extras.
+    """
+    from _mcp_mesh.engine.provider_handlers import ProviderHandlerRegistry
+
+    native = ProviderHandlerRegistry.get_handler(vendor)._native_module()
+    monkeypatch.setattr(native, "is_available", lambda: False)
+    return native
 
 
 def _break_litellm_subimport(monkeypatch, missing: str = "tokenizers"):
@@ -240,7 +281,12 @@ class TestLongTailModelWithoutLiteLLM:
         assert str(exc.value).startswith("This agent's LLM provider")
 
     def test_dispatch_time_wording_is_unchanged(self):
-        """The six lazy call sites keep the copy they already had."""
+        """The six lazy call sites keep the copy they already had.
+
+        Both shaped parameters (``subject``, ``explanation``) default to what
+        the message used to hard-code, so a call site that passes neither is
+        unaffected by their existence.
+        """
         from mesh.helpers import _require_litellm
 
         with pytest.raises(ImportError) as exc:
@@ -248,7 +294,12 @@ class TestLongTailModelWithoutLiteLLM:
                 _hide_litellm(mp)
                 _require_litellm(model="ollama/llama3", vendor="ollama")
 
-        assert str(exc.value).startswith("This request for model 'ollama/llama3'")
+        message = str(exc.value)
+        assert message.startswith("This request for model 'ollama/llama3'")
+        assert (
+            "mcp-mesh bundles native SDK adapters for Anthropic, OpenAI and "
+            "Gemini; every other vendor/model dispatches through LiteLLM."
+        ) in message
 
     def test_no_tool_is_registered(self, monkeypatch):
         """The whole point: it must not be discoverable.
@@ -427,3 +478,265 @@ class TestBrokenTransitiveImport:
                 mod, module_name, "anthropic/claude-sonnet-4-5"
             )
             assert decorated is not None
+
+
+# ---------------------------------------------------------------------------
+# A big-3 model that will NOT dispatch natively
+# ---------------------------------------------------------------------------
+
+
+class TestNativeDispatchUnavailable:
+    """ "Needs LiteLLM" is two questions, and the model answers only one.
+
+    A big-3 model is on the LiteLLM path whenever native dispatch is not
+    actually available in the process — ``MCP_MESH_NATIVE_LLM`` switching it
+    off, or the vendor SDK not importing. Such a provider fails on a
+    consumer's first call for precisely the reason #1551 reports, so leaving
+    it out would have left the reported bug reachable through a configuration
+    the operator explicitly asked for.
+
+    The runtime question is asked at the registration site, NOT inside
+    ``_model_requires_litellm``: that predicate is a cross-language duplicate
+    of the scaffolder's ``IsNativeDispatchModel``, which runs in ``meshctl``
+    where this process's environment and installed SDKs do not exist. Making
+    it env-dependent would make the Go/Python sync guard enforce a lie.
+    """
+
+    @pytest.mark.parametrize("flag", ["0", "false", "no", "off", "OFF", " False "])
+    def test_env_opt_out_makes_a_big3_model_require_litellm(self, monkeypatch, flag):
+        _disable_native_dispatch(monkeypatch, flag)
+        _hide_litellm(monkeypatch)
+        module_name = "_test_llm_provider_native_env_off"
+        with _module_with_app(module_name) as mod:
+            with pytest.raises(ImportError) as exc:
+                _declare_provider(mod, module_name, "anthropic/claude-sonnet-4-5")
+
+        message = str(exc.value)
+        assert "anthropic/claude-sonnet-4-5" in message
+        assert "mcp-mesh[litellm]" in message
+        # The cause, named. Without it the message would claim this model is
+        # long-tail — "every other vendor/model dispatches through LiteLLM" —
+        # and send an Anthropic user looking for a typo in a model string that
+        # is perfectly correct.
+        assert "MCP_MESH_NATIVE_LLM" in message
+
+    @pytest.mark.parametrize("flag", ["1", "true", "yes", "on", ""])
+    def test_a_non_opt_out_value_leaves_native_dispatch_alone(self, monkeypatch, flag):
+        """Only the documented opt-out set disables native dispatch.
+
+        The negative control for the parametrization above: if any value of the
+        variable counted, this check would be reading the variable's presence
+        rather than its meaning.
+        """
+        _disable_native_dispatch(monkeypatch, flag)
+        _hide_litellm(monkeypatch)
+        module_name = "_test_llm_provider_native_env_on"
+        with _module_with_app(module_name) as mod:
+            assert (
+                _declare_provider(mod, module_name, "anthropic/claude-sonnet-4-5")
+                is not None
+            )
+
+    def test_env_opt_out_with_litellm_installed_still_starts(self, monkeypatch):
+        """The opt-out is a supported configuration — it just needs the extra."""
+        pytest.importorskip("litellm")
+        _disable_native_dispatch(monkeypatch)
+        module_name = "_test_llm_provider_native_env_off_with_litellm"
+        with _module_with_app(module_name) as mod:
+            assert (
+                _declare_provider(mod, module_name, "anthropic/claude-sonnet-4-5")
+                is not None
+            )
+
+    @pytest.mark.parametrize(
+        "model,vendor",
+        [
+            ("anthropic/claude-sonnet-4-5", "anthropic"),
+            ("openai/gpt-4o", "openai"),
+            ("gemini/gemini-2.5-flash", "gemini"),
+            ("claude-3-haiku", "anthropic"),
+        ],
+    )
+    def test_env_opt_out_covers_every_native_vendor(self, monkeypatch, model, vendor):
+        _disable_native_dispatch(monkeypatch)
+        _hide_litellm(monkeypatch)
+        module_name = "_test_llm_provider_native_env_off_matrix"
+        with _module_with_app(module_name) as mod:
+            with pytest.raises(ImportError) as exc:
+                _declare_provider(mod, module_name, model)
+
+        assert vendor in str(exc.value)
+
+    def test_a_missing_vendor_sdk_is_covered_too(self, monkeypatch):
+        """The deliberate scope decision, stated as a test.
+
+        The check is "will this dispatch through LiteLLM", not "did the
+        operator ask for LiteLLM" — so it covers an unimportable vendor SDK as
+        well as the env opt-out. Both leave the provider with no dispatch path
+        at all when ``litellm`` is absent, which is a first-call failure the
+        decorator can see coming. The vendor SDKs are BASE dependencies
+        (issue #834), so this state is a damaged install rather than a
+        supported one: nobody reaches it by choosing extras, and failing at
+        boot is strictly better than registering healthy and failing later.
+        """
+        _hide_vendor_sdk(monkeypatch, "anthropic")
+        _hide_litellm(monkeypatch)
+        module_name = "_test_llm_provider_native_sdk_missing"
+        with _module_with_app(module_name) as mod:
+            with pytest.raises(ImportError) as exc:
+                _declare_provider(mod, module_name, "anthropic/claude-sonnet-4-5")
+
+        message = str(exc.value)
+        assert "not importable" in message
+        assert "mcp-mesh[litellm]" in message
+        # It must not be described as a long-tail vendor: mcp-mesh does bundle
+        # an adapter for it, and that is the difference between "install the
+        # extra" and "repair your install".
+        assert "every other vendor/model dispatches through LiteLLM" not in message
+
+    def test_a_missing_vendor_sdk_falls_back_when_litellm_is_present(self, monkeypatch):
+        """This is the LiteLLM fallback working as designed, not a failure."""
+        pytest.importorskip("litellm")
+        _hide_vendor_sdk(monkeypatch, "anthropic")
+        module_name = "_test_llm_provider_native_sdk_missing_with_litellm"
+        with _module_with_app(module_name) as mod:
+            assert (
+                _declare_provider(mod, module_name, "anthropic/claude-sonnet-4-5")
+                is not None
+            )
+
+    def test_an_unset_model_never_fails_even_with_native_dispatch_off(
+        self, monkeypatch
+    ):
+        """Nothing is known about it, so there is nothing to refuse over."""
+        _disable_native_dispatch(monkeypatch)
+        _hide_litellm(monkeypatch)
+        module_name = "_test_llm_provider_empty_model_env_off"
+        with _module_with_app(module_name) as mod:
+            assert _declare_provider(mod, module_name, "") is not None
+
+    def test_the_optional_dependency_stays_optional_by_default(self, monkeypatch):
+        """The #1383 guarantee, re-asserted against the wider check.
+
+        With the env unset and the SDK present, the runtime question must
+        return "native" and ``_require_litellm`` must not be consulted at all —
+        "does not raise" is vacuous here because litellm IS installed in this
+        venv.
+        """
+        import mesh.helpers as helpers
+
+        calls = []
+        monkeypatch.setattr(
+            helpers,
+            "_require_litellm",
+            lambda *a, **k: calls.append(k) or object(),
+        )
+        _hide_litellm(monkeypatch)
+        module_name = "_test_llm_provider_native_default_no_import"
+        with _module_with_app(module_name) as mod:
+            _declare_provider(mod, module_name, "anthropic/claude-sonnet-4-5")
+
+        assert calls == []
+
+    def test_the_runtime_question_does_not_burn_the_dispatch_log_latches(
+        self, monkeypatch
+    ):
+        """Registration asks, but must not narrate.
+
+        ``has_native()`` fires two once-per-process latches — the
+        dispatch-status DEBUG record and the SDK-fallback INFO nudge — and both
+        exist to mark the first *dispatch* decision. Asking it at decoration
+        time would move those records away from the event they describe and
+        pre-arm them under the tests that assert on them, which is why the
+        startup check uses ``native_dispatch_blocker()`` instead.
+        """
+        from _mcp_mesh.engine.provider_handlers import claude_handler
+
+        monkeypatch.setattr(claude_handler, "_DISPATCH_STATUS_LOGGED", False)
+        native = _hide_vendor_sdk(monkeypatch, "anthropic")
+        fallback_calls = []
+        monkeypatch.setattr(
+            native, "log_fallback_once", lambda: fallback_calls.append(1)
+        )
+
+        module_name = "_test_llm_provider_latches_untouched"
+        with _module_with_app(module_name) as mod:
+            _declare_provider(mod, module_name, "anthropic/claude-sonnet-4-5")
+
+        assert claude_handler._DISPATCH_STATUS_LOGGED is False
+        assert fallback_calls == []
+
+    def test_the_dispatch_decision_still_logs(self, monkeypatch):
+        """The negative control: the latches are not dead, only unasked.
+
+        ``has_native()`` — what a real dispatch calls — must still fire both.
+        """
+        from _mcp_mesh.engine.provider_handlers import (
+            ProviderHandlerRegistry,
+            claude_handler,
+        )
+
+        monkeypatch.setattr(claude_handler, "_DISPATCH_STATUS_LOGGED", False)
+        native = _hide_vendor_sdk(monkeypatch, "anthropic")
+        fallback_calls = []
+        monkeypatch.setattr(native, "is_fallback_logged", lambda: False)
+        monkeypatch.setattr(
+            native, "log_fallback_once", lambda: fallback_calls.append(1)
+        )
+
+        handler = ProviderHandlerRegistry.get_handler("anthropic")
+        assert handler.has_native() is False
+
+        assert claude_handler._DISPATCH_STATUS_LOGGED is True
+        assert fallback_calls == [1]
+
+
+class TestNativeDispatchBlocker:
+    """The handler-level runtime question, in isolation."""
+
+    def test_reports_none_when_native_dispatch_will_happen(self):
+        from _mcp_mesh.engine.provider_handlers import ProviderHandlerRegistry
+
+        handler = ProviderHandlerRegistry.get_handler("anthropic")
+        assert handler.native_dispatch_blocker() is None
+
+    def test_reports_the_env_opt_out(self, monkeypatch):
+        from _mcp_mesh.engine.provider_handlers import ProviderHandlerRegistry
+
+        _disable_native_dispatch(monkeypatch)
+        handler = ProviderHandlerRegistry.get_handler("openai")
+        assert handler.native_dispatch_blocker() == "disabled-by-env"
+
+    def test_reports_a_missing_sdk(self, monkeypatch):
+        from _mcp_mesh.engine.provider_handlers import ProviderHandlerRegistry
+
+        _hide_vendor_sdk(monkeypatch, "gemini")
+        handler = ProviderHandlerRegistry.get_handler("gemini")
+        assert handler.native_dispatch_blocker() == "sdk-missing"
+
+    def test_the_env_opt_out_outranks_a_missing_sdk(self, monkeypatch):
+        """Same precedence ``has_native()`` has always had: an explicit
+        opt-out is answered without probing the SDK at all."""
+        from _mcp_mesh.engine.provider_handlers import ProviderHandlerRegistry
+
+        _disable_native_dispatch(monkeypatch)
+        _hide_vendor_sdk(monkeypatch, "anthropic")
+        handler = ProviderHandlerRegistry.get_handler("anthropic")
+        assert handler.native_dispatch_blocker() == "disabled-by-env"
+
+    def test_reports_a_vendor_with_no_adapter(self):
+        from _mcp_mesh.engine.provider_handlers import ProviderHandlerRegistry
+
+        handler = ProviderHandlerRegistry.get_handler("cohere")
+        assert handler.native_dispatch_blocker() == "no-adapter"
+
+    def test_has_native_agrees_with_it(self, monkeypatch):
+        """One verdict, two call sites — ``has_native()`` adds only logging."""
+        from _mcp_mesh.engine.provider_handlers import ProviderHandlerRegistry
+
+        handler = ProviderHandlerRegistry.get_handler("openai")
+        assert handler.has_native() is (handler.native_dispatch_blocker() is None)
+
+        _disable_native_dispatch(monkeypatch)
+        assert handler.has_native() is (handler.native_dispatch_blocker() is None)
+        assert handler.has_native() is False
