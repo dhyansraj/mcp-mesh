@@ -18,7 +18,6 @@ __all__ = [
     "DependencyInjector",
     "get_global_injector",
     # MCP client proxies
-    "AsyncMCPClient",
     "UnifiedMCPProxy",
     "EnhancedUnifiedMCPProxy",
     # Self-dependency proxy
@@ -54,10 +53,6 @@ def __getattr__(name):
 
         return get_global_injector
     # MCP client proxies
-    elif name == "AsyncMCPClient":
-        from .async_mcp_client import AsyncMCPClient
-
-        return AsyncMCPClient
     elif name == "UnifiedMCPProxy":
         from .unified_mcp_proxy import UnifiedMCPProxy
 
