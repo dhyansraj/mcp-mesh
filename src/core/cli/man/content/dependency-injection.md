@@ -73,6 +73,8 @@ app = FastMCP("my-agent", lifespan=_lifespan)
 
 **Opt-in `MCP_MESH_TOOL_WORKERS=N` (N>1)** for tool bodies that do sync blocking work and need concurrent calls to absorb it. Loop-affinity caveat: resources created in `lifespan` bind to worker-0 only. For cross-worker access, use a per-loop dict cache (each worker lazily builds its own resource on first access). Better escape: `await asyncio.to_thread(blocking_call)` keeps the user loop free without N>1 workers.
 
+**Loops must be long-lived.** Two surfaces cache their HTTP clients per event loop, keyed on `id(loop)`: the pooled clients your injected dependencies call through, and the native Anthropic, OpenAI and Gemini LLM clients. Both assume a loop lives as long as the agent process. Do not call `asyncio.run()` or otherwise create short-lived loops inside an agent to reach them: the id of a closed loop can be reused, nothing detects that, and the call gets back a client bound to the dead loop and fails with `RuntimeError: Event loop is closed`. Run async work on the loop the runtime already gives you.
+
 For long-running stateful work, use MeshJob (`@mesh.tool(task=True)`) with state externalized to a separate state agent — see `meshctl man jobs` and the Stateful Agents concept doc.
 
 For the narrow case where neither fits (sub-10ms state-mutation latency, unportable loop-bound resources like GPU contexts, true background daemons), see the In-Process State escape hatch. The default answer should still be MeshJob.

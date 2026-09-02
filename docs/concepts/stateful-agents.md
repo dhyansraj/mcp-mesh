@@ -85,6 +85,8 @@ No per-loop dict workarounds, no `WORKERS=1` ceremony, no surprises. The pool is
 
 **Better escape for sync-blocking**: refactor the blocking call to `await asyncio.to_thread(blocking_call)`. The blocking call runs on Python's default thread pool; the user loop stays free; you don't need N>1 workers.
 
+**Loops must be long-lived.** Two surfaces cache their HTTP clients per event loop, keyed on `id(loop)`: the pooled clients your injected dependencies call through, and the native Anthropic, OpenAI and Gemini LLM clients. Both assume a loop lives as long as the agent process. Do not call `asyncio.run()` or otherwise create short-lived loops inside an agent to reach them: the id of a closed loop can be reused, nothing detects that, and the call gets back a client bound to the dead loop and fails with `RuntimeError: Event loop is closed`. Run async work on the loop the runtime already gives you.
+
 The structural answer — the one that survives replica restart, scales
 horizontally, and composes with the rest of the mesh — is the
 three-agent decomposition that follows.

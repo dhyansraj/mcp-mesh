@@ -362,6 +362,8 @@ own internal use of this pattern for httpx clients.
 runs on Python's default thread pool; the user loop stays free; no
 cross-worker resource problem.
 
+**Loops must be long-lived.** Two surfaces cache their HTTP clients per event loop, keyed on `id(loop)`: the pooled clients your injected dependencies call through, and the native Anthropic, OpenAI and Gemini LLM clients. Both assume a loop lives as long as the agent process. Do not call `asyncio.run()` or otherwise create short-lived loops inside an agent to reach them: the id of a closed loop can be reused, nothing detects that, and the call gets back a client bound to the dead loop and fails with `RuntimeError: Event loop is closed`. Run async work on the loop the runtime already gives you.
+
 ### Trade-offs
 
 | Concern | N=1 (default) | `MCP_MESH_TOOL_WORKERS=N` (N>1) |

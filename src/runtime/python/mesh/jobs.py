@@ -34,8 +34,8 @@ just adds the helpers + error classes around that surface.
 
 from __future__ import annotations
 
-import asyncio
 import os
+import threading
 from collections import OrderedDict
 from collections.abc import AsyncIterator
 from typing import Any
@@ -93,26 +93,52 @@ def _proxy_cache_max() -> int:
 
 
 _proxy_cache: OrderedDict[tuple[str, str], Any] = OrderedDict()
-_proxy_cache_lock = asyncio.Lock()
+
+# A ``threading.Lock``, deliberately NOT an ``asyncio.Lock`` (issue
+# #1564). The public helpers below are called from tool bodies, and the
+# Python runtime runs tool bodies on more than one event loop by design:
+# plain ``@mesh.tool`` bodies run on the tool-executor worker loop, while
+# ``task=True`` handlers run on the heartbeat thread's loop that the
+# claim dispatchers are started on. An ``asyncio.Lock`` binds to the
+# first loop that contends on it and is not thread-safe — a release on
+# loop A schedules the waiter's wakeup on loop B with a plain
+# ``call_soon``, which never wakes loop B out of ``select`` (permanent
+# hang), or raises "bound to a different event loop". The critical
+# section never awaits (import, ``JobProxy(...)`` construction, LRU
+# eviction), so a plain thread lock is both correct and sufficient.
+_proxy_cache_lock = threading.Lock()
 
 
 async def _get_or_create_proxy(registry_url: str, job_id: str) -> Any:
     """Return a process-cached ``mcp_mesh_core.JobProxy`` for the given
     ``(registry_url, job_id)`` pair, constructing one on first miss.
 
-    Double-checked locking under an asyncio ``Lock`` so concurrent
-    callers in the same event loop end up sharing a single proxy
-    instance — the lock is only contended on the first call per key.
+    Lookup and construction both happen under a ``threading.Lock`` —
+    NOT an ``asyncio.Lock`` — because callers run on more than one event
+    loop and OS thread (the tool-executor worker loop vs the heartbeat
+    thread's loop that runs ``task=True`` claim dispatchers), and an
+    ``asyncio.Lock`` shared across loops can hang one of them (issue
+    #1564). The whole critical section is synchronous, so no asyncio
+    primitive is needed; the coroutine signature is kept only so callers
+    stay unchanged.
+
+    The cache hit is served under the same lock as the miss, so a hit
+    cannot ``move_to_end`` a key that another thread just evicted. That
+    costs one uncontended lock acquire per call, and — when it IS
+    contended — a blocking ``acquire`` inside a coroutine, which parks
+    the calling loop rather than yielding to it. The wait is bounded by
+    what the holder does: a dict lookup, or at worst a synchronous
+    ``JobProxy`` construction, which builds a ``reqwest`` client and
+    performs no I/O. The GIL already serialises that work against the
+    waiter, so the lock adds negligible latency on top of the wait the
+    caller would have taken anyway.
+
     Cache is a bounded LRU: hits bump the entry to the most-recent end,
     misses on a full cache evict the least-recent entry before
     inserting.
     """
     key = (registry_url, job_id)
-    proxy = _proxy_cache.get(key)
-    if proxy is not None:
-        _proxy_cache.move_to_end(key)
-        return proxy
-    async with _proxy_cache_lock:
+    with _proxy_cache_lock:
         proxy = _proxy_cache.get(key)
         if proxy is not None:
             _proxy_cache.move_to_end(key)
