@@ -59,4 +59,4 @@ shape. See the full reference for typed examples per language.
 - `meshctl man llm` - `@mesh.llm` consumer guide
 
 For the complete kwargs reference including TypeScript/Java examples and
-vendor-by-vendor matrix, see <https://mcp-mesh.io/reference/kwargs>.
+vendor-by-vendor matrix, see <https://mcp-mesh.ai/reference/kwargs/>.

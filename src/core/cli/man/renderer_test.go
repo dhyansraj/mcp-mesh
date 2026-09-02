@@ -418,6 +418,32 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // in `variant_corpus_test.go` is unmoved — the case the note below describes,
 // in reverse.
 //
+// Issues #1561/#1562: +7 / +0 / +0, all of it in `jobs.md`, and it splits into
+// two unrelated halves.
+//
+// +3 is the correction itself. The consumer-side passage said the parameter
+// NAME picks the `MeshJobSubmitter` slot. It does not: `_prepare_injection_kwargs`
+// pairs `dependencies[i]` to the i-th eligible slot positionally and branches on
+// the `MeshJob` annotation alone ("Param NAME does not matter; the binding is
+// positional"), so the Notes bullet was rewritten and gains `MeshJob` twice, a
+// third `McpMeshTool`, and `meshctl man dependency-injection` for the pairing
+// rule, against the `task=True` span the old claim needed and no longer does.
+//
+// +4 is a rendering defect this test could not see. renderStyled styles inline
+// code per LINE, so a span wrapped across a break renders as literal backticks
+// and is not a span at all. This page had four: the two `meshctl man
+// dependency-injection` citations (one of them introduced by the fix above),
+// `proxy.send_event(event_type, payload)` and `proxy.cancel(reason)`. Rewrapping
+// each onto one line is what makes them spans for the first time — the words on
+// the page are unchanged. A page-wide scan for a backtick opened on one line and
+// closed on the next now reports none here.
+//
+// The renamed consumer parameter (`generate_report` to `report_job`, so the
+// example demonstrates the free name) sits inside a fence, and the cheat-sheet
+// cell is a table cell; renderStyled takes other branches for both and neither
+// adds a span. The rewritten bullet is a list item but changes no line's markup
+// shape, so the two list goldens below hold.
+//
 // Issue #1500: the sentence most annotations above end on — that the `_java`
 // and `_typescript` files are invisible here, so a review of them cannot lean
 // on this test — is still true of THESE constants and no longer true of this
@@ -431,7 +457,7 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // the starter's POM; a test in this package cannot, and #1499 shipped three
 // false claims through a green run here.
 const (
-	wantInlineCodeSpans = 1780
+	wantInlineCodeSpans = 1787
 	wantListCodeSpans   = 522
 	wantMarkupListLines = 448
 )

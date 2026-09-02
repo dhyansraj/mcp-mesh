@@ -180,11 +180,12 @@ and [`examples/jobs-java/`](https://github.com/dhyansraj/mcp-mesh/tree/main/exam
     async def commission_report(
         user_id: str,
         sections: list[str],
-        # Param name MUST match the dependency capability — that pairing
-        # is what makes the slot a MeshJobSubmitter (not a McpMeshTool proxy).
-        generate_report: MeshJob = None,
+        # The MeshJob annotation is what makes this a MeshJobSubmitter slot
+        # (not a McpMeshTool proxy); it pairs with the dependency at its
+        # position, so the parameter name is yours to pick.
+        report_job: MeshJob = None,
     ) -> dict:
-        proxy = await generate_report.submit(
+        proxy = await report_job.submit(
             user_id=user_id, sections=sections, max_duration=60,
         )
         return await proxy.wait(timeout_secs=60)
@@ -204,9 +205,9 @@ and [`examples/jobs-java/`](https://github.com/dhyansraj/mcp-mesh/tree/main/exam
       }),
       execute: async (
         { user_id, sections },
-        generateReport: MeshJob | null = null,
+        reportJob: MeshJob | null = null,
       ) => {
-        const proxy = await generateReport!.submit!(
+        const proxy = await reportJob!.submit!(
           { user_id, sections },
           { maxDuration: 60 },
         );
@@ -224,8 +225,8 @@ and [`examples/jobs-java/`](https://github.com/dhyansraj/mcp-mesh/tree/main/exam
     public Map<String, Object> commissionReport(
         @Param("user_id") String userId,
         @Param("sections") List<String> sections,
-        MeshJob generateReport) throws Exception {
-      MeshJobSubmitter submitter = (MeshJobSubmitter) generateReport;
+        MeshJob reportJob) throws Exception {
+      MeshJobSubmitter submitter = (MeshJobSubmitter) reportJob;
       Map<String, Object> payload = new LinkedHashMap<>();
       payload.put("user_id", userId);
       payload.put("sections", sections);
@@ -660,12 +661,16 @@ owner replica and outbound HTTP proxies abort their requests too.
 **DDDI is the injection layer.** The producer's `MeshJob` parameter
 lands at `meshJobParamIndex` (Python and Java auto-detect it from the
 type annotation; TS declares it explicitly in `addTool`). The
-consumer's `MeshJob` parameter — typed identically, but on a slot
-named after a dependency capability — gets a `MeshJobSubmitter`
-instead of an `McpMeshTool` proxy: same DDDI lookup, different
-injection target based on the dep's `task=true` flag. Resolution,
-trust, and tag matching are unchanged from the regular tool path; the
-only difference is the runtime swaps the proxy class at the dep slot.
+consumer's `MeshJob` parameter — typed identically, and likewise
+selected by its annotation rather than its name — gets a
+`MeshJobSubmitter` instead of an `McpMeshTool` proxy. The slot pairs
+with the dependency at its position among the tool's injectable
+parameters, and the injector builds a submitter for any `MeshJob`-typed
+slot whenever a registry URL is configured (otherwise the slot is left
+`None` with a warning, or an error under `MCP_MESH_STRICT_DI`); it never
+consults the provider's `task=true` flag. Resolution, trust, and tag
+matching are unchanged from the regular tool path; the only difference
+is the runtime swaps the proxy class at that slot.
 For the full design rationale and lifecycle diagrams, see
 [`MESHJOB_DESIGN.org`](https://github.com/dhyansraj/mcp-mesh/blob/main/MESHJOB_DESIGN.org)
 and [`MESHJOB_DDDI_CONTRACT.md`](https://github.com/dhyansraj/mcp-mesh/blob/main/MESHJOB_DDDI_CONTRACT.md).
