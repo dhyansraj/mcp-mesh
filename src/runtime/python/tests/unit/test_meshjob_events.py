@@ -23,6 +23,8 @@ calls them via the ``MeshJob``-typed parameter the framework injects.
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
 from typing import Any
 from unittest import mock
 
@@ -978,6 +980,177 @@ class TestSharedProxyCache:
             f"status / wait; got {construct_count} constructions for the "
             f"same (registry_url, job_id) key"
         )
+
+
+class TestProxyCacheCrossLoopSafety:
+    """Regression for issue #1564.
+
+    ``mesh.jobs`` helpers are called from tool bodies, and the Python
+    runtime runs tool bodies on more than one event loop by design:
+    plain ``@mesh.tool`` bodies run on the tool-executor worker loop,
+    ``task=True`` handlers run on the heartbeat thread's loop that the
+    claim dispatchers are started on. The proxy-cache lock is therefore
+    contended from two loops on two OS threads.
+
+    An ``asyncio.Lock`` cannot survive that: it binds to the first loop
+    that contends on it, and a release on loop A schedules the waiter's
+    wakeup on loop B with a plain ``call_soon``, which never wakes loop
+    B out of ``select`` — loop B hangs permanently (or, on the other
+    interleaving, ``_LoopBoundMixin._get_loop`` raises "bound to a
+    different event loop"). The fix is a ``threading.Lock``; the
+    critical section never awaits.
+    """
+
+    def test_two_event_loops_on_two_threads_do_not_deadlock(self):
+        from mesh import jobs as mesh_jobs
+
+        iterations = 15
+        errors: list[BaseException] = []
+        completed: set[str] = set()
+
+        class _SlowFake:
+            """Sleeps inside the constructor so both threads are
+            guaranteed to contend on the cache lock. Every key is
+            distinct, so every call takes the slow (locked) path."""
+
+            def __init__(self, _job_id: str, _registry_url: str) -> None:
+                time.sleep(0.02)
+
+        def _target(label: str) -> None:
+            loop = asyncio.new_event_loop()
+            try:
+                for i in range(iterations):
+                    loop.run_until_complete(
+                        mesh_jobs._get_or_create_proxy(
+                            "http://registry", f"{label}-job-{i}"
+                        )
+                    )
+                completed.add(label)
+            except BaseException as e:  # pragma: no cover - failure path
+                errors.append(e)
+            finally:
+                loop.close()
+
+        with mock.patch("mcp_mesh_core.JobProxy", _SlowFake, create=True):
+            threads = [
+                # Daemon so a regression leaves a hung thread behind
+                # without wedging the whole pytest process.
+                threading.Thread(target=_target, args=(label,), name=label, daemon=True)
+                for label in ("loop-A", "loop-B")
+            ]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10.0)
+
+            still_running = [t.name for t in threads if t.is_alive()]
+
+        assert not still_running, (
+            f"threads {still_running} never finished within 10s — the proxy "
+            f"cache lock deadlocked across event loops (issue #1564: an "
+            f"asyncio.Lock released on one loop schedules the waiter's "
+            f"wakeup on another loop that is parked in select())"
+        )
+        assert not errors, (
+            f"cross-loop proxy-cache access raised: {errors!r} (an "
+            f"asyncio.Lock bound to a different event loop raises "
+            f"RuntimeError on the other interleaving)"
+        )
+        assert completed == {"loop-A", "loop-B"}
+
+    def test_proxy_cache_lock_is_a_threading_primitive(self):
+        """Pin the primitive itself: an ``asyncio.Lock`` here is the
+        defect from #1564, and the swap is easy to undo by accident
+        while refactoring.
+
+        Asserted positively — ``not isinstance(x, asyncio.Lock)`` would
+        also pass for ``None``, an ``asyncio.Semaphore``, or anything
+        else that is not the lock we want."""
+        from mesh import jobs as mesh_jobs
+
+        assert isinstance(mesh_jobs._proxy_cache_lock, type(threading.Lock())), (
+            f"mesh.jobs._proxy_cache_lock must be a threading.Lock — it is "
+            f"acquired from multiple event loops on multiple threads (#1564); "
+            f"got {type(mesh_jobs._proxy_cache_lock)!r}"
+        )
+
+    def test_shared_key_hits_race_against_eviction(self, monkeypatch):
+        """The cache HIT is served under the same lock as the miss.
+
+        Pre-fix the fast path ran outside the lock, so a hit could read
+        a key, lose the GIL, and then ``move_to_end`` a key another
+        thread had already evicted — a ``KeyError`` out of a cache
+        lookup. The window is two bytecodes wide, so this drives it as
+        hard as it can be driven from Python: ``MCP_MESH_JOBPROXY_CACHE_MAX=1``
+        means every insert evicts, two threads hammer one shared key
+        (maximising hits on the entry being evicted), and a third churns
+        distinct keys (maximising evictions).
+        """
+        from mesh import jobs as mesh_jobs
+
+        # _proxy_cache_max() re-reads the env on every miss, so setting
+        # it here applies to every construction below.
+        monkeypatch.setenv("MCP_MESH_JOBPROXY_CACHE_MAX", "1")
+
+        iterations = 300
+        errors: list[BaseException] = []
+        completed: set[str] = set()
+
+        class _FastFake:
+            """No sleep — this scenario wants raw iteration count, not
+            a widened lock-hold window."""
+
+            def __init__(self, _job_id: str, _registry_url: str) -> None:
+                pass
+
+        def _target(label: str, keys: list[str]) -> None:
+            loop = asyncio.new_event_loop()
+            try:
+                for i in range(iterations):
+                    loop.run_until_complete(
+                        mesh_jobs._get_or_create_proxy(
+                            "http://registry", keys[i % len(keys)]
+                        )
+                    )
+                completed.add(label)
+            except BaseException as e:  # pragma: no cover - failure path
+                errors.append(e)
+            finally:
+                loop.close()
+
+        with mock.patch("mcp_mesh_core.JobProxy", _FastFake, create=True):
+            threads = [
+                threading.Thread(
+                    target=_target, args=("shared-A", ["shared"]), name="shared-A"
+                ),
+                threading.Thread(
+                    target=_target, args=("shared-B", ["shared"]), name="shared-B"
+                ),
+                threading.Thread(
+                    target=_target,
+                    args=("churn", [f"churn-{i}" for i in range(64)]),
+                    name="churn",
+                ),
+            ]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10.0)
+
+            still_running = [t.name for t in threads if t.is_alive()]
+
+        assert not still_running, (
+            f"threads {still_running} never finished within 10s under "
+            f"contention on a single-entry cache"
+        )
+        assert not errors, (
+            f"a cache hit raced an eviction: {errors!r} — the hit path must "
+            f"take the same lock as the miss so it cannot move_to_end a key "
+            f"another thread just evicted (#1564)"
+        )
+        assert completed == {"shared-A", "shared-B", "churn"}
+        # Cap honoured throughout: the cache never grew past one entry.
+        assert len(mesh_jobs._proxy_cache) <= 1
 
 
 # ===========================================================================

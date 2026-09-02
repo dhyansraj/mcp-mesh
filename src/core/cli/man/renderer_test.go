@@ -444,6 +444,44 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // adds a span. The rewritten bullet is a list item but changes no line's markup
 // shape, so the two list goldens below hold.
 //
+// Issue #1564: +3 / +0 / +0, one added paragraph at the end of
+// `dependency-injection.md`'s "Loop topology" section. That section taught which
+// loops the runtime runs your code on and never stated the lifetime the runtime
+// assumes of them. The assumption was real but written only in source comments:
+// the client caches are keyed on `id(loop)`, and nothing detects a closed loop
+// whose id was later reused, so an agent calling `asyncio.run()` per call gets
+// `RuntimeError: Event loop is closed` out of a client bound to the dead loop.
+// The three spans are `id(loop)` (the cache key, which is why the reuse is
+// undetectable), `asyncio.run()` as the thing not to do, and the error it
+// produces. Prose, not a list item, so the two list goldens hold.
+//
+// The paragraph named three caches in its first draft and now names two. The
+// count is coincidentally unchanged — `mesh.jobs` left and `id(loop)` arrived —
+// so anyone bisecting a future delta here should not read 1790 as "the wording
+// never moved". `mesh.jobs` does not belong: its cache is keyed by
+// `(registry_url, job_id)` with no loop component, and the `JobProxy` inside is
+// a pyo3-wrapped Rust reqwest client with no Python loop affinity at all. The
+// two that do belong are `unified_mcp_proxy.py` (`_fastmcp_client_pool` and
+// `_httpx_pool`, both keyed `(id(loop), endpoint)`) and the native LLM clients.
+// That is THREE native clients, not the two #1564 cites: `anthropic_native.py`
+// carries the same `dict[int, httpx.AsyncClient]` cache and the same ASSUMPTION
+// comment as `openai_native.py` and `gemini_native.py`, so the page names
+// Anthropic alongside them.
+//
+// The contract has THREE surfaces and one wording: this page,
+// `docs/python/dependency-injection.md` and `docs/concepts/stateful-agents.md`
+// each carry the byte-identical paragraph in their own "Loop topology" section.
+// The `docs/python` one is the anchor `docs/concepts/in-process-state.md` and
+// `stateful-agents.md` deep-link to (`#loop-topology-v224`), so omitting it
+// would have left the most-linked copy of the section as the one that does not
+// state the contract. Only this page is in the man corpus, so the two `docs/`
+// copies move no golden here — `scripts/check_doc_claims.py` is what reads
+// those, and a future edit to the wording has to touch all three files.
+//
+// The behaviour is Python's alone, so the `_java` and `_typescript`
+// dependency-injection pages did not get it; neither has a Loop topology section
+// to put it in, and the variant golden in `variant_corpus_test.go` is unmoved.
+//
 // Issue #1500: the sentence most annotations above end on — that the `_java`
 // and `_typescript` files are invisible here, so a review of them cannot lean
 // on this test — is still true of THESE constants and no longer true of this
@@ -457,7 +495,7 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // the starter's POM; a test in this package cannot, and #1499 shipped three
 // false claims through a green run here.
 const (
-	wantInlineCodeSpans = 1787
+	wantInlineCodeSpans = 1790
 	wantListCodeSpans   = 522
 	wantMarkupListLines = 448
 )
