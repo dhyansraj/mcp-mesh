@@ -1119,17 +1119,28 @@ class TestProxyCacheCrossLoopSafety:
                 loop.close()
 
         with mock.patch("mcp_mesh_core.JobProxy", _FastFake, create=True):
+            # Daemon, as in the deadlock test above: if the hit path ever
+            # regresses to a blocking wait, the join below times out and
+            # the assertion fails — non-daemon survivors would then hang
+            # pytest at interpreter exit instead of reporting that.
             threads = [
                 threading.Thread(
-                    target=_target, args=("shared-A", ["shared"]), name="shared-A"
+                    target=_target,
+                    args=("shared-A", ["shared"]),
+                    name="shared-A",
+                    daemon=True,
                 ),
                 threading.Thread(
-                    target=_target, args=("shared-B", ["shared"]), name="shared-B"
+                    target=_target,
+                    args=("shared-B", ["shared"]),
+                    name="shared-B",
+                    daemon=True,
                 ),
                 threading.Thread(
                     target=_target,
                     args=("churn", [f"churn-{i}" for i in range(64)]),
                     name="churn",
+                    daemon=True,
                 ),
             ]
             for t in threads:
