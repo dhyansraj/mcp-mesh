@@ -25,7 +25,7 @@ behavior change for non-job tools.
 | Surface                    | Producer                          | Consumer                                |
 | -------------------------- | --------------------------------- | --------------------------------------- |
 | Decorator flag             | `@mesh.tool(task=True, ...)`      | (regular `@mesh.tool` w/ dependency)    |
-| Injected type              | `job: MeshJob = None`             | `<dep_name>: MeshJob = None`            |
+| Injected type              | `job: MeshJob = None`             | `report_job: MeshJob = None`            |
 | Concrete injection         | `JobController` (or `None`)       | `MeshJobSubmitter`                      |
 | Progress                   | `await job.update_progress(f, m)` | (read via `__mesh_job_status`)          |
 | Request input              | `await job.request_input(prompt)` | (status → `input_required`; answer via `post_event`) |
@@ -105,16 +105,16 @@ app = FastMCP("Long Task Consumer")
 @app.tool()
 @mesh.tool(
     capability="commission_report",
-    # Param NAME must match the dependency capability — that pairing is
-    # what makes the slot a MeshJobSubmitter (instead of an McpMeshTool).
+    # The MeshJob annotation is what makes the slot a MeshJobSubmitter;
+    # it pairs with the dependency at its position (name is yours to pick).
     dependencies=["generate_report"],
 )
 async def commission_report(
     user_id: str,
     sections: list[str],
-    generate_report: MeshJob = None,        # injected MeshJobSubmitter
+    report_job: MeshJob = None,             # injected MeshJobSubmitter
 ) -> dict:
-    proxy = await generate_report.submit(
+    proxy = await report_job.submit(
         user_id=user_id,
         sections=sections,
         max_duration=60,                    # per-attempt soft timeout (seconds)
@@ -124,10 +124,14 @@ async def commission_report(
 
 **Notes:**
 
-- The SDK swaps `McpMeshTool` for `MeshJobSubmitter` at the slot
-  whose param name matches a dependency that points at a `task=True`
-  capability. Same DDDI lookup pipeline (resolution, trust, tags) —
-  only the proxy class differs.
+- The SDK swaps `McpMeshTool` for `MeshJobSubmitter` at the parameter
+  annotated `MeshJob`. That parameter pairs with the dependency at its
+  position among the tool's injectable parameters — the `McpMeshTool`-
+  and `MeshJob`-typed ones in declaration order, not the raw signature
+  index — exactly like an `McpMeshTool` slot
+  (see `meshctl man dependency-injection`); the parameter name is yours
+  to choose. Same DDDI lookup pipeline (resolution, trust, tags) — only
+  the proxy class differs.
 - `wait(timeout_secs=N)` returns the producer's `complete()` payload
   on success; raises `JobFailedError`, `JobCancelledError`, or
   `JobTimeoutError` on the other terminal states.
@@ -186,7 +190,7 @@ async def report_with_transient_failures(
 
 ```python
 # Caller-side: at most 4 total attempts (1 initial + 3 retries)
-proxy = await generate_report.submit(
+proxy = await report_job.submit(
     user_id="alice",
     sections=["intro"],
     max_duration=30,
@@ -306,8 +310,9 @@ async def submit_user_input(job_id: str, text: str) -> dict:
 the registry from `MCP_MESH_REGISTRY_URL` and reuses a process-cached
 `JobProxy` from a bounded LRU keyed by `(registry_url, job_id)`
 (default cap 256; tune via `MCP_MESH_JOBPROXY_CACHE_MAX`). If the
-calling code already holds a `JobProxy`, use `proxy.send_event(
-event_type, payload)` directly — same wire shape, skip the helper.
+calling code already holds a `JobProxy`, use
+`proxy.send_event(event_type, payload)` directly — same wire shape,
+skip the helper.
 
 **Lifecycle facades by `job_id`.** Same DDDI-clean pattern as
 `post_event` — module-level helpers that take a `job_id` and dispatch
@@ -335,8 +340,8 @@ raise `JobNotFoundError` if the registry has reaped the job.
 - `mesh.JobNotFoundError` — job swept or id typo
 - `mesh.JobTerminalError` — job already terminal, no more events accepted
 
-**Synthetic cancel event**. When a consumer calls `proxy.cancel(
-reason)`, the registry writes a synthetic
+**Synthetic cancel event**. When a consumer calls
+`proxy.cancel(reason)`, the registry writes a synthetic
 `{"type": "cancelled", "payload": {"reason": "..."}}` event into the
 log before forwarding the cancel signal. A handler parked on
 `recv_event(types=["cancelled", ...])` observes it and can return
@@ -673,9 +678,9 @@ except mesh.SupersededError:
 ```
 
 `SupersededError` is distinct from a generic tool failure and from the
-`dependency_unavailable` refusal (an unresolved required dep, `meshctl man
-dependency-injection`) — it means specifically *you are running under a
-superseded claim*. It does **not** change delivery: jobs remain
+`dependency_unavailable` refusal (an unresolved required dep,
+`meshctl man dependency-injection`) — it means specifically *you are
+running under a superseded claim*. It does **not** change delivery: jobs remain
 **at-least-once** and a fenced re-execution still runs under the new claim;
 the typed signal only lets the stale attempt bow out on its first rejected
 write rather than every downstream provider re-checking a string marker.
