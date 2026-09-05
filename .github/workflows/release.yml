@@ -574,6 +574,15 @@ jobs:
         working-directory: src/runtime/core/typescript
         run: npm install
 
+      # KEEP THE FEATURE LIST IN SYNC with the `build` / `build:debug` scripts in
+      # src/runtime/core/typescript/package.json. This step is the only thing
+      # that decides what actually ships to npm; those scripts are what CI, the
+      # Makefile and every developer compile locally. Issue #1586: the two had
+      # drifted — the scripts carried `typescript,spire` while this line shipped
+      # `typescript` alone — so SPIRE was present in every build except the
+      # released one, and tc17_spire_typescript was passing against a binary no
+      # user ever received. Changing either side without the other reopens that
+      # gap silently.
       - name: Build native bindings
         working-directory: src/runtime/core/typescript
         env:
@@ -582,7 +591,7 @@ jobs:
           npx napi build --platform --release \
             --target ${{ matrix.target }} \
             --manifest-path ../Cargo.toml \
-            --features typescript --no-default-features -o .
+            --features typescript,spire --no-default-features -o .
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

@@ -61,31 +61,129 @@ jobs:
       - name: Run Go tests with race detection
         run: go test ./... -race
 
+  # Issue #1586: this job ran `--no-default-features` and nothing else, so
+  # `ffi` — the one feature no other CI job enables — was compiled for the
+  # first time by release.yml, i.e. after merge. `java-test` below runs
+  # `mvn test` with no Rust step at all, so nothing on a PR built it.
+  #
+  # What the `ffi` feature actually gates is narrower than it sounds, and worth
+  # stating so this leg is not mistaken for broader coverage than it has:
+  # `src/ffi.rs` — the core Java native surface — is declared UNGATED at
+  # lib.rs:89 and was already compiled (and its tests already run) by the
+  # existing no-default-features leg. The feature gates exactly two things:
+  # `src/jobs_ffi.rs`, the MeshJob C-ABI surface (its own `#![cfg]`, 25 tests),
+  # and the cbindgen header generation in build.rs, which keys off
+  # CARGO_FEATURE_FFI. Both were release-only until this leg.
+  #
+  # The remaining feature sets were already compiled on every PR, just not
+  # here: `python` + `spire` by `python-test` (maturin, via pyproject's
+  # features = ["pyo3/extension-module", "spire"]) and `typescript` + `spire` by
+  # `typescript-test` (napi, via package.json's `build` script). But both of
+  # those only *build* the crate; neither runs `cargo test`, so the tests behind
+  # those gates never executed anywhere. That was 14 tests for `typescript`
+  # alone (8 in napi.rs, 6 in jobs_napi.rs). The `typescript` and `spire` legs
+  # below close that gap. To be precise about what the `spire` leg buys: it is
+  # not the only thing that *compiles* spire.rs on a PR — both builds above
+  # already do — it is the only thing that *runs* spire.rs's tests.
+  #
+  # Test counts differ per leg, which is the point — if a leg's count drops to
+  # another leg's, a feature gate has stopped doing anything:
+  #   488  --no-default-features
+  #   513  ffi        (+25, jobs_ffi.rs)
+  #   502  typescript (+14, napi.rs + jobs_napi.rs)
+  #   492  spire      (+4,  spire.rs)
+  # The `default` leg does not run tests; see the note on it below.
   rust-test:
-    name: Rust Tests
+    name: Rust Tests (${{ matrix.id }})
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: src/runtime/core
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: no-default-features
+            features: "--no-default-features"
+            cmd: "cargo test --no-default-features -- --test-threads=1"
+          - id: ffi
+            features: "--features ffi --no-default-features"
+            cmd: "cargo test --features ffi --no-default-features -- --test-threads=1"
+          - id: spire
+            features: "--features spire --no-default-features"
+            cmd: "cargo test --features spire --no-default-features -- --test-threads=1"
+          - id: typescript
+            features: "--features typescript --no-default-features"
+            cmd: "cargo test --features typescript --no-default-features -- --test-threads=1"
+          # `cargo check`, not `cargo test`, and not a lapse. The default set is
+          # `python` + `simd`, and `python` pulls pyo3 with `extension-module`
+          # (Cargo.toml:28) unconditionally — which tells pyo3 to leave the
+          # libpython symbols undefined for the interpreter to resolve at import
+          # time. A test harness is an executable with no interpreter to resolve
+          # them, so linking fails on `__Py_NoneStruct` and friends. Making it
+          # link would mean either making the pyo3 feature conditional (a source
+          # change) or platform-specific RUSTFLAGS, neither of which belongs in
+          # a CI change. `--all-targets` still type-checks the test modules, so
+          # this leg catches everything except a genuine runtime failure in a
+          # `python`-gated test; those run for real in `python-test`.
+          - id: default
+            features: ""
+            cmd: "cargo check --all-targets"
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          # Not in the default (minimal) profile dtolnay/rust-toolchain installs.
+          components: clippy
 
+      # Two entries, deliberately. The downloaded crates are decided by
+      # Cargo.lock alone — feature-independent and byte-identical across the
+      # five legs — so they share one entry keyed without the matrix id. Packing
+      # them per-leg would store five near-identical copies of the registry
+      # against this repo's 10 GB LRU budget, on top of the `-cargo-py-` and
+      # `-cargo-ts-` entries other jobs restore; the likely victim of that
+      # eviction is those other jobs, not these legs.
+      #
+      # target/ is the part that genuinely differs per feature set, so it keeps
+      # the matrix id. Note the reason is speed, not correctness: `actions/cache`
+      # entries are immutable, and a save against an existing key does not
+      # clobber it — it no-ops with "Cache already exists". Under one shared key
+      # the first leg to finish would simply win, and the other four would
+      # restore a tree whose cargo fingerprints do not match their feature set
+      # and rebuild from scratch anyway.
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            src/runtime/core/target
-          key: ${{ runner.os }}-cargo-rust-${{ hashFiles('src/runtime/core/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-rust-registry-${{ hashFiles('src/runtime/core/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-rust-
+            ${{ runner.os }}-cargo-rust-registry-
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: src/runtime/core/target
+          key: ${{ runner.os }}-cargo-rust-target-${{ matrix.id }}-${{ hashFiles('src/runtime/core/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-rust-target-${{ matrix.id }}-
 
       - name: Run Rust tests
-        run: cargo test --no-default-features -- --test-threads=1
+        run: ${{ matrix.cmd }}
+
+      # ADVISORY, NOT A GATE — `continue-on-error: true` and no `-D warnings`.
+      # The crate has 26-45 style warnings depending on the feature set, most of
+      # them the dead code issue #1594 removes. Gating on them today would mean
+      # either a red wall on every PR or turning this CI change into a Rust
+      # cleanup. Once #1594 lands, drop `continue-on-error` and append
+      # `-- -D warnings` here; until then this exists so the count is visible in
+      # the log and a *new* warning is at least readable in the diff of a run.
+      - name: Clippy (advisory)
+        continue-on-error: true
+        run: cargo clippy ${{ matrix.features }} --all-targets
 
   typescript-test:
     name: TypeScript Tests
