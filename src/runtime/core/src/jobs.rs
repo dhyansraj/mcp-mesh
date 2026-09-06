@@ -8,7 +8,7 @@
 //! v1"). TODO(phase 2/3): SQLite backing for crash-survival across replica
 //! restarts.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -302,6 +302,65 @@ async fn flush_once(
 /// match at seq N no longer skips a type-B event at seq < N. A NEW
 /// controller for the same `job_id` starts every cursor at seq=0 — replay
 /// is per-instance, per filter.
+// =============================================================================
+// JobController event-read tuning (issue #1585)
+// =============================================================================
+
+/// Per-round long-poll cap. Matches the registry's server-side ceiling
+/// (`wait` query param `maximum: 60`); requesting longer is silently
+/// truncated there, so `recv_event` loops client-side instead.
+const REGISTRY_LONG_POLL_CAP: Duration = Duration::from_secs(60);
+
+/// Page size for `GET /jobs/{id}/events` reads. Matches the OpenAPI `limit`
+/// maximum, and is shared by [`JobController::recv_event`] and
+/// [`JobProxy::list_events`] so the two cannot drift.
+///
+/// `recv_event` hands the handler ONE event per call but keeps the rest of the
+/// page in [`JobController::pending`], so a full page costs one round trip
+/// instead of one per event (issue #1585). `list_events` returns the whole
+/// page to its caller.
+const JOB_EVENTS_FETCH_LIMIT: usize = 100;
+
+/// Maximum age of a [`JobController::pending`] read-ahead buffer before
+/// `recv_event` discards it and does a real registry round trip instead —
+/// applied ONLY to controllers that carry a claim epoch, i.e. whose reads
+/// carry executor identity.
+///
+/// This exists because such a read renews `lease_expires_at` server-side
+/// (`AuthorizeExecutorRead` → `ExecutorReadExtended`) and is the only place
+/// a superseding claim is detected. Nothing else renews the lease on a
+/// schedule. The bound is what keeps the buffer from starving that signal.
+///
+/// 2s is deliberately far below the smallest lease the registry grants: the
+/// window is `max_duration` when declared and `defaultClaimLeaseSeconds`
+/// (300s) otherwise, so the worst case this adds is 2s of extra exposure on
+/// top of the handler's own gap between `recv_event` calls — under 1% of the
+/// default window. The trade lands where it should: a handler draining a page
+/// faster than 2s pays ONE round trip for the whole page (the #1585 win),
+/// while a handler slow enough for the lease to matter reads at least every
+/// 2s, which is no worse than the per-call read it had before #1585.
+///
+/// The one shape this does not cover is a job declaring `max_duration` below
+/// 2s. Such a job is already a coin flip — a single long-poll round trip can
+/// outlive its whole lease — and the controller is not told `max_duration`
+/// (it is not on `JobController`, only on the claim response), so deriving an
+/// exact fraction would mean threading it through the pyo3/napi/C constructors
+/// of all three bindings. Left as a documented edge rather than an ABI change.
+const RECV_READAHEAD_MAX_AGE: Duration = Duration::from_secs(2);
+
+/// Client-side floor between two [`JobController::recv_event`] round trips
+/// when the registry answered an empty page earlier than the wait we asked
+/// for.
+///
+/// The `wait` query param is whole seconds, so a sub-second long-poll budget
+/// goes out as `wait=0` and comes straight back. Without this floor the last
+/// sub-second of every budget — and the whole of any `timeout_secs < 1` —
+/// was a tight GET loop against the registry (issue #1585). 100ms matches the
+/// registry's own inner long-poll resolution
+/// (`listJobEventsPollResolution` in `ent_service_jobs.go`), so pacing here
+/// costs no wake-up latency the server side wasn't already imposing.
+const EMPTY_PAGE_POLL_PACE: Duration = Duration::from_millis(100);
+
 #[derive(Clone)]
 pub struct JobController {
     job_id: String,
@@ -380,6 +439,47 @@ pub struct JobController {
     /// small entry per distinct filter the handler uses (bounded), never per
     /// event.
     recv_locks: Arc<std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    /// Per-filter READ-AHEAD buffer over the tail of the last fetched page
+    /// (issue #1585), paired with the [`Instant`] of the round trip that
+    /// filled it. `list_job_events` returns up to [`JOB_EVENTS_FETCH_LIMIT`]
+    /// events per round trip but `recv_event` hands back exactly one; before
+    /// #1585 the other 99 were thrown away and re-fetched — a job that posts
+    /// N events cost N registry round trips to drain, each transferring up to
+    /// 100 rows. The tail now stays here and later calls on the SAME filter
+    /// drain it locally.
+    ///
+    /// # Why the timestamp is not optional
+    ///
+    /// An executor read (one carrying `(instance_id, claim_epoch)`) is not
+    /// just a read — it is this execution's LIVENESS SIGNAL. The registry's
+    /// `AuthorizeExecutorRead` extends `lease_expires_at` on every such read
+    /// (`ent_service_jobs.go`, `ExecutorReadExtended`) and it is also where a
+    /// stale `(owner, epoch)` pair is fenced as `claim_superseded`. Nothing
+    /// else in this controller renews the lease on a schedule: only
+    /// `update_progress` / `request_input` deltas extend it, and neither is
+    /// mandatory. So "a healthy handler renews its lease on every poll" — the
+    /// registry says exactly that at `ent_handlers_jobs.go` — was load-bearing,
+    /// and an unbounded buffer would have broken it: a handler spending 5s per
+    /// event on a 100-event page would go ~500s without a read against a 300s
+    /// default lease (`defaultClaimLeaseSeconds`), get reclaimed mid-flight by
+    /// the expired-lease sweep, and only discover it was fenced once the
+    /// buffer drained.
+    ///
+    /// [`RECV_READAHEAD_MAX_AGE`] bounds that: a buffer older than it is
+    /// discarded and the page refetched, which renews the lease and re-checks
+    /// fencing. The refetch is free of correctness risk because `cursors[K]`
+    /// sits at the last RETURNED event, so it returns exactly the discarded
+    /// events again (plus anything new).
+    ///
+    /// # Interaction with the cursors above
+    ///
+    /// `cursors[K]` is advanced ONLY when an event is RETURNED to the handler,
+    /// never at fetch time. So the durable-resume contract is unchanged — a
+    /// crash with a full buffer leaves both cursors behind the buffered seqs
+    /// and the re-claim replays them from the registry (at-least-once, never
+    /// skip). Access is under filter K's `recv_locks` entry, same as the
+    /// cursor window.
+    pending: Arc<std::sync::Mutex<HashMap<String, (Instant, VecDeque<JobEvent>)>>>,
 }
 
 impl JobController {
@@ -430,7 +530,56 @@ impl JobController {
             cursors: Arc::new(std::sync::Mutex::new(seed.clone())),
             durable_cursors: Arc::new(std::sync::Mutex::new(seed)),
             recv_locks: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            pending: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Pop the next read-ahead event for filter `key`, if the previous round
+    /// trip left one buffered AND that buffer is still fresh enough to serve
+    /// (issue #1585). Removes the map entry once the buffer drains — or as
+    /// soon as it goes stale — so the map stays bounded by the number of
+    /// distinct filters in use, not by event volume.
+    ///
+    /// `renew_by` is the age at which the buffer must be abandoned in favour
+    /// of a real round trip. It is `Some` exactly when this controller sends
+    /// executor identity on reads (`claim_epoch.is_some()`), because that is
+    /// the case where a read has REGISTRY-SIDE EFFECTS — lease renewal and
+    /// claim fencing — that serving from a local buffer would skip. See the
+    /// `pending` field docs. A push-mode / legacy controller reads
+    /// anonymously (no lease, no fencing), so its buffer has no expiry.
+    ///
+    /// Callers MUST hold filter `key`'s `recv_locks` entry — the pop and the
+    /// subsequent `cursors[key]` advance have to be atomic with respect to a
+    /// concurrent same-filter `recv_event`, exactly as the fetch path's
+    /// load→list→store window is.
+    fn take_pending(&self, key: &str, renew_by: Option<Duration>) -> Option<JobEvent> {
+        let mut pending = self.pending.lock().expect("pending poisoned");
+        let (filled_at, buf) = pending.get_mut(key)?;
+        if let Some(max_age) = renew_by {
+            if filled_at.elapsed() >= max_age {
+                // Stale: drop it and let the caller do a real round trip, which
+                // renews the lease and re-checks fencing. `cursors[key]` still
+                // points at the last RETURNED event, so the refetch re-reads
+                // exactly what we are throwing away.
+                pending.remove(key);
+                return None;
+            }
+        }
+        let ev = buf.pop_front();
+        if buf.is_empty() {
+            pending.remove(key);
+        }
+        ev
+    }
+
+    /// The age at which this controller's read-ahead buffers must be
+    /// abandoned in favour of a real registry round trip, or `None` when they
+    /// never need to be.
+    ///
+    /// `Some` iff this controller carries a claim epoch, i.e. iff its reads
+    /// carry executor identity and therefore renew the lease / can be fenced.
+    fn readahead_max_age(&self) -> Option<Duration> {
+        self.claim_epoch.map(|_| RECV_READAHEAD_MAX_AGE)
     }
 
     /// Canonical identity of a `recv_event` type filter, used as the
@@ -516,6 +665,15 @@ impl JobController {
                 *e = v;
             }
         }
+    }
+
+    /// Test-only snapshot of the RECEIPT cursors (the ones that advance when
+    /// an event is handed to the handler). Used by the #1585 read-ahead tests
+    /// to prove the page buffer never runs the cursor past an unreturned
+    /// event.
+    #[cfg(test)]
+    fn cursors_snapshot(&self) -> HashMap<String, i64> {
+        self.cursors.lock().expect("cursors poisoned").clone()
     }
 
     /// Snapshot the lagging durable cursors to stamp onto an outgoing
@@ -848,6 +1006,14 @@ impl JobController {
     /// the registry's 60s cap until an event arrives). `Some(d)` returns
     /// `Ok(None)` once roughly `d` has elapsed without a matching event.
     ///
+    /// `Some(0)` — and any budget already spent by the time the call arrives —
+    /// is a SINGLE IMMEDIATE READ (issue #1585): one non-blocking round trip,
+    /// then `Ok(None)` if it found nothing. Before #1585 it did no read at
+    /// all, so an event already sitting in the log was invisible to it. The
+    /// one qualification: with no budget left there is nothing to wait for the
+    /// per-filter serialization lock with, so if a concurrent same-filter call
+    /// already holds it, this returns `Ok(None)` without reading.
+    ///
     /// Trace context: when an event with `trace_context` is returned, the
     /// field is passed through verbatim on [`JobEvent::trace_context`].
     /// TODO: wire OpenTelemetry child-span creation when the core crate
@@ -888,13 +1054,6 @@ impl JobController {
         types: Option<Vec<String>>,
         timeout: Option<Duration>,
     ) -> Result<Option<JobEvent>, JobError> {
-        // Per-round long-poll cap. Matches the registry's server-side
-        // ceiling (`wait` query param ≤ 60s); requesting longer is
-        // silently truncated, so we loop client-side instead.
-        const REGISTRY_LONG_POLL_CAP: Duration = Duration::from_secs(60);
-        // Server-side limit (matches OpenAPI `limit` maximum).
-        const FETCH_LIMIT: usize = 100;
-
         // Per-filter cursor + serialization (issue #1252 Phase 3). This
         // filter's identity keys BOTH its cursor and its serialization lock.
         // Hold ONLY this filter's lock across the load→list→store window:
@@ -938,7 +1097,26 @@ impl JobController {
         // `timeout` is `None` — so an untimed, uncancellable call simply awaits
         // the lock. Once acquired, the loop below derives every poll's budget
         // from `deadline`, so wait-on-lock time is already subtracted.
-        let _guard = {
+        //
+        // Special case: a budget that is ALREADY spent on arrival — `timeout =
+        // Some(0)` (the "single immediate read" shape), or a caller whose
+        // budget elapsed before it got here. The `select!` below is `biased`
+        // and would poll the already-elapsed `deadline_sleep` before the lock,
+        // so routing that case through it makes the single read a RACE: it
+        // only happens when tokio's ms-granularity sleep rounding leaves the
+        // timer not-yet-ready, which under real same-filter contention it
+        // won't be. Decide it explicitly instead: take the lock if it is free
+        // and do the one read, otherwise return `Ok(None)` immediately —
+        // there is by definition no budget left to wait for the lock with.
+        // (A fired cancel still wins: the loop below re-reads the cancel token
+        // and returns `Cancelled` before issuing any read.)
+        let already_spent = deadline.is_some_and(|d| Instant::now() >= d);
+        let _guard = if already_spent {
+            match filter_lock.try_lock() {
+                Ok(g) => g,
+                Err(_) => return Ok(None),
+            }
+        } else {
             let deadline_sleep = async {
                 match deadline {
                     Some(d) => tokio::time::sleep_until(d).await,
@@ -975,6 +1153,14 @@ impl JobController {
         // `POLL_MAX_MS` — same shape as `JobProxy::wait_with_config`.
         let mut backoff_ms = POLL_INITIAL_MS;
 
+        // Round-trip counter, paired with the `already_spent` branch above:
+        // `timeout = Some(0)` (and any budget elapsed on arrival) still gets
+        // ONE non-blocking read (issue #1585). Before that, an expired budget
+        // returned `Ok(None)` having never looked at the log, so
+        // `recv_event(timeout_secs=0)` could not observe an event that was
+        // already sitting there.
+        let mut rounds: u64 = 0;
+
         loop {
             // Honour the caller's overall timeout BEFORE issuing the next
             // long-poll round-trip so a tight `timeout` doesn't get one
@@ -983,9 +1169,15 @@ impl JobController {
                 Some(d) => {
                     let now = Instant::now();
                     if now >= d {
-                        return Ok(None);
+                        if rounds > 0 {
+                            return Ok(None);
+                        }
+                        // First pass on an already-spent budget: fall through
+                        // with a zero-length wait (a single immediate read).
+                        Some(Duration::ZERO)
+                    } else {
+                        Some(d - now)
                     }
-                    Some(d - now)
                 }
                 None => None,
             };
@@ -1025,6 +1217,25 @@ impl JobController {
                 }
             }
 
+            // Read-ahead buffer first (issue #1585): the previous round trip
+            // fetched up to JOB_EVENTS_FETCH_LIMIT events and returned one;
+            // the rest are here. Serve them locally instead of re-fetching the
+            // same page — but only while the buffer is younger than
+            // `readahead_max_age()`, because for a claimed controller a real
+            // read is what renews the lease and re-checks claim fencing (see
+            // the `pending` field docs). Deliberately AFTER the cancel check
+            // above so a fired cancel still wins over a buffered event.
+            // `cursors[K]` advances here — at RETURN — exactly as it does on
+            // the fetch path, so the durable-resume contract is untouched.
+            if let Some(ev) = self.take_pending(&key, self.readahead_max_age()) {
+                let mut cursors = self.cursors.lock().expect("cursors poisoned");
+                let cur = cursors.entry(key.clone()).or_insert(0);
+                if ev.seq > *cur {
+                    *cur = ev.seq;
+                }
+                return Ok(Some(ev));
+            }
+
             // Read THIS filter's cursor (default 0 for a never-consumed
             // filter). The per-filter lock above serializes same-filter
             // callers, so the load→list→store window is race-free.
@@ -1043,12 +1254,23 @@ impl JobController {
             let identity = self
                 .claim_epoch
                 .map(|epoch| (self.instance_id.as_str(), epoch));
-            let list_fut =
-                self.backend
-                    .list_job_events(&self.job_id, after, types_ref, wait, FETCH_LIMIT, identity);
+            rounds += 1;
+            let list_fut = self.backend.list_job_events(
+                &self.job_id,
+                after,
+                types_ref,
+                wait,
+                JOB_EVENTS_FETCH_LIMIT,
+                identity,
+            );
             // Race the long-poll against the cancel token so a cancel fired
             // mid-poll returns immediately instead of after the registry's
             // 60s cap. Poll cadence / backoff are otherwise unchanged.
+            //
+            // `round_started` feeds the empty-page pacing below: it tells us
+            // whether the registry actually held the request for the `wait`
+            // we asked for, or answered early (issue #1585).
+            let round_started = Instant::now();
             let list_result = match &cancel_token {
                 Some(tok) => {
                     tokio::select! {
@@ -1071,7 +1293,25 @@ impl JobController {
                     // the head and advance THIS filter's cursor to its seq so
                     // the next same-filter call picks up strictly after it.
                     // Advance monotonically (never retreat).
-                    if let Some(ev) = resp.events.into_iter().next() {
+                    let mut page = resp.events.into_iter();
+                    if let Some(ev) = page.next() {
+                        // Park the REST of the page (issue #1585) so the next
+                        // same-filter `recv_event` serves it locally instead
+                        // of re-requesting the identical rows. Only `cursors`
+                        // — advanced below for the event we actually return —
+                        // is durable state; the buffer is best-effort and
+                        // simply re-fetched if this process dies.
+                        let tail: VecDeque<JobEvent> = page.collect();
+                        if !tail.is_empty() {
+                            // Stamp the buffer with the time of THIS round
+                            // trip: that is the moment the lease was last
+                            // renewed, and the clock `take_pending` measures
+                            // staleness against.
+                            self.pending
+                                .lock()
+                                .expect("pending poisoned")
+                                .insert(key.clone(), (round_started, tail));
+                        }
                         let mut cursors = self.cursors.lock().expect("cursors poisoned");
                         let cur = cursors.entry(key.clone()).or_insert(0);
                         if ev.seq > *cur {
@@ -1103,8 +1343,53 @@ impl JobController {
                             *cur = resp.next_after;
                         }
                     }
-                    // No event yet — loop. The deadline check at the top
-                    // of the next iteration returns Ok(None) if expired.
+                    // No event yet — pace, then loop. The deadline check at
+                    // the top of the next iteration returns Ok(None) if
+                    // expired.
+                    //
+                    // Pacing exists because the round trip can come back
+                    // EARLIER than the wait we asked for, and when it does
+                    // this loop had nothing to stop it re-requesting
+                    // immediately. The routine case is the wire format: the
+                    // `wait` query param is whole seconds, so
+                    // `RegistryHttpBackend` truncates and any `wait` under one
+                    // second goes out as `wait=0` and is answered instantly —
+                    // which made `timeout_secs < 1`, and the last sub-second
+                    // of EVERY budget, a tight GET loop against the registry
+                    // (issue #1585). Keying off "returned early" rather than
+                    // "wait < 1s" also covers a registry (or an ingress in
+                    // front of it) that short-circuits a longer long-poll.
+                    //
+                    // Sleep at most one poll interval, bounded by both the
+                    // unserved part of this round's wait and whatever is left
+                    // of the caller's budget, so pacing never overshoots the
+                    // deadline. Race the cancel token so a cancel during the
+                    // nap is still prompt.
+                    let served = round_started.elapsed();
+                    if served < wait {
+                        let mut nap = EMPTY_PAGE_POLL_PACE.min(wait - served);
+                        if let Some(d) = deadline {
+                            let now = Instant::now();
+                            if now >= d {
+                                // Budget spent; the next iteration returns
+                                // Ok(None) without sleeping at all.
+                                continue;
+                            }
+                            nap = nap.min(d - now);
+                        }
+                        if !nap.is_zero() {
+                            match &cancel_token {
+                                Some(tok) => {
+                                    tokio::select! {
+                                        biased;
+                                        _ = tok.cancelled() => return Err(JobError::Cancelled),
+                                        _ = sleep(nap) => {}
+                                    }
+                                }
+                                None => sleep(nap).await,
+                            }
+                        }
+                    }
                 }
                 Err(BackendError::ClaimSuperseded(_)) => {
                     // The registry fenced this executor read: a newer claim
@@ -1316,21 +1601,37 @@ impl JobProxy {
         types: Option<Vec<String>>,
         wait: Option<Duration>,
     ) -> Result<(Vec<JobEvent>, i64), JobError> {
-        // Server-side limit (matches OpenAPI `limit` maximum).
-        const FETCH_LIMIT: usize = 100;
+        let requested = wait.unwrap_or_default();
         let resp = self
             .backend
             .list_job_events(
                 &self.job_id,
                 after,
                 types.as_deref(),
-                wait.unwrap_or_default(),
-                FETCH_LIMIT,
+                requested,
+                JOB_EVENTS_FETCH_LIMIT,
                 // Observer read: JobProxy never claims — no executor identity,
                 // no lease side-effects (A2A / UI / meshctl all rely on this).
                 None,
             )
             .await?;
+        // The registry's `wait` query param is WHOLE SECONDS, so a fractional
+        // budget loses its sub-second remainder on the wire: `Some(500ms)`
+        // goes out as `wait=0` and comes straight back empty, turning the
+        // caller's `subscribe_events` loop into a tight GET loop (issue
+        // #1585). Absorb ONLY the truncated remainder here, and only on an
+        // empty page. Two things this deliberately does NOT do: it never
+        // sleeps for a whole-second budget (30.0 has no remainder, so an
+        // in-process/mock backend answering instantly still returns
+        // instantly), and it never turns `Some(0)` — the documented
+        // "single immediate read" / tight-poll opt-in — into a wait.
+        if resp.events.is_empty() {
+            let capped = requested.min(REGISTRY_LONG_POLL_CAP);
+            let remainder = capped - Duration::from_secs(capped.as_secs());
+            if !remainder.is_zero() {
+                sleep(remainder).await;
+            }
+        }
         Ok((resp.events, resp.next_after))
     }
 
@@ -1338,6 +1639,13 @@ impl JobProxy {
     /// payload, or surfaces an error. Convenience wrapper around
     /// [`Self::wait_with_config`] that uses [`WaitConfig::default`] for
     /// the resilience window (60s).
+    ///
+    /// `timeout`: `None` blocks until the job is terminal. `Some(0)` — and
+    /// any already-elapsed budget — performs a SINGLE immediate `get_job`
+    /// and then reports `JobError::Timeout` if the job is still running
+    /// (issue #1584); it is not "no timeout". Only the C-ABI surfaces use a
+    /// NEGATIVE value to mean "absent", and they convert it to `None` before
+    /// it reaches here.
     ///
     /// Honours:
     /// 1. Caller-supplied `timeout` (returns `JobError::Timeout`).
@@ -1386,11 +1694,21 @@ impl JobProxy {
         // Tracks the start of the current contiguous transient-failure
         // window. `None` after every successful poll.
         let mut transient_failure_started: Option<Instant> = None;
+        // Round-trip counter. A zero-length (or already-elapsed) budget still
+        // gets ONE `get_job` before timing out — the same "single immediate
+        // read" semantics `recv_event` has for `Some(0)` (issue #1584/#1585).
+        // Without it the deadline check below ran BEFORE the first poll, so
+        // `wait(Some(ZERO))` reported a timeout on a job that had already
+        // completed, and the Java `await(id, 0.0)` surface documented a
+        // behaviour ("no timeout, block until terminal") that no longer held
+        // once the C-ABI sentinel was narrowed to negatives only.
+        let mut rounds: u64 = 0;
 
         loop {
-            // Check absolute deadline first (cheap).
+            // Check absolute deadline first (cheap) — but never before the
+            // first poll; see `rounds`.
             if let Some(d) = effective_deadline {
-                if Instant::now() >= d {
+                if rounds > 0 && Instant::now() >= d {
                     return Err(JobError::Timeout(config.timeout.unwrap_or_default()));
                 }
             }
@@ -1403,6 +1721,7 @@ impl JobProxy {
             }
 
             // Poll the registry.
+            rounds += 1;
             match self.backend.get_job(&self.job_id).await {
                 Ok(job) => {
                     // Recovered: drop any in-flight transient window.
@@ -3057,6 +3376,38 @@ mod tests {
 
     /// Build a working JobController against a fresh MockBackend with the
     /// given job_id pre-created in the backend's job map.
+    /// Seed a bare job row on the mock so `JobProxy` tests can drive
+    /// `get_job` without hand-rolling the whole struct each time.
+    fn seed_job(
+        backend: &Arc<MockBackend>,
+        job_id: &str,
+        status: JobStatus,
+        result: Option<serde_json::Value>,
+    ) {
+        backend.jobs.lock().unwrap().insert(
+            job_id.to_string(),
+            Job {
+                id: job_id.to_string(),
+                capability: "cap".into(),
+                owner_instance_id: None,
+                status,
+                progress: None,
+                progress_message: None,
+                result,
+                error: None,
+                submitted_payload: serde_json::json!({}),
+                attempt_count: 0,
+                max_retries: 1,
+                max_duration: None,
+                total_deadline: None,
+                lease_expires_at: None,
+                last_heartbeat_at: None,
+                submitted_at: 0,
+                submitted_by: "client-1".into(),
+            },
+        );
+    }
+
     async fn make_controller(job_id: &str) -> (Arc<MockBackend>, JobController) {
         let backend = MockBackend::new();
         backend.jobs.lock().unwrap().insert(
@@ -3474,6 +3825,311 @@ mod tests {
             .await
             .unwrap();
         assert!(result.is_none(), "expected timeout (None), got {:?}", result);
+    }
+
+    // ---- issue #1585: sub-second waits / page read-ahead --------------------
+
+    /// A sub-second `timeout` used to be a tight GET loop: the wire's `wait`
+    /// param is whole seconds, so anything under 1s went out as `wait=0`, the
+    /// registry answered instantly, and `recv_event` immediately re-requested
+    /// with no pacing at all. The mock reproduces that exactly (it never
+    /// long-polls), so the round-trip count is a direct measurement.
+    ///
+    /// With `EMPTY_PAGE_POLL_PACE` = 100ms, a 500ms budget is ~5 round trips.
+    /// The pre-fix loop managed thousands. The bound here is deliberately
+    /// generous (25) so it measures "paced" vs "unpaced", not scheduler jitter.
+    #[tokio::test]
+    async fn recv_event_sub_second_timeout_does_not_hot_loop() {
+        let (backend, ctrl) = make_controller("j-1585-subsec").await;
+
+        let result = ctrl
+            .recv_event(None, Some(Duration::from_millis(500)))
+            .await
+            .unwrap();
+        assert!(result.is_none(), "expected timeout, got {:?}", result);
+
+        let rounds = backend.list_identities().len();
+        assert!(
+            rounds <= 25,
+            "sub-second recv_event must be paced, not a hot loop; \
+             issued {rounds} registry round trips for a 500ms budget"
+        );
+        assert!(rounds >= 1, "must issue at least one read");
+    }
+
+    /// Same defect, different entry: the LAST sub-second of any budget. A
+    /// whole-second budget spends its final <1s remainder at `wait=0`, so the
+    /// pacing has to apply there too.
+    #[tokio::test]
+    async fn recv_event_multi_second_timeout_paces_its_sub_second_tail() {
+        let (backend, ctrl) = make_controller("j-1585-tail").await;
+
+        let result = ctrl
+            .recv_event(None, Some(Duration::from_millis(1_200)))
+            .await
+            .unwrap();
+        assert!(result.is_none());
+
+        let rounds = backend.list_identities().len();
+        assert!(
+            rounds <= 40,
+            "sub-second tail must be paced; issued {rounds} round trips"
+        );
+    }
+
+    /// `timeout = Some(0)` is the documented "single immediate read". Before
+    /// #1585 the deadline check ran BEFORE the first round trip, so a
+    /// zero-length budget returned `Ok(None)` having never looked at the
+    /// event log — even when a matching event was already sitting in it.
+    #[tokio::test]
+    async fn recv_event_zero_timeout_still_reads_once() {
+        let (backend, ctrl) = make_controller("j-1585-zero").await;
+        backend.push_event("j-1585-zero", "ping", serde_json::json!({"n": 1}));
+
+        let ev = ctrl
+            .recv_event(None, Some(Duration::ZERO))
+            .await
+            .unwrap()
+            .expect("timeout=0 must still perform one immediate read");
+        assert_eq!(ev.seq, 1);
+        assert_eq!(backend.list_identities().len(), 1, "exactly one round trip");
+    }
+
+    /// `JobProxy::wait(Some(0))` is the same single-immediate-read shape as
+    /// `recv_event(Some(0))` (issue #1584). Before the fix the deadline check
+    /// ran BEFORE the first `get_job`, so a zero-length budget reported a
+    /// timeout on a job that had already completed — and the Java
+    /// `await(id, 0.0)` surface still documented it as "no timeout, block
+    /// until terminal", which stopped being true once the C-ABI absence
+    /// sentinel was narrowed to negatives only.
+    #[tokio::test]
+    async fn proxy_wait_zero_timeout_still_polls_once() {
+        let backend = MockBackend::new();
+        seed_job(&backend, "j-1584-wait-zero", JobStatus::Completed, Some(serde_json::json!({"n": 7})));
+        let proxy = JobProxy::new("j-1584-wait-zero", backend.clone() as Arc<dyn TaskBackend>);
+
+        let out = proxy
+            .wait(Some(Duration::ZERO))
+            .await
+            .expect("a terminal job must be observed by the single immediate read");
+        assert_eq!(out, serde_json::json!({"n": 7}));
+    }
+
+    /// ...and a zero budget on a job that is still running times out after
+    /// exactly one poll rather than looping.
+    #[tokio::test]
+    async fn proxy_wait_zero_timeout_times_out_after_one_poll() {
+        let backend = MockBackend::new();
+        seed_job(&backend, "j-1584-wait-zero-run", JobStatus::Working, None);
+        let proxy = JobProxy::new("j-1584-wait-zero-run", backend.clone() as Arc<dyn TaskBackend>);
+
+        let err = proxy.wait(Some(Duration::ZERO)).await.unwrap_err();
+        assert!(matches!(err, JobError::Timeout(_)), "got {err:?}");
+    }
+
+    /// ...and that single read must not turn into a loop when the log is
+    /// empty: `timeout = Some(0)` reads once and gives up.
+    #[tokio::test]
+    async fn recv_event_zero_timeout_reads_exactly_once_when_empty() {
+        let (backend, ctrl) = make_controller("j-1585-zero-empty").await;
+
+        let result = ctrl.recv_event(None, Some(Duration::ZERO)).await.unwrap();
+        assert!(result.is_none());
+        assert_eq!(backend.list_identities().len(), 1);
+    }
+
+    /// The registry returns up to 100 events per round trip; `recv_event`
+    /// hands back one. Before #1585 the other 99 were discarded and
+    /// re-fetched, so draining N events cost N round trips. They are now
+    /// buffered per filter: N events, ONE round trip.
+    #[tokio::test]
+    async fn recv_event_serves_the_rest_of_the_page_without_re_fetching() {
+        let (backend, ctrl) = make_controller("j-1585-page").await;
+        for i in 1..=5 {
+            backend.push_event("j-1585-page", "tick", serde_json::json!({"n": i}));
+        }
+
+        for expected_seq in 1..=5i64 {
+            let ev = ctrl
+                .recv_event(None, Some(Duration::from_secs(2)))
+                .await
+                .unwrap()
+                .expect("event");
+            assert_eq!(ev.seq, expected_seq);
+            assert_eq!(ev.payload, Some(serde_json::json!({"n": expected_seq})));
+        }
+        assert_eq!(
+            backend.list_identities().len(),
+            1,
+            "five events from one page must cost ONE registry round trip"
+        );
+    }
+
+    /// Issue #1585 BLOCKER: the read-ahead buffer must not starve the
+    /// executor's liveness signal.
+    ///
+    /// An identity-carrying `GET /jobs/{id}/events` is what renews
+    /// `lease_expires_at` server-side (`AuthorizeExecutorRead` →
+    /// `ExecutorReadExtended`) and the only place a superseding claim is
+    /// detected. Nothing else in `JobController` renews on a schedule. An
+    /// unbounded buffer therefore turned a 100-event page into ONE liveness
+    /// signal for the whole drain — a handler spending seconds per event would
+    /// be reclaimed mid-flight by the expired-lease sweep and only find out
+    /// when the buffer ran dry.
+    ///
+    /// Drain five buffered events slowly (past `RECV_READAHEAD_MAX_AGE` each
+    /// time) and assert every one of them cost a real identity-carrying read.
+    #[tokio::test(start_paused = true)]
+    async fn recv_event_read_ahead_still_renews_the_lease_on_a_slow_drain() {
+        let (backend, ctrl) = make_controller_with_epoch("j-1585-lease", Some(1), 1).await;
+        for _ in 0..5 {
+            backend.push_event("j-1585-lease", "tick", serde_json::json!({}));
+        }
+
+        for expected_seq in 1..=5i64 {
+            let ev = ctrl
+                .recv_event(None, Some(Duration::from_secs(2)))
+                .await
+                .unwrap()
+                .expect("event");
+            assert_eq!(ev.seq, expected_seq);
+            // Handler work: long enough that a lease renewal is due.
+            sleep(RECV_READAHEAD_MAX_AGE + Duration::from_millis(100)).await;
+        }
+
+        let identity_reads = backend
+            .list_identities()
+            .into_iter()
+            .filter(|i| i.is_some())
+            .count();
+        assert_eq!(
+            identity_reads, 5,
+            "a slow drain must renew the lease per event, not serve 4 of 5 \
+             events from a stale buffer"
+        );
+    }
+
+    /// The other half of the trade: a FAST drain still collapses to one round
+    /// trip even for a claimed (identity-carrying) controller, because the
+    /// buffer never goes stale within the drain.
+    #[tokio::test(start_paused = true)]
+    async fn recv_event_read_ahead_still_saves_round_trips_on_a_fast_drain() {
+        let (backend, ctrl) = make_controller_with_epoch("j-1585-fast", Some(1), 1).await;
+        for _ in 0..5 {
+            backend.push_event("j-1585-fast", "tick", serde_json::json!({}));
+        }
+
+        for expected_seq in 1..=5i64 {
+            let ev = ctrl
+                .recv_event(None, Some(Duration::from_secs(2)))
+                .await
+                .unwrap()
+                .expect("event");
+            assert_eq!(ev.seq, expected_seq);
+            // Well inside RECV_READAHEAD_MAX_AGE.
+            sleep(Duration::from_millis(10)).await;
+        }
+
+        assert_eq!(
+            backend.list_identities().len(),
+            1,
+            "a drain faster than the renewal window must still cost ONE read"
+        );
+    }
+
+    /// A push-mode / legacy controller (no claim epoch) reads anonymously —
+    /// no lease, no fencing — so its buffer has no expiry and a slow drain
+    /// still costs one round trip.
+    #[tokio::test(start_paused = true)]
+    async fn recv_event_read_ahead_has_no_expiry_without_an_epoch() {
+        let (backend, ctrl) = make_controller("j-1585-anon").await;
+        for _ in 0..3 {
+            backend.push_event("j-1585-anon", "tick", serde_json::json!({}));
+        }
+
+        for expected_seq in 1..=3i64 {
+            let ev = ctrl
+                .recv_event(None, Some(Duration::from_secs(2)))
+                .await
+                .unwrap()
+                .expect("event");
+            assert_eq!(ev.seq, expected_seq);
+            sleep(RECV_READAHEAD_MAX_AGE * 3).await;
+        }
+
+        assert_eq!(backend.list_identities().len(), 1);
+        assert!(
+            backend.list_identities().iter().all(|i| i.is_none()),
+            "a legacy controller must read anonymously"
+        );
+    }
+
+    /// The read-ahead buffer is PER FILTER — draining filter A must not
+    /// consume or reorder filter B's stream, and each filter keeps its own
+    /// cursor exactly as before.
+    #[tokio::test]
+    async fn recv_event_read_ahead_buffer_is_per_filter() {
+        let (backend, ctrl) = make_controller("j-1585-page-filter").await;
+        backend.push_event("j-1585-page-filter", "A", serde_json::json!({}));
+        backend.push_event("j-1585-page-filter", "B", serde_json::json!({}));
+        backend.push_event("j-1585-page-filter", "A", serde_json::json!({}));
+        backend.push_event("j-1585-page-filter", "B", serde_json::json!({}));
+
+        let a1 = ctrl
+            .recv_event(Some(vec!["A".into()]), Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .expect("A1");
+        assert_eq!(a1.seq, 1);
+        // Served from filter A's buffer — no new round trip.
+        let a2 = ctrl
+            .recv_event(Some(vec!["A".into()]), Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .expect("A2");
+        assert_eq!(a2.seq, 3);
+        // Filter B has its own cursor and its own (empty) buffer, so it still
+        // sees seq=2 first even though A consumed past it.
+        let b1 = ctrl
+            .recv_event(Some(vec!["B".into()]), Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .expect("B1");
+        assert_eq!(b1.seq, 2);
+        let b2 = ctrl
+            .recv_event(Some(vec!["B".into()]), Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .expect("B2");
+        assert_eq!(b2.seq, 4);
+    }
+
+    /// The buffer must never advance a cursor past an event the handler has
+    /// not been handed — that is what keeps the durable-resume contract
+    /// (#1277) at-least-once. After ONE `recv_event` off a 3-event page, the
+    /// cursor sits at seq=1, not seq=3.
+    #[tokio::test]
+    async fn recv_event_read_ahead_does_not_advance_cursor_past_unreturned_events() {
+        let (backend, ctrl) = make_controller("j-1585-cursor").await;
+        for _ in 0..3 {
+            backend.push_event("j-1585-cursor", "tick", serde_json::json!({}));
+        }
+
+        let ev = ctrl
+            .recv_event(None, Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .expect("event");
+        assert_eq!(ev.seq, 1);
+        assert_eq!(
+            ctrl.cursors_snapshot().get(""),
+            Some(&1),
+            "cursor must track the RETURNED event, not the fetched page"
+        );
+        // The lagging durable cursor is still behind that, so a crash here
+        // replays seq 1..=3 from the registry rather than skipping the two
+        // events that only ever existed in the local buffer.
+        assert_eq!(ctrl.durable_snapshot().and_then(|m| m.get("").copied()), Some(0));
     }
 
     #[tokio::test]
@@ -4642,6 +5298,86 @@ mod tests {
         let proxy = JobProxy::new("j-list-empty", backend.clone() as Arc<dyn TaskBackend>);
         let (events, _next_after) = proxy.list_events(0, None, None).await.unwrap();
         assert!(events.is_empty());
+    }
+
+    /// Issue #1585: the registry's `wait` param is whole seconds, so a
+    /// fractional long-poll budget lost its sub-second remainder on the wire
+    /// and came straight back — turning a `subscribe_events(long_poll_secs=0.5)`
+    /// loop into a tight GET loop. `list_events` now absorbs the truncated
+    /// remainder itself when the page came back empty.
+    #[tokio::test]
+    async fn list_events_absorbs_the_truncated_sub_second_wait() {
+        let backend = MockBackend::new();
+        let proxy = JobProxy::new("j-1585-frac", backend.clone() as Arc<dyn TaskBackend>);
+        let started = std::time::Instant::now();
+        let (events, _) = proxy
+            .list_events(0, None, Some(Duration::from_millis(400)))
+            .await
+            .unwrap();
+        let elapsed = started.elapsed();
+        assert!(events.is_empty());
+        assert!(
+            elapsed >= Duration::from_millis(350),
+            "a 400ms budget must actually wait ~400ms, not return instantly; \
+             took {elapsed:?}"
+        );
+    }
+
+    /// The compensation is EXACTLY the truncated remainder — never more.
+    /// A whole-second budget has no remainder, so a backend that answers
+    /// instantly still returns instantly (this is what keeps in-process and
+    /// mock backends usable), and `Some(0)` stays the documented tight-poll
+    /// opt-in.
+    #[tokio::test]
+    async fn list_events_does_not_pad_whole_second_or_zero_waits() {
+        let backend = MockBackend::new();
+        let proxy = JobProxy::new("j-1585-whole", backend.clone() as Arc<dyn TaskBackend>);
+
+        let started = std::time::Instant::now();
+        let _ = proxy
+            .list_events(0, None, Some(Duration::from_secs(30)))
+            .await
+            .unwrap();
+        assert!(
+            started.elapsed() < Duration::from_millis(200),
+            "whole-second budget must not be padded client-side"
+        );
+
+        let started = std::time::Instant::now();
+        let _ = proxy
+            .list_events(0, None, Some(Duration::ZERO))
+            .await
+            .unwrap();
+        assert!(
+            started.elapsed() < Duration::from_millis(200),
+            "Some(0) is the documented single-immediate-read"
+        );
+
+        let started = std::time::Instant::now();
+        let _ = proxy.list_events(0, None, None).await.unwrap();
+        assert!(
+            started.elapsed() < Duration::from_millis(200),
+            "None must stay a single immediate read"
+        );
+    }
+
+    /// A non-empty page returns as soon as it has data — the sub-second
+    /// compensation only applies when there was nothing to hand back.
+    #[tokio::test]
+    async fn list_events_does_not_pad_a_non_empty_page() {
+        let backend = MockBackend::new();
+        backend.push_event("j-1585-hit", "e", serde_json::json!({}));
+        let proxy = JobProxy::new("j-1585-hit", backend.clone() as Arc<dyn TaskBackend>);
+        let started = std::time::Instant::now();
+        let (events, _) = proxy
+            .list_events(0, None, Some(Duration::from_millis(900)))
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(
+            started.elapsed() < Duration::from_millis(200),
+            "an event was available; do not pad"
+        );
     }
 
     #[tokio::test]

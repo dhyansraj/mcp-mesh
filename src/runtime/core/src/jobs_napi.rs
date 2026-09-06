@@ -580,8 +580,10 @@ pub fn current_job_napi() -> Option<JsJobContextSnapshot> {
 pub struct JsJobHeaders {
     /// `X-Mesh-Job-Id` header value.
     pub x_mesh_job_id: String,
-    /// `X-Mesh-Timeout` header value (seconds remaining as decimal string),
-    /// or `None` if the active context has no deadline.
+    /// `X-Mesh-Timeout` header value (`ceil(remaining)` floored at 1, as a
+    /// decimal string), or `None` when the header must be OMITTED: the active
+    /// context has no deadline, or that deadline has already expired. Never
+    /// `"0"` — see `JobContext::timeout_header_seconds` (issue #1584).
     pub x_mesh_timeout: Option<String>,
 }
 
@@ -600,7 +602,18 @@ pub struct JsJobHeaders {
 #[napi(js_name = "injectJobHeaders")]
 pub fn inject_job_headers_napi() -> Option<JsJobHeaders> {
     job_context::current().map(|ctx| {
-        let timeout = ctx.remaining_seconds().map(|s| s.to_string());
+        // `timeout_header_seconds`, NOT `remaining_seconds` (issue #1584):
+        // the latter truncates, so a sub-second or expired budget renders as
+        // "0" — which every receiver reads as "unset" and replaces with its
+        // own (larger) default, losing the parent's cap entirely.
+        let timeout = ctx.timeout_header_seconds().map(|s| s.to_string());
+        if timeout.is_none() && ctx.deadline.is_some() {
+            tracing::warn!(
+                "injectJobHeaders: job={} has an expired deadline; omitting \
+                 X-Mesh-Timeout instead of emitting an invalid '0' value",
+                ctx.job_id
+            );
+        }
         JsJobHeaders {
             x_mesh_job_id: ctx.job_id,
             x_mesh_timeout: timeout,
@@ -695,8 +708,10 @@ pub async fn await_job_cancel_napi(job_id: String) {
 /// Arguments:
 ///   * `jobId` — server-assigned job UUID this call is bound to.
 ///   * `deadlineSecs` — optional per-attempt deadline in seconds.
-///     `null` / `undefined` means no deadline (unlimited per design-doc
-///     default).
+///     `null` / `undefined` (and `0`) mean no deadline (unlimited per
+///     design-doc default). A negative, NaN or infinite value rejects — see
+///     the "f64-SECONDS BOUNDARY POLICY" note in `task_backend.rs`
+///     (issue #1584).
 ///   * `body` — in-flight JS Promise resolving to a JSON value. The
 ///     SDK's TS wrapper typically constructs this with the user
 ///     function's return value already JSON-serialised.
@@ -705,17 +720,19 @@ pub async fn await_job_cancel_napi(job_id: String) {
 /// underlying JS Promise settles. The `run_as_job` scope keeps the
 /// cancel registry entry alive for that whole window, then drops it
 /// (panic-safe via the internal drop guard).
-/// Validate `deadline_secs` for [`with_job_async_napi`]. Returns the
-/// [`napi::Error`] message that would be propagated to JS, or `None`
-/// when the input is acceptable. Extracted from `with_job_async_napi`
-/// so it can be unit-tested without the napi `Promise<T>` boundary.
-fn validate_deadline_secs(deadline_secs: Option<f64>, job_id: &str) -> Option<String> {
+/// Validate a JS-supplied job `deadlineSecs` against the ONE boundary policy
+/// shared by every binding (see the "f64-SECONDS BOUNDARY POLICY" note in
+/// `task_backend.rs`, issue #1584). `null`/`undefined` in, `None` out (no
+/// deadline); `0` is also "no deadline"; NaN / Inf / negative are errors.
+///
+/// Extracted from `with_job_async_napi` so it can be unit-tested without the
+/// napi `Promise<T>` boundary.
+fn parse_deadline_secs(deadline_secs: Option<f64>, job_id: &str) -> Result<Option<Duration>> {
     match deadline_secs {
-        Some(secs) if !secs.is_finite() || secs < 0.0 => Some(format!(
-            "withJobAsync: invalid deadline_secs ({}) for job {} — must be a non-negative finite number or null",
-            secs, job_id,
-        )),
-        _ => None,
+        None => Ok(None),
+        Some(secs) => crate::task_backend::validate_deadline_secs(secs, false).map_err(|e| {
+            Error::from_reason(format!("withJobAsync: {} (job {})", e, job_id))
+        }),
     }
 }
 
@@ -727,27 +744,13 @@ pub async fn with_job_async_napi(
     claim_epoch: Option<i64>,
 ) -> Result<serde_json::Value> {
     // Reject negative / NaN / Inf deadlines explicitly: silently aliasing
-    // them to "no deadline" (the previous behaviour) papers over upstream
-    // bugs where a caller arithmetic'd a negative remaining-time or
-    // produced NaN through a buggy clock computation.
-    if let Some(msg) = validate_deadline_secs(deadline_secs, &job_id) {
-        return Err(Error::from_reason(msg));
-    }
-    let ctx = match deadline_secs {
-        Some(secs) if secs > 0.0 => {
-            // `validate_deadline_secs` already rejects NaN / Inf / negative,
-            // but a finite-but-huge `secs` (e.g. `f64::MAX`) would still
-            // panic in `Duration::from_secs_f64`. Use the fallible variant
-            // and surface a clean napi error instead.
-            let dur = Duration::try_from_secs_f64(secs).map_err(|e| {
-                Error::from_reason(format!(
-                    "withJobAsync: deadline_secs ({}) out of range for job {} — {}",
-                    secs, job_id, e
-                ))
-            })?;
-            JobContext::with_timeout(job_id, dur)
-        }
-        _ => JobContext::new(job_id),
+    // them to "no deadline" papers over upstream bugs where a caller
+    // arithmetic'd a negative remaining-time or produced NaN through a buggy
+    // clock computation. Since #1584 all three bindings share this rule via
+    // `task_backend::validate_deadline_secs`.
+    let ctx = match parse_deadline_secs(deadline_secs, &job_id)? {
+        Some(dur) => JobContext::with_timeout(job_id, dur),
+        None => JobContext::new(job_id),
     };
     // Carry the claim generation so `currentJob()` exposes it (issue #1252).
     let ctx = ctx.with_claim_epoch(claim_epoch);
@@ -756,7 +759,7 @@ pub async fn with_job_async_napi(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_timeout_secs, validate_deadline_secs};
+    use super::{parse_deadline_secs, parse_timeout_secs};
 
     #[test]
     fn parse_timeout_secs_accepts_none_and_valid() {
@@ -795,29 +798,46 @@ mod tests {
 
 
     #[test]
-    fn validate_deadline_secs_accepts_none_and_zero_and_positive() {
-        assert!(validate_deadline_secs(None, "j-1").is_none());
-        assert!(validate_deadline_secs(Some(0.0), "j-1").is_none());
-        assert!(validate_deadline_secs(Some(1.5), "j-1").is_none());
-        assert!(validate_deadline_secs(Some(60.0), "j-1").is_none());
+    fn parse_deadline_secs_accepts_none_and_zero_and_positive() {
+        assert_eq!(parse_deadline_secs(None, "j-1").unwrap(), None);
+        // Zero is "no deadline", NOT an already-expired context.
+        assert_eq!(parse_deadline_secs(Some(0.0), "j-1").unwrap(), None);
+        assert_eq!(parse_deadline_secs(Some(-0.0), "j-1").unwrap(), None);
+        assert_eq!(
+            parse_deadline_secs(Some(1.5), "j-1").unwrap(),
+            Some(std::time::Duration::from_millis(1500))
+        );
+        assert_eq!(
+            parse_deadline_secs(Some(60.0), "j-1").unwrap(),
+            Some(std::time::Duration::from_secs(60))
+        );
     }
 
     #[test]
-    fn validate_deadline_secs_rejects_negative() {
-        let msg = validate_deadline_secs(Some(-0.001), "j-neg").expect("should reject");
-        assert!(msg.contains("invalid deadline_secs"));
-        assert!(msg.contains("j-neg"));
-        assert!(msg.contains("-0.001"));
+    fn parse_deadline_secs_rejects_negative() {
+        let err = parse_deadline_secs(Some(-0.001), "j-neg").expect_err("should reject");
+        let msg = err.reason.as_str();
+        assert!(msg.contains("deadline_secs"), "got: {msg}");
+        assert!(msg.contains("j-neg"), "got: {msg}");
+        assert!(msg.contains("-0.001"), "got: {msg}");
 
-        let msg = validate_deadline_secs(Some(-30.0), "abc").expect("should reject");
-        assert!(msg.contains("-30"));
-        assert!(msg.contains("abc"));
+        let err = parse_deadline_secs(Some(-30.0), "abc").expect_err("should reject");
+        let msg = err.reason.as_str();
+        assert!(msg.contains("-30"), "got: {msg}");
+        assert!(msg.contains("abc"), "got: {msg}");
     }
 
     #[test]
-    fn validate_deadline_secs_rejects_nan_and_inf() {
-        assert!(validate_deadline_secs(Some(f64::NAN), "j-nan").is_some());
-        assert!(validate_deadline_secs(Some(f64::INFINITY), "j-inf").is_some());
-        assert!(validate_deadline_secs(Some(f64::NEG_INFINITY), "j-ninf").is_some());
+    fn parse_deadline_secs_rejects_nan_and_inf() {
+        assert!(parse_deadline_secs(Some(f64::NAN), "j-nan").is_err());
+        assert!(parse_deadline_secs(Some(f64::INFINITY), "j-inf").is_err());
+        assert!(parse_deadline_secs(Some(f64::NEG_INFINITY), "j-ninf").is_err());
+    }
+
+    #[test]
+    fn parse_deadline_secs_rejects_overflow_finite() {
+        let err = parse_deadline_secs(Some(f64::MAX), "j-big").expect_err("should reject");
+        let msg = err.reason.as_str();
+        assert!(msg.contains("out of range"), "got: {msg}");
     }
 }

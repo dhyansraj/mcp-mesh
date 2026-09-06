@@ -148,14 +148,27 @@ public final class JobProxy implements MeshJob, AutoCloseable {
      *
      * @param timeoutSecs Wall-clock timeout in seconds.
      *                    <ul>
-     *                      <li>Negative or zero (including {@code -0.0})
-     *                          → no timeout (block until terminal).</li>
+     *                      <li>Negative → no timeout (block until
+     *                          terminal). This is the core's C-ABI
+     *                          "absent" sentinel: the boundary cannot
+     *                          pass a null double.</li>
+     *                      <li>Zero (including {@code -0.0}) → a
+     *                          zero-length budget: the registry is polled
+     *                          EXACTLY ONCE, so a job that is already
+     *                          terminal returns its result and one that is
+     *                          still running surfaces a timeout error.</li>
      *                      <li>Positive finite → wait that many
      *                          seconds, then surface a timeout error.</li>
-     *                      <li>Non-finite (NaN, ±Inf) → no timeout.</li>
+     *                      <li>Non-finite (NaN, ±Inf) → a caller bug;
+     *                          throws {@link MeshException}.</li>
      *                    </ul>
      *                    The {@link #await()} no-arg overload uses
      *                    {@code -1.0} to opt into the no-timeout branch.
+     *                    <p>Changed in issue #1584: {@code 0.0} used to
+     *                    mean "no timeout" and NaN / ±Inf used to be
+     *                    silently accepted as "no timeout". Only a
+     *                    NEGATIVE value is the absence sentinel now, and
+     *                    every core timeout surface agrees on it.
      * @return The job result payload
      * @throws MeshException on timeout, cancellation, or non-success terminal
      *                       (the message starts with the variant name —

@@ -972,11 +972,17 @@ int32_t mesh_job_proxy_status(struct JobProxyHandle *handle, char **out_job_json
 // `result` (JSON-encoded) to `*out_result_json`; caller frees via
 // `mesh_free_string`.
 //
-// `timeout_secs`: wall-clock timeout. Any value `<= 0.0` (including
-// `-0.0` and negatives such as `-1`) means "no timeout"; non-finite
-// values (NaN, ±Inf) also fall back to "no timeout". Matches the
-// Python / napi-rs `Optional<f64>` shape and keeps the same policy
-// as [`mesh_run_as_job`] for consistency.
+// `timeout_secs`: wall-clock timeout, under the ONE boundary policy shared
+// by every binding (see the "f64-SECONDS BOUNDARY POLICY" note in
+// `task_backend.rs`, issue #1584): negative (including `-1`, which is how
+// Java expresses `Optional<Duration>::empty()` over a C ABI that has no
+// nullable double) means "no timeout"; `0.0`/`-0.0` is a zero-length budget;
+// NaN / ±Inf are ERRORS (`-1` return, message in the last-error slot).
+//
+// The NaN/±Inf rejection is a #1584 change: this entry point used to alias
+// them to "no timeout" while its sibling `mesh_job_controller_recv_event`
+// rejected them, so the same bad input produced an unbounded wait on one
+// call and a clean error on the other.
 int32_t mesh_job_proxy_wait(struct JobProxyHandle *handle,
                             double timeout_secs,
                             char **out_result_json);
@@ -1082,8 +1088,12 @@ int32_t mesh_current_job(char **out_snapshot_json);
 // active job context, if any.
 //
 // Writes a JSON object `{"X-Mesh-Job-Id": "...", "X-Mesh-Timeout":
-// "<secs>"}` (with `X-Mesh-Timeout` omitted when no deadline is set) to
-// `*out_headers_json`. If no context is active, writes NULL.
+// "<secs>"}` to `*out_headers_json`. If no context is active, writes NULL.
+//
+// `X-Mesh-Timeout` is omitted when the active context has no deadline OR
+// when that deadline has already expired; otherwise it is `ceil(remaining)`
+// floored at 1. It is NEVER `"0"` — see
+// [`crate::job_context::JobContext::timeout_header_seconds`] (issue #1584).
 //
 // Caller frees the JSON string via `mesh_free_string` if it is non-NULL.
 int32_t mesh_inject_job_headers(char **out_headers_json);
@@ -1154,7 +1164,12 @@ int32_t mesh_job_cancel_fired(const char *job_id_ptr);
 // `{"job_id": "...", "deadline_secs": <number>|null}` mirroring the
 // payload Java SDK constructs from inbound `X-Mesh-Job-Id` / `X-Mesh-Timeout`
 // headers. `deadline_secs` is the per-attempt deadline (relative); null /
-// missing / non-positive ≡ no deadline.
+// missing / `0` ≡ no deadline. A NEGATIVE value is an ERROR here, not a
+// sentinel: this payload is JSON, so `null` already expresses absence — the
+// negative-means-absence convention belongs only to the bare-`double` C
+// entry points. NaN / ±Inf and finite-but-out-of-`Duration`-range values are
+// also ERRORS. See the "f64-SECONDS BOUNDARY POLICY" note in
+// `task_backend.rs` (issue #1584).
 //
 // `callback` is invoked synchronously from the runtime's `block_on`,
 // wrapped in [`tokio::task::block_in_place`] so it is legal for the

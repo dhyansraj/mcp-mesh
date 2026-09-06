@@ -421,6 +421,25 @@ export MCP_MESH_PROXY_TIMEOUT=60
 export MCP_MESH_CALL_TIMEOUT=300
 ```
 
+In every runtime, whichever value wins is used for BOTH the `X-Mesh-Timeout`
+advertised downstream and the local HTTP client timeout, so an agent never
+promises a provider a budget it will not itself wait out. An inbound
+`X-Mesh-Timeout` overrides the local value — that is what makes the
+propagation below work.
+
+Where the local value comes from differs by runtime, because only TypeScript
+has a per-dependency knob the runtime reads:
+
+| Runtime | Per-dependency override | Otherwise |
+| --- | --- | --- |
+| TypeScript | `timeout` on the dependency's kwargs (`streamTimeout` when `streaming: true`) | `MCP_MESH_CALL_TIMEOUT`, else 300s |
+| Python | none today | `MCP_MESH_CALL_TIMEOUT`, else 300s |
+| Java | none | `MCP_MESH_CALL_TIMEOUT`, else 300s (client read timeout adds a 10s buffer over the advertised value) |
+
+Python's `dependency_kwargs` documents a `timeout` entry, but no code path
+reads it yet; the proxy's kwargs are the *producer's* `@mesh.tool` kwargs, so
+a `timeout` there is provider metadata and deliberately does not cap callers.
+
 **How timeout propagation works:**
 
 1. First hop: SDK sets `X-Mesh-Timeout: 300` (from `MCP_MESH_CALL_TIMEOUT`) on the outgoing request

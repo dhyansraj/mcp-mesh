@@ -38,9 +38,83 @@ export interface CallOptions {
   maxResponseSize: number;
 }
 
-/** Default CallOptions for internal callers that don't go through createProxy. */
+/**
+ * Fallback per-call budget in seconds when neither the caller nor
+ * `MCP_MESH_CALL_TIMEOUT` says otherwise. 300 across all three runtimes
+ * (issue #1584) — TypeScript used to fall back to 30, so the same tool got a
+ * 10x smaller budget depending on the caller's language.
+ */
+const FALLBACK_CALL_TIMEOUT_SECS = 300;
+
+/** Bad `MCP_MESH_CALL_TIMEOUT` values already warned about (de-spam). */
+const warnedCallTimeoutValues = new Set<string>();
+
+/**
+ * Resolve the default per-call budget, in seconds, from
+ * `MCP_MESH_CALL_TIMEOUT`.
+ *
+ * This is the ONLY source of a default budget in this module: whatever it
+ * returns is used for BOTH the local abort timer and the `X-Mesh-Timeout`
+ * header, so a TypeScript caller can never advertise one budget downstream
+ * while abandoning the request at another (issue #1584). An explicit
+ * per-call `timeout` kwarg overrides it — also for both.
+ *
+ * Read at call time, not at module load, so a test (or a process that
+ * configures its environment late) sees the current value. Mirrors Java's
+ * `McpHttpClient.parseTimeoutSecs` and Python's `_default_call_timeout_secs`:
+ * unset / blank / unparseable / non-positive all fall back to
+ * {@link FALLBACK_CALL_TIMEOUT_SECS}, with a warning for the values that
+ * look like a misconfiguration rather than an absence.
+ */
+export function resolveDefaultCallTimeoutSecs(): number {
+  const raw = process.env.MCP_MESH_CALL_TIMEOUT;
+  if (raw === undefined || raw.trim() === "") {
+    return FALLBACK_CALL_TIMEOUT_SECS;
+  }
+  const parsed = Number(raw.trim());
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    // Warn once per distinct bad value: this runs on every outbound call, and
+    // a misconfigured env var is a startup-shaped problem, not a per-call one.
+    if (!warnedCallTimeoutValues.has(raw)) {
+      warnedCallTimeoutValues.add(raw);
+      console.warn(
+        `[mcp-mesh] Invalid MCP_MESH_CALL_TIMEOUT value '${raw}' — using default ${FALLBACK_CALL_TIMEOUT_SECS}s`,
+      );
+    }
+    return FALLBACK_CALL_TIMEOUT_SECS;
+  }
+  return Math.max(1, Math.round(parsed));
+}
+
+/**
+ * Round a caller-declared budget (in SECONDS) to the whole seconds the
+ * `X-Mesh-Timeout` wire format can carry: up, and never below 1.
+ *
+ * Applied at declaration time so the local abort timer and the advertised
+ * header are the same number for every dependency proxy (issue #1584). A
+ * non-finite or non-positive input falls back to the resolved default rather
+ * than producing a 1s budget out of a typo.
+ */
+function quantiseBudgetSecs(secs: number): number {
+  if (!Number.isFinite(secs) || secs <= 0) {
+    return resolveDefaultCallTimeoutSecs();
+  }
+  return Math.max(1, Math.ceil(secs));
+}
+
+/**
+ * Default CallOptions for internal callers that don't go through createProxy.
+ *
+ * `timeout` is a GETTER, not a fixed number: it resolves
+ * `MCP_MESH_CALL_TIMEOUT` on every read so these internal callers follow the
+ * same rule as a user-declared dependency (issue #1584). Spreading
+ * (`{ ...DEFAULT_CALL_OPTIONS, timeout: X }`) evaluates the getter and then
+ * overrides it, which is exactly what those call sites want.
+ */
 export const DEFAULT_CALL_OPTIONS: CallOptions = {
-  timeout: 30_000,
+  get timeout(): number {
+    return resolveDefaultCallTimeoutSecs() * 1000;
+  },
   maxAttempts: 1,
   streamTimeout: 300_000,
   retryDelay: 100,
@@ -188,15 +262,44 @@ export function createProxy(
   kwargs?: DependencyKwargs
 ): McpMeshTool {
   const options: CallOptions = {
-    timeout: (kwargs?.timeout ?? 30) * 1000,
+    // An explicit per-call `timeout` is authoritative for BOTH the local
+    // abort timer and the emitted `X-Mesh-Timeout`; when absent, both come
+    // from `MCP_MESH_CALL_TIMEOUT` (default 300s). Resolving it HERE — rather
+    // than defaulting to 30 here and consulting the env separately when
+    // building the header — is what removes the #1584 split-brain: previously
+    // `kwargs?.timeout ?? 30` collapsed "caller asked for 30" and "caller
+    // asked for nothing", and the header was then built from the env var, so
+    // setting MCP_MESH_CALL_TIMEOUT=600 advertised a 600s budget downstream
+    // while this client still aborted at 30s.
+    // Quantised to whole seconds (rounded up, floored at 1) because that is
+    // all `X-Mesh-Timeout` can carry: a `timeout: 2.4` that aborted at 2400ms
+    // while advertising 3s would leave the provider working 600ms past the
+    // point anyone was listening — the same defect, smaller, that #1584 is
+    // about. Python quantises identically in `effective_call_timeout_secs`.
+    timeout: quantiseBudgetSecs(kwargs?.timeout ?? resolveDefaultCallTimeoutSecs()) * 1000,
     maxAttempts: kwargs?.maxAttempts ?? 1,
-    streamTimeout: (kwargs?.streamTimeout ?? 300) * 1000,
+    // `streamTimeout` shares the same fallback chain (issue #1584 review).
+    // Its literal default was also 300, so this is a no-op when the env var
+    // is unset — but leaving it hard-coded would have silently broken the
+    // workaround `docs/environment-variables.md` prescribes for long-lived
+    // streams ("raise MCP_MESH_CALL_TIMEOUT"): before this PR the stream
+    // header was `env || floor(timeout/1000)`, so raising the env var raised
+    // it. An explicit `streamTimeout` kwarg still wins.
+    streamTimeout:
+      quantiseBudgetSecs(
+        kwargs?.streamTimeout ?? resolveDefaultCallTimeoutSecs(),
+      ) * 1000,
     customHeaders: kwargs?.customHeaders,
     retryDelay: (kwargs?.retryDelay ?? 0.1) * 1000,
     retryBackoff: kwargs?.retryBackoff ?? 2.0,
     maxResponseSize: kwargs?.maxResponseSize ?? 10 * 1024 * 1024,
   };
-  // Use streamTimeout when streaming is enabled
+  // Use streamTimeout when streaming is enabled. NOTE this is the documented
+  // exception to "an explicit `timeout` is authoritative": a `streaming: true`
+  // dependency is by definition long-lived, so it runs on `streamTimeout` and
+  // an explicit `timeout` does not apply to it. Pre-existing behaviour, called
+  // out here (and on `DependencyKwargs.timeout`) because #1584 otherwise reads
+  // as though `timeout` always wins.
   if (kwargs?.streaming) {
     options.timeout = options.streamTimeout;
   }
@@ -408,6 +511,21 @@ function buildMcpRequest(
   if (typeof effectiveTimeout !== "number" || effectiveTimeout <= 0) {
     effectiveTimeout = defaultTimeout;
   }
+  // The whole-second budget to advertise. `X-Mesh-Timeout` is `minimum: 1` and
+  // integer-valued, so this rounds UP and floors at 1 (issue #1584).
+  //
+  // For every budget that ARRIVES in seconds this is the same number the abort
+  // timer below is armed with, by construction — `createProxy` quantises the
+  // declared/env seconds, `DEFAULT_CALL_OPTIONS` derives from the env, and a
+  // propagated inbound `X-Mesh-Timeout` is whole seconds already. The one gap
+  // is an internal caller hand-building `CallOptions` with a SUB-SECOND
+  // millisecond budget: the wire cannot express it, so such a call advertises
+  // 1s while aborting earlier. That over-advertises by under a second, which
+  // is the lesser evil against the alternatives — advertising `0` reads as
+  // "unset" downstream and hands the provider an unbounded budget, and
+  // inflating the local timer to 1s would silently multiply a deliberate
+  // 50ms internal budget by twenty.
+  const budgetSecs = Math.max(1, Math.ceil(effectiveTimeout / 1000));
 
   const bodyStr = JSON.stringify(payload);
   const requestBytes = Buffer.byteLength(bodyStr, "utf8");
@@ -428,10 +546,14 @@ function buildMcpRequest(
   for (const [key, value] of Object.entries(mergedHeaders)) {
     headers[key] = value;
   }
-  // Set X-Mesh-Timeout for registry proxy (#769). If already propagated, keep it.
+  // Set X-Mesh-Timeout for the registry proxy (#769). If already propagated,
+  // keep it — an inbound budget always wins over a locally derived one.
+  //
+  // See `budgetSecs` above for why this equals the abort timer for every
+  // seconds-declared budget, and for the one sub-second exception (issue
+  // #1584).
   if (!headers["X-Mesh-Timeout"] && !headers["x-mesh-timeout"]) {
-    const callTimeout = process.env.MCP_MESH_CALL_TIMEOUT || String(Math.floor(options.timeout / 1000));
-    headers["X-Mesh-Timeout"] = callTimeout;
+    headers["X-Mesh-Timeout"] = String(budgetSecs);
   }
 
   return { mcpEndpoint, bodyStr, requestId: payload.id, requestBytes, headers, effectiveTimeout, traceCtx, spanId, startTime };
