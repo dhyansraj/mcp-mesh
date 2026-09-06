@@ -3,7 +3,7 @@ package registry
 // HTTP-level coverage for the X-Mesh-Pending-Jobs header on
 // HEAD /heartbeat/{agent_id}. Uses the same real-service test env as
 // the jobs endpoint tests so the header value reflects the production
-// CountPendingJobsForAgent path end-to-end.
+// CountPendingJobsForAgentName path end-to-end.
 //
 // The capability scoping rule under test (per MESHJOB_DESIGN.org > Key
 // Decisions > "Pending-jobs scoping: per-agent capability set"): the
@@ -30,7 +30,7 @@ import (
 
 // newHeartbeatTestEnv reuses newAuditTestEnv (real EntService over an
 // in-memory Ent client) and wires the production handlers so HEAD
-// /heartbeat/{agent_id} hits CountPendingJobsForAgent.
+// /heartbeat/{agent_id} hits CountPendingJobsForAgentName.
 func newHeartbeatTestEnv(t *testing.T) (*httptest.Server, *EntService, *ent.Client, func()) {
 	t.Helper()
 	client, service, cleanup := newAuditTestEnv(t)

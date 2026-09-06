@@ -791,14 +791,22 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 					return err
 				}
 
-				// Update existing agent
+				// Update existing agent.
+				//
+				// Issue #1580: only touch `status` when it actually changes.
+				// Any mutation carrying the status field wakes the status-change
+				// hook, which re-reads the agent row just to discover the status
+				// is unchanged and emit nothing. `existingAgent` was read inside
+				// this transaction, so the comparison is exact.
 				updateBuilder := existingAgent.Update().
 					SetAgentType(agent.AgentType(meta.agentType)).
 					SetRuntime(agent.Runtime(meta.runtime)).
 					SetName(meta.name).
 					SetNamespace(meta.namespace).
-					SetStatus(agent.StatusHealthy).
 					SetUpdatedAt(now)
+				if existingAgent.Status != agent.StatusHealthy {
+					updateBuilder = updateBuilder.SetStatus(agent.StatusHealthy)
+				}
 
 				if meta.version != "" {
 					updateBuilder = updateBuilder.SetVersion(meta.version)
@@ -973,6 +981,11 @@ func (s *EntService) StoreDependencyResolutions(
 		return nil
 	}
 
+	// Per-call memo for the audit prior-trace lookup: every dependency of the
+	// same function shares one query instead of issuing two of its own
+	// (issue #1582).
+	auditHistory := newAuditHistoryCache()
+
 	// Store each pre-resolved dependency
 	for _, result := range resolutions {
 		// Determine namespace
@@ -1026,7 +1039,7 @@ func (s *EntService) StoreDependencyResolutions(
 		// Emit dependency-resolution audit event when warranted.
 		// Trace will be nil for malformed dep specs (capability == "") — no event in that case.
 		if result.Trace != nil {
-			if err := s.emitAuditEventIfInteresting(ctx, agentID, result.FunctionName, result.DepIndex, result.Trace, result.Resolution); err != nil {
+			if err := s.emitAuditEventIfInteresting(ctx, agentID, result.FunctionName, result.DepIndex, result.Trace, result.Resolution, auditHistory); err != nil {
 				// Don't fail registration on audit emission failure; just warn.
 				s.logger.Warning("Failed to emit dependency audit event for %s/%s[%d]: %v",
 					agentID, result.FunctionName, result.DepIndex, err)
@@ -1474,11 +1487,36 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 					meta := extractAgentMetadata(req.AgentID, req.Metadata)
 					descWarnings = meta.descWarnings
 
-					// Update status and timestamp unconditionally
+					// Update timestamp unconditionally; status only when it
+					// actually changes (issue #1580). Every mutation carrying the
+					// status field wakes the status-change hook, which re-reads
+					// the agent row on every full heartbeat only to find the
+					// status unchanged and emit nothing.
+					//
+					// The comparison MUST use a read taken inside this
+					// transaction, not `existingAgent` (read before
+					// guardedCapabilityWrite): a heartbeat is proof the agent is
+					// alive, so if the health monitor flipped the row to unhealthy
+					// in the meantime this write has to correct it. Skipping the
+					// correction on a stale copy would leave a live provider
+					// unwired — consumers stop resolving unhealthy agents — until
+					// the next round trip. Same read-inside-the-transaction
+					// discipline as the RegisterAgent update path above.
+					statusNow := existingAgent.Status
+					if fresh, ferr := tx.Agent.Query().
+						Where(agent.IDEQ(existingAgent.ID)).
+						Only(ctx); ferr == nil {
+						statusNow = fresh.Status
+					} else if !ent.IsNotFound(ferr) {
+						return fmt.Errorf("failed to re-read agent status: %w", ferr)
+					}
+
 					updateBuilder := tx.Agent.UpdateOneID(existingAgent.ID).
-						SetStatus(agent.StatusHealthy).
 						SetUpdatedAt(now).
 						SetLastFullRefresh(now)
+					if statusNow != agent.StatusHealthy {
+						updateBuilder = updateBuilder.SetStatus(agent.StatusHealthy)
+					}
 
 					// Only update metadata fields when the heartbeat provides non-default values,
 					// to avoid overwriting existing agent metadata with extraction defaults.
@@ -2395,20 +2433,18 @@ func (s *EntService) markAgentStaleAttempt(ctx context.Context, staleAgent *ent.
 func (s *EntService) UpdateAgentHeartbeatTimestamp(ctx context.Context, agentID string) error {
 	now := time.Now().UTC()
 
-	// Find the existing agent
-	existingAgent, err := s.entDB.Agent.Query().Where(agent.IDEQ(agentID)).Only(ctx)
-	if err != nil {
-		if ent.IsNotFound(err) {
-			// Agent doesn't exist - return without error (idempotent behavior)
-			return nil
-		}
-		return fmt.Errorf("failed to query agent: %w", err)
-	}
-
-	// Bump the last-heartbeat timestamp. Status is intentionally NOT modified here
-	// (#955): the caller has already verified the agent is healthy.
-	_, err = existingAgent.Update().SetUpdatedAt(now).Save(ctx)
-	if err != nil {
+	// Bump the last-heartbeat timestamp in a single statement — the row is
+	// neither read first nor re-read afterwards (issue #1580: the HEAD path
+	// loaded the agent row three times per beat; UpdateOneID would add a
+	// transaction plus a re-select on top). Status is intentionally NOT
+	// modified here (#955): the caller has already verified the agent is
+	// healthy, and leaving `status` out of the mutation also keeps the
+	// status-change hook asleep. A missing row is a no-op, not an error
+	// (idempotent behavior).
+	if _, err := s.entDB.Agent.Update().
+		Where(agent.IDEQ(agentID)).
+		SetUpdatedAt(now).
+		Save(ctx); err != nil {
 		return fmt.Errorf("failed to update agent heartbeat timestamp: %w", err)
 	}
 

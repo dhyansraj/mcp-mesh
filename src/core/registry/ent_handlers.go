@@ -586,11 +586,27 @@ func ConvertMeshAgentRegistrationToMap(reg generated.MeshAgentRegistration) map[
 
 // FastHeartbeatCheck implements HEAD /heartbeat/{agent_id}
 func (h *EntBusinessLogicHandlers) FastHeartbeatCheck(c *gin.Context, agentId string) {
-	// Check if agent exists in registry
+	// Check if agent exists in registry.
+	//
+	// Issue #1580: only a genuine "row not found" may answer 410. Every
+	// other error (dropped connection, pool exhaustion, statement timeout)
+	// is a registry-side fault and must answer 503 — the clients map 410 to
+	// AGENT_UNKNOWN and immediately POST a full re-registration, so mapping a
+	// transient DB fault to 410 makes the whole fleet re-register at once,
+	// precisely when the database is least able to absorb it. 503 maps to
+	// REGISTRY_ERROR, which the clients already back off from (Rust:
+	// FastHeartbeatStatus::RegistryError → should_skip_for_resilience).
+	// GetAgent uses Only(), so a nil error always carries a non-nil row —
+	// "missing" arrives as *ent.NotFoundError, never as (nil, nil).
 	agentEntity, err := h.entService.GetAgent(c.Request.Context(), agentId)
-	if err != nil || agentEntity == nil {
-		// Unknown agent - please register with POST heartbeat
-		c.Status(http.StatusGone) // 410
+	if err != nil {
+		if ent.IsNotFound(err) {
+			// Unknown agent - please register with POST heartbeat
+			c.Status(http.StatusGone) // 410
+			return
+		}
+		// Transient/registry-side failure - back off and retry
+		c.Status(http.StatusServiceUnavailable) // 503
 		return
 	}
 
@@ -628,7 +644,10 @@ func (h *EntBusinessLogicHandlers) FastHeartbeatCheck(c *gin.Context, agentId st
 	// here must not break the heartbeat — the producer will discover the
 	// pending work on the next tick. Header is set BEFORE c.Status(...)
 	// because Gin commits headers when the status line is written.
-	if pending, perr := h.entService.CountPendingJobsForAgent(c.Request.Context(), agentId); perr == nil && pending > 0 {
+	//
+	// Issue #1580: the agent group name comes from the row already loaded
+	// above, so this path no longer re-reads the agent row.
+	if pending, perr := h.entService.CountPendingJobsForAgentName(c.Request.Context(), agentEntity.Name); perr == nil && pending > 0 {
 		c.Header("X-Mesh-Pending-Jobs", strconv.Itoa(pending))
 	}
 

@@ -17,10 +17,17 @@ import (
 )
 
 // priorTraceLookupLimit caps how many recent registry events the prior-trace
-// lookups scan when searching for a matching dep_index. Headroom for functions
+// lookup scans when searching for a matching dep_index. Headroom for functions
 // with many deps + concurrent writes; raise if you have functions with >64
 // deps. Future: push the dep_index filter into SQL via a JSON path expression
 // so we don't need to overscan in Go.
+//
+// The limit applies per event-type set, exactly as it did when each lookup
+// issued its own query (#1582 changed WHERE the queries run, not what they
+// select). Merging the two sets into one LIMIT-64 window was tried and
+// rejected: the window is scoped to (consumer, function), NOT to dep_index, so
+// unresolved events from sibling dep slots would evict a slot's own last
+// resolved event and silently swallow a chosen-producer flip.
 const priorTraceLookupLimit = 64
 
 // emitAuditEventIfInteresting writes a dependency_resolved or dependency_unresolved
@@ -47,6 +54,7 @@ func (s *EntService) emitAuditEventIfInteresting(
 	depIndex int,
 	trace *AuditTrace,
 	resolved *DependencyResolution,
+	history *auditHistoryCache,
 ) error {
 	if trace == nil {
 		return nil
@@ -58,23 +66,36 @@ func (s *EntService) emitAuditEventIfInteresting(
 	trace.DepIndex = depIndex
 
 	// Look up the prior emission for this (consumer, function, dep_index).
-	prior, err := s.lastResolvedTraceFor(ctx, consumerAgentID, functionName, depIndex)
+	//
+	// Issue #1582: the two lookups below are unchanged in what they select,
+	// but each is now issued once per (consumer, function) and shared by every
+	// dependency of that function through `history`, instead of once per
+	// dependency. A 32-dep function goes from 64 queries per full heartbeat to
+	// 2. They stay separate queries on purpose — see priorTraceLookupLimit.
+	priorByDep, err := s.auditLatestByDep(ctx, history, consumerAgentID, functionName, true)
 	if err != nil {
 		return fmt.Errorf("audit: query prior trace: %w", err)
 	}
 
 	priorChosen := ""
-	if prior != nil && prior.Chosen != nil {
-		priorChosen = prior.Chosen.AgentID
+	if prior := priorByDep[depIndex]; prior != nil && prior.trace.Chosen != nil {
+		priorChosen = prior.trace.Chosen.AgentID
 	}
 	trace.PriorChosen = priorChosen
 
 	// Look up the most recent audit event (resolved OR unresolved) so we can
 	// (a) detect an unresolved→resolved flip even when only one candidate
 	// survives, and (b) dedupe identical-trace re-emissions further down.
-	lastAnyEvent, lastAny, err := s.lastAuditTraceFor(ctx, consumerAgentID, functionName, depIndex)
+	anyByDep, err := s.auditLatestByDep(ctx, history, consumerAgentID, functionName, false)
 	if err != nil {
 		return fmt.Errorf("audit: query last trace: %w", err)
+	}
+	var (
+		lastAnyEvent *ent.RegistryEvent
+		lastAny      *AuditTrace
+	)
+	if last := anyByDep[depIndex]; last != nil {
+		lastAnyEvent, lastAny = last.event, last.trace
 	}
 
 	// Decide event type and gating.
@@ -217,97 +238,145 @@ func canonicalTraceHash(t *AuditTrace) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// lastResolvedTraceFor returns the most recent dependency_resolved AuditTrace
-// for the given (consumer, function, dep_index). Returns (nil, nil) when none
-// exists. Used by gating to detect chosen-producer flips.
+// auditEventTrace pairs an audit event row with its decoded trace. The raw row
+// is kept so callers can inspect EventType (e.g. to distinguish an
+// unresolved→resolved flip from a steady-state resolution).
+type auditEventTrace struct {
+	event *ent.RegistryEvent
+	trace *AuditTrace
+}
+
+// auditHistoryCache memoizes the prior-event lookups for the duration of a
+// single StoreDependencyResolutions call. The queries are per (consumer,
+// function) and their results are bucketed by dep_index, so every dependency
+// of the same function reuses one query and one decode pass per event-type set
+// instead of issuing its own (issue #1582). Two buckets, because the two
+// lookups select different event types and must keep their own LIMIT windows.
 //
-// Filters: agent_id == consumer, event_type == dependency_resolved,
-// function_name == functionName, ORDER BY timestamp DESC LIMIT priorTraceLookupLimit.
-// The (event_type, timestamp) indexes on registry_events make this cheap.
-func (s *EntService) lastResolvedTraceFor(
+// Events written by the loop that owns the cache are deliberately not visible
+// to it: an emission for dep_index i can only ever be the "prior" of dep_index
+// i, and each (function, dep_index) slot is processed at most once per call.
+type auditHistoryCache struct {
+	resolvedOnly map[string]map[int]*auditEventTrace
+	anyType      map[string]map[int]*auditEventTrace
+}
+
+func newAuditHistoryCache() *auditHistoryCache {
+	return &auditHistoryCache{
+		resolvedOnly: make(map[string]map[int]*auditEventTrace),
+		anyType:      make(map[string]map[int]*auditEventTrace),
+	}
+}
+
+// auditLatestByDep returns, per dep_index, the most recent audit event for the
+// given (consumer, function) — restricted to dependency_resolved when
+// `resolvedOnly`, otherwise covering both audit event types. Uses and
+// populates `cache` when one is supplied; a nil cache is legal and just runs
+// the lookup uncached.
+//
+// Filters: agent_id == consumer, event_type IN (...), function_name ==
+// functionName, ORDER BY timestamp DESC LIMIT priorTraceLookupLimit — i.e.
+// the same queries the per-dependency lookups used to issue. The
+// (function_name, timestamp, agent_events) index on registry_events serves the
+// ordering and the LIMIT; see the schema for what that index does and does not
+// guarantee.
+func (s *EntService) auditLatestByDep(
 	ctx context.Context,
+	cache *auditHistoryCache,
 	consumerAgentID string,
 	functionName string,
-	depIndex int,
-) (*AuditTrace, error) {
-	q := s.entDB.RegistryEvent.Query().
-		Where(registryevent.EventTypeEQ(registryevent.EventTypeDependencyResolved)).
+	resolvedOnly bool,
+) (map[int]*auditEventTrace, error) {
+	key := consumerAgentID + "\x00" + functionName
+
+	var bucket map[string]map[int]*auditEventTrace
+	if cache != nil {
+		bucket = cache.anyType
+		if resolvedOnly {
+			bucket = cache.resolvedOnly
+		}
+		if byDep, ok := bucket[key]; ok {
+			return byDep, nil
+		}
+	}
+
+	typeFilter := registryevent.EventTypeIn(
+		registryevent.EventTypeDependencyResolved,
+		registryevent.EventTypeDependencyUnresolved,
+	)
+	if resolvedOnly {
+		typeFilter = registryevent.EventTypeEQ(registryevent.EventTypeDependencyResolved)
+	}
+
+	events, err := s.entDB.RegistryEvent.Query().
+		Where(typeFilter).
 		Where(registryevent.HasAgentWith(agent.IDEQ(consumerAgentID))).
 		Where(registryevent.FunctionNameEQ(functionName)).
 		Order(registryevent.ByTimestamp(sql.OrderDesc())).
-		Limit(priorTraceLookupLimit)
-
-	events, err := q.All(ctx)
+		Limit(priorTraceLookupLimit).
+		All(ctx)
 	if err != nil {
 		return nil, err
 	}
-	_, trace := pickEventWithDepIndex(events, depIndex)
-	return trace, nil
-}
 
-// lastAuditTraceFor returns the most recent audit event (resolved OR unresolved)
-// for the given (consumer, function, dep_index) along with its decoded trace.
-// The raw event row is returned so callers can inspect EventType (e.g., to
-// distinguish an unresolved→resolved flip from a steady-state resolution).
-// Used by the dedupe step that suppresses repeat emissions whose canonical
-// hashes are identical.
-func (s *EntService) lastAuditTraceFor(
-	ctx context.Context,
-	consumerAgentID string,
-	functionName string,
-	depIndex int,
-) (*ent.RegistryEvent, *AuditTrace, error) {
-	q := s.entDB.RegistryEvent.Query().
-		Where(registryevent.EventTypeIn(
-			registryevent.EventTypeDependencyResolved,
-			registryevent.EventTypeDependencyUnresolved,
-		)).
-		Where(registryevent.HasAgentWith(agent.IDEQ(consumerAgentID))).
-		Where(registryevent.FunctionNameEQ(functionName)).
-		Order(registryevent.ByTimestamp(sql.OrderDesc())).
-		Limit(priorTraceLookupLimit)
-
-	events, err := q.All(ctx)
-	if err != nil {
-		return nil, nil, err
+	byDep := indexAuditEventsByDep(events)
+	if bucket != nil {
+		bucket[key] = byDep
 	}
-	evt, trace := pickEventWithDepIndex(events, depIndex)
-	return evt, trace, nil
+	return byDep, nil
 }
 
-// pickEventWithDepIndex walks events newest-first and returns the first event
-// whose decoded AuditTrace dep_index matches, along with that decoded trace.
-// Returns (nil, nil) when nothing matches.
-func pickEventWithDepIndex(events []*ent.RegistryEvent, depIndex int) (*ent.RegistryEvent, *AuditTrace) {
+// indexAuditEventsByDep walks a newest-first event slice ONCE and keeps, per
+// dep_index, the newest event whose payload decodes as an AuditTrace. Rows that
+// carry no usable dep_index or fail to decode are skipped, so an older event
+// can still fill the slot — matching what the per-dependency scan did.
+func indexAuditEventsByDep(events []*ent.RegistryEvent) map[int]*auditEventTrace {
+	byDep := make(map[int]*auditEventTrace)
 	for _, e := range events {
-		if e.Data == nil {
+		di, ok := depIndexOf(e)
+		if !ok {
 			continue
 		}
-		// data["dep_index"] is float64 after JSON round-trip into map.
-		var di int
-		switch v := e.Data["dep_index"].(type) {
-		case float64:
-			di = int(v)
-		case int:
-			di = v
-		case int64:
-			di = int(v)
-		default:
+		if _, seen := byDep[di]; seen {
+			continue // a newer row already claimed this slot
+		}
+		trace := decodeAuditTrace(e)
+		if trace == nil {
 			continue
 		}
-		if di != depIndex {
-			continue
-		}
-
-		raw, err := json.Marshal(e.Data)
-		if err != nil {
-			continue
-		}
-		var t AuditTrace
-		if err := json.Unmarshal(raw, &t); err != nil {
-			continue
-		}
-		return e, &t
+		byDep[di] = &auditEventTrace{event: e, trace: trace}
 	}
-	return nil, nil
+	return byDep
+}
+
+// depIndexOf extracts the dep_index from an event payload. data["dep_index"]
+// is float64 after the JSON round-trip into map.
+func depIndexOf(e *ent.RegistryEvent) (int, bool) {
+	if e.Data == nil {
+		return 0, false
+	}
+	switch v := e.Data["dep_index"].(type) {
+	case float64:
+		return int(v), true
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	default:
+		return 0, false
+	}
+}
+
+// decodeAuditTrace decodes an event payload into an AuditTrace, returning nil
+// when the payload isn't a trace.
+func decodeAuditTrace(e *ent.RegistryEvent) *AuditTrace {
+	raw, err := json.Marshal(e.Data)
+	if err != nil {
+		return nil
+	}
+	var t AuditTrace
+	if err := json.Unmarshal(raw, &t); err != nil {
+		return nil
+	}
+	return &t
 }
