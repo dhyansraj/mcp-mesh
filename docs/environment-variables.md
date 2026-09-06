@@ -205,6 +205,21 @@ export DATABASE_URL=mcp_mesh_registry.db
 
 # Registry service name
 export REGISTRY_NAME=mcp-mesh-registry
+
+# Maximum accepted request body in bytes, on the main and admin
+# listeners. A declared Content-Length over the limit is refused with 413
+# before the body is read. An undeclared (chunked) body is cut off at the
+# limit: JSON endpoints answer 413, while /proxy/* — which streams the
+# body onward — answers 502 after a truncated request has already reached
+# the target agent. Default: 10485760 (10MB), roughly ten times the
+# largest realistic heartbeat (~1MB for a 100-tool agent carrying input
+# and output schemas plus their canonical forms). 0 disables it.
+export MCP_MESH_MAX_REQUEST_BODY_BYTES=10485760
+
+# Opt the admin listener into the main listener's TLS certificate and
+# MCP_MESH_TLS_MODE client-certificate policy. Default false (plaintext,
+# unauthenticated). Enabling it changes the admin port to https.
+export MCP_MESH_ADMIN_TLS=false
 ```
 
 ### TLS and Security
@@ -224,7 +239,8 @@ export MCP_MESH_TRUST_BACKEND=filestore
 # Trust store directory (for filestore backend)
 export MCP_MESH_TRUST_DIR=/path/to/trust/dir
 
-# Admin port isolation (admin endpoints only on this port)
+# Serve /admin/* only on this port (same TLS + client-cert policy as the
+# main port; restrict it at the network layer)
 export MCP_MESH_ADMIN_PORT=8001
 
 # Kubernetes secrets backend

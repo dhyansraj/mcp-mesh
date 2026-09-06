@@ -499,7 +499,7 @@ export MCP_MESH_K8S_LABEL_SELECTOR="mcp-mesh.io/trust=entity-ca"
 # SPIRE backend
 export MCP_MESH_SPIRE_SOCKET=/run/spire/agent/sockets/agent.sock
 
-# Admin port isolation
+# Admin API on its own port (restrict it at the network layer)
 export MCP_MESH_ADMIN_PORT=9443
 ```
 
@@ -599,6 +599,25 @@ export MCP_MESH_SWEEP_INTERVAL=5m
 # renewed by progress deltas / recvEvent polls — tuning this variable does
 # NOT change how quickly a quiet handler's lease expires.
 export MCP_MESH_JOB_STALE_TIMEOUT=2h
+
+# Maximum request body the registry will accept, in bytes, on both the
+# main and admin listeners. A request whose Content-Length exceeds it is
+# refused with 413 before any of the body is read. A request that does
+# not declare a length is cut off at the limit instead: JSON endpoints
+# answer 413, but /proxy/* streams the body onward as it arrives, so
+# there the caller gets 502 and the target agent has already received a
+# truncated request. Default: 10485760 (10MB) — about ten times the
+# largest realistic heartbeat (a 100-tool agent carrying input and
+# output schemas plus their canonical forms measures ~1MB). Set to 0 to
+# disable the limit.
+export MCP_MESH_MAX_REQUEST_BODY_BYTES=10485760
+
+# Opt the admin listener (MCP_MESH_ADMIN_PORT) into the main listener's
+# TLS certificate and MCP_MESH_TLS_MODE client-certificate policy.
+# Default false: the admin port is plaintext and unauthenticated.
+# Setting this changes the admin port's scheme to https — see
+# `meshctl man security` before enabling it.
+export MCP_MESH_ADMIN_TLS=false
 
 # CORS
 export ENABLE_CORS=true

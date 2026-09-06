@@ -65,6 +65,13 @@ type RegistryConfig struct {
 	TlsKeyFile               string // registry server key — from MCP_MESH_TLS_KEY
 	TrustDir                 string // directory for FileStore backend — from MCP_MESH_TRUST_DIR
 	AdminPort                int    // admin API port — from MCP_MESH_ADMIN_PORT (0 = disabled)
+	// AdminTLS opts the admin listener into the main listener's transport
+	// and trust policy — from MCP_MESH_ADMIN_TLS. Default false, which is
+	// the historical behaviour: the admin port is plaintext and carries no
+	// client-certificate check regardless of MCP_MESH_TLS_MODE. Opting in
+	// changes the admin port's scheme to https and, in strict mode,
+	// requires callers to present a trusted client certificate.
+	AdminTLS bool
 }
 
 // AgentRegistrationRequest matches Python RegisterAgentRequest exactly

@@ -144,14 +144,16 @@ meshctl entity rotate "partner-corp"     # Specific entity only
 
 Agents with revoked certificates are automatically evicted in strict TLS mode.
 
-### Admin Port Isolation
+### Admin Port
 
-Separate admin APIs from the agent-facing port for defense in depth:
+Serve the admin APIs on their own port so they can be restricted separately at the network layer:
 
 ```bash
 # Registry listens on 8000 (agents) and 8001 (admin only)
 MCP_MESH_ADMIN_PORT=8001 mcp-mesh-registry
 ```
+
+By default the admin listener is plain `http://` and applies no client-certificate check, whatever `MCP_MESH_TLS_MODE` is set to, so front it with a NetworkPolicy or equivalent — a separate port is not a security boundary on its own. Set `MCP_MESH_ADMIN_TLS=true` to give it the registry's certificate and client-certificate policy; run `meshctl man security` first, since that switches the port to `https://` and `meshctl` cannot present a client certificate.
 
 [:material-arrow-right: CLI Reference](cli/index.md){ .md-button } — Run `meshctl man cli` for the full command reference.
 

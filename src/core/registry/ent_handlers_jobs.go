@@ -106,10 +106,7 @@ func parseCancelEventGraceFromEnv() time.Duration {
 func (h *EntBusinessLogicHandlers) CreateJob(c *gin.Context) {
 	var req generated.CreateJobRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
-			Error:     fmt.Sprintf("Invalid JSON payload: %v", err),
-			Timestamp: time.Now().UTC(),
-		})
+		writeBindError(c, err)
 		return
 	}
 
@@ -319,10 +316,7 @@ func (h *EntBusinessLogicHandlers) GetJob(c *gin.Context, jobId string) {
 func (h *EntBusinessLogicHandlers) SubmitJobBatch(c *gin.Context) {
 	var req generated.JobBatchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
-			Error:     fmt.Sprintf("Invalid JSON payload: %v", err),
-			Timestamp: time.Now().UTC(),
-		})
+		writeBindError(c, err)
 		return
 	}
 	if req.InstanceId == "" {
@@ -412,10 +406,7 @@ func (h *EntBusinessLogicHandlers) SubmitJobBatch(c *gin.Context) {
 func (h *EntBusinessLogicHandlers) ClaimJobs(c *gin.Context) {
 	var req generated.ClaimJobsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
-			Error:     fmt.Sprintf("Invalid JSON payload: %v", err),
-			Timestamp: time.Now().UTC(),
-		})
+		writeBindError(c, err)
 		return
 	}
 	if req.Capability == "" {
@@ -499,10 +490,7 @@ func (h *EntBusinessLogicHandlers) ReleaseJob(c *gin.Context, jobId string) {
 
 	var req generated.ReleaseJobRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
-			Error:     fmt.Sprintf("Invalid JSON payload: %v", err),
-			Timestamp: time.Now().UTC(),
-		})
+		writeBindError(c, err)
 		return
 	}
 	if strings.TrimSpace(req.InstanceId) == "" {
@@ -580,10 +568,7 @@ func (h *EntBusinessLogicHandlers) CancelJob(c *gin.Context, jobId string) {
 	var req generated.CancelJobRequest
 	if c.Request.ContentLength > 0 {
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, generated.ErrorResponse{
-				Error:     fmt.Sprintf("Invalid JSON payload: %v", err),
-				Timestamp: time.Now().UTC(),
-			})
+			writeBindError(c, err)
 			return
 		}
 	}
@@ -1028,10 +1013,7 @@ func (h *EntBusinessLogicHandlers) PostJobEvent(c *gin.Context, jobId string) {
 
 	var req generated.JobEventPostRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
-			Error:     fmt.Sprintf("Invalid JSON payload: %v", err),
-			Timestamp: time.Now().UTC(),
-		})
+		writeBindError(c, err)
 		return
 	}
 	normalizedType := strings.TrimSpace(req.Type)
