@@ -239,8 +239,10 @@ export MCP_MESH_TRUST_BACKEND=filestore
 # Trust store directory (for filestore backend)
 export MCP_MESH_TRUST_DIR=/path/to/trust/dir
 
-# Serve /admin/* only on this port (same TLS + client-cert policy as the
-# main port; restrict it at the network layer)
+# Serve /admin/* only on this port. Plaintext and unauthenticated by
+# default, whatever MCP_MESH_TLS_MODE is set to — restrict it at the
+# network layer. See MCP_MESH_ADMIN_TLS to opt it into the main port's
+# TLS certificate and client-certificate policy.
 export MCP_MESH_ADMIN_PORT=8001
 
 # Kubernetes secrets backend

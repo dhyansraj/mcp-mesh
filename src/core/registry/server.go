@@ -575,7 +575,11 @@ func (s *Server) serverTLSConfig() (*tls.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loading TLS certificate: %w", err)
 	}
+	// MinVersion is pinned rather than left to Go's server default (TLS
+	// 1.2), which GODEBUG=tls10server=1 can roll back at runtime, and to
+	// match how tlsutil and the CLI build their tls.Config.
 	return &tls.Config{
+		MinVersion:   tls.VersionTLS12,
 		ClientAuth:   tls.RequestClientCert,
 		Certificates: []tls.Certificate{cert},
 	}, nil
