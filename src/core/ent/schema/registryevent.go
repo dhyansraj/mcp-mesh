@@ -48,5 +48,26 @@ func (RegistryEvent) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("timestamp"),
 		index.Fields("event_type"),
+		// Supports the dependency-audit prior-trace lookup, which runs on every
+		// full heartbeat that re-resolves dependencies (issue #1582):
+		//   WHERE function_name = ? AND event_type IN (...) AND <consumer agent>
+		//   ORDER BY timestamp DESC LIMIT 64
+		// Emitted column order is (function_name, timestamp, agent_events) —
+		// ent always places Fields() columns before Edges() columns, so the FK
+		// column behind the `agent` edge cannot lead.
+		//
+		// What the shape guarantees: function_name is an equality prefix and
+		// timestamp the ordered suffix, so the ORDER BY ... LIMIT is served by
+		// an index scan instead of a full scan plus sort. What it does NOT
+		// guarantee: event_type is not in the index (it is a recheck), and the
+		// consumer filter reaches the query as an EXISTS subquery rather than
+		// `agent_events = ?`, so the trailing FK column is not inherently an
+		// access predicate — how many index entries the LIMIT touches depends
+		// on the planner. (Postgres 16 was observed folding the semi-join
+		// equality into the index scan, making both function_name and
+		// agent_events access predicates; that is a planner behavior, not a
+		// property of the index.) Also narrows `meshctl audit` / GET /events
+		// when filtered by function name.
+		index.Fields("function_name", "timestamp").Edges("agent"),
 	}
 }

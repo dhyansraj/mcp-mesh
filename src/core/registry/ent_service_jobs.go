@@ -789,12 +789,18 @@ func (s *EntService) ClaimNextJob(ctx context.Context, capability, instanceID st
 
 		leaseExpires := now.Add(leaseWindowFor(candidate))
 
-		// Guarded update: only succeed if owner is still NULL. Concurrent
-		// claimers race here; exactly one wins, the rest see Affected=0.
+		// Guarded update: only succeed if owner is still NULL AND the row is
+		// still `working`. Concurrent claimers race here; exactly one wins, the
+		// rest see Affected=0. The status half of the guard re-asserts the
+		// candidate query's own predicate (issue #1581): an unowned job can be
+		// cancelled or deadline-expired between the SELECT and this UPDATE, and
+		// without it the claim would attach an owner to a terminal row and hand
+		// a cancelled job to a worker.
 		affected, err := s.entDB.Job.Update().
 			Where(
 				job.IDEQ(candidate.ID),
 				job.OwnerInstanceIDIsNil(),
+				job.StatusEQ(job.StatusWorking),
 			).
 			SetOwnerInstanceID(instanceID).
 			AddAttemptCount(1).
@@ -862,7 +868,19 @@ func (s *EntService) CancelJob(ctx context.Context, jobID string, reason string)
 			prevOwner = &owner
 		}
 
-		upd := tx.Job.UpdateOneID(jobID).
+		// Guarded write (issue #1581): the terminal check above ran on a read
+		// that, under READ COMMITTED, can go stale before this statement — a
+		// completion committing in between would otherwise be overwritten with
+		// `cancelled` and its result discarded. Re-asserting the non-terminal
+		// status in the WHERE clause makes the loser of that race see
+		// Affected=0, which is exactly the already-terminal case the caller
+		// maps to 409. Matches the guarded-update discipline used by every
+		// sweep phase (ExpireStaleJobs, ReclaimExpiredLeaseJobs, ...).
+		upd := tx.Job.Update().
+			Where(
+				job.IDEQ(jobID),
+				job.StatusNotIn(job.StatusCompleted, job.StatusFailed, job.StatusCancelled),
+			).
 			SetStatus(job.StatusCancelled).
 			SetLastHeartbeatAt(time.Now().UTC())
 		// Preserve the optional reason. Phase 1 stores it in the existing
@@ -871,9 +889,19 @@ func (s *EntService) CancelJob(ctx context.Context, jobID string, reason string)
 		if r := strings.TrimSpace(reason); r != "" {
 			upd = upd.SetError("cancelled: " + r)
 		}
-		u, err := upd.Save(ctx)
+		affected, err := upd.Save(ctx)
 		if err != nil {
 			return fmt.Errorf("update job: %w", err)
+		}
+		if affected == 0 {
+			// Lost the race to a concurrent terminal transition.
+			return ErrJobAlreadyTerminal
+		}
+		// Re-read so callers still receive the post-update row (a guarded
+		// Update().Save returns only the affected count).
+		u, err := tx.Job.Query().Where(job.IDEQ(jobID)).Only(ctx)
+		if err != nil {
+			return fmt.Errorf("reload cancelled job: %w", err)
 		}
 		updated = u
 		return nil
@@ -1066,7 +1094,29 @@ func (s *EntService) ReleaseJob(ctx context.Context, jobID, instanceID, reason s
 
 		now := time.Now().UTC()
 
-		upd := tx.Job.UpdateOneID(jobID).
+		// Guarded write (issue #1581): the terminal + owner checks above ran on
+		// a read that takes no row lock, so under READ COMMITTED both can go
+		// stale before this statement — a completion committing in between
+		// would otherwise have its owner/lease cleared and, on the exhausted
+		// branch, its status stamped `failed` and its result discarded. Both
+		// checks are re-asserted in the WHERE clause; Affected=0 means we lost
+		// the race and is classified below. Same discipline as ApplyJobDeltas
+		// and the sweep phases.
+		//
+		// claim_epoch closes the same window for a case the owner predicate
+		// cannot see: a lease reclaim followed by a re-claim by the SAME
+		// instance_id leaves owner_instance_id identical across both claims,
+		// so `owner = instanceID` still holds even though the claim we read is
+		// gone. ClaimNextJob mints a fresh epoch on every claim, so pinning the
+		// epoch we just read is what makes "still the same claim" checkable —
+		// the same fence ApplyJobDeltas applies to in-flight writes.
+		upd := tx.Job.Update().
+			Where(
+				job.IDEQ(jobID),
+				job.StatusNotIn(job.StatusCompleted, job.StatusFailed, job.StatusCancelled),
+				job.OwnerInstanceIDEQ(instanceID),
+				job.ClaimEpochEQ(current.ClaimEpoch),
+			).
 			ClearOwnerInstanceID().
 			ClearLeaseExpiresAt().
 			SetLastHeartbeatAt(now)
@@ -1092,9 +1142,30 @@ func (s *EntService) ReleaseJob(ctx context.Context, jobID, instanceID, reason s
 		// untouched — row is ready for the next claim round-trip, which
 		// will increment attempt_count itself.
 
-		u, err := upd.Save(ctx)
+		affected, err := upd.Save(ctx)
 		if err != nil {
 			return fmt.Errorf("update job: %w", err)
+		}
+		if affected == 0 {
+			// Lost the race. Re-read to report the same error the pre-write
+			// checks would have: terminal → 409, owner gone/changed → 403.
+			// An epoch mismatch lands on the 403 branch too, which is the
+			// right answer: the claim being released is not ours any more,
+			// whoever holds the current one.
+			latest, rerr := tx.Job.Query().Where(job.IDEQ(jobID)).Only(ctx)
+			if rerr != nil {
+				return rerr // includes ent.NotFoundError (deleted under us)
+			}
+			if isTerminalStatus(latest.Status) {
+				return ErrJobAlreadyTerminal
+			}
+			return ErrJobNotOwner
+		}
+		// Re-read so callers still receive the post-update row (a guarded
+		// Update().Save returns only the affected count).
+		u, err := tx.Job.Query().Where(job.IDEQ(jobID)).Only(ctx)
+		if err != nil {
+			return fmt.Errorf("reload released job: %w", err)
 		}
 		updated = u
 		return nil
@@ -1118,11 +1189,16 @@ func isTerminalStatus(s job.Status) bool {
 	}
 }
 
-// CountPendingJobsForAgent returns the count of unclaimed jobs whose
-// capability is served by agentID's group (= other agents sharing this
-// agent_name) and which still have retry budget. Used by the HEAD
+// CountPendingJobsForAgentName returns the count of unclaimed jobs whose
+// capability is served by the agent group named agentName (= all agents
+// sharing this agent_name) and which still have retry budget. Used by the HEAD
 // /heartbeat handler to set the X-Mesh-Pending-Jobs header so replicas
 // know to call POST /jobs/claim.
+//
+// Takes the group NAME, not an instance ID: the HEAD handler has already
+// loaded the agent row for its own gating, so making it pass the name keeps
+// that path down to a single read of the row (issue #1580 — it used to read
+// the same row three times).
 //
 // Scoping per design doc ("Pending-jobs scoping: per-agent capability
 // set"): agents sharing the same agent_name are replicas of the same
@@ -1131,7 +1207,7 @@ func isTerminalStatus(s job.Status) bool {
 // the replicas whose agent_name actually serves X.
 //
 // Returns 0 (no error) when:
-//   - agent record is missing
+//   - agentName is empty (caller had no agent row)
 //   - agent group serves zero capabilities
 //   - no jobs are pending in those capabilities
 //
@@ -1143,20 +1219,9 @@ func isTerminalStatus(s job.Status) bool {
 // Performance: this runs on every HEAD heartbeat (~5s per agent).
 // Backed by the jobs_pending_by_capability index (full index in Phase 1;
 // partial WHERE owner IS NULL to follow up).
-func (s *EntService) CountPendingJobsForAgent(ctx context.Context, agentID string) (int, error) {
-	if agentID == "" {
+func (s *EntService) CountPendingJobsForAgentName(ctx context.Context, agentName string) (int, error) {
+	if agentName == "" {
 		return 0, nil
-	}
-
-	// Look up the agent_name (group identity, not instance ID).
-	a, err := s.entDB.Client.Agent.Query().
-		Where(agent.IDEQ(agentID)).
-		Only(ctx)
-	if err != nil {
-		if ent.IsNotFound(err) {
-			return 0, nil
-		}
-		return 0, fmt.Errorf("lookup agent %s: %w", agentID, err)
 	}
 
 	// Capabilities served by every replica that shares this agent_name.
@@ -1165,10 +1230,10 @@ func (s *EntService) CountPendingJobsForAgent(ctx context.Context, agentID strin
 	// double-counted.
 	var capRows []string
 	if err := s.entDB.Client.Capability.Query().
-		Where(capability.HasAgentWith(agent.NameEQ(a.Name))).
+		Where(capability.HasAgentWith(agent.NameEQ(agentName))).
 		Select(capability.FieldCapability).
 		Scan(ctx, &capRows); err != nil {
-		return 0, fmt.Errorf("collect capabilities for agent group %s: %w", a.Name, err)
+		return 0, fmt.Errorf("collect capabilities for agent group %s: %w", agentName, err)
 	}
 	if len(capRows) == 0 {
 		return 0, nil
@@ -1222,7 +1287,7 @@ func (s *EntService) CountPendingJobsForAgent(ctx context.Context, agentID strin
 		Limit(pendingJobsHeaderCap + 1).
 		Select(job.FieldAttemptCount, job.FieldMaxRetries).
 		Scan(ctx, &rows); err != nil {
-		return 0, fmt.Errorf("count pending jobs for agent group %s: %w", a.Name, err)
+		return 0, fmt.Errorf("count pending jobs for agent group %s: %w", agentName, err)
 	}
 
 	count := 0
@@ -1842,14 +1907,28 @@ func (s *EntService) ExpireDeadlinedJobs(ctx context.Context) (int, error) {
 
 	expired := 0
 	for _, j := range candidates {
-		if _, uerr := s.entDB.Client.Job.UpdateOneID(j.ID).
+		// Guarded write (issue #1581): re-assert the non-terminal status the
+		// candidate query selected on. A completion landing between that SELECT
+		// and this UPDATE would otherwise be overwritten with
+		// `failed/deadline_exceeded` and its result silently discarded. Affected=0
+		// means we lost the race — skip the row without counting it, the same way
+		// ExpireStaleJobs does.
+		affected, uerr := s.entDB.Client.Job.Update().
+			Where(
+				job.IDEQ(j.ID),
+				job.StatusNotIn(job.StatusCompleted, job.StatusFailed, job.StatusCancelled),
+			).
 			SetStatus(job.StatusFailed).
 			SetError("deadline_exceeded").
 			ClearLeaseExpiresAt().
 			ClearOwnerInstanceID().
 			SetLastHeartbeatAt(now).
-			Save(ctx); uerr != nil {
+			Save(ctx)
+		if uerr != nil {
 			return expired, fmt.Errorf("expire deadlined job %s: %w", j.ID, uerr)
+		}
+		if affected == 0 {
+			continue
 		}
 		expired++
 	}

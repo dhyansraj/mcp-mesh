@@ -424,6 +424,11 @@ var (
 				Unique:  false,
 				Columns: []*schema.Column{RegistryEventsColumns[1]},
 			},
+			{
+				Name:    "registryevent_function_name_timestamp_agent_events",
+				Unique:  false,
+				Columns: []*schema.Column{RegistryEventsColumns[2], RegistryEventsColumns[3], RegistryEventsColumns[5]},
+			},
 		},
 	}
 	// SchemaEntriesColumns holds the columns for the "schema_entries" table.
