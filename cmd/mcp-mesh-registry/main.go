@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	flag "github.com/spf13/pflag"
 
@@ -19,6 +20,14 @@ import (
 
 // version is injected at build time via ldflags
 var version = "dev"
+
+// shutdownWaitTimeout bounds how long main waits for Server.Stop after
+// the listeners have closed. Stop's own bounded phases are 5s of HTTP
+// drain plus 10s of handler-goroutine drain, so 20s leaves both room to
+// finish and still guarantees the process exits: Stop's tail (tracing
+// shutdown) has no deadline of its own, and by this point the SIGTERM
+// has already been consumed.
+const shutdownWaitTimeout = 20 * time.Second
 
 func main() {
 	// Command line flags
@@ -123,12 +132,13 @@ func main() {
 		TlsKeyFile:              os.Getenv("MCP_MESH_TLS_KEY"),
 		TrustDir:                os.Getenv("MCP_MESH_TRUST_DIR"),
 		AdminPort:               getEnvIntDefault("MCP_MESH_ADMIN_PORT", 0),
+		AdminTLS:                getEnvBoolDefault("MCP_MESH_ADMIN_TLS", false),
 	}
 
 	if registryConfig.TlsMode != "off" {
 		appLogger.Info("🔒 TLS configuration: mode=%s, backend=%s", registryConfig.TlsMode, registryConfig.TrustBackend)
 		if registryConfig.AdminPort > 0 {
-			appLogger.Info("🔒 Admin API port: %d", registryConfig.AdminPort)
+			appLogger.Info("🔒 Admin API port: %d (TLS: %t)", registryConfig.AdminPort, registryConfig.AdminTLS)
 		}
 	}
 
@@ -141,7 +151,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Setup graceful shutdown
+	// Setup graceful shutdown.
+	//
+	// shutdownDone is what makes the drain observable to the main
+	// goroutine: Server.Stop now closes the HTTP listeners and waits for
+	// in-flight requests, and Run returns as soon as they are closed. The
+	// old os.Exit(0) in here raced that wait — the process could exit
+	// while requests were still draining. Main blocks on shutdownDone
+	// instead, so the deferred db.Close also runs (issue #1583).
+	shutdownDone := make(chan struct{})
 	go func() {
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -154,8 +172,7 @@ func main() {
 			appLogger.Error("Error during server shutdown: %v", err)
 		}
 
-		appLogger.Info("✅ Registry service stopped")
-		os.Exit(0)
+		close(shutdownDone)
 	}()
 
 	// Start server
@@ -165,6 +182,23 @@ func main() {
 		appLogger.Error("❌ Failed to start server: %v", err)
 		os.Exit(1)
 	}
+
+	// Run returned without error, which only happens once the listeners
+	// have been shut down. Wait for the rest of Stop (background-goroutine
+	// drain, tracing flush) before returning — but bounded. Stop's own
+	// phases are capped, yet its tail is not: tracingManager.Stop() waits
+	// on the trace-trim WaitGroup and the Redis consumer with no deadline,
+	// so a wedged Redis would otherwise leave a process that has already
+	// consumed its SIGTERM and needs a SIGKILL to die. The bound sits
+	// above Stop's bounded phases (HTTP drain + goroutine drain) so it
+	// never cuts a drain that is still making progress.
+	select {
+	case <-shutdownDone:
+		appLogger.Info("✅ Registry service stopped")
+	case <-time.After(shutdownWaitTimeout):
+		appLogger.Warning("Shutdown did not finish within %s; exiting anyway", shutdownWaitTimeout)
+		os.Exit(0)
+	}
 }
 
 func getEnvDefault(key, defaultValue string) string {
@@ -172,6 +206,23 @@ func getEnvDefault(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+// getEnvBoolDefault parses a boolean env var, accepting the same spellings
+// the rest of the mesh does (true/1/yes). Anything else is the default.
+func getEnvBoolDefault(key string, defaultValue bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	switch value {
+	case "":
+		return defaultValue
+	case "true", "1", "yes":
+		return true
+	case "false", "0", "no":
+		return false
+	default:
+		log.Printf("[registry] invalid %s=%q, using default %t", key, value, defaultValue)
+		return defaultValue
+	}
 }
 
 func getEnvIntDefault(key string, defaultValue int) int {

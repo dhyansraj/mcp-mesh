@@ -67,6 +67,24 @@ class DualContractEndpointDetector:
         return False
 
     @staticmethod
+    def is_test_file(file_path: Path) -> bool:
+        """Check if a file is a test file, which is out of contract scope.
+
+        This detector exists to keep *production* handler implementations in sync
+        with the OpenAPI contracts. A fixture route registered on a throwaway
+        engine/app inside a test is not an endpoint the contract governs, so test
+        files are never scanned.
+        """
+        name = file_path.name
+        if name.endswith("_test.go"):
+            return True
+        if name.endswith("_test.py") or (
+            name.startswith("test_") and name.endswith(".py")
+        ):
+            return True
+        return "tests" in file_path.parts
+
+    @staticmethod
     def normalize_path(path: str) -> str:
         """Normalize path parameters from framework-specific to OpenAPI format.
 
@@ -112,7 +130,9 @@ class DualContractEndpointDetector:
                 continue
 
             for go_file in source_path.rglob("*.go"):
-                # Skip generated files, mocks, and deprecated files
+                # Skip test files, generated files, mocks, and deprecated files
+                if self.is_test_file(go_file):
+                    continue
                 if (
                     "generated" in str(go_file)
                     or "mock" in str(go_file)
@@ -152,11 +172,12 @@ class DualContractEndpointDetector:
                 continue
 
             for py_file in source_path.rglob("*.py"):
-                # Skip generated files, tests, mocks, and deprecated files
+                # Skip test files, generated files, mocks, and deprecated files
+                if self.is_test_file(py_file):
+                    continue
                 if (
                     "generated" in str(py_file)
                     or "mock" in str(py_file)
-                    or "test" in str(py_file)
                     or "deprecated" in str(py_file)
                     or "_old_" in str(py_file)
                 ):
@@ -184,6 +205,8 @@ class DualContractEndpointDetector:
             # Only scan registry paths for Go endpoints
             if "registry" in str(source_path).lower():
                 for go_file in source_path.rglob("*.go"):
+                    if self.is_test_file(go_file):
+                        continue
                     if (
                         "generated" in str(go_file)
                         or "mock" in str(go_file)
@@ -226,10 +249,11 @@ class DualContractEndpointDetector:
                 for term in ["runtime", "agent", "http_wrapper"]
             ):
                 for py_file in source_path.rglob("*.py"):
+                    if self.is_test_file(py_file):
+                        continue
                     if (
                         "generated" in str(py_file)
                         or "mock" in str(py_file)
-                        or "test" in str(py_file)
                         or "deprecated" in str(py_file)
                         or "_old_" in str(py_file)
                     ):

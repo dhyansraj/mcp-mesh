@@ -199,10 +199,7 @@ func (h *EntBusinessLogicHandlers) GetRoot(c *gin.Context) {
 func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 	var req generated.MeshAgentRegistration
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
-			Error:     fmt.Sprintf("Invalid JSON payload: %v", err),
-			Timestamp: time.Now().UTC(),
-		})
+		writeBindError(c, err)
 		return
 	}
 
@@ -1192,14 +1189,18 @@ func getProxyTLSTransport(caPath, certPath, keyPath string) (*http.Transport, er
 // host (e.g., K8s service DNS) — used by the proxy to dial the real endpoint
 // rather than the user-supplied hostPort when matching via Id/Name fallback.
 func (h *EntBusinessLogicHandlers) isRegisteredAgentEndpoint(ctx context.Context, hostPort string) (bool, string, string, error) {
-	// Parse host and port
-	parts := strings.Split(hostPort, ":")
-	if len(parts) != 2 {
+	// Parse host and port. net.SplitHostPort rather than a split on ":"
+	// so an IPv6 literal target ("[::1]:8080", or a K8s pod IP in an
+	// IPv6 cluster) parses at all — the old split saw three-plus fields
+	// and rejected every IPv6 host as malformed. It also unwraps the
+	// brackets, so the host compared against the registered http_host
+	// below is the bare address the agent registered.
+	host, portStr, err := net.SplitHostPort(hostPort)
+	if err != nil || host == "" {
 		return false, "", "", nil // Invalid format
 	}
 
-	host := parts[0]
-	portInt, err := strconv.Atoi(parts[1])
+	portInt, err := strconv.Atoi(portStr)
 	if err != nil || portInt <= 0 {
 		return false, "", "", nil // Invalid port
 	}
@@ -1236,7 +1237,7 @@ func (h *EntBusinessLogicHandlers) isRegisteredAgentEndpoint(ctx context.Context
 	}
 	for _, a := range candidates {
 		if a.HTTPHost == host {
-			return true, schemeFor(a), fmt.Sprintf("%s:%d", a.HTTPHost, a.HTTPPort), nil
+			return true, schemeFor(a), net.JoinHostPort(a.HTTPHost, strconv.Itoa(a.HTTPPort)), nil
 		}
 	}
 
@@ -1252,7 +1253,7 @@ func (h *EntBusinessLogicHandlers) isRegisteredAgentEndpoint(ctx context.Context
 	// directly.
 	for _, a := range candidates {
 		if a.ID == host || a.Name == host {
-			return true, schemeFor(a), fmt.Sprintf("%s:%d", a.HTTPHost, a.HTTPPort), nil
+			return true, schemeFor(a), net.JoinHostPort(a.HTTPHost, strconv.Itoa(a.HTTPPort)), nil
 		}
 	}
 

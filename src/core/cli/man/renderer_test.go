@@ -482,6 +482,36 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // dependency-injection pages did not get it; neither has a Loop topology section
 // to put it in, and the variant golden in `variant_corpus_test.go` is unmoved.
 //
+// Issue #1583 moved this to 1809 (+13) and the list constant to 523
+// (+1). The security page's "Admin Port Isolation" section was two code
+// spans of prose asserting that /admin/* "are served only on the admin
+// port when set" — true, and the whole of what the page said about a
+// listener that is plaintext and applies no client-certificate check.
+// The replacement is 20 spans: what the port serves, that it is
+// `http://` and unauthenticated by DEFAULT and must be
+// network-restricted, and a "Hardening the admin port" subsection for
+// the new `MCP_MESH_ADMIN_TLS` opt-in. Twelve of the thirteen are prose;
+// the thirteenth is the production-checklist line, which is why the list
+// constant moved by exactly one and the markup-list-line constant did
+// not move at all (the line already carried markup).
+//
+// The two caveats in that subsection are the reason it is long, and they
+// are load-bearing rather than padding: enabling the opt-in changes the
+// admin port's scheme to `https://` (the subsection names the two man
+// pages whose `http://` admin URLs assume the default), and `meshctl`
+// cannot present a client certificate (its only TLS flag is --insecure),
+// so `strict` plus the opt-in leaves `meshctl registry drain` — the
+// documented pre-upgrade step — answering 403. A reader who enables the
+// flag without both sentences has broken their drain path.
+//
+// The word "isolation" is gone from the heading on purpose: it was the
+// framing that made a second listener sound like a control.
+//
+// `security.md` has no `_java` or `_typescript` variant (no
+// HasJavaVariant/HasTypeScriptVariant in content.go), so the variant
+// golden did not move — the same edit on a page that had variants would
+// have moved both files.
+//
 // Issue #1500: the sentence most annotations above end on — that the `_java`
 // and `_typescript` files are invisible here, so a review of them cannot lean
 // on this test — is still true of THESE constants and no longer true of this
@@ -495,8 +525,8 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // the starter's POM; a test in this package cannot, and #1499 shipped three
 // false claims through a green run here.
 const (
-	wantInlineCodeSpans = 1790
-	wantListCodeSpans   = 522
+	wantInlineCodeSpans = 1809
+	wantListCodeSpans   = 523
 	wantMarkupListLines = 448
 )
 

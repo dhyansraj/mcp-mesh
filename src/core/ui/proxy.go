@@ -10,6 +10,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// maxRegistryResponseBytes caps the registry response the UI will buffer
+// and forward. Every proxied endpoint is a bounded JSON document (agent
+// lists, traces, job pages), so 10MB is far past any legitimate reply;
+// past it the request fails with 502 rather than forwarding a body that
+// was cut mid-token.
+const maxRegistryResponseBytes int64 = 10 * 1024 * 1024
+
 // proxyToRegistry forwards an API request to the registry and writes back the response.
 // The /api prefix is stripped before forwarding: /api/health -> {registryURL}/health.
 func (s *Server) proxyToRegistry(c *gin.Context) {
@@ -52,10 +59,24 @@ func (s *Server) proxyToRegistry(c *gin.Context) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024)) // 10MB limit
+	// Read one byte past the cap so an over-large response is detectable.
+	// It used to be a plain LimitReader at the cap, which silently handed
+	// the client a truncated body — invalid JSON carrying the upstream's
+	// 200 — with nothing in the response to say it had been cut (issue
+	// #1583). A response this size is a registry bug or a runaway query,
+	// so fail the request instead of corrupting it.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRegistryResponseBytes+1))
 	if err != nil {
 		log.Printf("proxy: failed to read registry response: %v", err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Failed to read registry response"})
+		return
+	}
+	if int64(len(body)) > maxRegistryResponseBytes {
+		log.Printf("proxy: registry response for %s exceeded %d bytes; refusing to forward a truncated body", registryPath, maxRegistryResponseBytes)
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": fmt.Sprintf("Registry response exceeded the %d byte limit", maxRegistryResponseBytes),
+			"path":  registryPath,
+		})
 		return
 	}
 

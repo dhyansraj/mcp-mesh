@@ -192,16 +192,29 @@ If a configured backend fails to initialize at startup, the registry refuses to 
 | `MCP_MESH_TRUST_BACKEND`      | Trust backend(s), comma-separated           | (none; `localca` with `--tls-auto`) |
 | `MCP_MESH_TRUST_DIR`          | Directory for filestore/localca backends    | `~/.mcp-mesh/tls` (local), `/etc/mcp-mesh/trust` (Helm) |
 | `MCP_MESH_ADMIN_PORT`         | Separate admin API port                     | (disabled)       |
+| `MCP_MESH_ADMIN_TLS`          | Admin port inherits main-port TLS + trust   | `false`          |
 | `MCP_MESH_K8S_NAMESPACE`      | Namespace for k8s-secrets backend           | release namespace|
 | `MCP_MESH_K8S_LABEL_SELECTOR` | Label selector for k8s-secrets backend      | `mcp-mesh.io/trust=entity-ca` |
 
-## Admin Port Isolation
+## Admin Port
 
 ```bash
 MCP_MESH_ADMIN_PORT=9443 meshctl start --registry-only --tls-auto -d
 ```
 
-Admin endpoints (`/admin/rotate`, `/admin/entities`) are served only on the admin port when set.
+When set, `/admin/*` (`/admin/rotate`, `/admin/entities`, `/admin/drain`) is served only on this port and the main port returns 404.
+
+By default the admin listener is plain `http://` and applies no client-certificate check, whatever `MCP_MESH_TLS_MODE` is set to. Anyone who can reach the port can call it, and `/admin/rotate` signals every matching healthy agent to rotate its credentials. Restrict the port at the network layer with a NetworkPolicy or equivalent: a separate port is not a security boundary on its own.
+
+### Hardening the admin port
+
+```bash
+MCP_MESH_ADMIN_TLS=true
+```
+
+The admin listener then uses the registry's certificate and the same `MCP_MESH_TLS_MODE` client-certificate policy as the main port: certless callers pass in `auto` and are rejected with 403 in `strict`.
+
+Two things to know before enabling it. The admin port's scheme becomes `https://`, so every existing caller has to be updated — the `http://` admin URLs in `meshctl man registry` and `meshctl man upgrading` assume the default. And `meshctl` cannot present a client certificate, so with `strict` the admin API is reachable only from a cert-capable client such as `curl --cert`; `meshctl registry drain|resume|status` and `meshctl entity rotate` will return 403. Leave it off if `meshctl` is your drain path before upgrades.
 
 ## Docker Compose TLS
 
@@ -349,7 +362,7 @@ meshctl start my_agent.py --tls-auto
 - [ ] `MCP_MESH_TLS_MODE=strict` on registry and all agents
 - [ ] Credential provider configured (file, vault, or spire) — not `--tls-auto`
 - [ ] CA certs distributed to all agents (volume, secret, or SPIRE)
-- [ ] `MCP_MESH_ADMIN_PORT` set on registry (isolates admin API)
+- [ ] `MCP_MESH_ADMIN_PORT` set on registry, and the port restricted by NetworkPolicy (see `MCP_MESH_ADMIN_TLS`)
 - [ ] Certificate rotation tested (`meshctl entity rotate`)
 - [ ] Vault TTL or SPIRE SVID TTL configured for auto-renewal
 - [ ] `--tls-auto` NOT used in production (generates self-signed certs)
