@@ -417,3 +417,75 @@ func TestReleaseJob_StillReleasesOwnedJob(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, got.OwnerInstanceID)
 }
+
+// TestReleaseJob_LosesToConcurrentReclaimBySameInstance is the case the owner
+// predicate alone cannot catch. The lease sweep reclaims an expired lease and
+// the SAME replica immediately re-claims the job, all inside the window
+// between ReleaseJob's lock-free read and its write. owner_instance_id is
+// identical across both claims, so `owner = instanceID` still holds and the
+// release would clear a claim it never held — cancelling a lease the registry
+// had just granted for a fresh attempt. ClaimNextJob mints a new claim_epoch
+// on every claim, so re-asserting the epoch that was read is what makes the
+// stale claim detectable.
+//
+// Covers: the release UPDATE observing a row that was re-claimed (new epoch,
+// same owner) after the read → the caller gets ErrJobNotOwner (403) and the
+// new claim's owner/lease survive.
+// Does not cover: the post-rollback row state under Postgres, for the same
+// reason as the tests above — the injected reclaim shares the release
+// transaction, so the rollback unwinds it too. The assertion is "the release
+// did not clear an owner".
+func TestReleaseJob_LosesToConcurrentReclaimBySameInstance(t *testing.T) {
+	client, service, cleanup := newAuditTestEnv(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	j := seedJob(t, service, "job-release-same-instance-reclaim", "render", nil)
+	claimed, err := service.ClaimNextJob(ctx, "render", "replica-a")
+	require.NoError(t, err)
+	require.NotNil(t, claimed)
+	require.Equal(t, int64(1), claimed.ClaimEpoch, "first claim mints epoch 1")
+
+	// Expire the lease so the sweep is entitled to reclaim it.
+	_, err = client.Job.UpdateOneID(j.ID).
+		SetLeaseExpiresAt(time.Now().UTC().Add(-time.Minute)).
+		Save(ctx)
+	require.NoError(t, err)
+
+	injected := injectOnceBeforeJobUpdate(client,
+		func(m *ent.JobMutation) bool {
+			return m.OwnerInstanceIDCleared()
+		},
+		func(ctx context.Context, c *ent.Client) error {
+			// The sweep reclaims the expired lease...
+			if err := c.Job.UpdateOneID(j.ID).
+				ClearOwnerInstanceID().
+				ClearLeaseExpiresAt().
+				Exec(ctx); err != nil {
+				return err
+			}
+			// ...and the same replica wins the re-claim, which is what
+			// ClaimNextJob writes: same owner, fresh epoch, new lease.
+			return c.Job.UpdateOneID(j.ID).
+				SetOwnerInstanceID("replica-a").
+				AddAttemptCount(1).
+				AddClaimEpoch(1).
+				SetLeaseExpiresAt(time.Now().UTC().Add(5 * time.Minute)).
+				Exec(ctx)
+		},
+	)
+
+	released, err := service.ReleaseJob(ctx, j.ID, "replica-a", "handler raised")
+	require.True(t, injected(), "test bug: the injected re-claim never ran")
+	require.Error(t, err,
+		"release must not succeed against a claim generation it no longer holds (#1581)")
+	assert.True(t, errors.Is(err, ErrJobNotOwner),
+		"a superseded claim must surface as not-owner (403), got: %v", err)
+	assert.Nil(t, released)
+
+	got, err := client.Job.Get(ctx, j.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.OwnerInstanceID,
+		"the release must not clear the owner of a claim it did not hold (#1581)")
+	assert.Equal(t, job.StatusWorking, got.Status)
+}

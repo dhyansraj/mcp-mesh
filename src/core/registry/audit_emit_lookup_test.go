@@ -253,3 +253,73 @@ func TestAudit_SiblingUnresolvedFloodDoesNotHideFlip(t *testing.T) {
 	assert.Equal(t, "prod-a", flips[0].PriorChosen,
 		"the emitted flip must name the producer it replaced")
 }
+
+// TestAudit_DuplicateFunctionNameSlotSeesOwnEmission covers the one case where
+// the per-call memo introduced by #1582 can hand back a stale snapshot.
+//
+// ResolveAllDependenciesIndexed derives (function_name, dep_index) from the
+// agent-supplied tools list and does not deduplicate it, so an agent that
+// registers two tools under the same function_name produces the SAME slot
+// twice in one StoreDependencyResolutions call. The pre-#1582 code re-queried
+// per dependency and therefore saw the first occurrence's just-written event
+// as the second's prior; a naively memoized lookup would serve the
+// pre-emission snapshot instead and lose the flip.
+//
+// Here the first occurrence emits (two candidates for cap_a, chosen prod-a1)
+// and the second occurrence resolves the same slot to prod-b with a single
+// candidate — so its emission hinges entirely on the flip check against the
+// first occurrence's event.
+func TestAudit_DuplicateFunctionNameSlotSeesOwnEmission(t *testing.T) {
+	client, service, cleanup := newAuditTestEnv(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	seedConsumer(t, client, "consumer-1")
+	seedProducer(t, client, "prod-a1", "cap_a", "1.0.0", nil)
+	seedProducer(t, client, "prod-a2", "cap_a", "1.0.0", nil)
+	seedProducer(t, client, "prod-b", "cap_b", "1.0.0", nil)
+
+	// Two tools, one function_name, each with a dependency at index 0.
+	meta := map[string]interface{}{
+		"tools": []interface{}{
+			map[string]interface{}{
+				"function_name": "consume",
+				"dependencies": []interface{}{
+					map[string]interface{}{"capability": "cap_a"},
+				},
+			},
+			map[string]interface{}{
+				"function_name": "consume",
+				"dependencies": []interface{}{
+					map[string]interface{}{"capability": "cap_b"},
+				},
+			},
+		},
+	}
+
+	res := service.ResolveAllDependenciesIndexed(meta)
+	require.Len(t, res, 2, "both tools must reach the emitter")
+	require.Equal(t, 0, res[0].DepIndex)
+	require.Equal(t, 0, res[1].DepIndex,
+		"test premise: the duplicate function_name collides on the same slot")
+	require.True(t, res[0].Trace.IsInteresting(),
+		"test premise: the first occurrence must emit on its own merits")
+	require.False(t, res[1].Trace.IsInteresting(),
+		"test premise: the second occurrence must emit only via the flip check")
+	require.NotNil(t, res[1].Resolution)
+	require.Equal(t, "prod-b", res[1].Resolution.AgentID)
+
+	require.NoError(t, service.StoreDependencyResolutions(ctx, "consumer-1", res))
+
+	events := listAuditEventsFor(t, client, "consumer-1")
+	require.Len(t, events, 2,
+		"the second occurrence of a repeated (function, dep_index) slot must see "+
+			"the first occurrence's event as its prior and emit the flip; the "+
+			"per-call memo must not serve it the pre-emission snapshot")
+
+	firstChosen := events[0].Chosen
+	require.NotNil(t, firstChosen)
+	assert.Equal(t, "prod-b", events[1].Chosen.AgentID)
+	assert.Equal(t, firstChosen.AgentID, events[1].PriorChosen,
+		"the flip must name the producer the first occurrence chose")
+}

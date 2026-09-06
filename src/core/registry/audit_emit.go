@@ -72,7 +72,7 @@ func (s *EntService) emitAuditEventIfInteresting(
 	// dependency of that function through `history`, instead of once per
 	// dependency. A 32-dep function goes from 64 queries per full heartbeat to
 	// 2. They stay separate queries on purpose — see priorTraceLookupLimit.
-	priorByDep, err := s.auditLatestByDep(ctx, history, consumerAgentID, functionName, true)
+	priorByDep, err := s.auditLatestByDep(ctx, history, consumerAgentID, functionName, depIndex, true)
 	if err != nil {
 		return fmt.Errorf("audit: query prior trace: %w", err)
 	}
@@ -86,7 +86,7 @@ func (s *EntService) emitAuditEventIfInteresting(
 	// Look up the most recent audit event (resolved OR unresolved) so we can
 	// (a) detect an unresolved→resolved flip even when only one candidate
 	// survives, and (b) dedupe identical-trace re-emissions further down.
-	anyByDep, err := s.auditLatestByDep(ctx, history, consumerAgentID, functionName, false)
+	anyByDep, err := s.auditLatestByDep(ctx, history, consumerAgentID, functionName, depIndex, false)
 	if err != nil {
 		return fmt.Errorf("audit: query last trace: %w", err)
 	}
@@ -180,6 +180,10 @@ func (s *EntService) emitAuditEventIfInteresting(
 	if err != nil {
 		return fmt.Errorf("audit: create event: %w", err)
 	}
+	// Record the emission so a repeat of this exact slot within the same call
+	// re-queries instead of reading the pre-emission snapshot (see
+	// auditHistoryCache).
+	history.markEmitted(consumerAgentID, functionName, depIndex)
 
 	s.logger.Debug("audit: emitted %s for %s/%s[%d] (prior_chosen=%q)",
 		eventType, consumerAgentID, functionName, depIndex, priorChosen)
@@ -253,26 +257,70 @@ type auditEventTrace struct {
 // instead of issuing its own (issue #1582). Two buckets, because the two
 // lookups select different event types and must keep their own LIMIT windows.
 //
-// Events written by the loop that owns the cache are deliberately not visible
-// to it: an emission for dep_index i can only ever be the "prior" of dep_index
-// i, and each (function, dep_index) slot is processed at most once per call.
+// Events written by the loop that owns the cache are normally not visible to
+// it, and must not be: an emission for dep_index i can only ever be the
+// "prior" of dep_index i, so for every OTHER slot the cached snapshot and a
+// fresh query are provably identical (the per-slot lookup filters by
+// dep_index).
+//
+// A slot can, however, be processed more than once in a single call:
+// ResolveAllDependenciesIndexed derives (function_name, dep_index) from the
+// agent-supplied tools list and does not deduplicate it, so two tools sharing
+// a function_name yield duplicate slots. For those, the snapshot IS stale —
+// the first occurrence's event is the second's prior. `emitted` tracks the
+// slots that have written an event during this call and forces a re-query for
+// them only, which restores the pre-memoization semantics exactly without
+// costing the ordinary distinct-slot case a single extra query.
 type auditHistoryCache struct {
 	resolvedOnly map[string]map[int]*auditEventTrace
 	anyType      map[string]map[int]*auditEventTrace
+	emitted      map[string]map[int]bool
 }
 
 func newAuditHistoryCache() *auditHistoryCache {
 	return &auditHistoryCache{
 		resolvedOnly: make(map[string]map[int]*auditEventTrace),
 		anyType:      make(map[string]map[int]*auditEventTrace),
+		emitted:      make(map[string]map[int]bool),
 	}
+}
+
+// auditHistoryKey is the cache key shared by both buckets and by `emitted`.
+func auditHistoryKey(consumerAgentID, functionName string) string {
+	return consumerAgentID + "\x00" + functionName
+}
+
+// markEmitted records that an audit event was written for this slot during the
+// call that owns the cache. A nil cache (uncached callers) is a no-op.
+func (c *auditHistoryCache) markEmitted(consumerAgentID, functionName string, depIndex int) {
+	if c == nil {
+		return
+	}
+	key := auditHistoryKey(consumerAgentID, functionName)
+	byDep, ok := c.emitted[key]
+	if !ok {
+		byDep = make(map[int]bool)
+		c.emitted[key] = byDep
+	}
+	byDep[depIndex] = true
+}
+
+// hasEmitted reports whether this slot already wrote an event during the call
+// that owns the cache, i.e. whether the memoized snapshot is stale for it.
+func (c *auditHistoryCache) hasEmitted(consumerAgentID, functionName string, depIndex int) bool {
+	if c == nil {
+		return false
+	}
+	return c.emitted[auditHistoryKey(consumerAgentID, functionName)][depIndex]
 }
 
 // auditLatestByDep returns, per dep_index, the most recent audit event for the
 // given (consumer, function) — restricted to dependency_resolved when
 // `resolvedOnly`, otherwise covering both audit event types. Uses and
 // populates `cache` when one is supplied; a nil cache is legal and just runs
-// the lookup uncached.
+// the lookup uncached. `depIndex` is the slot the caller is about to decide
+// on: a cached bucket is bypassed and refreshed when that slot has already
+// emitted during this call, because only then can the snapshot be stale.
 //
 // Filters: agent_id == consumer, event_type IN (...), function_name ==
 // functionName, ORDER BY timestamp DESC LIMIT priorTraceLookupLimit — i.e.
@@ -285,9 +333,10 @@ func (s *EntService) auditLatestByDep(
 	cache *auditHistoryCache,
 	consumerAgentID string,
 	functionName string,
+	depIndex int,
 	resolvedOnly bool,
 ) (map[int]*auditEventTrace, error) {
-	key := consumerAgentID + "\x00" + functionName
+	key := auditHistoryKey(consumerAgentID, functionName)
 
 	var bucket map[string]map[int]*auditEventTrace
 	if cache != nil {
@@ -295,7 +344,7 @@ func (s *EntService) auditLatestByDep(
 		if resolvedOnly {
 			bucket = cache.resolvedOnly
 		}
-		if byDep, ok := bucket[key]; ok {
+		if byDep, ok := bucket[key]; ok && !cache.hasEmitted(consumerAgentID, functionName, depIndex) {
 			return byDep, nil
 		}
 	}

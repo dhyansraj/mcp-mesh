@@ -1102,11 +1102,20 @@ func (s *EntService) ReleaseJob(ctx context.Context, jobID, instanceID, reason s
 		// checks are re-asserted in the WHERE clause; Affected=0 means we lost
 		// the race and is classified below. Same discipline as ApplyJobDeltas
 		// and the sweep phases.
+		//
+		// claim_epoch closes the same window for a case the owner predicate
+		// cannot see: a lease reclaim followed by a re-claim by the SAME
+		// instance_id leaves owner_instance_id identical across both claims,
+		// so `owner = instanceID` still holds even though the claim we read is
+		// gone. ClaimNextJob mints a fresh epoch on every claim, so pinning the
+		// epoch we just read is what makes "still the same claim" checkable —
+		// the same fence ApplyJobDeltas applies to in-flight writes.
 		upd := tx.Job.Update().
 			Where(
 				job.IDEQ(jobID),
 				job.StatusNotIn(job.StatusCompleted, job.StatusFailed, job.StatusCancelled),
 				job.OwnerInstanceIDEQ(instanceID),
+				job.ClaimEpochEQ(current.ClaimEpoch),
 			).
 			ClearOwnerInstanceID().
 			ClearLeaseExpiresAt().
@@ -1140,6 +1149,9 @@ func (s *EntService) ReleaseJob(ctx context.Context, jobID, instanceID, reason s
 		if affected == 0 {
 			// Lost the race. Re-read to report the same error the pre-write
 			// checks would have: terminal → 409, owner gone/changed → 403.
+			// An epoch mismatch lands on the 403 branch too, which is the
+			// right answer: the claim being released is not ours any more,
+			// whoever holds the current one.
 			latest, rerr := tx.Job.Query().Where(job.IDEQ(jobID)).Only(ctx)
 			if rerr != nil {
 				return rerr // includes ent.NotFoundError (deleted under us)
