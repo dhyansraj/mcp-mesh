@@ -184,6 +184,16 @@ export MCP_MESH_SETTLE_TIMEOUT=20
 # outputSchemaStrict: false (TS) / outputSchemaStrict = false (Java)
 # overrides this for that one tool.
 export MCP_MESH_SCHEMA_STRICT=true
+
+# Ceiling on the number of JSON nodes the normalizer will materialize while
+# inlining $defs for one schema. Default: 500000. Shared $defs are inlined
+# once per use site, so a deeply nested model that reuses the same sub-model
+# on several branches expands multiplicatively; the ceiling stops that
+# becoming a multi-megabyte canonical form. Exceeding it is a BLOCK.
+#
+# Raise it if a legitimately large model is refused — a consumer-side
+# expected_type BLOCK has NO per-tool override, so this is the only remedy.
+export MCP_MESH_SCHEMA_MAX_INLINED_NODES=2000000
 ```
 
 See `meshctl man schema-matching` for the verdict tiers and per-tool overrides.

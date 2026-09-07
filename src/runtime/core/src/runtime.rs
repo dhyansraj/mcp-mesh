@@ -94,12 +94,17 @@ impl Default for RuntimeConfig {
 
 /// Key for tracking dependencies by position.
 /// Combines the requesting function and the dependency index within that function.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct DepKey {
+///
+/// This is the ONLY correct identity for a resolved dependency: a function may
+/// declare two dependencies on the same capability (differing only by tags), so
+/// capability alone does not identify an edge. [`crate::handle::HandleState`]
+/// is keyed the same way for that reason (issue #1588).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DepKey {
     /// The function that requested this dependency
-    requesting_function: String,
+    pub requesting_function: String,
     /// The index of the dependency in the function's dependencies array
-    dep_index: u32,
+    pub dep_index: u32,
 }
 
 /// Resolved dependency value with all details.
@@ -108,17 +113,17 @@ struct DepKey {
 /// can travel through the FFI boundary without GIL acquisition. SDKs decode
 /// it on receipt to configure the consumer-side proxy.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct DepValue {
+pub struct DepValue {
     /// The capability name
-    capability: String,
+    pub capability: String,
     /// The endpoint URL
-    endpoint: String,
+    pub endpoint: String,
     /// The function name to call
-    function_name: String,
+    pub function_name: String,
     /// The agent providing this dependency
-    agent_id: String,
+    pub agent_id: String,
     /// Producer's @mesh.tool kwargs serialized as JSON; None if absent.
-    kwargs: Option<String>,
+    pub kwargs: Option<String>,
 }
 
 /// Topology state - tracks current dependency endpoints.
@@ -514,39 +519,44 @@ impl AgentRuntime {
 
     /// Compare tools for equality (smart diffing).
     /// Returns true if the new tools are different from the current spec.
+    ///
+    /// Issue #1588: this used to compare a hand-picked subset — 7 of the 22
+    /// fields that reach the registry. An update that changed only one of the
+    /// other 15 (`tags`, `description`, either raw schema, either canonical
+    /// schema, either schema hash, `schema_warnings`, `llm_filter`,
+    /// `llm_provider`, `kwargs`, or a dependency's `expected_schema_canonical` /
+    /// `expected_schema_hash` / `match_mode`) was dropped as "unchanged" and the
+    /// registry kept the stale registration until the process restarted. The
+    /// recurrence is the real defect — every field added to `ToolSpec` since the
+    /// list was written silently went uncompared — so the comparison is now
+    /// derived from the struct's own serialization instead of enumerated by hand.
+    ///
+    /// `ToolSpec`/`DependencySpec` serialize in field-declaration order and hold
+    /// no maps, so the encoding is byte-stable across runs (no `HashMap`
+    /// iteration order leaks in). The comparison is over the encoded bytes
+    /// directly; there is no hash, so there is nothing to collide.
+    ///
+    /// This can be conservative — a producer that re-serializes an equivalent
+    /// schema string with different key order reads as changed — which costs one
+    /// redundant full heartbeat. That is the safe direction; the old failure
+    /// mode dropped real changes permanently.
     fn tools_are_different(&self, new_tools: &[ToolSpec]) -> bool {
-        if self.spec.tools.len() != new_tools.len() {
-            return true;
+        match (
+            Self::canonical_tools_repr(&self.spec.tools),
+            Self::canonical_tools_repr(new_tools),
+        ) {
+            (Some(old), Some(new)) => old != new,
+            // Serializing a ToolSpec cannot fail today (no non-string map keys,
+            // no non-finite floats). If it ever does, treat the update as a
+            // change: a redundant heartbeat beats a silently dropped one.
+            _ => true,
         }
+    }
 
-        for (old, new) in self.spec.tools.iter().zip(new_tools.iter()) {
-            // Compare key fields that affect registration
-            if old.function_name != new.function_name
-                || old.capability != new.capability
-                || old.version != new.version
-                || old.dependencies.len() != new.dependencies.len()
-            {
-                return true;
-            }
-
-            // Compare dependencies
-            for (old_dep, new_dep) in old.dependencies.iter().zip(new.dependencies.iter()) {
-                if old_dep.capability != new_dep.capability
-                    || old_dep.tags != new_dep.tags
-                    || old_dep.version != new_dep.version
-                    // Issue #1249: a tools update that flips only `required`
-                    // must not be dropped as "unchanged" — it changes the
-                    // availability edge the registry computes. (match_mode /
-                    // schema fields are intentionally left out here, matching
-                    // the pre-existing narrow comparison.)
-                    || old_dep.required != new_dep.required
-                {
-                    return true;
-                }
-            }
-        }
-
-        false
+    /// Serialize a tool list into its comparison form. See
+    /// [`Self::tools_are_different`].
+    fn canonical_tools_repr(tools: &[ToolSpec]) -> Option<String> {
+        serde_json::to_string(tools).ok()
     }
 
     /// Unregister the agent from the registry during shutdown.
@@ -745,18 +755,21 @@ impl AgentRuntime {
             }
         }
 
-        // Batch update shared state (single lock acquisition)
-        // Note: shared state still uses capability as key for backward compatibility
-        // with other parts of the system that lookup by capability
+        // Batch update shared state (single lock acquisition).
+        //
+        // Issue #1588: keyed by DepKey, exactly like the topology above. Keying
+        // it by capability meant that dropping ONE of two same-capability edges
+        // removed the shared entry outright, so `AgentHandle::get_dependencies`
+        // reported the surviving edge as unresolved. The capability-keyed view
+        // the public accessor still promises is now derived from this map on
+        // read (`HandleState::endpoints_by_capability`).
         if !removed.is_empty() || !added_or_changed.is_empty() {
             let mut state = self.shared_state.write().await;
-            for (_, value) in &removed {
-                state.dependencies.remove(&value.capability);
+            for (key, _) in &removed {
+                state.dependencies.remove(key);
             }
-            for (_, value, _) in &added_or_changed {
-                state
-                    .dependencies
-                    .insert(value.capability.clone(), value.endpoint.clone());
+            for (key, value, _) in &added_or_changed {
+                state.dependencies.insert(key.clone(), value.clone());
             }
         }
 
@@ -1146,6 +1159,321 @@ mod tests {
         assert!(!runtime.tools_are_different(&spec_with_required(true).tools));
         // Only `required` flipped → different.
         assert!(runtime.tools_are_different(&spec_with_required(false).tools));
+    }
+
+    // ---- Issue #1588: tools_are_different must cover the whole spec ----
+
+    /// Build a one-tool spec, letting each test mutate the single ToolSpec.
+    ///
+    /// Every optional field is populated on purpose. `DependencySpec::required`
+    /// is `skip_serializing_if`, so a `false` here would drop the field from the
+    /// serialized form and make
+    /// `tool_spec_shape_is_pinned_for_byte_stable_comparison` report it as an
+    /// uncovered field.
+    fn spec_with_tool(mutate: impl FnOnce(&mut crate::spec::ToolSpec)) -> crate::spec::AgentSpec {
+        use crate::spec::{AgentSpec, DependencySpec, ToolSpec};
+
+        let mut tool = ToolSpec::new(
+            "analyst".to_string(),
+            "analysis".to_string(),
+            "1.0.0".to_string(),
+            "does analysis".to_string(),
+            Some(vec!["alpha".to_string()]),
+            Some(vec![DependencySpec::new(
+                "weather-api".to_string(),
+                Some(r#"["fast"]"#.to_string()),
+                Some(">=1.0.0".to_string()),
+                Some(r#"{"type":"object"}"#.to_string()),
+                Some("sha256:aaa".to_string()),
+                Some("subset".to_string()),
+                true,
+            )]),
+            Some(r#"{"type":"object","properties":{}}"#.to_string()),
+            Some(r#"{"type":"string"}"#.to_string()),
+            Some(r#"{"type":"object"}"#.to_string()),
+            Some("sha256:bbb".to_string()),
+            Some(r#"{"type":"string"}"#.to_string()),
+            Some("sha256:ccc".to_string()),
+            Some(vec!["a warning".to_string()]),
+            Some(r#"{"tags":["x"]}"#.to_string()),
+            Some(r#"{"model":"claude"}"#.to_string()),
+            Some(r#"{"timeout":30}"#.to_string()),
+        );
+        mutate(&mut tool);
+
+        AgentSpec::new(
+            "diff-agent".to_string(),
+            "http://127.0.0.1:1".to_string(),
+            "1.0.0".to_string(),
+            "".to_string(),
+            8080,
+            "localhost".to_string(),
+            "default".to_string(),
+            None,
+            None,
+            Some(vec![tool]),
+            None,
+            5,
+            None,
+        )
+    }
+
+    async fn runtime_for_spec(spec: crate::spec::AgentSpec) -> AgentRuntime {
+        let (event_tx, _event_rx) = mpsc::channel(10);
+        let (_shutdown_tx, shutdown_rx) = mpsc::channel(1);
+        let (_command_tx, command_rx) = mpsc::channel(10);
+        AgentRuntime::new(
+            spec,
+            RuntimeConfig::default(),
+            event_tx,
+            Arc::new(RwLock::new(HandleState::default())),
+            shutdown_rx,
+            command_rx,
+        )
+        .await
+        .expect("runtime construction should succeed")
+    }
+
+    type Mutation = (&'static str, fn(&mut crate::spec::ToolSpec));
+
+    /// One mutation per field that reaches the registry, named `field` for a
+    /// `ToolSpec` field and `dependency.field` for a `DependencySpec` one.
+    ///
+    /// Cross-checked against the structs' actual serialized field names by
+    /// `tool_spec_shape_is_pinned_for_byte_stable_comparison`, so a field added
+    /// to either struct fails that test until a mutation is added here.
+    fn tool_spec_mutations() -> Vec<Mutation> {
+        vec![
+            ("function_name", |t| t.function_name = "renamed".into()),
+            ("capability", |t| t.capability = "other".into()),
+            ("version", |t| t.version = "2.0.0".into()),
+            ("tags", |t| t.tags = vec!["beta".into()]),
+            ("description", |t| t.description = "changed".into()),
+            ("input_schema", |t| {
+                t.input_schema = Some(r#"{"type":"array"}"#.into())
+            }),
+            ("output_schema", |t| {
+                t.output_schema = Some(r#"{"type":"number"}"#.into())
+            }),
+            ("input_schema_canonical", |t| {
+                t.input_schema_canonical = Some(r#"{"type":"array"}"#.into())
+            }),
+            ("input_schema_hash", |t| {
+                t.input_schema_hash = Some("sha256:zzz".into())
+            }),
+            ("output_schema_canonical", |t| {
+                t.output_schema_canonical = Some(r#"{"type":"number"}"#.into())
+            }),
+            ("output_schema_hash", |t| {
+                t.output_schema_hash = Some("sha256:yyy".into())
+            }),
+            ("schema_warnings", |t| {
+                t.schema_warnings = Some(vec!["another warning".into()])
+            }),
+            ("llm_filter", |t| {
+                t.llm_filter = Some(r#"{"tags":["y"]}"#.into())
+            }),
+            ("llm_provider", |t| {
+                t.llm_provider = Some(r#"{"model":"gpt"}"#.into())
+            }),
+            ("kwargs", |t| t.kwargs = Some(r#"{"timeout":60}"#.into())),
+            ("dependency.capability", |t| {
+                t.dependencies[0].capability = "other-api".into()
+            }),
+            ("dependency.tags", |t| {
+                t.dependencies[0].tags = r#"["slow"]"#.into()
+            }),
+            ("dependency.version", |t| {
+                t.dependencies[0].version = Some(">=2.0.0".into())
+            }),
+            ("dependency.expected_schema_canonical", |t| {
+                t.dependencies[0].expected_schema_canonical = Some(r#"{"type":"array"}"#.into())
+            }),
+            ("dependency.expected_schema_hash", |t| {
+                t.dependencies[0].expected_schema_hash = Some("sha256:xxx".into())
+            }),
+            ("dependency.match_mode", |t| {
+                t.dependencies[0].match_mode = Some("strict".into())
+            }),
+            ("dependency.required", |t| t.dependencies[0].required = false),
+        ]
+    }
+
+    /// Issue #1588: every field on `ToolSpec` (and on its dependencies) must
+    /// trip the smart diff. The old comparison covered 3 of 16 tool fields and
+    /// 4 of 7 dependency fields, so a tags-only, description-only, schema-only,
+    /// kwargs-only, llm_filter-only or match_mode-only update was dropped as
+    /// "unchanged" and never reached the registry.
+    #[tokio::test]
+    async fn every_tool_spec_field_trips_the_smart_diff() {
+        let runtime = runtime_for_spec(spec_with_tool(|_| {})).await;
+
+        // Identical spec: unchanged.
+        assert!(
+            !runtime.tools_are_different(&spec_with_tool(|_| {}).tools),
+            "an identical tool list must not force a heartbeat"
+        );
+
+        for (name, mutate) in tool_spec_mutations() {
+            assert!(
+                runtime.tools_are_different(&spec_with_tool(mutate).tools),
+                "a change to `{}` must be seen as different",
+                name
+            );
+        }
+    }
+
+    /// Issue #1588: `tools_are_different` compares the serialized bytes of the
+    /// spec, which is only sound while that encoding is deterministic. Two
+    /// things have to hold, and both are pinned here rather than left to a
+    /// comment:
+    ///
+    ///   1. No field serializes as a JSON object. A `HashMap`/`HashSet` field
+    ///      added to either struct would encode in `RandomState` order and make
+    ///      an unchanged tool list compare as changed on some runs — the exact
+    ///      failure the byte comparison replaced a hand-written field list to
+    ///      avoid. Serde emits structs in declaration order, so everything else
+    ///      is stable.
+    ///   2. The field set matches `tool_spec_mutations()`. Adding a field to
+    ///      `ToolSpec` or `DependencySpec` fails this test until the author adds
+    ///      a mutation, which is what keeps the diff coverage honest instead of
+    ///      silently regressing to the pre-#1588 state.
+    #[test]
+    fn tool_spec_shape_is_pinned_for_byte_stable_comparison() {
+        use std::collections::BTreeSet;
+
+        let tool = spec_with_tool(|_| {}).tools.remove(0);
+        let encoded = serde_json::to_value(&tool).expect("ToolSpec serializes");
+        let tool_obj = encoded.as_object().expect("ToolSpec is a JSON object");
+
+        let mut declared: BTreeSet<String> = BTreeSet::new();
+        for (name, value) in tool_obj {
+            if name == "dependencies" {
+                for dep in value.as_array().expect("dependencies is an array") {
+                    for (dep_name, dep_value) in
+                        dep.as_object().expect("DependencySpec is a JSON object")
+                    {
+                        assert!(
+                            !dep_value.is_object(),
+                            "DependencySpec.{} serializes as a JSON object; if that is a \
+                             map, tools_are_different is no longer byte-stable",
+                            dep_name
+                        );
+                        declared.insert(format!("dependency.{}", dep_name));
+                    }
+                }
+                continue;
+            }
+            assert!(
+                !value.is_object(),
+                "ToolSpec.{} serializes as a JSON object; if that is a map, \
+                 tools_are_different is no longer byte-stable",
+                name
+            );
+            declared.insert(name.clone());
+        }
+
+        let exercised: BTreeSet<String> = tool_spec_mutations()
+            .into_iter()
+            .map(|(name, _)| name.to_string())
+            .collect();
+
+        assert_eq!(
+            declared, exercised,
+            "every serialized field must have a mutation in tool_spec_mutations() \
+             (and vice versa); add one for any new ToolSpec/DependencySpec field"
+        );
+    }
+
+    /// The comparison must not depend on allocation or iteration order — the
+    /// same logical tool list has to compare equal every time.
+    #[tokio::test]
+    async fn tool_comparison_is_stable_across_repeated_calls() {
+        let runtime = runtime_for_spec(spec_with_tool(|_| {})).await;
+        for _ in 0..50 {
+            assert!(!runtime.tools_are_different(&spec_with_tool(|_| {}).tools));
+        }
+    }
+
+    #[tokio::test]
+    async fn tools_differ_when_the_list_length_changes() {
+        let runtime = runtime_for_spec(spec_with_tool(|_| {})).await;
+        assert!(runtime.tools_are_different(&[]));
+    }
+
+    // ---- Issue #1588: handle state keyed like the topology ----
+
+    /// Two dependencies on the SAME capability (different tags) at different
+    /// positions. Dropping one must not delete the other from the handle state:
+    /// the shared map used to be keyed by capability, so `get_dependencies()`
+    /// reported the surviving edge as unresolved.
+    #[tokio::test]
+    async fn dropping_one_of_two_same_capability_deps_keeps_the_survivor() {
+        let (event_tx, _event_rx) = mpsc::channel(100);
+        let (_shutdown_tx, shutdown_rx) = mpsc::channel(1);
+        let (_command_tx, command_rx) = mpsc::channel(10);
+        let shared_state = Arc::new(RwLock::new(HandleState::default()));
+        let mut runtime = AgentRuntime::new(
+            reconcile_spec(),
+            RuntimeConfig::default(),
+            event_tx,
+            shared_state.clone(),
+            shutdown_rx,
+            command_rx,
+        )
+        .await
+        .expect("runtime construction should succeed");
+
+        fn dep(endpoint: &str) -> crate::registry::ResolvedDependency {
+            crate::registry::ResolvedDependency {
+                agent_id: "provider-agent".to_string(),
+                endpoint: endpoint.to_string(),
+                function_name: "provider_fn".to_string(),
+                capability: "weather".to_string(),
+                status: "available".to_string(),
+                ttl: 0,
+                kwargs: None,
+            }
+        }
+
+        let mut both = HashMap::new();
+        both.insert(
+            "consumer_fn".to_string(),
+            vec![dep("http://a:9000"), dep("http://b:9000")],
+        );
+        runtime.process_dependency_changes(&both).await;
+        {
+            let state = shared_state.read().await;
+            // Both edges are tracked independently...
+            assert_eq!(state.dependencies.len(), 2);
+            // ...and the capability view resolves to the first position.
+            assert_eq!(
+                state.endpoints_by_capability().get("weather").map(String::as_str),
+                Some("http://a:9000")
+            );
+        }
+
+        // The second edge goes away; the first is still resolved.
+        let mut one = HashMap::new();
+        one.insert("consumer_fn".to_string(), vec![dep("http://a:9000")]);
+        runtime.process_dependency_changes(&one).await;
+        {
+            let state = shared_state.read().await;
+            assert_eq!(state.dependencies.len(), 1);
+            assert_eq!(
+                state.endpoints_by_capability().get("weather").map(String::as_str),
+                Some("http://a:9000"),
+                "'weather' is still resolved at position 0"
+            );
+        }
+
+        // Both gone: only now does the capability disappear.
+        runtime.process_dependency_changes(&HashMap::new()).await;
+        assert!(shared_state
+            .read()
+            .await
+            .endpoints_by_capability()
+            .is_empty());
     }
 
     /// Issue #1249: a registry rejection (HTTP 200 + {"status":"error",...},

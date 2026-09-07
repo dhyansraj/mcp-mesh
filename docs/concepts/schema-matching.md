@@ -199,7 +199,7 @@ Two knobs let you adjust the strictness:
 
 - **Cluster-wide hardening** — set `MCP_MESH_SCHEMA_STRICT=true` in the agent's environment to promote every WARN to BLOCK across all tools. Use this in production to refuse to start any agent with a lossy schema.
 
-- **Per-tool escape hatch** — set the producer-side `output_schema_strict=False` (Python) / `outputSchemaStrict: false` (TypeScript) / `outputSchemaStrict = false` (Java) to demote BLOCK to WARN for that one tool. The override **wins** even when `MCP_MESH_SCHEMA_STRICT=true` is set cluster-wide:
+- **Per-tool escape hatch (producer side only)** — set the producer-side `output_schema_strict=False` (Python) / `outputSchemaStrict: false` (TypeScript) / `outputSchemaStrict = false` (Java) to demote BLOCK to WARN for that one tool. The override **wins** even when `MCP_MESH_SCHEMA_STRICT=true` is set cluster-wide. There is no equivalent on the **consumer** side: a verdict on an `expected_type` always applies, so a consumer-side BLOCK can only be resolved by changing the type or, for the inlining ceiling, by raising `MCP_MESH_SCHEMA_MAX_INLINED_NODES`.
 
 ```python
 # This tool will register even if its output schema only WARNs or BLOCKs
@@ -231,6 +231,10 @@ public SomeWeirdType experimental(...) { ... }
 - **Pydantic cross-references in the same module** — models that reference each other in one file need `model_rebuild()` to resolve forward references before schema extraction. The SDK calls this automatically — you don't need to add it yourself.
 
 - **Strict mode is unforgiving about extras** — adding any field on the producer side (even an optional one) breaks `strict` matching. Use `subset` if you want producer evolution.
+
+- **Property names that collide when camelCased** — the canonical form camelCases every property name, and that is not reversible: `value` and `Value`, or `user_id` and `userID`, collapse onto one canonical key and only the last one declared survives into the hashed schema. The normalizer emits a WARN naming both properties. Rename one of them; under `MCP_MESH_SCHEMA_STRICT=true` this WARN becomes a startup refusal.
+
+- **Very large `$defs` graphs** — shared definitions are inlined once per use site, so a model that reuses the same sub-model across several branches expands multiplicatively. Past `MCP_MESH_SCHEMA_MAX_INLINED_NODES` (default 500000 nodes, roughly a few megabytes of canonical schema) the normalizer emits a BLOCK rather than truncating, because a truncated canonical form could collide with an unrelated schema and produce a false match. Raise the ceiling if a legitimate model trips it.
 
 ## Inspecting matches and mismatches
 

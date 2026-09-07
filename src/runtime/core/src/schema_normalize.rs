@@ -33,7 +33,6 @@ pub struct NormalizeResult {
 enum Verdict {
     Ok,
     Warn,
-    #[allow(dead_code)] // reserved for future hard-failure rules
     Block,
 }
 
@@ -59,6 +58,97 @@ impl Verdict {
     }
 }
 
+/// Keys this normalizer strips as non-contract metadata.
+///
+/// Shared between the strip rule in [`normalize`] and the nested-union
+/// detection in [`nested_union_branches`] so the two cannot drift: "is this
+/// branch a bare nested union?" has to ask the same question the strip rule
+/// answers, or the two runtimes' spellings stop converging.
+const STRIPPED_METADATA_KEYS: &[&str] = &[
+    "title",
+    "description",
+    "examples",
+    "default",
+    "$schema",
+    "$id",
+    "$defs",
+    "definitions",
+    "markdownDescription",
+    // Pydantic-specific discriminator metadata (mapping + propertyName).
+    // The discriminator info is already encoded in each branch via `const`,
+    // which is sufficient for structural disambiguation. Strip so Pydantic's
+    // `oneOf + discriminator` matches Zod/Jackson `anyOf`.
+    "discriminator",
+];
+
+/// Ceiling on the total number of JSON nodes `inline_refs` may materialize for
+/// one schema, and the env var that overrides it.
+///
+/// `inline_refs` expands a shared `$def` once per *use site*, so defs forming a
+/// diamond (`Ln` references `Ln-1` twice) expand as 2^depth: a 1.6 KB input with
+/// 16 such levels materializes 524,288 nodes / 6.3 MB, and 17 levels doubles
+/// that again. The canonical form is hashed for capability matching, so
+/// silently truncating the expansion would let two different schemas collapse
+/// onto the same dangling-`$ref` form — a false match. Exceeding the budget is
+/// therefore a BLOCK, not a degradation.
+///
+/// The budget counts **materialized nodes, not `$ref` sites**, because node
+/// count is what bounds output size: a site inlines a def body of unbounded
+/// size, so N sites says nothing about how large the result is. Each expansion
+/// is charged the node count of the body it splices in, and nested refs inside
+/// that body are charged separately as they expand, so the total charged
+/// tracks the total emitted.
+///
+/// The default is calibrated against a realistic Pydantic-shaped model, not the
+/// fixture corpus — every nested `BaseModel` and `Enum` becomes a `$defs` entry
+/// `$ref`'d per use site, so use-site counts climb fast without the schema being
+/// pathological. Measured: a 40-sub-model × 50-shared-enum domain model is 2,040
+/// use sites but only 27,205 nodes / 198 KB. 500,000 nodes is ~18× that, and
+/// lands somewhere around 3.5–6 MB of canonical output at the 7–12 bytes/node
+/// these shapes measure at.
+///
+/// Operators who genuinely exceed it can raise (or lower) it via the env var
+/// rather than restructuring their models: the consumer-side `expected_type`
+/// path hardcodes `tool_strict=true`, so a BLOCK there has no per-tool escape
+/// hatch and this knob is the only remedy.
+const DEFAULT_MAX_INLINED_NODES: usize = 500_000;
+
+/// Env override for [`DEFAULT_MAX_INLINED_NODES`]. Values that do not parse as a
+/// positive integer are ignored (with a log line) rather than turned into a
+/// warning, since a typo here must not become a startup refusal via
+/// `MCP_MESH_SCHEMA_STRICT`.
+const MAX_INLINED_NODES_ENV: &str = "MCP_MESH_SCHEMA_MAX_INLINED_NODES";
+
+fn resolved_node_budget() -> usize {
+    match std::env::var(MAX_INLINED_NODES_ENV) {
+        Err(_) => DEFAULT_MAX_INLINED_NODES,
+        Ok(raw) => match raw.trim().parse::<usize>() {
+            Ok(n) if n > 0 => n,
+            _ => {
+                static WARNED: std::sync::Once = std::sync::Once::new();
+                WARNED.call_once(|| {
+                    tracing::warn!(
+                        "{}={:?} is not a positive integer; using the default of {}",
+                        MAX_INLINED_NODES_ENV,
+                        raw,
+                        DEFAULT_MAX_INLINED_NODES
+                    );
+                });
+                DEFAULT_MAX_INLINED_NODES
+            }
+        },
+    }
+}
+
+/// Total number of JSON values in a tree (objects, arrays and scalars alike).
+fn count_nodes(v: &Value) -> usize {
+    match v {
+        Value::Object(map) => 1 + map.values().map(count_nodes).sum::<usize>(),
+        Value::Array(arr) => 1 + arr.iter().map(count_nodes).sum::<usize>(),
+        _ => 1,
+    }
+}
+
 struct Ctx {
     defs: Map<String, Value>,
     /// Stack of def names currently being inlined (for cycle detection).
@@ -68,22 +158,67 @@ struct Ctx {
     cyclic: HashSet<String>,
     warnings: Vec<String>,
     verdict: Verdict,
+    /// Nodes materialized by `$ref` inlining so far. See [`DEFAULT_MAX_INLINED_NODES`].
+    inlined_nodes: usize,
+    /// Ceiling for `inlined_nodes`.
+    node_budget: usize,
+    /// Memoized `count_nodes` per def body, so a def referenced from many use
+    /// sites is measured once.
+    def_node_counts: HashMap<String, usize>,
 }
 
 impl Ctx {
-    fn new() -> Self {
+    fn new(node_budget: usize) -> Self {
         Self {
             defs: Map::new(),
             visiting: Vec::new(),
             cyclic: HashSet::new(),
             warnings: Vec::new(),
             verdict: Verdict::Ok,
+            inlined_nodes: 0,
+            node_budget,
+            def_node_counts: HashMap::new(),
         }
     }
 
     fn warn(&mut self, msg: impl Into<String>) {
         self.warnings.push(msg.into());
         self.verdict.upgrade(Verdict::Warn);
+    }
+
+    fn block(&mut self, msg: impl Into<String>) {
+        self.warnings.push(msg.into());
+        self.verdict.upgrade(Verdict::Block);
+    }
+
+    /// Node count of a def body, memoized.
+    fn def_node_count(&mut self, name: &str) -> usize {
+        if let Some(n) = self.def_node_counts.get(name) {
+            return *n;
+        }
+        let n = self.defs.get(name).map(count_nodes).unwrap_or(0);
+        self.def_node_counts.insert(name.to_string(), n);
+        n
+    }
+
+    /// Charge one expansion against the node budget. Returns false once the
+    /// budget is exhausted (recording the BLOCK exactly once).
+    fn charge_nodes(&mut self, cost: usize) -> bool {
+        if self.verdict == Verdict::Block {
+            return false;
+        }
+        self.inlined_nodes = self.inlined_nodes.saturating_add(cost);
+        if self.inlined_nodes > self.node_budget {
+            self.block(format!(
+                "schema exceeds the $ref inlining budget of {} nodes: shared $defs \
+                 are inlined once per use site, so a diamond-shaped $defs graph \
+                 expands exponentially. Simplify the model, or raise the ceiling \
+                 with {}",
+                self.node_budget, MAX_INLINED_NODES_ENV
+            ));
+            return false;
+        }
+        true
     }
 }
 
@@ -92,6 +227,18 @@ impl Ctx {
 /// On parse error returns a `NormalizeResult` with `verdict="BLOCK"`, empty `hash`,
 /// `canonical=Value::Null`, and the parse error in `warnings`.
 pub fn normalize_schema(raw_json: &str, origin: SchemaOrigin) -> NormalizeResult {
+    normalize_schema_with_budget(raw_json, origin, resolved_node_budget())
+}
+
+/// [`normalize_schema`] with the inlining ceiling supplied explicitly.
+///
+/// Split out so budget behaviour is testable without mutating the process
+/// environment (which would race any concurrently running test).
+fn normalize_schema_with_budget(
+    raw_json: &str,
+    origin: SchemaOrigin,
+    node_budget: usize,
+) -> NormalizeResult {
     let _ = origin; // currently unused; reserved for future origin-specific tweaks
 
     let parsed: Value = match serde_json::from_str(raw_json) {
@@ -106,7 +253,7 @@ pub fn normalize_schema(raw_json: &str, origin: SchemaOrigin) -> NormalizeResult
         }
     };
 
-    let mut ctx = Ctx::new();
+    let mut ctx = Ctx::new(node_budget);
     // Lift $defs / definitions for ref resolution
     if let Some(obj) = parsed.as_object() {
         for key in &["$defs", "definitions"] {
@@ -122,13 +269,23 @@ pub fn normalize_schema(raw_json: &str, origin: SchemaOrigin) -> NormalizeResult
     ctx.cyclic = detect_cyclic_defs(&ctx.defs);
 
     let inlined = inline_refs(&parsed, &mut ctx);
+    // Budget exhausted: the partially expanded tree carries dangling $refs, so
+    // emitting a hash for it would risk a false capability match. Bail before
+    // normalizing rather than after.
+    if ctx.verdict == Verdict::Block {
+        return block_result(ctx.warnings);
+    }
     let mut normalized = normalize(&inlined, &mut ctx);
 
     // If we have cyclic defs preserved, normalize them too and attach as canonical $defs.
     // We rename each cyclic def to a stable hash-based name so the canonical form is
     // independent of source-language class naming.
     if !ctx.cyclic.is_empty() {
-        let cyclic_names: Vec<String> = ctx.cyclic.iter().cloned().collect();
+        // Sorted: `cyclic` is a HashSet, and normalizing the bodies in its
+        // iteration order would make the ORDER of any warnings they emit
+        // nondeterministic across runs.
+        let mut cyclic_names: Vec<String> = ctx.cyclic.iter().cloned().collect();
+        cyclic_names.sort();
         // Normalize each cyclic def body (with the same cycle awareness — refs to other
         // cyclic defs are kept as $ref).
         let mut normalized_defs: HashMap<String, Value> = HashMap::new();
@@ -156,6 +313,12 @@ pub fn normalize_schema(raw_json: &str, origin: SchemaOrigin) -> NormalizeResult
         }
     }
 
+    // The cyclic-def bodies above share the same expansion budget, so re-check
+    // before hashing: a BLOCK must never ship a hash.
+    if ctx.verdict == Verdict::Block {
+        return block_result(ctx.warnings);
+    }
+
     let canonical = sort_keys(&normalized);
 
     let serialized = serde_json::to_string(&canonical).unwrap();
@@ -167,8 +330,32 @@ pub fn normalize_schema(raw_json: &str, origin: SchemaOrigin) -> NormalizeResult
         canonical,
         hash,
         verdict: ctx.verdict.as_str().to_string(),
-        warnings: ctx.warnings,
+        warnings: dedupe_warnings(ctx.warnings),
     }
+}
+
+/// A BLOCK verdict carries no canonical form and no hash — callers must not be
+/// able to match on a schema the normalizer refused to canonicalize.
+fn block_result(warnings: Vec<String>) -> NormalizeResult {
+    NormalizeResult {
+        canonical: Value::Null,
+        hash: String::new(),
+        verdict: Verdict::Block.as_str().to_string(),
+        warnings: dedupe_warnings(warnings),
+    }
+}
+
+/// Collapse repeated warnings, keeping first-occurrence order.
+///
+/// A def inlined at many use sites re-emits any warning its body produces once
+/// per site, so a single lossy property in a widely shared `$def` would
+/// otherwise fill the list with copies of one message.
+fn dedupe_warnings(warnings: Vec<String>) -> Vec<String> {
+    let mut seen: HashSet<String> = HashSet::new();
+    warnings
+        .into_iter()
+        .filter(|w| seen.insert(w.clone()))
+        .collect()
 }
 
 /// Walk a value and collect every $ref name that points into our defs.
@@ -385,7 +572,19 @@ fn inline_refs(v: &Value, ctx: &mut Ctx) -> Value {
                         }
                         return Value::Object(out);
                     }
-                    if let Some(target) = ctx.defs.get(&name).cloned() {
+                    if ctx.defs.contains_key(&name) {
+                        // Charge the body's node count BEFORE cloning it, so an
+                        // over-budget schema stops allocating here rather than
+                        // materializing one more copy first. `normalize_schema`
+                        // turns the recorded BLOCK into a hash-less envelope, so
+                        // the truncated $ref below never escapes.
+                        let cost = ctx.def_node_count(&name);
+                        if !ctx.charge_nodes(cost) {
+                            let mut out = Map::new();
+                            out.insert("$ref".into(), Value::String(format!("#/$defs/{}", name)));
+                            return Value::Object(out);
+                        }
+                        let target = ctx.defs.get(&name).cloned().unwrap_or(Value::Null);
                         ctx.visiting.push(name.clone());
                         let resolved = inline_refs(&target, ctx);
                         ctx.visiting.pop();
@@ -453,22 +652,7 @@ fn normalize(v: &Value, ctx: &mut Ctx) -> Value {
             node = normalize_nullable(node, ctx);
 
             // Rule: strip non-contract metadata
-            for key in &[
-                "title",
-                "description",
-                "examples",
-                "default",
-                "$schema",
-                "$id",
-                "$defs",
-                "definitions",
-                "markdownDescription",
-                // Pydantic-specific discriminator metadata (mapping + propertyName).
-                // The discriminator info is already encoded in each branch via `const`,
-                // which is sufficient for structural disambiguation. Strip so Pydantic's
-                // `oneOf + discriminator` matches Zod/Jackson `anyOf`.
-                "discriminator",
-            ] {
+            for key in STRIPPED_METADATA_KEYS {
                 node.remove(*key);
             }
 
@@ -504,10 +688,31 @@ fn normalize(v: &Value, ctx: &mut Ctx) -> Value {
             if let Some(Value::Object(props)) = node.remove("properties") {
                 let mut new_props = Map::new();
                 let mut rename: HashMap<String, String> = HashMap::new();
+                // Track which source property produced each canonical key so a
+                // collision can name both sides.
+                let mut origin: HashMap<String, String> = HashMap::new();
                 for (k, val) in props {
                     let new_key = to_camel_case(&k);
                     if new_key != k {
                         rename.insert(k.clone(), new_key.clone());
+                    }
+                    // camelCasing is not injective: `value`/`Value` and
+                    // `user_id`/`userID` both collapse onto one canonical key, and
+                    // `Map::insert` would silently drop the earlier property from
+                    // the hashed form. Signal it — a WARN is surfaced to the SDKs
+                    // and MCP_MESH_SCHEMA_STRICT promotes it to a startup refusal.
+                    if let Some(prev) = origin.get(&new_key) {
+                        ctx.warn(format!(
+                            "property name collision after camelCase normalization: \
+                             source properties '{}' and '{}' both normalize to the \
+                             canonical key '{}'. The canonical schema keeps ONE \
+                             definition under '{}' (the last one declared wins, here \
+                             '{}'), so '{}' is dropped from schema matching. Rename \
+                             one of them",
+                            prev, k, new_key, new_key, k, prev
+                        ));
+                    } else {
+                        origin.insert(new_key.clone(), k.clone());
                     }
                     new_props.insert(new_key, val);
                 }
@@ -644,6 +849,116 @@ fn to_camel_case(s: &str) -> String {
     out
 }
 
+/// The canonical null branch of a union.
+fn null_branch() -> Value {
+    let mut m = Map::new();
+    m.insert("type".into(), Value::String("null".into()));
+    Value::Object(m)
+}
+
+/// Is this union branch the `{"type":"null"}` marker?
+fn is_null_branch(b: &Value) -> bool {
+    matches!(
+        b.as_object().and_then(|m| m.get("type")),
+        Some(Value::String(t)) if t == "null"
+    )
+}
+
+/// If this union branch is a bare *nested union*, return its branches.
+///
+/// "Bare" is judged against the canonical spelling, not the raw one. Two things
+/// make the raw spelling differ between runtimes at this point in the pipeline,
+/// because `normalize_nullable` runs BEFORE the `discriminator` strip and the
+/// `oneOf`->`anyOf` rewrite, and those two rules only ever apply to the node
+/// being visited — never to a branch nested inside it:
+///
+///   * the keyword: Pydantic writes `oneOf` for a discriminated union, Zod and
+///     Jackson write `anyOf`;
+///   * metadata siblings: Pydantic hangs `discriminator` (and sometimes `title`)
+///     off the same object.
+///
+/// So Pydantic's `{"discriminator":{..},"oneOf":[Cat,Dog]}` and Zod's
+/// `{"anyOf":[Cat,Dog]}` are the same branch, and both must splice. Matching on
+/// "sole key, spelled exactly like the parent" would splice only Zod's and make
+/// `Optional[Pet]` stop resolving across runtimes.
+///
+/// A branch with a *contentful* sibling (`{"anyOf":[..],"minItems":1}`) is left
+/// alone: splicing would drop the sibling.
+fn nested_union_branches(branch: &Value) -> Option<&Vec<Value>> {
+    let map = branch.as_object()?;
+    let mut composite: Option<&Vec<Value>> = None;
+    for (k, v) in map {
+        if STRIPPED_METADATA_KEYS.contains(&k.as_str()) {
+            continue;
+        }
+        if k == "anyOf" || k == "oneOf" {
+            // Two composite keywords on one branch: not a bare nested union.
+            if composite.is_some() {
+                return None;
+            }
+            composite = Some(v.as_array()?);
+            continue;
+        }
+        return None; // a contentful sibling
+    }
+    composite
+}
+
+/// Splice bare nested unions into the parent branch list:
+/// `[{"anyOf":[A,B]}, C]` becomes `[A, B, C]`. Recursive, so arbitrarily deep
+/// nesting flattens onto the same form the flat spelling produces.
+fn flatten_union_branches(branches: Vec<Value>) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::with_capacity(branches.len());
+    for branch in branches {
+        match nested_union_branches(&branch) {
+            Some(inner) => out.extend(flatten_union_branches(inner.clone())),
+            None => out.push(branch),
+        }
+    }
+    out
+}
+
+/// Infer a `type` for a branch that has none, from the concrete values it pins.
+///
+/// Pydantic emits `Optional[Literal["a","b"]]` as
+/// `{"anyOf":[{"enum":[..]},{"type":"null"}]}` and `Optional[Literal["x"]]` as
+/// `{"anyOf":[{"const":"x"},{"type":"null"}]}`, while Zod spells both branches
+/// with an explicit `"type":"string"`. Without this, the Pydantic spelling has
+/// no `type` to hang "null" on and silently loses the nullability. Mirrors
+/// `normalize_enum`'s own inference, which otherwise only runs *after* the
+/// promotion has already discarded it.
+///
+/// Deliberately NOT consulted when the branch or the enclosing node already
+/// supplies a `type` — see [`nullable_promotion_type`].
+fn inferred_literal_type(branch: &Map<String, Value>) -> Option<Value> {
+    if let Some(Value::Array(vals)) = branch.get("enum") {
+        return infer_uniform_type(vals).map(Value::String);
+    }
+    if let Some(c) = branch.get("const") {
+        return infer_uniform_type(std::slice::from_ref(c)).map(Value::String);
+    }
+    None
+}
+
+/// The `type` that the promoted node should carry "null" on, or `None` if
+/// nothing supplies one (a kept `$ref`, or a composite with siblings).
+///
+/// Precedence is the branch's own `type`, then the enclosing node's, and only
+/// then a literal-inferred one. The middle term preserves the pre-existing
+/// behaviour for the odd `{"type":"integer","anyOf":[{"enum":["a"]},null]}`
+/// shape, where the merge leaves the enclosing `type` in place: inference must
+/// not override a `type` that is actually present.
+fn nullable_promotion_type(
+    branch: &Map<String, Value>,
+    node: &Map<String, Value>,
+) -> Option<Value> {
+    branch
+        .get("type")
+        .or_else(|| node.get("type"))
+        .cloned()
+        .or_else(|| inferred_literal_type(branch))
+}
+
 /// Convert various nullable forms into canonical {"type": ["X", "null"]}.
 fn normalize_nullable(mut node: Map<String, Value>, _ctx: &mut Ctx) -> Map<String, Value> {
     // Form A: nullable: true
@@ -673,27 +988,33 @@ fn normalize_nullable(mut node: Map<String, Value>, _ctx: &mut Ctx) -> Map<Strin
     // Form B/C: anyOf/oneOf with a null branch
     for key in &["anyOf", "oneOf"] {
         if let Some(Value::Array(branches)) = node.get(*key).cloned() {
-            // Find a null branch
-            let null_idx = branches.iter().position(|b| {
-                if let Value::Object(m) = b {
-                    if let Some(Value::String(t)) = m.get("type") {
-                        return t == "null";
-                    }
-                }
-                false
-            });
-            if let Some(idx) = null_idx {
-                let mut non_null: Vec<Value> = branches.clone();
-                non_null.remove(idx);
-                if non_null.len() == 1 {
-                    // Promote the single non-null branch to top level + null type
-                    let inner = non_null.into_iter().next().unwrap();
-                    if let Value::Object(inner_map) = inner {
-                        node.remove(*key);
-                        for (ik, iv) in inner_map {
-                            node.insert(ik, iv);
-                        }
-                        if let Some(t) = node.get("type").cloned() {
+            // Collapse nested unions first, so Pydantic's
+            // `{"anyOf":[{"discriminator":..,"oneOf":[A,B]},{"type":"null"}]}`,
+            // Zod's `{"anyOf":[{"anyOf":[A,B]},{"type":"null"}]}` and Jackson's
+            // flat `{"anyOf":[A,B,{"type":"null"}]}` all reach the null handling
+            // below with the same branch list.
+            let flattened = flatten_union_branches(branches);
+            let has_null = flattened.iter().any(is_null_branch);
+            let non_null: Vec<Value> = flattened
+                .into_iter()
+                .filter(|b| !is_null_branch(b))
+                .collect();
+
+            if !has_null {
+                node.insert((*key).to_string(), Value::Array(non_null));
+                continue;
+            }
+
+            if non_null.len() == 1 {
+                // Promote the single non-null branch to top level + null type
+                let inner = non_null.into_iter().next().unwrap();
+                if let Value::Object(inner_map) = inner {
+                    match nullable_promotion_type(&inner_map, &node) {
+                        Some(t) => {
+                            node.remove(*key);
+                            for (ik, iv) in inner_map {
+                                node.insert(ik, iv);
+                            }
                             match t {
                                 Value::String(s) => {
                                     if s != "null" {
@@ -715,9 +1036,32 @@ fn normalize_nullable(mut node: Map<String, Value>, _ctx: &mut Ctx) -> Map<Strin
                                 _ => {}
                             }
                         }
+                        None => {
+                            // Nothing carries a `type` to hang "null" on — a kept
+                            // `$ref` (cyclic def), or a composite with siblings.
+                            // Promoting would DROP the null and make `Optional[X]`
+                            // hash identically to `X`; a `"type"` sibling next to
+                            // `$ref` is ignored under pre-2019-09 drafts, so that is
+                            // not an option either. Keep the explicit union instead.
+                            node.insert(
+                                (*key).to_string(),
+                                Value::Array(vec![Value::Object(inner_map), null_branch()]),
+                            );
+                        }
                     }
+                } else {
+                    node.insert(
+                        (*key).to_string(),
+                        Value::Array(vec![inner, null_branch()]),
+                    );
                 }
-                // else: leave anyOf/oneOf in place (genuine union with multiple non-null branches)
+            } else {
+                // A genuine union that also admits null. Keep it as a union, but
+                // pin the null branch last (and collapse duplicates) so the form
+                // does not depend on where the generator happened to put it.
+                let mut out = non_null;
+                out.push(null_branch());
+                node.insert((*key).to_string(), Value::Array(out));
             }
         }
     }
@@ -916,6 +1260,514 @@ mod tests {
     pattern_tests!(inheritance, "Inheritance");
     pattern_tests!(number_constraints, "NumberConstraints");
     pattern_tests!(untagged_union, "UntaggedUnion");
+    // Issue #1587: nested-union spellings. `normalize_nullable` runs before the
+    // `discriminator` strip and the oneOf->anyOf rewrite, and neither of those
+    // reaches a nested branch, so these two patterns are the ones that catch a
+    // flattener keyed on the raw spelling. Three spellings of one type:
+    // Pydantic nests + writes `oneOf` + hangs `discriminator` off the branch,
+    // Zod nests + writes `anyOf`, Jackson writes it flat.
+    pattern_tests!(optional_discriminated_union, "OptionalDiscriminatedUnion");
+    pattern_tests!(nested_union, "NestedUnion");
+
+    // ---------------------------------------------------------------
+    // Issue #1587: nullable promotion must not drop `null`
+    // ---------------------------------------------------------------
+
+    /// A `$ref` kept for a cyclic def carries no `type`, so promoting it out of
+    /// the nullable wrapper used to leave nothing to hang `"null"` on and
+    /// `Optional[Node]` hashed byte-identically to `Node`.
+    #[test]
+    fn optional_cyclic_ref_does_not_hash_like_the_required_form() {
+        let optional = r##"{
+          "$defs": {"Node": {"type": "object", "properties": {
+              "name": {"type": "string"},
+              "child": {"anyOf": [{"$ref": "#/$defs/Node"}, {"type": "null"}]}
+          }}},
+          "type": "object",
+          "properties": {"root": {"anyOf": [{"$ref": "#/$defs/Node"}, {"type": "null"}]}}
+        }"##;
+        let required = r##"{
+          "$defs": {"Node": {"type": "object", "properties": {
+              "name": {"type": "string"},
+              "child": {"anyOf": [{"$ref": "#/$defs/Node"}, {"type": "null"}]}
+          }}},
+          "type": "object",
+          "properties": {"root": {"$ref": "#/$defs/Node"}}
+        }"##;
+        let opt = normalize_schema(optional, SchemaOrigin::Python);
+        let req = normalize_schema(required, SchemaOrigin::Python);
+        assert_ne!(
+            opt.hash, req.hash,
+            "Optional[Node] must not canonicalize to Node: {}",
+            serde_json::to_string(&opt.canonical).unwrap()
+        );
+        // The nullable form keeps an explicit two-branch union, null last.
+        let root = opt.canonical["properties"]["root"].clone();
+        let branches = root["anyOf"].as_array().expect("anyOf preserved");
+        assert_eq!(branches.len(), 2);
+        assert!(branches[0].get("$ref").is_some());
+        assert_eq!(branches[1]["type"], "null");
+        // Refs inside the preserved union are still rewritten to stable names.
+        assert!(branches[0]["$ref"]
+            .as_str()
+            .unwrap()
+            .starts_with("#/$defs/Recursive_"));
+    }
+
+    /// The nullable wrapper is order-independent: Pydantic puts the null branch
+    /// last, some generators put it first.
+    #[test]
+    fn optional_ref_is_canonical_regardless_of_branch_order() {
+        let null_last = r##"{"$defs":{"N":{"type":"object","properties":{"c":{"$ref":"#/$defs/N"}}}},
+          "type":"object","properties":{"r":{"anyOf":[{"$ref":"#/$defs/N"},{"type":"null"}]}}}"##;
+        let null_first = r##"{"$defs":{"N":{"type":"object","properties":{"c":{"$ref":"#/$defs/N"}}}},
+          "type":"object","properties":{"r":{"anyOf":[{"type":"null"},{"$ref":"#/$defs/N"}]}}}"##;
+        let a = normalize_schema(null_last, SchemaOrigin::Python);
+        let b = normalize_schema(null_first, SchemaOrigin::TypeScript);
+        assert_eq!(a.hash, b.hash);
+    }
+
+    /// `Optional[Union[A, B]]`: Pydantic emits the branches flat, Zod nests the
+    /// union inside the nullable wrapper. Both must canonicalize identically —
+    /// and the nested form used to lose the null entirely.
+    #[test]
+    fn optional_union_matches_between_flat_and_nested_shapes() {
+        let flat = r##"{"type":"object","properties":{"v":{"anyOf":[
+            {"type":"string"},{"type":"integer"},{"type":"null"}]}}}"##;
+        let nested = r##"{"type":"object","properties":{"v":{"anyOf":[
+            {"anyOf":[{"type":"string"},{"type":"integer"}]},{"type":"null"}]}}}"##;
+        let f = normalize_schema(flat, SchemaOrigin::Python);
+        let n = normalize_schema(nested, SchemaOrigin::TypeScript);
+        assert_eq!(
+            f.hash,
+            n.hash,
+            "flat={} nested={}",
+            serde_json::to_string(&f.canonical).unwrap(),
+            serde_json::to_string(&n.canonical).unwrap()
+        );
+        // And the nullability survives.
+        assert!(n.canonical["properties"]["v"]["anyOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["type"] == "null"));
+    }
+
+    /// `Optional[Literal[...]]`: Pydantic omits `type` on the enum branch, Zod
+    /// includes it. Inferring the branch type makes both promote to
+    /// `{"type":["string","null"]}` instead of one dropping the null.
+    #[test]
+    fn optional_enum_branch_keeps_null_and_matches_across_runtimes() {
+        let py = r##"{"type":"object","properties":{"m":{"anyOf":[
+            {"enum":["a","b"]},{"type":"null"}]}}}"##;
+        let ts = r##"{"type":"object","properties":{"m":{"anyOf":[
+            {"type":"string","enum":["a","b"]},{"type":"null"}]}}}"##;
+        let p = normalize_schema(py, SchemaOrigin::Python);
+        let t = normalize_schema(ts, SchemaOrigin::TypeScript);
+        assert_eq!(p.canonical["properties"]["m"]["type"], serde_json::json!(["string", "null"]));
+        assert_eq!(p.hash, t.hash);
+    }
+
+    /// The ordinary `Optional[str]` / `Optional[Model]` promotion is untouched:
+    /// a branch that already carries a `type` still collapses into a type array.
+    #[test]
+    fn optional_typed_branch_still_promotes() {
+        let raw = r##"{"type":"object","properties":{"n":{"anyOf":[
+            {"type":"string"},{"type":"null"}]}}}"##;
+        let r = normalize_schema(raw, SchemaOrigin::Python);
+        assert_eq!(r.canonical["properties"]["n"]["type"], serde_json::json!(["string", "null"]));
+        assert!(r.canonical["properties"]["n"].get("anyOf").is_none());
+    }
+
+    /// `Optional[Literal["x"]]`: Pydantic emits a bare `{"const":"x"}` branch,
+    /// Zod spells it `{"type":"string","const":"x"}`. Both must keep the null
+    /// and land on the same canonical form.
+    #[test]
+    fn optional_const_branch_keeps_null_and_matches_across_runtimes() {
+        let py = r##"{"type":"object","properties":{"k":{"anyOf":[
+            {"const":"x"},{"type":"null"}]}}}"##;
+        let ts = r##"{"type":"object","properties":{"k":{"anyOf":[
+            {"type":"string","const":"x"},{"type":"null"}]}}}"##;
+        let p = normalize_schema(py, SchemaOrigin::Python);
+        let t = normalize_schema(ts, SchemaOrigin::TypeScript);
+        assert_eq!(
+            p.canonical["properties"]["k"]["type"],
+            serde_json::json!(["string", "null"])
+        );
+        assert_eq!(p.hash, t.hash);
+    }
+
+    /// Literal-type inference is a LAST resort. When the enclosing node already
+    /// carries a `type`, the merge leaves that type in place and inference must
+    /// not overwrite it.
+    #[test]
+    fn enclosing_type_wins_over_inferred_literal_type() {
+        let raw = r##"{"type":"object","properties":{"v":{
+            "type":"integer","anyOf":[{"enum":["a","b"]},{"type":"null"}]}}}"##;
+        let r = normalize_schema(raw, SchemaOrigin::Python);
+        assert_eq!(
+            r.canonical["properties"]["v"]["type"],
+            serde_json::json!(["integer", "null"]),
+            "the node's own type must survive: {}",
+            serde_json::to_string(&r.canonical).unwrap()
+        );
+    }
+
+    /// A union that admits null AND has several non-null branches keeps its
+    /// union form, with the null branch pinned last so the canonical form does
+    /// not depend on where the generator put it. Newly load-bearing: the nested
+    /// spelling now flattens into this case instead of collapsing away.
+    #[test]
+    fn multi_branch_nullable_union_pins_null_last() {
+        let variants = [
+            r##"{"type":"object","properties":{"v":{"anyOf":[
+                {"type":"string"},{"type":"integer"},{"type":"null"}]}}}"##,
+            r##"{"type":"object","properties":{"v":{"anyOf":[
+                {"type":"null"},{"type":"string"},{"type":"integer"}]}}}"##,
+            r##"{"type":"object","properties":{"v":{"anyOf":[
+                {"type":"string"},{"type":"null"},{"type":"integer"}]}}}"##,
+            // nested spelling, null first
+            r##"{"type":"object","properties":{"v":{"anyOf":[
+                {"type":"null"},{"anyOf":[{"type":"string"},{"type":"integer"}]}]}}}"##,
+        ];
+        let first = normalize_schema(variants[0], SchemaOrigin::Python);
+        let branches = first.canonical["properties"]["v"]["anyOf"]
+            .as_array()
+            .expect("union preserved");
+        assert_eq!(branches.len(), 3);
+        assert_eq!(branches[2]["type"], "null", "null must be last");
+
+        for (i, raw) in variants.iter().enumerate().skip(1) {
+            let r = normalize_schema(raw, SchemaOrigin::TypeScript);
+            assert_eq!(
+                r.hash,
+                first.hash,
+                "variant {} must canonicalize identically: {}",
+                i,
+                serde_json::to_string(&r.canonical).unwrap()
+            );
+        }
+    }
+
+    /// Splicing is spelling-aware but not greedy: a nested composite carrying a
+    /// CONTENTFUL sibling must be left alone, because splicing would drop it.
+    #[test]
+    fn nested_union_with_a_contentful_sibling_is_not_spliced() {
+        let raw = r##"{"type":"object","properties":{"v":{"anyOf":[
+            {"anyOf":[{"type":"string"},{"type":"integer"}],"minItems":1},
+            {"type":"boolean"}]}}}"##;
+        let r = normalize_schema(raw, SchemaOrigin::Python);
+        let branches = r.canonical["properties"]["v"]["anyOf"].as_array().unwrap();
+        assert_eq!(branches.len(), 2, "must not splice: {}", serde_json::to_string(&r.canonical).unwrap());
+        assert_eq!(branches[0]["minItems"], 1, "the sibling must survive");
+    }
+
+    // ---------------------------------------------------------------
+    // Issue #1587: camelCase rename collisions
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn camel_case_collision_emits_warn_naming_both_properties() {
+        let raw = r##"{"type":"object","properties":{
+            "value":{"type":"string"},
+            "Value":{"type":"integer"},
+            "user_id":{"type":"string"},
+            "userID":{"type":"integer"}
+        }}"##;
+        let r = normalize_schema(raw, SchemaOrigin::Python);
+        assert_eq!(r.verdict, "WARN");
+        assert_eq!(r.warnings.len(), 2, "warnings: {:?}", r.warnings);
+
+        // Both source names, and the canonical key they collide on, must appear
+        // — and the message must not claim the surviving KEY is the source name.
+        let value_warning = r
+            .warnings
+            .iter()
+            .find(|w| w.contains("'value' and 'Value'"))
+            .unwrap_or_else(|| panic!("no value/Value warning in {:?}", r.warnings));
+        assert!(
+            value_warning.contains("canonical key 'value'"),
+            "must name the surviving canonical key: {}",
+            value_warning
+        );
+        assert!(
+            value_warning.contains("here 'Value'"),
+            "must name the source property whose definition wins: {}",
+            value_warning
+        );
+        assert!(
+            !value_warning.contains("only 'Value' is kept"),
+            "must not imply the key 'Value' survives: {}",
+            value_warning
+        );
+
+        let id_warning = r
+            .warnings
+            .iter()
+            .find(|w| w.contains("canonical key 'userId'"))
+            .unwrap_or_else(|| panic!("no userId warning in {:?}", r.warnings));
+        assert!(
+            id_warning.contains("'user_id' and 'userID'"),
+            "must name both source properties: {}",
+            id_warning
+        );
+
+        // The canonical form is still produced (lossily) — the WARN is the signal.
+        let props = r.canonical["properties"].as_object().unwrap();
+        assert_eq!(props.len(), 2);
+        assert!(props.contains_key("value") && props.contains_key("userId"));
+    }
+
+    #[test]
+    fn distinct_property_names_do_not_warn() {
+        let raw = r##"{"type":"object","properties":{
+            "market_cap":{"type":"number"},"hireDate":{"type":"string"}}}"##;
+        let r = normalize_schema(raw, SchemaOrigin::Python);
+        assert_eq!(r.verdict, "OK", "warnings: {:?}", r.warnings);
+    }
+
+    /// A lossy property inside a widely shared `$def` is re-walked at every use
+    /// site, so the identical warning must not be repeated once per site.
+    #[test]
+    fn repeated_warnings_are_deduped() {
+        let raw = r##"{
+          "$defs": {"Shared": {"type":"object","properties":{
+              "value": {"type":"string"}, "Value": {"type":"integer"}}}},
+          "type": "object",
+          "properties": {
+            "a": {"$ref": "#/$defs/Shared"},
+            "b": {"$ref": "#/$defs/Shared"},
+            "c": {"$ref": "#/$defs/Shared"}
+          }
+        }"##;
+        let r = normalize_schema(raw, SchemaOrigin::Python);
+        assert_eq!(r.verdict, "WARN");
+        assert_eq!(
+            r.warnings.len(),
+            1,
+            "one collision, three use sites, one warning: {:?}",
+            r.warnings
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Issue #1587: bounded $ref inlining
+    // ---------------------------------------------------------------
+
+    /// Build a diamond `$defs` graph: each level references the level below
+    /// twice, so inlining materializes 2^levels copies of the leaf.
+    /// Node counts (measured): 12 levels = 32,768; 16 = 524,288; 18 = 2,097,152.
+    fn diamond_schema(levels: usize) -> String {
+        let mut defs =
+            String::from(r##""L0":{"type":"object","properties":{"a":{"type":"string"}}}"##);
+        for i in 1..=levels {
+            defs.push_str(&format!(
+                concat!(
+                    r##","L{i}":{{"type":"object","properties":{{"x":{{"$ref":"##,
+                    r##""#/$defs/L{p}"}},"y":{{"$ref":"#/$defs/L{p}"}}}}}}"##
+                ),
+                i = i,
+                p = i - 1
+            ));
+        }
+        format!(
+            concat!(
+                r##"{{"$defs":{{{defs}}},"type":"object","##,
+                r##""properties":{{"root":{{"$ref":"#/$defs/L{levels}"}}}}}}"##
+            ),
+            defs = defs,
+            levels = levels
+        )
+    }
+
+    #[test]
+    fn diamond_defs_graph_blocks_instead_of_exploding() {
+        // 18 levels is ~1.8 KB of input and 2.1M nodes (~25 MB) unbounded.
+        let r = normalize_schema(&diamond_schema(18), SchemaOrigin::Python);
+        assert_eq!(r.verdict, "BLOCK");
+        assert_eq!(r.hash, "", "a BLOCK must never ship a hash");
+        assert!(r.canonical.is_null());
+        let w = r.warnings.join(" ");
+        assert!(w.contains("inlining budget"), "warnings: {:?}", r.warnings);
+        // The remedy must be discoverable from the message — a consumer-side
+        // BLOCK has no per-tool escape hatch, so this env var is the only one.
+        assert!(
+            w.contains(MAX_INLINED_NODES_ENV),
+            "the warning must name the override: {:?}",
+            r.warnings
+        );
+    }
+
+    #[test]
+    fn diamond_defs_graph_under_budget_still_normalizes() {
+        // 12 levels = 32,768 nodes, comfortably inside the 500,000 default.
+        let r = normalize_schema(&diamond_schema(12), SchemaOrigin::Python);
+        assert_eq!(r.verdict, "OK", "warnings: {:?}", r.warnings);
+        assert!(r.hash.starts_with("sha256:"));
+    }
+
+    /// The bound is on materialized nodes, not `$ref` use sites. A schema with
+    /// many cheap use sites must pass where a schema with few expensive ones
+    /// fails — that distinction is the whole reason the metric changed.
+    #[test]
+    fn budget_counts_nodes_not_ref_sites() {
+        // 400 use sites of a tiny def: many sites, few nodes.
+        let mut props = Vec::new();
+        for i in 0..400 {
+            props.push(format!(r##""p{}":{{"$ref":"#/$defs/Tiny"}}"##, i));
+        }
+        let many_cheap = format!(
+            r##"{{"$defs":{{"Tiny":{{"type":"string"}}}},"type":"object","properties":{{{}}}}}"##,
+            props.join(",")
+        );
+        let r = normalize_schema_with_budget(&many_cheap, SchemaOrigin::Python, 5_000);
+        assert_eq!(
+            r.verdict, "OK",
+            "400 use sites of a 3-node def is ~1200 nodes: {:?}",
+            r.warnings
+        );
+
+        // The same 400 sites pointing at a def big enough to blow the same
+        // budget must BLOCK, even though the site count is identical.
+        let big_props: Vec<String> = (0..60)
+            .map(|i| format!(r##""f{}":{{"type":"string"}}"##, i))
+            .collect();
+        let many_expensive = format!(
+            r##"{{"$defs":{{"Tiny":{{"type":"object","properties":{{{}}}}}}},"type":"object","properties":{{{}}}}}"##,
+            big_props.join(","),
+            props.join(",")
+        );
+        let r = normalize_schema_with_budget(&many_expensive, SchemaOrigin::Python, 5_000);
+        assert_eq!(r.verdict, "BLOCK", "same site count, far more nodes");
+    }
+
+    /// The default must admit a large-but-ordinary Pydantic domain model. This
+    /// is the shape the previous 2,000-`$ref`-site bound rejected: every nested
+    /// BaseModel and Enum is a `$defs` entry re-referenced per use site, so the
+    /// site count climbs fast while the output stays small (measured: 2,040
+    /// sites, 27,205 nodes, 198 KB).
+    #[test]
+    fn default_budget_admits_a_realistic_pydantic_model() {
+        let mut defs: Vec<String> = Vec::new();
+        for e in 0..50 {
+            defs.push(format!(
+                r##""E{}":{{"enum":["a","b","c","d","e","f","g","h"],"title":"E{}","type":"string"}}"##,
+                e, e
+            ));
+        }
+        for m in 0..40 {
+            let mut props: Vec<String> = (0..6)
+                .map(|f| format!(r##""f{}":{{"title":"F{}","type":"string"}}"##, f, f))
+                .collect();
+            for e in 0..50 {
+                props.push(format!(r##""e{}":{{"$ref":"#/$defs/E{}"}}"##, e, e));
+            }
+            if m > 0 {
+                props.push(format!(r##""child":{{"$ref":"#/$defs/M{}"}}"##, m - 1));
+            }
+            defs.push(format!(
+                r##""M{}":{{"properties":{{{}}},"title":"M{}","type":"object"}}"##,
+                m,
+                props.join(","),
+                m
+            ));
+        }
+        let raw = format!(
+            r##"{{"$defs":{{{}}},"type":"object","properties":{{"root":{{"$ref":"#/$defs/M39"}}}}}}"##,
+            defs.join(",")
+        );
+        let r = normalize_schema(&raw, SchemaOrigin::Python);
+        assert_eq!(
+            r.verdict, "OK",
+            "a 40-model x 50-enum domain model must not be refused: {:?}",
+            r.warnings
+        );
+        assert!(r.hash.starts_with("sha256:"));
+    }
+
+    /// The budget also covers the second inlining pass over cyclic def bodies —
+    /// a schema whose top-level ref is cyclic (so the main pass expands nothing)
+    /// must still not smuggle a diamond in through the def body.
+    #[test]
+    fn diamond_inside_a_cyclic_def_body_also_blocks() {
+        let mut defs =
+            String::from(r##""L0":{"type":"object","properties":{"a":{"type":"string"}}}"##);
+        for i in 1..=18 {
+            defs.push_str(&format!(
+                concat!(
+                    r##","L{i}":{{"type":"object","properties":{{"x":{{"$ref":"##,
+                    r##""#/$defs/L{p}"}},"y":{{"$ref":"#/$defs/L{p}"}}}}}}"##
+                ),
+                i = i,
+                p = i - 1
+            ));
+        }
+        defs.push_str(
+            r##","R":{"type":"object","properties":{"me":{"$ref":"#/$defs/R"},"big":{"$ref":"#/$defs/L18"}}}"##,
+        );
+        let raw = format!(
+            concat!(
+                r##"{{"$defs":{{{defs}}},"type":"object","##,
+                r##""properties":{{"root":{{"$ref":"#/$defs/R"}}}}}}"##
+            ),
+            defs = defs
+        );
+        let r = normalize_schema(&raw, SchemaOrigin::Python);
+        assert_eq!(r.verdict, "BLOCK");
+        assert_eq!(r.hash, "", "a BLOCK must never ship a hash");
+        assert!(r.canonical.is_null());
+    }
+
+    /// The ceiling is an operator knob, not a constant: a consumer-side BLOCK
+    /// hardcodes `tool_strict=true` in all three SDKs, so without an override an
+    /// agent that trips it has no way to start.
+    #[test]
+    fn node_budget_is_overridable() {
+        let raw = diamond_schema(12); // 32,768 nodes
+        assert_eq!(
+            normalize_schema_with_budget(&raw, SchemaOrigin::Python, 1_000).verdict,
+            "BLOCK",
+            "a lowered ceiling must bite"
+        );
+        assert_eq!(
+            normalize_schema_with_budget(&raw, SchemaOrigin::Python, 100_000).verdict,
+            "OK",
+            "a raised ceiling must let it through"
+        );
+    }
+
+    /// Env parsing for that knob. Kept separate from the budget behaviour tests
+    /// (which call `normalize_schema_with_budget`) so only this one test touches
+    /// process-global state.
+    #[test]
+    fn node_budget_env_parsing() {
+        let restore = std::env::var(MAX_INLINED_NODES_ENV).ok();
+
+        std::env::remove_var(MAX_INLINED_NODES_ENV);
+        assert_eq!(resolved_node_budget(), DEFAULT_MAX_INLINED_NODES);
+
+        std::env::set_var(MAX_INLINED_NODES_ENV, " 12345 ");
+        assert_eq!(resolved_node_budget(), 12_345);
+
+        // A typo must fall back to the default, NOT become a warning — a WARN
+        // here would be promoted to a startup refusal by MCP_MESH_SCHEMA_STRICT.
+        for bad in ["", "0", "-1", "lots"] {
+            std::env::set_var(MAX_INLINED_NODES_ENV, bad);
+            assert_eq!(
+                resolved_node_budget(),
+                DEFAULT_MAX_INLINED_NODES,
+                "{:?} must fall back to the default",
+                bad
+            );
+            let r = normalize_schema(r#"{"type":"string"}"#, SchemaOrigin::Python);
+            assert_eq!(r.verdict, "OK", "a bad env value must not taint the verdict");
+        }
+
+        match restore {
+            Some(v) => std::env::set_var(MAX_INLINED_NODES_ENV, v),
+            None => std::env::remove_var(MAX_INLINED_NODES_ENV),
+        }
+    }
 
     #[test]
     fn parse_error_returns_block_verdict() {

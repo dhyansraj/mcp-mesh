@@ -545,10 +545,20 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // copy of this section carries a fuller three-row table; only this file is in
 // the man corpus. `environment.md` has no `_java` / `_typescript` variant, so
 // the variant golden did not move either.
+// Issue #1587 moved all three: +9 inline spans, +9 list spans, +2 markup list
+// lines, all in `schema-matching.md`. Two new "Known limitations" bullets — the
+// camelCase property-name collision (now a WARN, and a startup refusal under
+// `MCP_MESH_SCHEMA_STRICT=true`) and the `$defs` inlining ceiling — contribute
+// 5 and 2 spans plus one list line each; the existing per-tool escape-hatch
+// bullet gained 2 spans for naming `expected_type` and
+// `MCP_MESH_SCHEMA_MAX_INLINED_NODES`, which is where the consumer-side
+// asymmetry is now stated. The `environment.md` entry for the same env var sits
+// inside a fenced block, so it adds no spans. `schema-matching.md` has no
+// `_java` / `_typescript` variant, so the variant golden did not move.
 const (
-	wantInlineCodeSpans = 1815
-	wantListCodeSpans   = 523
-	wantMarkupListLines = 448
+	wantInlineCodeSpans = 1824
+	wantListCodeSpans   = 532
+	wantMarkupListLines = 450
 )
 
 // assertCorpusSize replaces the t.Logf these tests used to end on.
