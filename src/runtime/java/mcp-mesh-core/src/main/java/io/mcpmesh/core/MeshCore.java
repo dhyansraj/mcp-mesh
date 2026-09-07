@@ -754,7 +754,11 @@ public interface MeshCore {
      * job result (JSON-encoded) to outResultJson.
      *
      * @param handle         Proxy handle
-     * @param timeoutSecs    Wall-clock timeout (negative = no timeout)
+     * @param timeoutSecs    Wall-clock timeout. Negative = no timeout (the
+     *                       C-ABI absence sentinel); {@code 0.0} is a
+     *                       zero-length budget; NaN / Infinity are errors
+     *                       (issue #1584 — this entry point used to accept
+     *                       them as "no timeout").
      * @param outResultJson  Out-param: receives the JSON string (caller frees via mesh_free_string)
      * @return 0 on success, -1 on error
      */

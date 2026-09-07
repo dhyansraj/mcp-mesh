@@ -76,12 +76,58 @@ impl JobContext {
 
     /// Seconds remaining until deadline, or `None` if no deadline is set.
     /// Returns `Some(0)` if the deadline has already passed.
+    ///
+    /// This is the INTROSPECTION shape: `Some(0)` is the meaningful "expired"
+    /// answer that `current_job()`-style snapshots expose to SDK callers
+    /// (which test it with `<= 0`). Do NOT use it to build the
+    /// `X-Mesh-Timeout` header — see [`Self::timeout_header_seconds`].
     pub fn remaining_seconds(&self) -> Option<u64> {
         self.deadline.map(|d| {
             d.checked_duration_since(Instant::now())
                 .map(|r| r.as_secs())
                 .unwrap_or(0)
         })
+    }
+
+    /// The value to advertise in an outbound `X-Mesh-Timeout` header, or
+    /// `None` when the header must be OMITTED (issue #1584).
+    ///
+    /// `None` is returned in two cases, and both mean "do not send the
+    /// header":
+    ///
+    /// * no deadline is set (the design-doc default — unlimited), or
+    /// * the deadline has already passed.
+    ///
+    /// Otherwise the remaining time is rounded UP to whole seconds and
+    /// floored at 1.
+    ///
+    /// # Why not `remaining_seconds()`
+    ///
+    /// `remaining_seconds()` truncates, so any budget under a second — and
+    /// every expired one — renders as `0`. `X-Mesh-Timeout` is `minimum: 1`
+    /// in the registry OpenAPI schema (`XMeshTimeoutHeader`), and every
+    /// receiver in the mesh treats a `<= 0` value as "unset" and substitutes
+    /// its OWN default budget (Python `unified_mcp_proxy`, the registry
+    /// proxy, the TS/Java clients). So emitting `0` does not communicate
+    /// "almost out of time" — it communicates "no cap at all", which is the
+    /// exact opposite of what the parent's deadline means, and it silently
+    /// discards the parent-scope cap on every nested call made in the last
+    /// second of a job.
+    ///
+    /// Rounding UP rather than down keeps a sub-second remainder expressible
+    /// (`1` — the tightest budget the wire can carry) instead of collapsing
+    /// it to the "unset" sentinel. Omitting on expiry matches what the Python
+    /// outbound proxy already does today: the parent-scope CANCEL TOKEN, not
+    /// a bogus header, is the authoritative signal that the call should not
+    /// have been made.
+    pub fn timeout_header_seconds(&self) -> Option<u64> {
+        let remaining = self.deadline?.checked_duration_since(Instant::now())?;
+        if remaining.is_zero() {
+            return None;
+        }
+        // ceil to whole seconds; `remaining > 0` so this is always >= 1.
+        let secs = remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0);
+        Some(secs.max(1))
     }
 
     /// Convenience: derive a child context with the same cancel-token but a
@@ -131,10 +177,22 @@ pub fn try_current() -> Option<JobContext> {
     current()
 }
 
-/// Seconds remaining on the active job's deadline, if any. Convenience for
-/// outbound header injection: `X-Mesh-Timeout: <remaining>`.
+/// Seconds remaining on the active job's deadline, if any. Introspection
+/// only — `Some(0)` means "expired". For outbound `X-Mesh-Timeout` header
+/// construction use [`timeout_header_seconds`], which never yields the `0`
+/// every receiver reads as "unset" (issue #1584).
 pub fn remaining_seconds() -> Option<u64> {
     CURRENT_JOB.try_with(|ctx| ctx.remaining_seconds()).ok().flatten()
+}
+
+/// The `X-Mesh-Timeout` value for the active job's deadline, or `None` when
+/// the header must be omitted (no deadline, no active context, or an expired
+/// deadline). See [`JobContext::timeout_header_seconds`].
+pub fn timeout_header_seconds() -> Option<u64> {
+    CURRENT_JOB
+        .try_with(|ctx| ctx.timeout_header_seconds())
+        .ok()
+        .flatten()
 }
 
 /// Run `f` with the given job context bound on the current async task.
@@ -154,7 +212,9 @@ where
 /// current task. No-op otherwise.
 ///
 /// `X-Mesh-Timeout` is only emitted when the active context has a deadline
-/// set (per design doc: deadline is opt-in / unlimited by default).
+/// that is set AND has not yet expired (per design doc: deadline is opt-in /
+/// unlimited by default). The value is `ceil(remaining)` floored at 1 — never
+/// `0`, which every receiver reads as "unset" (issue #1584).
 ///
 /// This is the FFI-friendly hook: language SDKs that build their own
 /// outbound HTTP requests through the Rust core (or wrap reqwest
@@ -165,8 +225,21 @@ pub fn inject_job_headers(builder: reqwest::RequestBuilder) -> reqwest::RequestB
         None => builder,
         Some(ctx) => {
             let mut b = builder.header("X-Mesh-Job-Id", &ctx.job_id);
-            if let Some(remaining) = ctx.remaining_seconds() {
-                b = b.header("X-Mesh-Timeout", remaining.to_string());
+            match ctx.timeout_header_seconds() {
+                Some(secs) => b = b.header("X-Mesh-Timeout", secs.to_string()),
+                None if ctx.deadline.is_some() => {
+                    // Deadline already blown. Omit rather than send "0" —
+                    // "0" reads as "unset" downstream and would hand the
+                    // child an unbounded budget. The parent-scope cancel
+                    // token is the authoritative signal here.
+                    tracing::warn!(
+                        "outbound call under job={} has an expired deadline; \
+                         omitting X-Mesh-Timeout instead of emitting an \
+                         invalid '0' value",
+                        ctx.job_id
+                    );
+                }
+                None => {}
             }
             b
         }
@@ -176,8 +249,45 @@ pub fn inject_job_headers(builder: reqwest::RequestBuilder) -> reqwest::RequestB
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap as Map;
+    use std::sync::Arc;
     use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::sync::Mutex as AMutex;
     use tokio::time::sleep;
+
+    /// Spin up a one-shot HTTP server that records the request headers.
+    /// Returns `(port, captured, join_handle)`.
+    async fn spawn_header_capture_server() -> (
+        u16,
+        Arc<AMutex<Map<String, String>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let captured: Arc<AMutex<Map<String, String>>> = Arc::new(AMutex::new(Map::new()));
+        let captured_clone = captured.clone();
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 8192];
+            let n = sock.read(&mut buf).await.unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            let mut hdrs = Map::new();
+            for line in req.lines().skip(1) {
+                if line.is_empty() {
+                    break;
+                }
+                if let Some((k, v)) = line.split_once(':') {
+                    hdrs.insert(k.trim().to_lowercase(), v.trim().to_string());
+                }
+            }
+            *captured_clone.lock().await = hdrs;
+            let resp = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+            sock.write_all(resp).await.unwrap();
+        });
+        (port, captured, server)
+    }
 
     #[tokio::test]
     async fn current_returns_none_outside_scope() {
@@ -210,6 +320,34 @@ mod tests {
             assert!(r1 < r0, "remaining should decrease (r0={}, r1={})", r0, r1);
         })
         .await;
+    }
+
+    /// Issue #1584: the header value never renders as `0` — not for a
+    /// sub-second remainder, not for an expired deadline.
+    #[tokio::test]
+    async fn timeout_header_seconds_never_zero() {
+        // Sub-second remaining: truncation would give 0, we must give 1.
+        let ctx = JobContext::with_timeout("job-subsec", Duration::from_millis(400));
+        assert_eq!(ctx.remaining_seconds(), Some(0), "precondition: truncates to 0");
+        assert_eq!(ctx.timeout_header_seconds(), Some(1));
+
+        // Fractional over a second: rounds UP, never down.
+        let ctx = JobContext::with_timeout("job-frac", Duration::from_millis(2_400));
+        assert_eq!(ctx.remaining_seconds(), Some(2));
+        assert_eq!(ctx.timeout_header_seconds(), Some(3));
+
+        // No deadline: omit.
+        assert_eq!(JobContext::new("job-none").timeout_header_seconds(), None);
+    }
+
+    /// Issue #1584: an expired deadline OMITS the header (returns `None`)
+    /// rather than advertising `0`, which every receiver reads as "unset".
+    #[tokio::test]
+    async fn timeout_header_seconds_none_when_expired() {
+        let ctx = JobContext::with_timeout("job-expired", Duration::from_millis(20));
+        sleep(Duration::from_millis(80)).await;
+        assert_eq!(ctx.remaining_seconds(), Some(0));
+        assert_eq!(ctx.timeout_header_seconds(), None);
     }
 
     #[tokio::test]
@@ -353,6 +491,52 @@ mod tests {
         let h = captured.lock().await;
         assert!(h.get("x-mesh-job-id").is_none());
         assert!(h.get("x-mesh-timeout").is_none());
+    }
+
+    /// Issue #1584 end-to-end over a real request: a job whose deadline has
+    /// blown sends `X-Mesh-Job-Id` and NO `X-Mesh-Timeout`. Before the fix it
+    /// sent `X-Mesh-Timeout: 0`, which the receiver treats as "unset" and
+    /// replaces with its own (much larger) default budget — silently losing
+    /// the parent's deadline cap.
+    #[tokio::test]
+    async fn inject_job_headers_omits_timeout_when_deadline_expired() {
+        let (port, captured, server) = spawn_header_capture_server().await;
+        let url = format!("http://127.0.0.1:{}/echo", port);
+        let client = reqwest::Client::new();
+        let ctx = JobContext::with_timeout("job-blown", Duration::from_millis(20));
+        sleep(Duration::from_millis(80)).await;
+        with_job(ctx, async {
+            let req = inject_job_headers(client.get(&url));
+            let _ = req.send().await.unwrap();
+        })
+        .await;
+        server.await.unwrap();
+        let h = captured.lock().await;
+        assert_eq!(h.get("x-mesh-job-id").map(String::as_str), Some("job-blown"));
+        assert!(
+            h.get("x-mesh-timeout").is_none(),
+            "expired deadline must OMIT X-Mesh-Timeout, got {:?}",
+            h.get("x-mesh-timeout")
+        );
+    }
+
+    /// Issue #1584: a live but sub-second budget is advertised as `1` (the
+    /// tightest value the `minimum: 1` wire schema can carry), never `0`.
+    #[tokio::test]
+    async fn inject_job_headers_floors_sub_second_budget_at_one() {
+        let (port, captured, server) = spawn_header_capture_server().await;
+        let url = format!("http://127.0.0.1:{}/echo", port);
+        let client = reqwest::Client::new();
+        let ctx = JobContext::with_timeout("job-tight", Duration::from_millis(700));
+        with_job(ctx, async {
+            let req = inject_job_headers(client.get(&url));
+            let _ = req.send().await.unwrap();
+        })
+        .await;
+        server.await.unwrap();
+        let h = captured.lock().await;
+        let timeout = h.get("x-mesh-timeout").expect("X-Mesh-Timeout missing");
+        assert_eq!(timeout, "1", "sub-second budget must floor at 1, not 0");
     }
 
     #[tokio::test]

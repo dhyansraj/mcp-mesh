@@ -382,7 +382,19 @@ export interface ResolvedAgentConfig {
  * Proxy configuration for a dependency.
  */
 export interface DependencyKwargs {
-  /** Request timeout in seconds. Defaults to 30 */
+  /**
+   * Request timeout in seconds. When set it is authoritative for BOTH the
+   * local abort timer and the `X-Mesh-Timeout` budget advertised downstream.
+   * When omitted, both come from `MCP_MESH_CALL_TIMEOUT`, defaulting to 300
+   * (issue #1584 — this used to default to 30 in TypeScript only).
+   *
+   * Fractional values are rounded UP to whole seconds, because that is all
+   * `X-Mesh-Timeout` can carry and both halves of the budget have to be the
+   * same number.
+   *
+   * Does not apply when `streaming: true` — a streaming dependency runs on
+   * {@link DependencyKwargs.streamTimeout} instead.
+   */
   timeout?: number;
   /** Total number of attempts (1 = one attempt with zero retries). Defaults to 1 */
   maxAttempts?: number;
@@ -390,7 +402,12 @@ export interface DependencyKwargs {
   streaming?: boolean;
   /** Require session affinity. Defaults to false */
   sessionRequired?: boolean;
-  /** Timeout for streaming/LLM responses in seconds. Defaults to 300 */
+  /**
+   * Timeout for streaming/LLM responses in seconds. When omitted it follows
+   * the same fallback chain as {@link DependencyKwargs.timeout} —
+   * `MCP_MESH_CALL_TIMEOUT`, else 300 — so raising that env var raises
+   * long-lived stream budgets too.
+   */
   streamTimeout?: number;
   /** Extra headers to send with every request to this dependency */
   customHeaders?: Record<string, string>;

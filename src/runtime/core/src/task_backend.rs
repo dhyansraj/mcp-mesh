@@ -714,8 +714,14 @@ impl TaskBackend for RegistryHttpBackend {
         identity: Option<(&str, i64)>,
     ) -> Result<JobEventListResponse, BackendError> {
         let url = format!("{}/jobs/{}/events", self.base_url, job_id);
-        // Registry caps `wait` at 60s — clamp client-side so we don't
-        // round-trip a value the registry will silently truncate.
+        // The `wait` query param is WHOLE SECONDS (OpenAPI: integer, max 60),
+        // so this truncates: a sub-second `wait` goes out as `wait=0` and the
+        // registry answers immediately. That is a wire constraint, not a bug
+        // to fix here — the callers compensate for the lost remainder
+        // client-side (`JobController::recv_event` paces at
+        // `EMPTY_PAGE_POLL_PACE`, `JobProxy::list_events` sleeps the
+        // remainder). Clamping at 60 client-side avoids round-tripping a
+        // value the registry would silently truncate anyway. See issue #1585.
         let wait_secs = wait.as_secs().min(60);
         let mut req = self.client.get(&url).query(&[
             ("after", after.to_string()),
@@ -806,6 +812,48 @@ impl TaskBackend for RegistryHttpBackend {
 // Shared helpers
 // =============================================================================
 
+// -----------------------------------------------------------------------------
+// THE f64-SECONDS BOUNDARY POLICY (issue #1584)
+// -----------------------------------------------------------------------------
+//
+// Exactly two kinds of value cross the language boundary as "a number of
+// seconds": a WAIT BUDGET (`recv_event` / `list_events` / `JobProxy::wait`)
+// and a JOB DEADLINE (`with_job_async` / `mesh_run_as_job`). Before #1584 each
+// of the three bindings had its own opinion about the edge values, so the same
+// input meant "unlimited" in one runtime and "error" in another. This module
+// is the single place that policy lives; every binding delegates here.
+//
+//   input             wait budget                deadline
+//   ---------------   ------------------------   -------------------------
+//   absent (None)     no timeout (block)         no deadline (unlimited)
+//   NaN / +-Inf       ERROR (all bindings)       ERROR (all bindings)
+//   negative          ERROR where the language   ERROR where the language
+//                     can express absence;       can express absence;
+//                     absence over the C ABI     absence over the C ABI
+//   0.0 / -0.0        zero-length budget         no deadline (unlimited)
+//   > 0, out of
+//   Duration range    ERROR                      ERROR
+//   > 0, in range      that budget                that deadline
+//
+// Why negative is an ERROR rather than "unlimited": "unlimited" is the
+// UNBOUNDED direction. A caller that arithmetic'd a remaining-time into the
+// negatives (`deadline - now` after the deadline passed is the common case)
+// has a bug; aliasing it to "never time out" upgrades that bug into a job that
+// runs until a sweep reaps it, silently. Erroring puts the failure at the call
+// site where the bad arithmetic is. The C ABI is the ONE exception, and only
+// because it has no nullable double: there the negative is a TRANSPORT
+// ENCODING OF ABSENCE (Java passes -1.0 for `Optional.empty()`), not a value.
+//
+// Why 0.0 means "unlimited" for a DEADLINE but "zero-length" for a WAIT: they
+// are different questions. `recv_event(timeout_secs=0.0)` is the documented
+// "single immediate read" (see `JobProxy::list_events`), so zero has to be a
+// real budget there. A zero-length DEADLINE, by contrast, is not reachable
+// from the wire at all -- `X-Mesh-Timeout` is `minimum: 1` in the OpenAPI
+// schema and every SDK normalises a `<= 0` header to "absent" before it gets
+// here (e.g. `job_dispatch.py::_read_job_headers`) -- so 0 only ever arrives
+// from a caller that means "no deadline". All three bindings already agreed on
+// that reading; #1584 keeps it and writes down why.
+
 /// Validate a caller-supplied `timeout_secs` (`f64`) and convert it into an
 /// `Option<Duration>`. Shared by the three binding-layer `parse_*timeout_secs`
 /// helpers (`jobs_py.rs`, `jobs_napi.rs`, `jobs_ffi.rs`) so the
@@ -825,18 +873,51 @@ pub(crate) fn validate_secs_to_duration(
     secs: f64,
     negative_is_none: bool,
 ) -> Result<Option<Duration>, String> {
+    validate_secs_to_duration_labeled(secs, negative_is_none, "timeout_secs")
+}
+
+/// [`validate_secs_to_duration`] with a caller-chosen field name in the error
+/// messages, so the deadline path can say `deadline_secs` instead of
+/// `timeout_secs` without forking the policy.
+pub(crate) fn validate_secs_to_duration_labeled(
+    secs: f64,
+    negative_is_none: bool,
+    label: &str,
+) -> Result<Option<Duration>, String> {
     if secs.is_nan() || secs.is_infinite() {
-        return Err(format!("timeout_secs must be a finite number, got {secs}"));
+        return Err(format!("{label} must be a finite number, got {secs}"));
     }
     if secs < 0.0 {
         if negative_is_none {
             return Ok(None);
         }
-        return Err(format!("timeout_secs must be non-negative, got {secs}"));
+        return Err(format!("{label} must be non-negative, got {secs}"));
     }
     Duration::try_from_secs_f64(secs)
         .map(Some)
-        .map_err(|e| format!("timeout_secs out of range: {e} (got {secs})"))
+        .map_err(|e| format!("{label} out of range: {e} (got {secs})"))
+}
+
+/// Validate a caller-supplied job `deadline_secs` (`f64`) and convert it into
+/// the `Option<Duration>` that [`crate::job_context::JobContext`] wants, where
+/// `None` means "no deadline / unlimited".
+///
+/// Same NaN / Inf / negative / overflow policy as
+/// [`validate_secs_to_duration`] (see the module note above); the ONE
+/// difference is that a zero-length deadline collapses to `None` rather than
+/// to `Duration::ZERO` -- an already-expired context is not what a caller
+/// passing `0` means, and all three bindings already read it this way.
+///
+/// `negative_is_none` has the same meaning as in [`validate_secs_to_duration`]:
+/// `true` only for the C ABI, which cannot pass a null double.
+pub(crate) fn validate_deadline_secs(
+    secs: f64,
+    negative_is_none: bool,
+) -> Result<Option<Duration>, String> {
+    match validate_secs_to_duration_labeled(secs, negative_is_none, "deadline_secs")? {
+        Some(d) if !d.is_zero() => Ok(Some(d)),
+        _ => Ok(None),
+    }
 }
 
 // =============================================================================
@@ -1338,6 +1419,41 @@ mod tests {
         assert!(validate_secs_to_duration(f64::INFINITY, true).is_err());
         // Finite-but-huge overflows Duration; message must say "out of range".
         let err = validate_secs_to_duration(f64::MAX, false).expect_err("overflow");
+        assert!(
+            err.contains("out of range"),
+            "expected 'out of range', got: {err}"
+        );
+    }
+
+    /// Issue #1584: the one deadline policy, exercised through the shared
+    /// helper every binding now delegates to.
+    #[test]
+    fn validate_deadline_secs_policy() {
+        // Positive finite: a real deadline.
+        assert_eq!(
+            validate_deadline_secs(1.5, false).unwrap(),
+            Some(Duration::from_millis(1500))
+        );
+        // Zero (and -0.0, which is NOT `< 0.0` in IEEE-754): no deadline,
+        // never an already-expired one.
+        assert_eq!(validate_deadline_secs(0.0, false).unwrap(), None);
+        assert_eq!(validate_deadline_secs(-0.0, false).unwrap(), None);
+        assert_eq!(validate_deadline_secs(-0.0, true).unwrap(), None);
+        // Negative: error where absence is expressible, absence over the C ABI.
+        let err = validate_deadline_secs(-1.0, false).expect_err("negative must reject");
+        assert!(
+            err.contains("deadline_secs"),
+            "message must name the field, got: {err}"
+        );
+        assert_eq!(validate_deadline_secs(-1.0, true).unwrap(), None);
+        // NaN / Inf: always an error, both policies.
+        for neg_is_none in [false, true] {
+            assert!(validate_deadline_secs(f64::NAN, neg_is_none).is_err());
+            assert!(validate_deadline_secs(f64::INFINITY, neg_is_none).is_err());
+            assert!(validate_deadline_secs(f64::NEG_INFINITY, neg_is_none).is_err());
+        }
+        // Finite-but-huge: overflow error, not a panic.
+        let err = validate_deadline_secs(f64::MAX, false).expect_err("overflow must reject");
         assert!(
             err.contains("out of range"),
             "expected 'out of range', got: {err}"

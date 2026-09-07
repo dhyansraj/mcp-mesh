@@ -53,6 +53,19 @@ fn parse_timeout_secs(secs: Option<f64>) -> PyResult<Option<Duration>> {
     }
 }
 
+/// Validate a Python-supplied job ``deadline_secs`` against the ONE boundary
+/// policy shared by every binding (see the "f64-SECONDS BOUNDARY POLICY" note
+/// in `task_backend.rs`). `None` in, `None` out (no deadline); `0` is also
+/// "no deadline"; NaN / Inf / negative raise ``ValueError``.
+fn parse_deadline_secs(secs: Option<f64>, job_id: &str) -> PyResult<Option<Duration>> {
+    match secs {
+        None => Ok(None),
+        Some(s) => crate::task_backend::validate_deadline_secs(s, false).map_err(|e| {
+            PyValueError::new_err(format!("with_job_async: {} (job {})", e, job_id))
+        }),
+    }
+}
+
 /// Build an `Arc<dyn TaskBackend>` from a registry URL. Returns a Python
 /// exception on transport-construction failure (mirrors the pattern in
 /// `lib.rs::call_tool_py`).
@@ -637,7 +650,9 @@ pub fn await_job_cancel_py<'py>(
 /// Arguments:
 ///   * `job_id` — server-assigned job UUID this call is bound to.
 ///   * `deadline_secs` — optional per-attempt deadline (relative). `None`
-///     means no deadline (unlimited per design-doc default).
+///     (and `0`) mean no deadline (unlimited per design-doc default). A
+///     negative, NaN or infinite value raises `ValueError` — see the
+///     "f64-SECONDS BOUNDARY POLICY" note in `task_backend.rs` (issue #1584).
 ///   * `awaitable` — Python coroutine. Awaited inside the
 ///     `run_as_job` scope; its result (or raised exception) becomes the
 ///     return value of the returned coroutine.
@@ -655,26 +670,17 @@ pub fn with_job_async_py<'py>(
     // Build the JobContext on the Rust side (the deadline is set relative
     // to "now" on the Tokio runtime, which matches the semantics of the
     // SDK reading `X-Mesh-Timeout: <secs>` from the inbound request).
-    let ctx = match deadline_secs {
-        Some(secs) if secs.is_nan() || secs.is_infinite() => {
-            return Err(PyValueError::new_err(format!(
-                "with_job_async: deadline_secs ({}) must be a finite number or None",
-                secs
-            )));
-        }
-        Some(secs) if secs > 0.0 => {
-            // Finite-but-huge `secs` (e.g. `sys.float_info.max`) would
-            // panic in `Duration::from_secs_f64`. Use the fallible variant
-            // and surface a clean `ValueError` instead.
-            let dur = Duration::try_from_secs_f64(secs).map_err(|e| {
-                PyValueError::new_err(format!(
-                    "with_job_async: deadline_secs ({}) out of range for job {} — {}",
-                    secs, job_id, e
-                ))
-            })?;
-            JobContext::with_timeout(job_id.clone(), dur)
-        }
-        _ => JobContext::new(job_id.clone()),
+    // ONE deadline policy for all three bindings (issue #1584) — see the
+    // "f64-SECONDS BOUNDARY POLICY" note in `task_backend.rs`. Python can
+    // express absence as `None`, so `negative_is_none = false`: a negative
+    // deadline is an ERROR here, not a silent alias for "unlimited". Before
+    // #1584 this binding was the odd one out — it swallowed negatives into
+    // `JobContext::new` (unlimited) while napi rejected them, so the same
+    // buggy `deadline - now` produced an unbounded job in Python and a clean
+    // error in TypeScript.
+    let ctx = match parse_deadline_secs(deadline_secs, &job_id)? {
+        Some(dur) => JobContext::with_timeout(job_id.clone(), dur),
+        None => JobContext::new(job_id.clone()),
     };
     // Carry the claim generation so `current_job()` can expose it (issue
     // #1252). Additive — `None` leaves the surface unchanged.

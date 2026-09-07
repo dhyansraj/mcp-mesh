@@ -157,13 +157,10 @@ fn jobs_set_err(err: JobError) -> i32 {
     -1
 }
 
-// Stricter timeout-policy than mesh_job_proxy_wait's predicate (which
-// silently aliases NaN/Inf to "no timeout" for back-compat). New FFI
-// surfaces should adopt this form: surface callers' invalid inputs as
-// errors rather than aliasing — matches the napi/pyo3 `parse_timeout_secs`
-// helpers in jobs_napi.rs / jobs_py.rs. The two policies coexist
-// intentionally; do not unify without coordinating a deprecation cycle
-// for mesh_job_proxy_wait.
+// THE timeout policy for every FFI surface, `mesh_job_proxy_wait` included
+// (issue #1584 unified the last holdout, which used to alias NaN/Inf to "no
+// timeout"). Invalid inputs surface as errors rather than aliasing — matches
+// the napi/pyo3 `parse_timeout_secs` helpers in jobs_napi.rs / jobs_py.rs.
 /// Parse an FFI-supplied `timeout_secs` f64 into an `Option<Duration>`,
 /// using the negative-sentinel convention to bridge `Option<Duration>` over
 /// the C ABI (which cannot pass `null` doubles).
@@ -952,11 +949,17 @@ pub unsafe extern "C" fn mesh_job_proxy_status(
 /// `result` (JSON-encoded) to `*out_result_json`; caller frees via
 /// `mesh_free_string`.
 ///
-/// `timeout_secs`: wall-clock timeout. Any value `<= 0.0` (including
-/// `-0.0` and negatives such as `-1`) means "no timeout"; non-finite
-/// values (NaN, ±Inf) also fall back to "no timeout". Matches the
-/// Python / napi-rs `Optional<f64>` shape and keeps the same policy
-/// as [`mesh_run_as_job`] for consistency.
+/// `timeout_secs`: wall-clock timeout, under the ONE boundary policy shared
+/// by every binding (see the "f64-SECONDS BOUNDARY POLICY" note in
+/// `task_backend.rs`, issue #1584): negative (including `-1`, which is how
+/// Java expresses `Optional<Duration>::empty()` over a C ABI that has no
+/// nullable double) means "no timeout"; `0.0`/`-0.0` is a zero-length budget;
+/// NaN / ±Inf are ERRORS (`-1` return, message in the last-error slot).
+///
+/// The NaN/±Inf rejection is a #1584 change: this entry point used to alias
+/// them to "no timeout" while its sibling `mesh_job_controller_recv_event`
+/// rejected them, so the same bad input produced an unbounded wait on one
+/// call and a clean error on the other.
 #[no_mangle]
 pub unsafe extern "C" fn mesh_job_proxy_wait(
     handle: *mut JobProxyHandle,
@@ -969,23 +972,15 @@ pub unsafe extern "C" fn mesh_job_proxy_wait(
         return -1;
     }
     let handle = &*handle;
-    // Uniform "no timeout" policy with mesh_run_as_job: `secs <= 0.0`
-    // (covers -0.0 which `< 0.0` would miss in IEEE-754) or non-finite.
-    // Use try_from_secs_f64 — `from_secs_f64` panics on overflow (e.g.
-    // `f64::MAX`); we surface the failure cleanly via the last-error
-    // slot so a buggy caller can't crash the host process. (PR #891 review.)
-    let timeout = if !timeout_secs.is_finite() || timeout_secs <= 0.0 {
-        None
-    } else {
-        match Duration::try_from_secs_f64(timeout_secs) {
-            Ok(d) => Some(d),
-            Err(e) => {
-                set_last_error(format!(
-                    "mesh_job_proxy_wait: invalid timeout_secs ({}): {}",
-                    timeout_secs, e
-                ));
-                return -1;
-            }
+    // One shared policy with `mesh_job_controller_recv_event` /
+    // `mesh_job_proxy_list_events` (issue #1584): negative ⇒ None (the C-ABI
+    // absence sentinel), NaN / ±Inf ⇒ error, finite-but-huge ⇒ error via
+    // `try_from_secs_f64` rather than the panic `from_secs_f64` would raise.
+    let timeout = match parse_ffi_timeout_secs(timeout_secs) {
+        Ok(t) => t,
+        Err(msg) => {
+            set_last_error(format!("mesh_job_proxy_wait: {}", msg));
+            return -1;
         }
     };
     let inner = handle.inner.clone();
@@ -1294,8 +1289,12 @@ pub unsafe extern "C" fn mesh_current_job(out_snapshot_json: *mut *mut c_char) -
 /// active job context, if any.
 ///
 /// Writes a JSON object `{"X-Mesh-Job-Id": "...", "X-Mesh-Timeout":
-/// "<secs>"}` (with `X-Mesh-Timeout` omitted when no deadline is set) to
-/// `*out_headers_json`. If no context is active, writes NULL.
+/// "<secs>"}` to `*out_headers_json`. If no context is active, writes NULL.
+///
+/// `X-Mesh-Timeout` is omitted when the active context has no deadline OR
+/// when that deadline has already expired; otherwise it is `ceil(remaining)`
+/// floored at 1. It is NEVER `"0"` — see
+/// [`crate::job_context::JobContext::timeout_header_seconds`] (issue #1584).
 ///
 /// Caller frees the JSON string via `mesh_free_string` if it is non-NULL.
 #[no_mangle]
@@ -1311,7 +1310,19 @@ pub unsafe extern "C" fn mesh_inject_job_headers(out_headers_json: *mut *mut c_c
             0
         }
         Some(ctx) => {
-            let remaining = ctx.remaining_seconds();
+            // `timeout_header_seconds`, NOT `remaining_seconds` (issue #1584):
+            // the latter truncates, so a sub-second or expired budget renders
+            // as "0" — which every receiver reads as "unset" and replaces with
+            // its own (larger) default, losing the parent's cap entirely.
+            let remaining = ctx.timeout_header_seconds();
+            if remaining.is_none() && ctx.deadline.is_some() {
+                tracing::warn!(
+                    "mesh_inject_job_headers: job={} has an expired deadline; \
+                     omitting X-Mesh-Timeout instead of emitting an invalid \
+                     '0' value",
+                    ctx.job_id
+                );
+            }
             let mut map = serde_json::Map::new();
             map.insert(
                 "X-Mesh-Job-Id".to_string(),
@@ -1449,7 +1460,12 @@ pub unsafe extern "C" fn mesh_job_cancel_fired(job_id_ptr: *const c_char) -> i32
 /// `{"job_id": "...", "deadline_secs": <number>|null}` mirroring the
 /// payload Java SDK constructs from inbound `X-Mesh-Job-Id` / `X-Mesh-Timeout`
 /// headers. `deadline_secs` is the per-attempt deadline (relative); null /
-/// missing / non-positive ≡ no deadline.
+/// missing / `0` ≡ no deadline. A NEGATIVE value is an ERROR here, not a
+/// sentinel: this payload is JSON, so `null` already expresses absence — the
+/// negative-means-absence convention belongs only to the bare-`double` C
+/// entry points. NaN / ±Inf and finite-but-out-of-`Duration`-range values are
+/// also ERRORS. See the "f64-SECONDS BOUNDARY POLICY" note in
+/// `task_backend.rs` (issue #1584).
 ///
 /// `callback` is invoked synchronously from the runtime's `block_on`,
 /// wrapped in [`tokio::task::block_in_place`] so it is legal for the
@@ -1511,38 +1527,40 @@ pub unsafe extern "C" fn mesh_run_as_job(
         }
     };
 
-    // Reject non-finite deadlines explicitly (NaN / ±Inf indicate an
-    // upstream bug — silently aliasing them to "no deadline" would
-    // paper over it). Any finite value `<= 0.0` (including -0.0 and
-    // negatives) is treated as "no deadline" for uniformity with
-    // [`mesh_job_proxy_wait`]. The two functions previously diverged
-    // on -0.0 handling (`is_sign_negative` vs `< 0.0`); a single
-    // policy avoids future drift.
-    if let Some(secs) = wire.deadline_secs {
-        if !secs.is_finite() {
-            set_last_error(format!(
-                "mesh_run_as_job: invalid deadline_secs ({}) for job {} — must be a finite number or null",
-                secs, wire.job_id
-            ));
-            return -1;
-        }
-    }
-
-    // `try_from_secs_f64` rather than `from_secs_f64` — the latter panics
-    // for very-large finite values (e.g. `f64::MAX`); a buggy caller
-    // shouldn't be able to abort the host process. (PR #891 review.)
-    let ctx = match wire.deadline_secs {
-        Some(secs) if secs > 0.0 => match Duration::try_from_secs_f64(secs) {
-            Ok(d) => JobContext::with_timeout(wire.job_id, d),
-            Err(e) => {
+    // ONE deadline policy for all three bindings (issue #1584) — see the
+    // "f64-SECONDS BOUNDARY POLICY" note in `task_backend.rs`.
+    //
+    // `negative_is_none = FALSE`, even though this is an FFI entry point. The
+    // policy allows the negative-means-absence sentinel ONLY where absence is
+    // otherwise inexpressible, and that is not the case here: the deadline
+    // arrives inside a JSON snapshot as `Option<f64>`, so `null` says "no
+    // deadline" directly and the `None` arm above already handles it. Using
+    // the sentinel anyway would reopen exactly the hole the policy argues
+    // against — a caller whose `deadline - now` went negative gets an
+    // unbounded job instead of an error. (The C-ABI exception applies to
+    // `mesh_job_proxy_wait` / `mesh_job_controller_recv_event`, whose timeout
+    // really is a bare `double` with no way to send null.)
+    //
+    // All three inbound SDK paths already normalise before serialising —
+    // `MeshToolWrapper` clamps with `Math.max(1L, ...)`, `ClaimDispatcher`
+    // sends the claim's positive `max_duration` or null, and the TS/Python
+    // header readers drop `<= 0` — so nothing in-tree sends a negative here.
+    let deadline = match wire.deadline_secs {
+        None => None,
+        Some(secs) => match crate::task_backend::validate_deadline_secs(secs, false) {
+            Ok(d) => d,
+            Err(msg) => {
                 set_last_error(format!(
-                    "mesh_run_as_job: invalid deadline_secs ({}) for job {}: {}",
-                    secs, wire.job_id, e
+                    "mesh_run_as_job: {} (job {})",
+                    msg, wire.job_id
                 ));
                 return -1;
             }
         },
-        _ => JobContext::new(wire.job_id),
+    };
+    let ctx = match deadline {
+        Some(d) => JobContext::with_timeout(wire.job_id, d),
+        None => JobContext::new(wire.job_id),
     };
     // Carry the claim generation so `mesh_current_job` exposes it (#1252).
     let ctx = ctx.with_claim_epoch(wire.claim_epoch);
@@ -1623,6 +1641,60 @@ mod tests {
         let rc = unsafe { mesh_inject_job_headers(&mut out as *mut _) };
         assert_eq!(rc, 0);
         assert!(out.is_null());
+    }
+
+    /// Issue #1584: inside a job scope, `X-Mesh-Timeout` is `ceil(remaining)`
+    /// floored at 1 for a live budget and OMITTED once the deadline has
+    /// blown. It is never `"0"` — every receiver in the mesh reads a `<= 0`
+    /// value as "unset" and substitutes its own, larger default, so `"0"`
+    /// silently discards the parent's deadline cap instead of tightening it.
+    #[test]
+    fn inject_job_headers_never_emits_zero_timeout() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        // Sub-second but LIVE: floors at 1 (truncation would have said "0").
+        let map = rt.block_on(job_context::with_job(
+            crate::job_context::JobContext::with_timeout(
+                "j-1584-tight",
+                Duration::from_millis(300),
+            ),
+            async {
+                let mut out: *mut c_char = ptr::null_mut();
+                let rc = unsafe { mesh_inject_job_headers(&mut out as *mut _) };
+                assert_eq!(rc, 0);
+                assert!(!out.is_null());
+                let json = unsafe { CStr::from_ptr(out) }.to_str().unwrap().to_string();
+                unsafe { crate::ffi::mesh_free_string(out) };
+                serde_json::from_str::<serde_json::Value>(&json).unwrap()
+            },
+        ));
+        assert_eq!(map["X-Mesh-Job-Id"], "j-1584-tight");
+        assert_eq!(map["X-Mesh-Timeout"], "1");
+
+        // Expired: the key is absent entirely.
+        let map = rt.block_on(async {
+            let ctx = crate::job_context::JobContext::with_timeout(
+                "j-1584-blown",
+                Duration::from_millis(10),
+            );
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            job_context::with_job(ctx, async {
+                let mut out: *mut c_char = ptr::null_mut();
+                let rc = unsafe { mesh_inject_job_headers(&mut out as *mut _) };
+                assert_eq!(rc, 0);
+                assert!(!out.is_null());
+                let json = unsafe { CStr::from_ptr(out) }.to_str().unwrap().to_string();
+                unsafe { crate::ffi::mesh_free_string(out) };
+                serde_json::from_str::<serde_json::Value>(&json).unwrap()
+            })
+            .await
+        });
+        assert_eq!(map["X-Mesh-Job-Id"], "j-1584-blown");
+        assert!(
+            map.get("X-Mesh-Timeout").is_none(),
+            "expired deadline must omit the header, got {:?}",
+            map.get("X-Mesh-Timeout")
+        );
     }
 
     /// `mesh_cancel_active_job` returns 0 when no active job — same
@@ -1756,18 +1828,17 @@ mod tests {
         assert_eq!(rc, -1, "+Inf deadline must be rejected");
     }
 
-    /// Boundary policy for `mesh_run_as_job`: zero, -0.0, and finite
-    /// negative deadlines all collapse to "no deadline" and the callback
-    /// runs successfully. Mirrors the same policy in
-    /// `mesh_job_proxy_wait` so future maintainers don't have to choose
-    /// between two operators.
+    /// Boundary policy for `mesh_run_as_job`: an absent or zero-length
+    /// deadline means "no deadline" and the callback runs successfully.
     #[test]
-    fn run_as_job_treats_zero_and_negative_deadline_as_no_deadline() {
+    fn run_as_job_treats_absent_and_zero_deadline_as_no_deadline() {
         extern "C" fn cb(_: *mut c_void) -> i32 { 0 }
         for snap_json in [
+            r#"{"job_id":"j-absent"}"#,
+            r#"{"job_id":"j-null","deadline_secs":null}"#,
             r#"{"job_id":"j-zero","deadline_secs":0.0}"#,
+            // -0.0 is NOT `< 0.0` in IEEE-754; it is zero, not a sentinel.
             r#"{"job_id":"j-negzero","deadline_secs":-0.0}"#,
-            r#"{"job_id":"j-neg","deadline_secs":-5.0}"#,
         ] {
             let snap = CString::new(snap_json).unwrap();
             let rc = unsafe { mesh_run_as_job(snap.as_ptr(), cb, ptr::null_mut()) };
@@ -1775,25 +1846,100 @@ mod tests {
         }
     }
 
-    /// Boundary policy for `mesh_job_proxy_wait`'s timeout argument:
-    /// zero, -0.0, and negative values all map to "no timeout"
-    /// (Option::None passed to the inner wait), and non-finite values
-    /// (NaN, ±Inf) map to "no timeout" too. We can't easily call the
-    /// wait FFI without a real handle here, so we exercise the same
-    /// predicate the FFI uses.
+    /// Issue #1584 warning 1: a NEGATIVE `deadline_secs` is an error on this
+    /// entry point, NOT the C-ABI absence sentinel. The snapshot is JSON, so
+    /// `null` already expresses absence (asserted above); accepting a negative
+    /// as "unlimited" here would reopen the hole the shared policy exists to
+    /// close — a caller whose `deadline - now` went negative would get an
+    /// unbounded job rather than a diagnosable failure.
     #[test]
-    fn wait_treats_zero_and_negative_as_no_timeout() {
-        fn would_be_no_timeout(secs: f64) -> bool {
-            !secs.is_finite() || secs <= 0.0
+    fn run_as_job_rejects_negative_deadline() {
+        extern "C" fn cb(_: *mut c_void) -> i32 { 0 }
+        for snap_json in [
+            r#"{"job_id":"j-neg","deadline_secs":-5.0}"#,
+            r#"{"job_id":"j-tiny-neg","deadline_secs":-0.001}"#,
+        ] {
+            let snap = CString::new(snap_json).unwrap();
+            let rc = unsafe { mesh_run_as_job(snap.as_ptr(), cb, ptr::null_mut()) };
+            assert_eq!(rc, -1, "negative deadline must reject: {}", snap_json);
+            let err = take_last_error().expect("last_error must be populated");
+            assert!(
+                err.contains("deadline_secs") && err.contains("non-negative"),
+                "unexpected message: {err}"
+            );
         }
-        assert!(would_be_no_timeout(0.0));
-        assert!(would_be_no_timeout(-0.0));
-        assert!(would_be_no_timeout(-1.0));
-        assert!(would_be_no_timeout(f64::NAN));
-        assert!(would_be_no_timeout(f64::INFINITY));
-        assert!(would_be_no_timeout(f64::NEG_INFINITY));
-        assert!(!would_be_no_timeout(0.001));
-        assert!(!would_be_no_timeout(60.0));
+    }
+
+    /// Boundary policy for `mesh_job_proxy_wait`'s timeout argument. Since
+    /// #1584 it is the SAME policy as every other FFI timeout surface, so
+    /// this asserts the shared helper the FFI actually calls rather than a
+    /// re-implementation of the predicate (the previous version of this test
+    /// copied the condition, so it would have kept passing after the FFI
+    /// changed underneath it).
+    ///
+    /// Two deliberate changes from the pre-#1584 behaviour, both narrowing
+    /// "unlimited":
+    /// * NaN / ±Inf now ERROR instead of silently meaning "no timeout" —
+    ///   they are caller bugs, and `mesh_job_controller_recv_event` already
+    ///   rejected them.
+    /// * `0.0` / `-0.0` are now a ZERO-LENGTH budget, not "no timeout". Only
+    ///   a NEGATIVE value is the C-ABI absence sentinel (Java's no-arg
+    ///   `await()` passes `-1.0`); `0.0` landing in the sentinel bucket was
+    ///   the `<= 0.0` predicate over-reaching into the value space.
+    #[test]
+    fn wait_timeout_policy_matches_every_other_ffi_surface() {
+        // Negative: the C-ABI "absent" sentinel.
+        assert_eq!(parse_ffi_timeout_secs(-1.0).unwrap(), None);
+        assert_eq!(parse_ffi_timeout_secs(f64::MIN).unwrap(), None);
+        // Zero: a real, zero-length budget.
+        assert_eq!(
+            parse_ffi_timeout_secs(0.0).unwrap(),
+            Some(Duration::from_secs(0))
+        );
+        assert_eq!(
+            parse_ffi_timeout_secs(-0.0).unwrap(),
+            Some(Duration::from_secs(0)),
+            "-0.0 is not `< 0.0` in IEEE-754; it is zero, not the sentinel"
+        );
+        // Positive finite: that budget.
+        assert_eq!(
+            parse_ffi_timeout_secs(0.001).unwrap(),
+            Some(Duration::from_millis(1))
+        );
+        assert_eq!(
+            parse_ffi_timeout_secs(60.0).unwrap(),
+            Some(Duration::from_secs(60))
+        );
+        // Non-finite: error, not "unlimited".
+        assert!(parse_ffi_timeout_secs(f64::NAN).is_err());
+        assert!(parse_ffi_timeout_secs(f64::INFINITY).is_err());
+        assert!(parse_ffi_timeout_secs(f64::NEG_INFINITY).is_err());
+    }
+
+    /// `mesh_job_proxy_wait` must reach the shared policy, not just declare
+    /// it: a NaN timeout returns `-1` with a message in the last-error slot
+    /// instead of parking forever. A null handle short-circuits first, so
+    /// drive the check through a real (never-resolving) proxy handle.
+    #[test]
+    fn proxy_wait_rejects_non_finite_timeout() {
+        let url = CString::new("http://127.0.0.1:1/registry").unwrap();
+        let job = CString::new("j-1584-nan").unwrap();
+        let mut handle: *mut JobProxyHandle = ptr::null_mut();
+        let rc = unsafe {
+            mesh_job_proxy_new(job.as_ptr(), url.as_ptr(), &mut handle as *mut _)
+        };
+        assert_eq!(rc, 0, "proxy construction should succeed (no I/O yet)");
+        assert!(!handle.is_null());
+
+        let mut out: *mut c_char = ptr::null_mut();
+        let rc = unsafe { mesh_job_proxy_wait(handle, f64::NAN, &mut out as *mut _) };
+        assert_eq!(rc, -1, "NaN timeout must be an error, not 'no timeout'");
+        let err = take_last_error().expect("last_error must be populated");
+        assert!(
+            err.contains("mesh_job_proxy_wait") && err.contains("finite"),
+            "unexpected message: {err}"
+        );
+        unsafe { mesh_job_proxy_free(handle) };
     }
 
     /// `f64::MAX` deadline must NOT panic — `Duration::from_secs_f64`

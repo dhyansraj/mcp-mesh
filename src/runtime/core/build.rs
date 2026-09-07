@@ -63,7 +63,15 @@ fn main() {
         }
     }
 
-    // Tell Cargo to re-run if these files change
+    // Tell Cargo to re-run if these files change.
+    //
+    // EVERY module that declares `#[no_mangle] pub extern "C"` symbols has to
+    // be listed: `include/mcp_mesh_core.h` is checked into git, so a module
+    // missing here silently ships a header that disagrees with the source.
+    // `jobs_ffi.rs` was missing and did exactly that — a doc-comment change to
+    // `mesh_run_as_job`'s deadline contract left the committed header
+    // describing the OLD contract (issue #1584 review).
     println!("cargo:rerun-if-changed=src/ffi.rs");
+    println!("cargo:rerun-if-changed=src/jobs_ffi.rs");
     println!("cargo:rerun-if-changed=cbindgen.toml");
 }

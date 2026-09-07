@@ -8,6 +8,7 @@ import asyncio
 import contextvars
 import json
 import logging
+import math
 import os
 import threading
 import uuid
@@ -29,6 +30,52 @@ from ..tracing.utils import generate_span_id
 from .superseded import SupersededError, parse_superseded_envelope
 
 logger = logging.getLogger(__name__)
+
+
+#: Fallback per-call budget in seconds when neither the ``timeout`` kwarg nor
+#: ``MCP_MESH_CALL_TIMEOUT`` says otherwise. 300 across all three runtimes
+#: (issue #1584).
+FALLBACK_CALL_TIMEOUT_SECS = 300
+
+
+def _default_call_timeout_secs() -> int:
+    """Resolve the default per-call budget, in seconds, from the environment.
+
+    Whatever this returns is used for BOTH the httpx client timeout and the
+    ``X-Mesh-Timeout`` header, so this process can never advertise one budget
+    downstream while abandoning the request at another (issue #1584). An
+    explicit ``timeout`` kwarg on the dependency overrides it -- also for both.
+
+    Read at call time (not import time) so a late environment change is
+    honoured. Mirrors Java's ``McpHttpClient.parseTimeoutSecs`` and
+    TypeScript's ``resolveDefaultCallTimeoutSecs``: unset / blank /
+    unparseable / non-positive all fall back to
+    :data:`FALLBACK_CALL_TIMEOUT_SECS`.
+    """
+    raw = os.environ.get("MCP_MESH_CALL_TIMEOUT")
+    if raw is None or not raw.strip():
+        return FALLBACK_CALL_TIMEOUT_SECS
+    try:
+        parsed = float(raw.strip())
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid MCP_MESH_CALL_TIMEOUT value %r - using default %ds",
+            raw,
+            FALLBACK_CALL_TIMEOUT_SECS,
+        )
+        return FALLBACK_CALL_TIMEOUT_SECS
+    if not math.isfinite(parsed) or parsed <= 0:
+        logger.warning(
+            "Invalid or non-positive MCP_MESH_CALL_TIMEOUT value %r - using default %ds",
+            raw,
+            FALLBACK_CALL_TIMEOUT_SECS,
+        )
+        return FALLBACK_CALL_TIMEOUT_SECS
+    # HALF-UP, deliberately not ``round()``: Python's built-in is banker's
+    # rounding, so ``round(2.5)`` is 2 while TypeScript's ``Math.round`` and
+    # Java's ``Math.round`` both give 3. The three runtimes have to agree on
+    # what ``MCP_MESH_CALL_TIMEOUT=2.5`` means (issue #1584).
+    return max(1, math.floor(parsed + 0.5))
 
 
 def _create_ssl_context_for_endpoint(endpoint: str):
@@ -437,7 +484,24 @@ class UnifiedMCPProxy:
 
     def _configure_from_kwargs(self):
         """Auto-configure proxy settings from kwargs."""
-        # Basic configuration
+        # Basic configuration.
+        #
+        # NOTE (issue #1584): `self.timeout` is NOT the per-call budget and
+        # must not be used as one. `kwargs_config` is the PRODUCER's
+        # `@mesh.tool` kwargs, travelling back from the registry on the
+        # resolved dependency (`rust_heartbeat.py` says so explicitly: "must
+        # be the *producer's* @mesh.tool kwargs, not the consumer's dep
+        # declaration"), and for an LLM provider proxy it is the provider's
+        # kwargs, where `timeout` means the vendor SDK's per-call timeout --
+        # a different concept entirely. Letting either drive this proxy's HTTP
+        # budget would let a provider cap every one of its consumers.
+        #
+        # The consumer-side knob that WOULD belong here, `dependency_kwargs`,
+        # has no reader anywhere in this runtime today; wiring one is a
+        # separate feature. Until then Python resolves its budget exactly like
+        # Java does -- `MCP_MESH_CALL_TIMEOUT`, else 300 -- see
+        # `effective_call_timeout_secs`. `self.timeout` survives only as
+        # advertised producer metadata.
         self.timeout = self.kwargs_config.get("timeout", 30)
         self.retry_count = self.kwargs_config.get("retry_count", 1)
         self.custom_headers = self.kwargs_config.get("custom_headers", {})
@@ -458,9 +522,25 @@ class UnifiedMCPProxy:
         )
 
         self.logger.info(
-            f"🔧 Unified MCP proxy configured - timeout: {self.timeout}s, "
+            f"🔧 Unified MCP proxy configured - timeout: "
+            f"{self.effective_call_timeout_secs()}s, "
             f"streaming: {self.streaming_capable}, session_required: {self.session_required}"
         )
+
+    def effective_call_timeout_secs(self) -> int:
+        """The single per-call budget for this proxy, in whole seconds.
+
+        Used for the httpx client timeout AND the outgoing ``X-Mesh-Timeout``
+        header, so the two can never disagree (issue #1584).
+
+        There is deliberately no per-dependency override branch here: the only
+        map this proxy holds is the PRODUCER's kwargs (see
+        ``_configure_from_kwargs``), and honouring a `timeout` from it would
+        let a provider dictate every consumer's client timeout. Python
+        therefore matches Java exactly -- ``MCP_MESH_CALL_TIMEOUT``, else 300.
+        An inbound ``X-Mesh-Timeout`` still overrides this at the call site.
+        """
+        return _default_call_timeout_secs()
 
     def _configure_telemetry(self):
         """Configure telemetry and tracing settings."""
@@ -560,7 +640,7 @@ class UnifiedMCPProxy:
                 "target_tool_name": tool_name,
                 "request_fingerprint": arg_fingerprint,
                 "proxy_config": {
-                    "timeout": self.timeout,
+                    "timeout": self.effective_call_timeout_secs(),
                     "retry_count": self.retry_count,
                     "streaming_capable": self.streaming_capable,
                     "session_required": self.session_required,
@@ -622,7 +702,7 @@ class UnifiedMCPProxy:
                         "endpoint": self.endpoint,
                         "proxy_type": "http_with_fastmcp_fallback",
                         "streaming_capable": self.streaming_capable,
-                        "timeout": self.timeout,
+                        "timeout": self.effective_call_timeout_secs(),
                         "retry_count": self.retry_count,
                     }
 
@@ -787,7 +867,8 @@ class UnifiedMCPProxy:
         # Log cross-agent call - summary line
         arg_keys = list(arguments.keys()) if arguments else []
         self.logger.debug(
-            f"{tp}🔄 Cross-agent call: {self.endpoint}/{name} (timeout: {self.timeout}s, args={arg_keys})"
+            f"{tp}🔄 Cross-agent call: {self.endpoint}/{name} "
+            f"(timeout: {self.effective_call_timeout_secs()}s, args={arg_keys})"
         )
         # Log full args (will be TRACE later)
         self.logger.debug(
@@ -1225,19 +1306,19 @@ class UnifiedMCPProxy:
                 for key, value in outbound.items():
                     headers[key] = value
 
-            # Enhanced timeout for large content processing
-            enhanced_timeout = max(
-                self.timeout, 300
-            )  # At least 5 minutes for large files
+            # ONE per-call budget for both halves of the call (issue #1584):
+            # an explicit `timeout` kwarg if the dependency declared one,
+            # otherwise MCP_MESH_CALL_TIMEOUT, otherwise 300. It becomes the
+            # httpx client timeout below AND the advertised X-Mesh-Timeout,
+            # so this process cannot promise the provider a budget it is not
+            # itself willing to wait out.
+            enhanced_timeout = self.effective_call_timeout_secs()
 
             # Set X-Mesh-Timeout for registry proxy (#769). If already
-            # propagated from an incoming request, keep that value;
-            # otherwise use env/default. Also use it for client timeout.
+            # propagated from an incoming request, keep that value -- an
+            # inbound budget always wins over a locally derived one.
             if "X-Mesh-Timeout" not in headers and "x-mesh-timeout" not in headers:
-                call_timeout = os.environ.get(
-                    "MCP_MESH_CALL_TIMEOUT", str(int(enhanced_timeout))
-                )
-                headers["X-Mesh-Timeout"] = call_timeout
+                headers["X-Mesh-Timeout"] = str(enhanced_timeout)
 
             # Phase 1 MeshJob substrate: when a tool is executing under
             # an active job context (set by the inbound dispatch wrapper
@@ -1266,7 +1347,29 @@ class UnifiedMCPProxy:
                                 cur_timeout = int(headers.get("X-Mesh-Timeout", "0"))
                             except (TypeError, ValueError):
                                 cur_timeout = 0
-                            remaining = int(snap.deadline_secs_remaining)
+                            raw_remaining = float(snap.deadline_secs_remaining)
+                            # NOTE: unlike the Rust `JobContext`, this value is
+                            # a STATIC dispatch-time snapshot -- job_dispatch
+                            # reads the inbound `X-Mesh-Timeout` once and never
+                            # decrements it -- so it is the budget the parent
+                            # granted, not live remaining time.
+                            #
+                            # Round UP and floor at 1 (issue #1584). Reachable:
+                            # an inbound header of "0.5" used to become
+                            # `int(0.5)` == 0 and get DROPPED as expired,
+                            # handing the child an unbounded budget instead of
+                            # the tightest one the wire can express.
+                            #
+                            # The `<= 0` arm below is defensive rather than
+                            # reachable from dispatch (job_dispatch already
+                            # normalises a `<= 0` header to None), but
+                            # `CURRENT_JOB` is public API that user code and
+                            # tests can set directly.
+                            remaining = (
+                                0
+                                if raw_remaining <= 0
+                                else max(1, math.ceil(raw_remaining))
+                            )
                             if remaining <= 0:
                                 # Already past the parent deadline. The
                                 # OpenAPI schema requires X-Mesh-Timeout
@@ -1281,11 +1384,11 @@ class UnifiedMCPProxy:
                                 # call shouldn't have been made.
                                 self.logger.warning(
                                     "outbound %s under job=%s has expired deadline "
-                                    "(remaining=%ds); omitting X-Mesh-Timeout instead "
+                                    "(granted=%ss); omitting X-Mesh-Timeout instead "
                                     "of emitting an invalid '0' value",
                                     name,
                                     snap.job_id,
-                                    remaining,
+                                    raw_remaining,
                                 )
                                 headers.pop("X-Mesh-Timeout", None)
                                 headers.pop("x-mesh-timeout", None)

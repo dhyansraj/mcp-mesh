@@ -524,8 +524,29 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // `scripts/check_doc_claims.py`, which can read the four runtimes' source and
 // the starter's POM; a test in this package cannot, and #1499 shipped three
 // false claims through a green run here.
+//
+// Issue #1584 moved this to 1815 (+6) and neither list constant. Six prose
+// spans on `environment.md`'s "Proxy & Timeout" section, stating that the
+// winning call budget drives BOTH the advertised `X-Mesh-Timeout` and the local
+// HTTP client timeout, and which source wins per runtime. The page already
+// documented the 300s default — true of Python and Java, NOT of TypeScript
+// whose fallback was 30 — so the fix made the existing sentence honest and this
+// paragraph says where the value comes from.
+//
+// The first draft of this paragraph claimed a single precedence chain "in every
+// runtime" (per-dependency kwarg, then env, then 300). Review caught that it is
+// false in two of the three: Java has no per-dependency timeout at all, and
+// Python's documented `dependency_kwargs.timeout` has no reader — its proxy map
+// is the PRODUCER's `@mesh.tool` kwargs, which deliberately must not cap
+// callers. Only TypeScript has the knob. The wording now says exactly that,
+// which is why the delta grew by two rather than shrinking.
+//
+// Prose only, no list item, hence the list constants are unmoved. The `docs/`
+// copy of this section carries a fuller three-row table; only this file is in
+// the man corpus. `environment.md` has no `_java` / `_typescript` variant, so
+// the variant golden did not move either.
 const (
-	wantInlineCodeSpans = 1809
+	wantInlineCodeSpans = 1815
 	wantListCodeSpans   = 523
 	wantMarkupListLines = 448
 )

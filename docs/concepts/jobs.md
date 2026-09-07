@@ -1103,9 +1103,12 @@ readability confusion with the inherited `Object.wait()` / `wait(long)`
 / `wait(long, int)` overload family, and to match the existing
 `JobProxy.await(double)` instance method precedent in the SDK. See the
 Javadoc on `MeshJobs.await` and `JobProxy.await` for the detailed
-rationale. `MeshJobs.await(jobId, timeoutSecs)` with `timeoutSecs <= 0.0`
-or non-finite values means "no timeout" (matches the no-arg
-`MeshJobs.await(jobId)` overload).
+rationale. `MeshJobs.await(jobId, timeoutSecs)` treats a NEGATIVE
+`timeoutSecs` as "no timeout" — the sentinel the no-arg
+`MeshJobs.await(jobId)` overload passes. `0.0` is a zero-length budget:
+the registry is polled exactly once, so an already-terminal job returns
+its result and a running one surfaces a timeout. `NaN` / infinity are
+rejected.
 
 If the calling code already holds a `JobProxy`, the same surface is
 on the proxy directly: `proxy.cancel(reason)`, `proxy.status()`,

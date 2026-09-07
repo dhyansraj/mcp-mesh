@@ -514,6 +514,15 @@ export MCP_MESH_PROXY_TIMEOUT=60
 export MCP_MESH_CALL_TIMEOUT=300
 ```
 
+In every runtime the winning value drives BOTH the advertised
+`X-Mesh-Timeout` and the local HTTP client timeout, so an agent never
+promises a provider a budget it will not itself wait out. An inbound
+`X-Mesh-Timeout` overrides the local value.
+
+Only TypeScript has a per-dependency override the runtime reads (`timeout`,
+or `streamTimeout` when `streaming` is set). Python and Java resolve the
+budget from `MCP_MESH_CALL_TIMEOUT`, else 300s.
+
 Streamed responses (e.g., SSE) routed through the registry proxy are bounded by the same call timeout — the proxy ends the exchange when it elapses, even mid-stream. Send a larger `X-Mesh-Timeout` header (or raise `MCP_MESH_PROXY_TIMEOUT`) for long-lived streams.
 
 ## MeshJob event channel

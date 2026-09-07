@@ -330,13 +330,26 @@ public final class MeshJobs {
      * @param jobId       Target job's server-assigned id
      * @param timeoutSecs Wall-clock timeout in seconds.
      *                    <ul>
-     *                      <li>{@code <= 0.0} (including {@code -0.0})
-     *                          → no timeout (block until terminal).</li>
+     *                      <li>Negative → no timeout (block until
+     *                          terminal). This is the core's C-ABI
+     *                          "absent" sentinel; the no-arg
+     *                          {@link #await(String)} overload passes
+     *                          {@code -1.0}.</li>
+     *                      <li>Zero (including {@code -0.0}) → a
+     *                          zero-length budget: the registry is polled
+     *                          EXACTLY ONCE, so a job that is already
+     *                          terminal returns its result and one that is
+     *                          still running surfaces a timeout error.</li>
      *                      <li>Positive finite → wait that many seconds,
      *                          then surface a timeout error.</li>
-     *                      <li>Non-finite (NaN, ±Inf) → no timeout.</li>
+     *                      <li>Non-finite (NaN, ±Inf) → a caller bug;
+     *                          throws {@link MeshException}.</li>
      *                    </ul>
      *                    Matches {@link JobProxy#await(double)}'s contract.
+     *                    <p>Changed in issue #1584: {@code 0.0} used to
+     *                    mean "no timeout" and NaN / ±Inf used to be
+     *                    silently accepted as "no timeout". Only a
+     *                    NEGATIVE value is the absence sentinel now.
      * @return The job's result payload (whatever the handler passed to
      *         {@code complete()}). Shape is application-defined —
      *         typically a {@code Map<String, Object>}, but any JSON-shaped
