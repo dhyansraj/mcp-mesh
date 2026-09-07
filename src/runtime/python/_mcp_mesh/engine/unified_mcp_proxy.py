@@ -1366,7 +1366,9 @@ class UnifiedMCPProxy:
                             # `CURRENT_JOB` is public API that user code and
                             # tests can set directly.
                             remaining = (
-                                0 if raw_remaining <= 0 else max(1, math.ceil(raw_remaining))
+                                0
+                                if raw_remaining <= 0
+                                else max(1, math.ceil(raw_remaining))
                             )
                             if remaining <= 0:
                                 # Already past the parent deadline. The
