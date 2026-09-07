@@ -159,7 +159,13 @@ class TestProducerKwargsCannotDictateTheBudget:
 
 
 class _CapturingClient:
-    """Minimal stand-in for the pooled httpx client: records what was sent."""
+    """Minimal stand-in for the pooled httpx client: records what was sent.
+
+    ``post`` raises a sentinel once it has captured, and every caller asserts
+    on THAT sentinel rather than a bare ``Exception``: a failure earlier in
+    ``_http_call`` would otherwise satisfy the assertion and leave the
+    remaining checks reading a client that captured nothing.
+    """
 
     def __init__(self):
         self.headers = None
@@ -177,7 +183,7 @@ async def _capture_call(proxy):
         "_mcp_mesh.engine.unified_mcp_proxy._get_httpx_client_sync",
         return_value=client,
     ):
-        with pytest.raises(Exception):
+        with pytest.raises(RuntimeError, match="stop-after-capture"):
             await proxy._http_call("some_tool", {})
     return client
 
@@ -222,7 +228,7 @@ class TestOutboundHeaderMatchesClientTimeout:
                     "_inject_trace_headers",
                     lambda h: {**h, "X-Mesh-Timeout": "12"},
                 ):
-                    with pytest.raises(Exception):
+                    with pytest.raises(RuntimeError, match="stop-after-capture"):
                         await proxy._http_call("some_tool", {})
             assert client.headers["X-Mesh-Timeout"] == "12"
             assert client.timeout.read == 12
@@ -257,7 +263,7 @@ class TestJobDeadlineOverride:
                 "_mcp_mesh.engine.unified_mcp_proxy._get_httpx_client_sync",
                 return_value=client,
             ):
-                with pytest.raises(Exception):
+                with pytest.raises(RuntimeError, match="stop-after-capture"):
                     await proxy._http_call("some_tool", {})
         finally:
             CURRENT_JOB.reset(token)
