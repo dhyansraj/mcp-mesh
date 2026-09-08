@@ -46,7 +46,13 @@ const _HDR_CLAIM_EPOCH = "x-mesh-claim-epoch";
 /**
  * Read `X-Mesh-Job-Id` / `X-Mesh-Timeout` / `X-Mesh-Claim-Epoch` from a
  * header dict (case normalised to lowercase). Returns
- * `[null, null, null]` when the job id is absent. `claimEpoch` is present
+ * `[null, null, null]` when the job id is absent.
+ *
+ * Issue #1570: pass the RAW inbound `_mesh_headers` map, never the
+ * allowlist-filtered one. `x-mesh-job-id` is the dispatch DISCRIMINATOR and is
+ * deliberately not propagatable (forwarding it self-dispatches nested
+ * `task: true` calls as the caller's job), so a filtered map never carries it
+ * and every call would look like a plain `tools/call`. `claimEpoch` is present
  * only on the claim path; a push-mode inbound job leaves it `null` (legacy
  * owner-only fencing) — a non-negative integer is required (never fabricate
  * a `0` the registry didn't mint).

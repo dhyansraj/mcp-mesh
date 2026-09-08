@@ -959,12 +959,53 @@ export class MeshAgent {
             }
           }
         }
-        // Remove trace context and mesh headers from args before passing to tool
-        if (incomingTraceId || incomingParentSpan || Object.keys(propagatedHeaders).length > 0) {
+        // Remove trace context and mesh headers from args before passing to tool.
+        // Keyed on `rawMeshHeaders`, not `propagatedHeaders` (issue #1570): a
+        // request whose only mesh header is `x-mesh-job-id` — a genuine push
+        // dispatch — allowlist-filters to an EMPTY propagated map, and gating
+        // on that would hand the tool's `execute` an internal `_mesh_headers`
+        // field in its arguments.
+        if (incomingTraceId || incomingParentSpan || rawMeshHeaders !== null) {
           const { _trace_id, _parent_span, _mesh_headers, ...rest } = argsObj;
           cleanArgs = rest as z.infer<T>;
         }
       }
+
+      // Issue #1570: the push-mode dispatch protocol headers (x-mesh-job-id /
+      // x-mesh-claim-epoch) are read ONCE, from the RAW inbound map — never
+      // from the allowlist-filtered `propagatedHeaders`. They are deliberately
+      // kept OUT of the propagate allowlist (forwarding the job id makes a
+      // nested task:true call self-dispatch as the CALLER's job and
+      // auto-complete it with the wrong result), so reading them off the
+      // filtered map leaves push-mode dispatch over HTTP unreachable and
+      // misclassifies a genuine inbound job dispatch as a plain tools/call.
+      // The required-dep guard below and the dispatch site further down both
+      // consume THIS result, so they can never disagree about the flavor.
+      // Version-skew guard (#1570). A pre-3.8 peer forwarded x-mesh-job-id on
+      // ordinary nested calls, and only ever from inside a bound job context —
+      // which seeds x-mesh-calling-job-id on the SAME request. A genuine
+      // push-mode dispatch carries the job id WITHOUT calling identity (the
+      // submitter is not itself executing that job), so the two arriving
+      // together identifies a leaked nested call from an old caller.
+      // Dispatching on it would bind this handler to the CALLER's job row and
+      // auto-complete it with this tool's result. Refuse, run as a plain call,
+      // and say so loudly: the fix is to finish the upgrade.
+      const leakedFromOldCaller =
+        !!rawMeshHeaders?.["x-mesh-job-id"] &&
+        !!rawMeshHeaders?.["x-mesh-calling-job-id"];
+      if (leakedFromOldCaller) {
+        console.warn(
+          `[mesh-jobs] tool '${toolName}': inbound x-mesh-job-id=` +
+            `${rawMeshHeaders?.["x-mesh-job-id"]} arrived together with ` +
+            `x-mesh-calling-job-id — a pre-3.8 caller leaking its own job id ` +
+            `on a nested call, not a push-mode dispatch. Running as a plain ` +
+            `tool call; upgrade the calling agent to stop this (issue #1570).`,
+        );
+      }
+      const [inboundJobId, inboundDeadlineSecs, inboundClaimEpoch] =
+        leakedFromOldCaller
+          ? ([null, null, null] as [null, null, null])
+          : readJobHeaders(rawMeshHeaders);
 
       // Use incoming trace context or generate new one
       const traceId = incomingTraceId ?? generateTraceId();
@@ -988,28 +1029,23 @@ export class MeshAgent {
       //     (UserError → isError result) so the caller classifies it as
       //     retryable topology, not application failure.
       if (missingRequiredCap !== null) {
-        // Read job headers from the RAW inbound map (not the allowlist-filtered
-        // propagatedHeaders), so a genuine inbound job dispatch is classified as
-        // one — and released, not refused — even though x-mesh-job-id is not in
-        // the propagate allowlist.
-        const [guardJobId, , guardClaimEpoch] = readJobHeaders(rawMeshHeaders);
         const isJobDispatch =
           isTaskTool &&
-          guardJobId !== null &&
+          inboundJobId !== null &&
           !!this.config.registryUrl &&
           !!this.agentId;
         if (isJobDispatch) {
           console.warn(
-            `[mesh-jobs] releasing job=${guardJobId} for tool '${toolName}' — ` +
+            `[mesh-jobs] releasing job=${inboundJobId} for tool '${toolName}' — ` +
               `required dependency '${missingRequiredCap}' unavailable at ` +
               `invocation time; releasing lease for retry (not invoking, not failing)`,
           );
           try {
             const controller = makeJobController(
-              guardJobId as string,
+              inboundJobId as string,
               this.agentId as string,
               this.config.registryUrl as string,
-              guardClaimEpoch,
+              inboundClaimEpoch,
             );
             await controller.releaseLease(
               `required dependency '${missingRequiredCap}' unavailable at ` +
@@ -1017,7 +1053,7 @@ export class MeshAgent {
             );
           } catch (err) {
             console.debug(
-              `[mesh-jobs] release-lease for job=${guardJobId} raised:`,
+              `[mesh-jobs] release-lease for job=${inboundJobId} raised:`,
               err,
             );
           }
@@ -1119,16 +1155,19 @@ export class MeshAgent {
           // unconditionally for job-bound tools (see isJobBound above).
           //
           // Phase 1 MeshJob substrate: when this tool is task=true and the
-          // inbound headers carry X-Mesh-Job-Id, build a JobController,
+          // RAW inbound headers carry X-Mesh-Job-Id, build a JobController,
           // splice it into the call args at meshJobParamIndex, and run the
           // user function inside both the JS-side ALS (CURRENT_JOB) and the
           // Rust-side task-local (withJobAsync) so cancel-registry binding
-          // + outbound header injection work transparently.
+          // works transparently. The job context does NOT put X-Mesh-Job-Id
+          // on outbound calls — it is inbound-only (#1570); what it does seed
+          // outbound is the calling-identity pair.
           result = await runWithTraceContext(traceContext, async () => {
             return await runWithPropagatedHeaders(propagatedHeaders, async () => {
               if (isTaskTool) {
-                const [jobId, deadlineSecs, claimEpoch] =
-                  readJobHeaders(propagatedHeaders);
+                const jobId = inboundJobId;
+                const deadlineSecs = inboundDeadlineSecs;
+                const claimEpoch = inboundClaimEpoch;
                 let controller = null;
                 if (jobId && this.config.registryUrl && this.agentId) {
                   try {

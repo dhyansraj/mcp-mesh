@@ -475,10 +475,29 @@ class HttpMcpWrapper:
 
                     # Capture configured propagation headers from incoming request
                     from ..tracing.context import (
+                        DISPATCH_HEADERS,
                         PROPAGATE_HEADERS,
                         matches_propagate_header,
                     )
                     from ..tracing.context import TraceContext as _TC
+
+                    # Issue #1570: capture the push-mode dispatch protocol
+                    # headers from the RAW inbound request, independently of
+                    # the propagate allowlist. They are the dispatch
+                    # discriminator, deliberately NOT allowlisted (a nested
+                    # outbound call must not look like a job dispatch to every
+                    # downstream) — so reading them off the filtered map would
+                    # leave push-mode dispatch over HTTP unreachable.
+                    dispatch = {
+                        name.lower(): value
+                        for name, value in request.headers.items()
+                        if name.lower() in DISPATCH_HEADERS and value
+                    }
+                    if dispatch:
+                        _TC.set_dispatch_headers(dispatch)
+                        self.logger.debug(
+                            f"Captured {len(dispatch)} inbound dispatch headers"
+                        )
 
                     if PROPAGATE_HEADERS:
                         captured = {}

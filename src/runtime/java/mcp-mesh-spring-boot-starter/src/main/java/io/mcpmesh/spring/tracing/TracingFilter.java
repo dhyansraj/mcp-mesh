@@ -65,6 +65,7 @@ public class TracingFilter implements Filter {
             // Thread pools reuse threads, so previous request context must be cleared
             TraceContext.clear();
             TraceContext.clearPropagatedHeaders();
+            TraceContext.clearDispatchHeaders();
 
             // Extract trace context from headers
             String traceId = httpRequest.getHeader(TRACE_ID_HEADER);
@@ -93,6 +94,25 @@ public class TracingFilter implements Filter {
                 log.trace("No trace headers found, deferring context creation to MeshToolWrapper");
             }
 
+            // Issue #1570: capture the push-mode dispatch protocol headers
+            // from the RAW inbound request, independently of the propagate
+            // allowlist. They are the dispatch discriminator and are
+            // deliberately NOT allowlisted (this same allowlist drives the
+            // OUTBOUND forward, and forwarding the job id self-dispatches a
+            // nested task=true call as the caller's job), so the inbound
+            // dispatch gate reads them from here instead.
+            Map<String, String> dispatch = new HashMap<>();
+            for (String name : TraceContext.DISPATCH_HEADERS) {
+                String value = httpRequest.getHeader(name);
+                if (value != null && !value.isEmpty()) {
+                    dispatch.put(name, value);
+                }
+            }
+            if (!dispatch.isEmpty()) {
+                TraceContext.setDispatchHeaders(dispatch);
+                log.trace("Captured {} inbound dispatch headers", dispatch.size());
+            }
+
             // Capture configured propagation headers from incoming request
             if (!TraceContext.getPropagateHeaderNames().isEmpty()) {
                 Map<String, String> captured = new HashMap<>();
@@ -118,6 +138,7 @@ public class TracingFilter implements Filter {
             // Always clear context after request completes
             TraceContext.clear();
             TraceContext.clearPropagatedHeaders();
+            TraceContext.clearDispatchHeaders();
         }
     }
 }

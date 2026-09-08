@@ -22,6 +22,31 @@ import mesh
 from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
 
 
+def _seed_inbound(headers: dict) -> None:
+    """Deliver ``headers`` the way the inbound path does (issue #1570).
+
+    The dispatch protocol trio lands on the RAW dispatch store (captured from
+    the inbound request / seeded by the claim dispatcher); everything else
+    lands on the propagated store, which is what rides outbound calls. The two
+    are separate precisely so the discriminator can never be forwarded.
+    """
+    from _mcp_mesh.tracing.context import DISPATCH_HEADERS, TraceContext
+
+    TraceContext.set_dispatch_headers(
+        {k: v for k, v in headers.items() if k in DISPATCH_HEADERS}
+    )
+    TraceContext.set_propagated_headers(
+        {k: v for k, v in headers.items() if k not in DISPATCH_HEADERS}
+    )
+
+
+def _clear_inbound() -> None:
+    from _mcp_mesh.tracing.context import TraceContext
+
+    TraceContext.set_propagated_headers({})
+    TraceContext.clear_dispatch_headers()
+
+
 @pytest.fixture(autouse=True)
 def _clean_registry():
     # Several cases here declare a tool function named ``handler``. Those are
@@ -124,11 +149,11 @@ class TestReadJobHeadersRecvCursor:
         from _mcp_mesh.engine.job_dispatch import _read_job_headers
         from _mcp_mesh.tracing.context import TraceContext
 
-        TraceContext.set_propagated_headers(headers)
+        _seed_inbound(headers)
         try:
             return _read_job_headers()
         finally:
-            TraceContext.set_propagated_headers({})
+            _clear_inbound()
 
     def test_parses_recv_cursor_to_dict(self):
         cursor = {"work": 7, "answer": 3}
@@ -231,7 +256,9 @@ class TestDispatchSetsRecvCursorHeader:
         seen: dict = {}
 
         async def handler(**kwargs):
-            seen["headers"] = dict(TraceContext.get_propagated_headers())
+            # Issue #1570: the cursor rides the inbound-only DISPATCH store.
+            seen["headers"] = dict(TraceContext.get_dispatch_headers())
+            seen["propagated"] = dict(TraceContext.get_propagated_headers())
 
         d = self._make_dispatcher(handler)
         cursor = {"work": 4, "signal": 1}
@@ -245,10 +272,13 @@ class TestDispatchSetsRecvCursorHeader:
                 }
             )
         finally:
-            TraceContext.set_propagated_headers({})
+            _clear_inbound()
+            TraceContext.clear_dispatch_headers()
 
         assert "x-mesh-recv-cursor" in seen["headers"]
         assert json.loads(seen["headers"]["x-mesh-recv-cursor"]) == cursor
+        # ...and never on the propagated (outbound-eligible) store.
+        assert "x-mesh-recv-cursor" not in seen["propagated"]
 
     @pytest.mark.asyncio
     async def test_dispatch_without_recv_cursor_sets_no_header(self):
@@ -257,7 +287,7 @@ class TestDispatchSetsRecvCursorHeader:
         seen: dict = {}
 
         async def handler(**kwargs):
-            seen["headers"] = dict(TraceContext.get_propagated_headers())
+            seen["headers"] = dict(TraceContext.get_dispatch_headers())
 
         d = self._make_dispatcher(handler)
         try:
@@ -265,7 +295,8 @@ class TestDispatchSetsRecvCursorHeader:
                 {"id": "job-2", "submitted_payload": {}, "claim_epoch": 2}
             )
         finally:
-            TraceContext.set_propagated_headers({})
+            _clear_inbound()
+            TraceContext.clear_dispatch_headers()
 
         assert "x-mesh-recv-cursor" not in seen["headers"]
 
@@ -276,7 +307,12 @@ class TestDispatchSetsRecvCursorHeader:
         seen: dict = {}
 
         async def handler(**kwargs):
-            seen["headers"] = dict(TraceContext.get_propagated_headers())
+            # Issue #1570: assert against the DISPATCH store, which is where
+            # the cursor now lands. Reading the propagated store here would
+            # pass even if the empty-cursor branch DID seed a cursor, because
+            # nothing seeds that store with one any more.
+            seen["headers"] = dict(TraceContext.get_dispatch_headers())
+            seen["propagated"] = dict(TraceContext.get_propagated_headers())
 
         d = self._make_dispatcher(handler)
         try:
@@ -288,9 +324,10 @@ class TestDispatchSetsRecvCursorHeader:
                 }
             )
         finally:
-            TraceContext.set_propagated_headers({})
+            _clear_inbound()
 
         assert "x-mesh-recv-cursor" not in seen["headers"]
+        assert "x-mesh-recv-cursor" not in seen["propagated"]
 
 
 # ===========================================================================
@@ -318,7 +355,7 @@ class TestResumeGate:
         headers = {"x-mesh-job-id": "job-1", "x-mesh-claim-epoch": "5"}
         if header_cursor is not None:
             headers["x-mesh-recv-cursor"] = json.dumps(header_cursor)
-        TraceContext.set_propagated_headers(headers)
+        _seed_inbound(headers)
         monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
         monkeypatch.setenv("MCP_MESH_AGENT_ID", "agent-1")
 
@@ -351,7 +388,7 @@ class TestResumeGate:
             ):
                 await maybe_dispatch_as_job(fn, invoke, {"user": "alice"})
         finally:
-            TraceContext.set_propagated_headers({})
+            _clear_inbound()
         return seen
 
     @pytest.mark.asyncio
@@ -413,7 +450,7 @@ class TestOutboundScrub:
     def teardown_method(self):
         from _mcp_mesh.tracing.context import TraceContext
 
-        TraceContext.set_propagated_headers({})
+        _clear_inbound()
 
     def _merged(self):
         from _mcp_mesh.engine.unified_mcp_proxy import UnifiedMCPProxy
@@ -425,7 +462,7 @@ class TestOutboundScrub:
     def test_recv_cursor_scrubbed_from_outbound(self):
         from _mcp_mesh.tracing.context import TraceContext
 
-        TraceContext.set_propagated_headers(
+        _seed_inbound(
             {
                 "x-mesh-job-id": "job-1",
                 "x-mesh-claim-epoch": "3",
@@ -442,7 +479,7 @@ class TestOutboundScrub:
         from _mcp_mesh.engine.job_dispatch import _read_job_headers
         from _mcp_mesh.tracing.context import TraceContext
 
-        TraceContext.set_propagated_headers(
+        _seed_inbound(
             {
                 "x-mesh-job-id": "job-1",
                 "x-mesh-recv-cursor": json.dumps({"work": 5}),

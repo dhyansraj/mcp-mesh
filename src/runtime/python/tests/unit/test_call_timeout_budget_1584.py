@@ -272,8 +272,10 @@ class TestJobDeadlineOverride:
     @pytest.mark.asyncio
     async def test_tighter_deadline_replaces_the_default(self):
         client = await self._capture_under_job(20.0)
-        assert client.headers["X-Mesh-Job-Id"] == "job-1584"
         assert client.headers["X-Mesh-Timeout"] == "20"
+        # Issue #1570: the dispatch discriminator never rides outbound.
+        assert "X-Mesh-Job-Id" not in client.headers
+        assert "x-mesh-job-id" not in client.headers
 
     @pytest.mark.asyncio
     async def test_sub_second_grant_advertises_one_not_zero(self):
@@ -290,6 +292,65 @@ class TestJobDeadlineOverride:
         # `<= 0` header to None. CURRENT_JOB is public API, so user code and
         # tests can still produce this snapshot directly.
         client = await self._capture_under_job(-3.0)
-        assert client.headers["X-Mesh-Job-Id"] == "job-1584"
         assert "X-Mesh-Timeout" not in client.headers
         assert "x-mesh-timeout" not in client.headers
+
+
+class TestTightenedBudgetIsNotDuplicated:
+    """The parent-scope cap must leave exactly ONE timeout header on the wire.
+
+    The propagated store is lowercased, so an inbound budget arrives as
+    ``x-mesh-timeout``. The expired branch pops both casings; the tighten
+    branch only assigned the canonical name, so a tightened call went out
+    carrying the parent's larger ``x-mesh-timeout`` AND the tightened
+    ``X-Mesh-Timeout``. A receiver taking the first header wins loses the
+    parent's cap — the same duplicate-header class as issue #1611.
+    """
+
+    async def _capture(self, *, inbound: dict, deadline_secs_remaining: float):
+        from _mcp_mesh.engine.job_context import CURRENT_JOB, JobContextSnapshot
+        from _mcp_mesh.engine.unified_mcp_proxy import _outbound_headers_var
+
+        proxy = UnifiedMCPProxy("http://downstream:8000", "some_tool", {})
+        client = _CapturingClient()
+        hdr_token = _outbound_headers_var.set(dict(inbound))
+        job_token = CURRENT_JOB.set(
+            JobContextSnapshot(
+                job_id="job-1613",
+                deadline_secs_remaining=deadline_secs_remaining,
+                claim_epoch=None,
+            )
+        )
+        try:
+            with mock.patch(
+                "_mcp_mesh.engine.unified_mcp_proxy._get_httpx_client_sync",
+                return_value=client,
+            ):
+                with pytest.raises(RuntimeError, match="stop-after-capture"):
+                    await proxy._http_call("some_tool", {})
+        finally:
+            CURRENT_JOB.reset(job_token)
+            _outbound_headers_var.reset(hdr_token)
+        return client
+
+    @pytest.mark.asyncio
+    async def test_tightening_a_lowercase_inbound_leaves_one_header(self):
+        client = await self._capture(
+            inbound={"x-mesh-timeout": "30"}, deadline_secs_remaining=20.0
+        )
+        assert client.headers["X-Mesh-Timeout"] == "20"
+        assert "x-mesh-timeout" not in client.headers
+        assert client.timeout.read == 20
+
+    @pytest.mark.asyncio
+    async def test_a_tighter_lowercase_inbound_is_not_widened(self):
+        # The inbound cap is already tighter than what this job has left, so
+        # the tighten branch must not fire at all. Reading only the canonical
+        # casing saw "0" here — "unset" — and replaced a 5s parent cap with a
+        # 20s advertisement.
+        client = await self._capture(
+            inbound={"x-mesh-timeout": "5"}, deadline_secs_remaining=20.0
+        )
+        assert client.headers.get("x-mesh-timeout") == "5"
+        assert "X-Mesh-Timeout" not in client.headers
+        assert client.timeout.read == 5

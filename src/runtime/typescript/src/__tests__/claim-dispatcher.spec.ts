@@ -177,7 +177,7 @@ describe("ClaimDispatcher", () => {
     expect(handler.mock.calls[0][1].jobId).toBe("real-job");
   });
 
-  it("seeds the propagated-headers ALS with x-mesh-job-id (and x-mesh-timeout when present)", async () => {
+  it("seeds the propagated-headers ALS with x-mesh-timeout only, never the dispatch pair (#1570)", async () => {
     // Verifies follow-up #2: claim-path dispatches must seed the
     // propagated-headers AsyncLocalStorage so outbound calls made by
     // the handler continue the submitter's trace tree (Python parity
@@ -218,8 +218,12 @@ describe("ClaimDispatcher", () => {
 
     expect(handler).toHaveBeenCalledOnce();
     expect(observed).not.toBeNull();
-    expect(observed!["x-mesh-job-id"]).toBe("job-trace-1");
     expect(observed!["x-mesh-timeout"]).toBe("45");
+    // Issue #1570: the dispatch pair is NOT seeded into the propagated store —
+    // that store is what every outbound call forwards, and a forwarded job id
+    // makes a nested task:true callee treat the call as an inbound dispatch.
+    expect(observed!["x-mesh-job-id"]).toBeUndefined();
+    expect(observed!["x-mesh-claim-epoch"]).toBeUndefined();
   });
 
   it("omits x-mesh-timeout when claim has no max_duration", async () => {
@@ -252,7 +256,7 @@ describe("ClaimDispatcher", () => {
 
     expect(handler).toHaveBeenCalledOnce();
     expect(observed).not.toBeNull();
-    expect(observed!["x-mesh-job-id"]).toBe("job-no-timeout");
+    expect(observed!["x-mesh-job-id"]).toBeUndefined();
     expect(observed!["x-mesh-timeout"]).toBeUndefined();
   });
 

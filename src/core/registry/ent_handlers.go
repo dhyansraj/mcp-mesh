@@ -36,8 +36,11 @@ func init() {
 	//
 	// Baked-in defaults (always forwarded, regardless of this env var):
 	//   X-Trace-ID, X-Parent-Span, X-Mesh-Timeout, X-Mesh-Job-Id,
+	//   X-Mesh-Claim-Epoch,
 	//   X-Mesh-Calling-Job-Id, X-Mesh-Calling-Claim-Epoch
-	// MCP_MESH_PROPAGATE_HEADERS is purely *additive* on top of the defaults.
+	// MCP_MESH_PROPAGATE_HEADERS is purely *additive* on top of the defaults,
+	// with one exception: X-Mesh-Recv-Cursor is claim-local and is never
+	// forwarded, however it is listed (#1570).
 	// TODO(test): extract this parser into a pure helper so it can be unit-tested
 	// without env-var mutation. Coverage today is via integration tests.
 	if raw := os.Getenv("MCP_MESH_PROPAGATE_HEADERS"); raw != "" {
@@ -849,6 +852,21 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		proxyReq.Header.Set("X-Mesh-Job-Id", meshJobID)
 	}
 
+	// Forward the claim generation alongside it (#1570). The producer's
+	// dispatch gate reads the pair together — job id to bind the row, epoch to
+	// fence out-of-epoch writes — so forwarding one without the other silently
+	// downgrades a proxied dispatch to legacy owner-only fencing. No in-mesh
+	// caller emits this today (both names are inbound-only as of #1570, and a
+	// claim epoch is minted by this registry, not by a peer), so in practice
+	// this carries a value only for a client that supplies one explicitly. It
+	// is forwarded rather than dropped so the proxy hop is not the reason the
+	// pair arrives split. The claim-local X-Mesh-Recv-Cursor is deliberately
+	// NOT forwarded: it never travels between agents at all -- enforced by
+	// neverForwarded below, not by omission here.
+	if claimEpoch := c.Request.Header.Get("X-Mesh-Claim-Epoch"); claimEpoch != "" {
+		proxyReq.Header.Set("X-Mesh-Claim-Epoch", claimEpoch)
+	}
+
 	// Forward the calling-job identity pair so the downstream producer can
 	// attribute the call to the originating MeshJob (#1263). Baked-in defaults
 	// like X-Mesh-Job-Id above so registry-proxied topologies keep the identity
@@ -871,8 +889,21 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		"x-parent-span":              true,
 		"x-mesh-timeout":             true,
 		"x-mesh-job-id":              true,
+		"x-mesh-claim-epoch":         true,
 		"x-mesh-calling-job-id":      true,
 		"x-mesh-calling-claim-epoch": true,
+	}
+
+	// Names that must NEVER cross the proxy hop, whatever the operator put in
+	// MCP_MESH_PROPAGATE_HEADERS (#1570). X-Mesh-Recv-Cursor is claim-local: it
+	// is minted by the registry for ONE claim and consumed by the handler that
+	// claim dispatched, so a resume cursor belonging to one job must never
+	// arrive at another agent and rewind its event consumption. The allowlist
+	// loop below would otherwise forward it on an exact entry or on the
+	// documented "x-mesh-*" prefix form, so the guarantee is enforced here
+	// rather than merely asserted by not setting the header above.
+	neverForwarded := map[string]bool{
+		"x-mesh-recv-cursor": true,
 	}
 
 	// Forward headers matching MCP_MESH_PROPAGATE_HEADERS allowlist (#769, #790).
@@ -880,7 +911,7 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 	if len(proxyPropagateHeaderEntries) > 0 {
 		for headerName, values := range c.Request.Header {
 			lowerName := strings.ToLower(headerName)
-			if explicitlySet[lowerName] {
+			if explicitlySet[lowerName] || neverForwarded[lowerName] {
 				continue
 			}
 			for _, entry := range proxyPropagateHeaderEntries {

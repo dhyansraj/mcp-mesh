@@ -352,7 +352,9 @@ class MeshToolWrapperRequiredDepGuardTest {
 
         MeshSettleState.resetForTests(); // settled — no grace
         try {
-            TraceContext.setPropagatedHeaders(Map.of("x-mesh-job-id", "job-123"));
+            // Issue #1570: an inbound job dispatch is signalled through the
+            // RAW dispatch-header store, not the propagate allowlist.
+            TraceContext.setDispatchHeaders(Map.of("x-mesh-job-id", "job-123"));
             Object result = wrapper.invoke(Map.of("user_id", "frank"));
 
             assertNull(result,
@@ -361,7 +363,7 @@ class MeshToolWrapperRequiredDepGuardTest {
             assertFalse(bean.handlerRan.get(),
                 "the handler MUST NOT run with an unresolved required dep on the job path");
         } finally {
-            TraceContext.clearPropagatedHeaders();
+            TraceContext.clearDispatchHeaders();
         }
     }
 

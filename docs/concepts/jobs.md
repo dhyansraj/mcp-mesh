@@ -406,11 +406,22 @@ requests `max_duration=30`, the child gets 5 seconds. This is enforced
 at submission time so the child's runtime sees a single coherent
 deadline regardless of how deep the chain runs.
 
-The header is on the default `MCP_MESH_PROPAGATE_HEADERS` allowlist
-alongside `X-Mesh-Job-Id`, `X-Mesh-Trace-Id`, etc. — no per-agent
-configuration is needed for propagation to work. Tracing this in
+`X-Mesh-Timeout` is a baked-in default — it propagates with no
+`MCP_MESH_PROPAGATE_HEADERS` configuration, alongside the trace headers
+(`X-Trace-ID` / `X-Parent-Span`). Tracing this in
 [Audit Trail](audit.md) shows the deadline shrinking as it walks the
 chain.
+
+`X-Mesh-Job-Id` is deliberately **not** propagated. It is the inbound
+dispatch discriminator — the producer runtime reads it off the incoming
+request to bind the handler to that job row — so a call a runtime
+originates never carries it, and a nested `task=True` call cannot
+dispatch as, or auto-complete, its caller's job. The registry proxy is
+the one hop that does forward it: there it is still the *inbound*
+header of a push dispatch on its way to the producer that has to bind
+that row. Which job invoked the current handler is a separate question,
+answered by the dedicated `X-Mesh-Calling-Job-Id` /
+`X-Mesh-Calling-Claim-Epoch` pair that `calling_job()` reads.
 
 ## meshctl
 
@@ -1300,8 +1311,8 @@ MeshJob event-channel variables in
 
 - [Streaming](streaming.md) — token-by-token progress for the request-
   response case where the work fits in a single SSE
-- [Audit Trail](audit.md) — `progressToken`, `X-Mesh-Job-Id`, and
-  `X-Mesh-Timeout` propagation through the audit pipeline
+- [Audit Trail](audit.md) — why the registry wired a job's `task=True`
+  provider to the consumer it did
 - [DDDI](dddi.md) — Distributed Dynamic Dependency Injection overview;
   explains how `MeshJob` slots are resolved
 - [Stateful Agents](stateful-agents.md) — the broader decomposition

@@ -760,21 +760,24 @@ class UnifiedMCPProxy:
           propagate allowlist. Caller is responsible for setting
           ``_outbound_headers_var`` so the httpx event hook picks them up.
         """
-        from ..tracing.context import matches_propagate_header
+        from ..tracing.context import DISPATCH_HEADERS, matches_propagate_header
 
         current_trace = TraceContext.get_current()
         merged_headers: dict[str, str] = dict(TraceContext.get_propagated_headers())
 
-        # Issue #1277: the persisted recv-cursor is CLAIM-LOCAL — it is read
-        # once by job_dispatch (from the contextvar, before this outbound call)
-        # to seed the handler's controller, and is meaningless (and wasteful —
-        # it's a serialized map) downstream. Unlike x-mesh-job-id /
-        # x-mesh-claim-epoch (which propagate intentionally for calling-job
-        # identity, #1263), scrub ONLY this key from the outbound base. The
-        # inbound claim→handler seed is unaffected — that read already happened
-        # against the contextvar, not this outbound copy.
-        merged_headers.pop("x-mesh-recv-cursor", None)
-
+        # Issue #1570: the push-mode dispatch protocol trio (x-mesh-job-id,
+        # x-mesh-claim-epoch, x-mesh-recv-cursor) is INBOUND-ONLY and is
+        # scrubbed from every outbound call. x-mesh-job-id is the dispatch
+        # DISCRIMINATOR: forwarding it makes a nested same-instance task=True
+        # call self-dispatch as the CALLER's job (owner + epoch match) and
+        # auto-complete it with the wrong result. The claim-local recv-cursor
+        # (#1277) is additionally meaningless downstream. Calling identity
+        # rides the dedicated x-mesh-calling-* pair overlaid below (#1263).
+        # The inbound claim→handler seed is unaffected — that read already
+        # happened against the contextvar, not this outbound copy. The scrub
+        # runs AFTER the custom / per-call merges below (matching Java's
+        # McpHttpClient and TypeScript's buildMcpRequest) so neither channel
+        # can reintroduce a name the contract forbids on the wire.
         if self.custom_headers:
             for k, v in self.custom_headers.items():
                 if matches_propagate_header(k):
@@ -784,6 +787,9 @@ class UnifiedMCPProxy:
             for k, v in per_call_headers.items():
                 if matches_propagate_header(k):
                     merged_headers[k.lower()] = v
+
+        for _dispatch_only in DISPATCH_HEADERS:
+            merged_headers.pop(_dispatch_only, None)
 
         # Issue #1263: overlay the CALLING job's identity so a nested outbound
         # call made from within a job execution context carries who invoked the
@@ -1320,84 +1326,94 @@ class UnifiedMCPProxy:
             if "X-Mesh-Timeout" not in headers and "x-mesh-timeout" not in headers:
                 headers["X-Mesh-Timeout"] = str(enhanced_timeout)
 
-            # Phase 1 MeshJob substrate: when a tool is executing under
-            # an active job context (set by the inbound dispatch wrapper
-            # in job_dispatch.maybe_dispatch_as_job), attach
-            # X-Mesh-Job-Id to every outbound mesh→mesh call so the
-            # downstream producer can bind its execution to the same job
-            # row. Mirrors the Rust core's `inject_job_headers` helper —
-            # this Python-side variant covers calls that originate in
-            # Python user code (vs Rust-originated outbound, e.g. from
-            # the agentic-loop LLM provider).
-            if "X-Mesh-Job-Id" not in headers and "x-mesh-job-id" not in headers:
-                try:
-                    from .job_context import current_job
+            # Phase 1 MeshJob substrate: when a tool is executing under an
+            # active job context (set by the inbound dispatch wrapper in
+            # job_dispatch.maybe_dispatch_as_job), cap the outbound budget at
+            # the parent's remaining deadline (parent-scope deadline cap — see
+            # "Nested jobs: strict deadline cap" in MESHJOB_DESIGN.org).
+            #
+            # Issue #1570: X-Mesh-Job-Id is NOT attached here. It is the
+            # push-mode dispatch DISCRIMINATOR, so forwarding it would make a
+            # nested task=True call dispatch as — and auto-complete — the
+            # CALLER's job row. Who invoked the downstream travels on the
+            # dedicated x-mesh-calling-* pair instead (#1263).
+            try:
+                from .job_context import current_job
 
-                    snap = current_job()
-                    if snap is not None and snap.job_id:
-                        headers["X-Mesh-Job-Id"] = snap.job_id
-                        # Also override X-Mesh-Timeout with the
-                        # remaining-on-deadline value if the active
-                        # context has a tighter budget than what's
-                        # already in headers (parent-scope deadline cap
-                        # — see "Nested jobs: strict deadline cap" in
-                        # MESHJOB_DESIGN.org).
-                        if snap.deadline_secs_remaining is not None:
-                            try:
-                                cur_timeout = int(headers.get("X-Mesh-Timeout", "0"))
-                            except (TypeError, ValueError):
-                                cur_timeout = 0
-                            raw_remaining = float(snap.deadline_secs_remaining)
-                            # NOTE: unlike the Rust `JobContext`, this value is
-                            # a STATIC dispatch-time snapshot -- job_dispatch
-                            # reads the inbound `X-Mesh-Timeout` once and never
-                            # decrements it -- so it is the budget the parent
-                            # granted, not live remaining time.
-                            #
-                            # Round UP and floor at 1 (issue #1584). Reachable:
-                            # an inbound header of "0.5" used to become
-                            # `int(0.5)` == 0 and get DROPPED as expired,
-                            # handing the child an unbounded budget instead of
-                            # the tightest one the wire can express.
-                            #
-                            # The `<= 0` arm below is defensive rather than
-                            # reachable from dispatch (job_dispatch already
-                            # normalises a `<= 0` header to None), but
-                            # `CURRENT_JOB` is public API that user code and
-                            # tests can set directly.
-                            remaining = (
-                                0
-                                if raw_remaining <= 0
-                                else max(1, math.ceil(raw_remaining))
-                            )
-                            if remaining <= 0:
-                                # Already past the parent deadline. The
-                                # OpenAPI schema requires X-Mesh-Timeout
-                                # >= 1, so we MUST NOT emit the header
-                                # with "0" — downstream behaviour at the
-                                # registry proxy is undefined. Drop any
-                                # propagated header value and let the
-                                # downstream apply its server-side
-                                # default; the parent-scope cancel token
-                                # (already wired through job_context) is
-                                # the authoritative signal that this
-                                # call shouldn't have been made.
-                                self.logger.warning(
-                                    "outbound %s under job=%s has expired deadline "
-                                    "(granted=%ss); omitting X-Mesh-Timeout instead "
-                                    "of emitting an invalid '0' value",
-                                    name,
-                                    snap.job_id,
-                                    raw_remaining,
-                                )
-                                headers.pop("X-Mesh-Timeout", None)
-                                headers.pop("x-mesh-timeout", None)
-                            elif cur_timeout == 0 or remaining < cur_timeout:
-                                headers["X-Mesh-Timeout"] = str(remaining)
-                except Exception as e:
-                    self.logger.debug(
-                        f"job_context lookup failed for outbound headers: {e}"
+                snap = current_job()
+                if (
+                    snap is not None
+                    and snap.job_id
+                    and snap.deadline_secs_remaining is not None
+                ):
+                    # Read the current budget from EITHER casing: the
+                    # propagated store can deliver a lowercase
+                    # `x-mesh-timeout`, and looking only at the canonical
+                    # name would read 0 ("unset") and tighten against
+                    # nothing.
+                    try:
+                        cur_timeout = int(
+                            headers.get("X-Mesh-Timeout")
+                            or headers.get("x-mesh-timeout")
+                            or "0"
+                        )
+                    except (TypeError, ValueError):
+                        cur_timeout = 0
+                    raw_remaining = float(snap.deadline_secs_remaining)
+                    # NOTE: unlike the Rust `JobContext`, this value is
+                    # a STATIC dispatch-time snapshot -- job_dispatch
+                    # reads the inbound `X-Mesh-Timeout` once and never
+                    # decrements it -- so it is the budget the parent
+                    # granted, not live remaining time.
+                    #
+                    # Round UP and floor at 1 (issue #1584). Reachable:
+                    # an inbound header of "0.5" used to become
+                    # `int(0.5)` == 0 and get DROPPED as expired,
+                    # handing the child an unbounded budget instead of
+                    # the tightest one the wire can express.
+                    #
+                    # The `<= 0` arm below is defensive rather than
+                    # reachable from dispatch (job_dispatch already
+                    # normalises a `<= 0` header to None), but
+                    # `CURRENT_JOB` is public API that user code and
+                    # tests can set directly.
+                    remaining = (
+                        0 if raw_remaining <= 0 else max(1, math.ceil(raw_remaining))
                     )
+                    if remaining <= 0:
+                        # Already past the parent deadline. The
+                        # OpenAPI schema requires X-Mesh-Timeout
+                        # >= 1, so we MUST NOT emit the header
+                        # with "0" — downstream behaviour at the
+                        # registry proxy is undefined. Drop any
+                        # propagated header value and let the
+                        # downstream apply its server-side
+                        # default; the parent-scope cancel token
+                        # (already wired through job_context) is
+                        # the authoritative signal that this
+                        # call shouldn't have been made.
+                        self.logger.warning(
+                            "outbound %s under job=%s has expired deadline "
+                            "(granted=%ss); omitting X-Mesh-Timeout instead "
+                            "of emitting an invalid '0' value",
+                            name,
+                            snap.job_id,
+                            raw_remaining,
+                        )
+                        headers.pop("X-Mesh-Timeout", None)
+                        headers.pop("x-mesh-timeout", None)
+                    elif cur_timeout == 0 or remaining < cur_timeout:
+                        # Drop the lowercase twin before assigning the
+                        # canonical name, exactly as the expired branch above
+                        # does. Leaving it would put BOTH the parent's larger
+                        # value and this tightened one on the wire, and a
+                        # receiver taking the first loses the parent's cap.
+                        headers.pop("x-mesh-timeout", None)
+                        headers["X-Mesh-Timeout"] = str(remaining)
+            except Exception as e:
+                self.logger.debug(
+                    f"job_context lookup failed for outbound headers: {e}"
+                )
 
             # Use X-Mesh-Timeout to set client-side timeout (authoritative override)
             mesh_timeout_val = headers.get("X-Mesh-Timeout") or headers.get(

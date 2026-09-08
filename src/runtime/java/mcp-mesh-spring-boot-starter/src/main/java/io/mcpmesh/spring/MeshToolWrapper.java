@@ -993,6 +993,28 @@ public class MeshToolWrapper implements McpToolHandler {
         if (meshHeadersObj instanceof Map) {
             @SuppressWarnings("unchecked")
             Map<String, Object> meshHeaders = (Map<String, Object>) meshHeadersObj;
+
+            // Issue #1570: the push-mode dispatch trio rides the args channel
+            // too (FastMCP hides HTTP headers from non-Java callers), and is
+            // read RAW — it is deliberately absent from the propagate
+            // allowlist, so filtering it here would leave a genuine inbound
+            // job dispatch undetectable. HTTP wins over args, matching the
+            // propagated-header merge below.
+            Map<String, String> rawDispatch = new HashMap<>();
+            for (Map.Entry<String, Object> entry : meshHeaders.entrySet()) {
+                if (entry.getKey() == null || !(entry.getValue() instanceof String)) continue;
+                String name = entry.getKey().toLowerCase();
+                if (TraceContext.DISPATCH_HEADERS.contains(name)) {
+                    rawDispatch.put(name, (String) entry.getValue());
+                }
+            }
+            if (!rawDispatch.isEmpty()) {
+                Map<String, String> existingDispatch = TraceContext.getDispatchHeaders();
+                Map<String, String> mergedDispatch = new HashMap<>(rawDispatch);
+                mergedDispatch.putAll(existingDispatch);
+                TraceContext.setDispatchHeaders(mergedDispatch);
+            }
+
             Map<String, String> filtered = new HashMap<>();
             if (!TraceContext.getPropagateHeaderNames().isEmpty()) {
                 for (Map.Entry<String, Object> entry : meshHeaders.entrySet()) {
@@ -1026,11 +1048,36 @@ public class MeshToolWrapper implements McpToolHandler {
      */
     private Object invokeInternal(Map<String, Object> cleanArgs) throws Exception {
         // Phase B MeshJob substrate: detect inbound job dispatch.
-        // X-Mesh-Job-Id is captured by TracingFilter (we register it as a
-        // propagation header in MeshAutoConfiguration), so it lands in
-        // TraceContext.getPropagatedHeaders() with a lowercased key.
+        // Issue #1570: X-Mesh-Job-Id is captured from the RAW inbound request
+        // (TracingFilter) or the raw _mesh_headers argument map, NOT from the
+        // propagate allowlist. The allowlist drives the OUTBOUND forward too,
+        // so allowlisting the discriminator made every nested call look like a
+        // job dispatch to its callee. Both keys are lowercased at capture.
+        Map<String, String> dispatchHeaders = TraceContext.getDispatchHeaders();
         Map<String, String> propagated = TraceContext.getPropagatedHeaders();
-        String jobIdHeader = propagated != null ? propagated.get("x-mesh-job-id") : null;
+        String jobIdHeader = dispatchHeaders != null ? dispatchHeaders.get("x-mesh-job-id") : null;
+
+        // Version-skew guard (issue #1570). A pre-3.8 peer forwarded
+        // x-mesh-job-id on ordinary nested calls, and only ever from inside a
+        // bound job context — which seeds x-mesh-calling-job-id on the SAME
+        // request. A genuine push-mode dispatch carries the job id WITHOUT
+        // calling identity (the submitter is not itself executing that job),
+        // so the two arriving together identifies a leaked nested call from an
+        // old caller. Dispatching on it would bind this handler to the
+        // CALLER's job row and auto-complete it with this tool's result — the
+        // very corruption this issue removes. Refuse the dispatch, run as a
+        // plain call, and say so loudly: the fix is to finish the upgrade.
+        if (jobIdHeader != null && !jobIdHeader.isEmpty() && propagated != null) {
+            String callingJobId = propagated.get(TraceContext.CALLING_JOB_ID_HEADER);
+            if (callingJobId != null && !callingJobId.isEmpty()) {
+                log.warn("Inbound x-mesh-job-id={} for tool {} arrived together with "
+                    + "x-mesh-calling-job-id={} — a pre-3.8 caller leaking its own job id "
+                    + "on a nested call, not a push-mode dispatch. Running as a plain tool "
+                    + "call; upgrade the calling agent to stop this (issue #1570).",
+                    jobIdHeader, funcId, callingJobId);
+                jobIdHeader = null;
+            }
+        }
         // Issue #1164 MED-5: parse the propagated X-Mesh-Timeout budget for
         // EVERY inbound call (not only job dispatch) so CompletableFuture-
         // returning tools are awaited against the caller's actual budget
@@ -1060,29 +1107,32 @@ public class MeshToolWrapper implements McpToolHandler {
         // both Java + native contexts, inject the controller at
         // meshJobParamIndex, auto-complete on successful return.
         //
-        // Gate is intentionally narrow — only `task=true` + a present
-        // `X-Mesh-Job-Id` header. Whether a JobController gets injected
+        // Gate is intentionally narrow — only `task=true` + a present RAW
+        // inbound `X-Mesh-Job-Id` header (never a propagated one — the name is
+        // inbound-only, issue #1570). Whether a JobController gets injected
         // (requires meshJobParamIndex + instanceId + registryUrl) is
         // decided INSIDE dispatchAsJob; if any of those is missing, we
-        // still bind the JobContext snapshot so outbound calls
-        // propagate the right job-id headers, but invoke the user
-        // method without the controller. The previous all-or-nothing
+        // still bind the JobContext snapshot so outbound calls carry
+        // the right calling-identity headers and deadline (never the
+        // job id itself — #1570), but invoke the user method without
+        // the controller. The previous all-or-nothing
         // gate silently skipped the wrap when the wiring was partial,
         // leaving downstream calls headerless. (PR #891 review.)
         if (task && jobIdHeader != null && !jobIdHeader.isEmpty()) {
             // Claim generation minted by the registry on POST /jobs/claim
             // (issue #1252). Java's own claim path (ClaimDispatcher) invokes
             // handlers directly and fences via JobController.open(..., epoch) —
-            // it never writes this header. So x-mesh-claim-epoch is currently
-            // populated only by cross-runtime propagation, i.e. a Python/TS
-            // claim dispatcher (which re-enters its wrapper and seeds the
-            // header) forwarding into a Java tool. Absent ⇒ null ⇒ legacy
-            // owner-only fencing; never fabricate a 0. Parse kept regardless
-            // (harmless, future-proof). NOTE (#1263): the calling-job identity
-            // carrier (x-mesh-calling-*) is intentionally SEPARATE from this
-            // protocol pair and never feeds this dispatch gate.
+            // it never writes this header. So x-mesh-claim-epoch reaches a Java
+            // tool only when the inbound request carries it. Read from the RAW
+            // dispatch store alongside the job id (#1570) — it was previously
+            // read off the allowlist-filtered map, where it could never appear
+            // (unlike x-mesh-job-id, it was never allowlisted), so the epoch
+            // was unconditionally null here. Absent ⇒ null ⇒ legacy owner-only
+            // fencing; never fabricate a 0. NOTE (#1263): the calling-job
+            // identity carrier (x-mesh-calling-*) is intentionally SEPARATE
+            // from this protocol pair and never feeds this dispatch gate.
             Long claimEpoch = parseClaimEpochHeader(
-                propagated != null ? propagated.get("x-mesh-claim-epoch") : null);
+                dispatchHeaders != null ? dispatchHeaders.get("x-mesh-claim-epoch") : null);
             return dispatchAsJob(cleanArgs, jobIdHeader, deadlineSecs, claimEpoch);
         }
 

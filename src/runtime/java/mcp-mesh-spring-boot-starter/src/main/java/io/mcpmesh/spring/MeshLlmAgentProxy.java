@@ -267,7 +267,8 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
      * ({@code ${ctx.*}} template variables set by {@link MeshToolWrapper} on
      * the servlet thread) read null, and {@link TraceContext} was empty — so
      * outbound calls carried neither trace headers nor propagated headers
-     * (X-Mesh-Job-Id, X-Mesh-Timeout, allowlisted auth).
+     * (X-Mesh-Timeout, X-Mesh-Calling-Job-Id, allowlisted auth — never
+     * X-Mesh-Job-Id, which is inbound-only per issue #1570).
      *
      * <p>The returned supplier layers {@link TraceContext#wrapSupplier} (trace
      * info + propagated headers, with restore-previous semantics) and a
@@ -933,8 +934,10 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                     // Parallel execution via CompletableFuture.
                     // Issue #1164 MED-4: wrap each task with TraceContext so
                     // parallel tool calls carry trace headers AND propagated
-                    // headers (X-Mesh-Job-Id, X-Mesh-Timeout, allowlisted auth)
-                    // on outbound calls — matching the sequential branch, which
+                    // headers (X-Mesh-Timeout, X-Mesh-Calling-Job-Id,
+                    // allowlisted auth — never X-Mesh-Job-Id, which is
+                    // inbound-only per #1570) on outbound calls — matching
+                    // the sequential branch, which
                     // runs on the caller thread and inherits them implicitly.
                     log.info("Executing {} tool calls in parallel", toolCalls.size());
                     List<CompletableFuture<Map<String, Object>>> futures = new ArrayList<>();
