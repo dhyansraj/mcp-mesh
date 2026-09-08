@@ -62,9 +62,12 @@ class _Recorder:
         self.standalone = False
         self.drop_app = False
         self.break_heartbeat_setup = False
+        self.raise_error = None
 
     async def _process(self):
         self.ran_pipeline = True
+        if self.raise_error is not None:
+            raise self.raise_error
         heartbeat_config = {
             "agent_id": "agent-1",
             "service_id": "agent-1",
@@ -374,6 +377,77 @@ class TestEmbeddedFailureContract:
 
         assert status["state"] == "ready"
         assert any("nothing for your server loop" in w for w in status["warnings"])
+
+    def test_pipeline_crash_is_observable_as_failed(self, monkeypatch):
+        """A RAISING pipeline must not leave the caller polling forever.
+
+        The failed-result branch only fires when the pipeline returns
+        ``status == "failed"``. When it raises instead, the exception lands on
+        the timer thread and nothing was ever recorded, so
+        ``startup_status()`` stayed ``pending`` — worse than ``failed``,
+        because a caller cannot tell "still starting" from "crashed and never
+        will" and waits indefinitely instead of shutting down.
+        """
+        _register_agent(False)
+        c = DebounceCoordinator(delay_seconds=0.01)
+        rec = _Recorder().install(monkeypatch, c)
+        rec.raise_error = KeyError("registry_url")
+
+        status = self._drive_through_timer(c)
+
+        assert status["state"] == "failed", (
+            "the pipeline raised on the timer thread and left no trace the "
+            "caller can see — startup_status() is still 'pending' forever"
+        )
+        # The class matters: str(KeyError("registry_url")) is just
+        # "'registry_url'", which reads like a stray string on its own.
+        assert "KeyError" in (status["error"] or "")
+        assert "registry_url" in (status["error"] or "")
+        assert status["heartbeat"] is False
+
+    def test_crash_still_propagates_to_the_outer_handler(self, monkeypatch):
+        """Recording the outcome must not swallow the exception."""
+        _register_agent(False)
+        c = DebounceCoordinator(delay_seconds=0.01)
+        rec = _Recorder().install(monkeypatch, c)
+        rec.raise_error = KeyError("registry_url")
+
+        returned, error = _run(c)
+
+        assert returned
+        assert error and isinstance(error[0], KeyError)
+
+    def test_failed_result_detail_is_not_overwritten_by_its_own_raise(
+        self, monkeypatch
+    ):
+        """The failed-result branch records, then raises. That raise now passes
+        through the crash handler, which must not replace the pipeline's own
+        message with a paraphrase of the RuntimeError wrapping it."""
+        _register_agent(False)
+        c = DebounceCoordinator(delay_seconds=0.01)
+        _Recorder(status="failed").install(monkeypatch, c)
+
+        status = self._drive_through_timer(c)
+
+        assert status["state"] == "failed"
+        assert status["error"] == "boom", (
+            f"the recorded detail was clobbered by the re-raise: {status['error']!r}"
+        )
+
+    def test_unsupported_pipeline_type_is_recorded_too(self, monkeypatch):
+        """A mesh bug leaves the caller in the same place as a runtime failure.
+
+        Nothing registered and nothing ever will be, so it gets a terminal
+        status rather than an indefinite ``pending``.
+        """
+        _register_agent(False)
+        c = DebounceCoordinator(delay_seconds=0.01)
+        _Recorder(pipeline_type="bogus").install(monkeypatch, c)
+
+        status = self._drive_through_timer(c)
+
+        assert status["state"] == "failed"
+        assert "Unsupported pipeline type" in (status["error"] or "")
 
     def test_heartbeat_setup_failure_is_not_reported_as_healthy(self, monkeypatch):
         """_setup_heartbeat_background swallows exceptions into a warning.
