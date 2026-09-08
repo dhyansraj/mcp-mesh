@@ -18,6 +18,8 @@ import logging
 import re
 from typing import Any, Optional
 
+from ..shared.dependency_spec import build_dependency_specs, cluster_strict_enabled
+
 # Matches the registry/SDK convention of "{base}-{8-hex-chars}" at the end
 # of a service_id. Used to strip the suffix and recover the base name.
 _API_SERVICE_ID_SUFFIX_RE = re.compile(r"-[0-9a-f]{8}$")
@@ -109,6 +111,8 @@ def _build_api_agent_spec(context: dict[str, Any], service_id: str = None) -> An
     tools = []
     route_wrappers = DecoratorRegistry.get_all_route_wrappers()
 
+    cluster_strict = cluster_strict_enabled()
+
     for route_id, route_info in route_wrappers.items():
         dependencies = route_info.get("dependencies", [])
 
@@ -116,16 +120,14 @@ def _build_api_agent_spec(context: dict[str, Any], service_id: str = None) -> An
         if not dependencies:
             continue
 
-        # Build dependency specs
-        deps = []
-        for dep_cap in dependencies:
-            # Tags must be serialized to JSON string (Rust core expects string, not list)
-            dep_spec = core.DependencySpec(
-                capability=dep_cap,
-                tags=json.dumps([]),
-                version=None,
-            )
-            deps.append(dep_spec)
+        # Build dependency specs. Issue #1571: prefer the validated selector
+        # mappings the route decorator produced — building from the flattened
+        # capability names alone drops tags, version, required, match_mode and
+        # the expected schema, so a tag-routed or required route edge reached
+        # the registry as an unqualified capability. Fall back to the names for
+        # wrappers registered before ``dependency_specs`` existed.
+        dep_infos = route_info.get("dependency_specs") or dependencies
+        deps = build_dependency_specs(core, dep_infos, cluster_strict=cluster_strict)
 
         # Create ToolSpec for this route
         # For API routes: function_name is the route_id (METHOD:path)

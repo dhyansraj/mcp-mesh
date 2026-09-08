@@ -57,6 +57,58 @@ class MyAgent:
     pass
 ```
 
+### auto_run: server and process lifetime, not mesh membership
+
+`auto_run` controls who starts the HTTP server and who owns the process. It does
+not control whether the agent joins the mesh.
+
+| | `auto_run=True` (default) | `auto_run=False` |
+|---|---|---|
+| Startup pipeline runs | yes | yes |
+| Registers with the registry | yes | yes |
+| Heartbeats, dependencies resolve | yes | yes |
+| Starts the HTTP server | yes | no — you do |
+| Keeps the process alive | yes | no — your loop does |
+
+Use `auto_run=False` to embed a mesh agent inside a server loop you already own.
+Serve on the configured `http_port`: that is the address the agent registers, so
+a mismatch registers an endpoint nothing answers on.
+
+`MCP_MESH_AUTO_RUN` overrides the decorator argument, so
+`MCP_MESH_AUTO_RUN=false` behaves exactly like `auto_run=False` — including
+still registering. To make mesh inert instead, set `MCP_MESH_ENABLED=false`.
+
+Startup runs on a background timer, after your decorators import and after
+`@mesh.agent` returns, so mesh can neither raise into your code nor exit the
+process it does not own. Poll the outcome:
+
+```python
+import mesh
+
+status = mesh.startup_status()
+# {"state": "pending"|"ready"|"failed", "pipeline_type": ..., "error": ...,
+#  "heartbeat": bool, "warnings": [...]}
+if status["state"] == "failed":
+    raise SystemExit(f"mesh failed to start: {status['error']}")
+```
+
+Check `heartbeat` and `warnings` even on `ready`: a run can succeed and still
+leave the agent unable to stay registered (standalone mode, or heartbeat setup
+failing), and those are reported rather than announced as success.
+
+**Current limits of embedded mode.** Two things auto-run does for you have no
+public equivalent yet:
+
+- **No app accessor.** The MCP pipeline builds a FastAPI app with FastMCP
+  mounted, but it is only reachable inside the pipeline context — there is no
+  supported way to obtain it and serve it yourself. Embedded mode is therefore
+  practical today for `@mesh.route` and `@mesh.a2a` services, where you build
+  and own the app, and for `@mesh.tool` agents whose HTTP surface you do not
+  need to serve.
+- **No graceful deregistration.** Auto-run installs a SIGTERM path that
+  unregisters on shutdown. Embedded mode installs none, so the agent is removed
+  by registry timeout rather than promptly on exit.
+
 ## @mesh.tool
 
 Registers a function as a mesh capability with dependency injection.
@@ -195,7 +247,7 @@ All decorator parameters can be overridden via environment variables:
 export MCP_MESH_AGENT_NAME=custom-name
 export MCP_MESH_HTTP_PORT=9090
 export MCP_MESH_NAMESPACE=production
-export MCP_MESH_AUTO_RUN=false
+export MCP_MESH_AUTO_RUN=false   # No server, no blocking — still registers
 ```
 
 ## See Also

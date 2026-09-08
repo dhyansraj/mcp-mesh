@@ -604,10 +604,33 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // there it is still inbound). That rewording is span-neutral on all three
 // pages — 5 spans before and after — so neither this constant nor the variant
 // golden moved with it. 1843 + 3 = 1846.
+//
+// Issue #1589 added an "auto_run: server and process lifetime, not mesh
+// membership" section to `decorators.md`. The old docstring ("Automatically
+// start service and keep process alive") was the ambiguity that let
+// auto_run=False be read as "do not join the mesh"; the new section states the
+// split explicitly and pins that MCP_MESH_AUTO_RUN=false still registers. Six
+// new spans on that page (the two mode names, http_port, the env var twice and
+// auto_run=False in prose); the table cells are list/markup lines, not inline
+// spans. 1846 + 6 = 1852.
+//
+// Issue #1589 follow-up: MCP_MESH_ENABLED got a real entry on `environment.md`
+// as the inert switch, because the documented CI recipe (MCP_MESH_AUTO_RUN=false)
+// stopped meaning "off" — under the new semantics that recipe registers into
+// whatever MCP_MESH_REGISTRY_URL points at. Ten new spans on that page (the two
+// env var names, the six accepted/rejected literals, and the man cross-ref).
+// 1852 + 10 = 1862.
+//
+// The same issue documented embedded mode's outcome API and its two current
+// limits on `decorators.md`: mesh.startup_status() polling (startup runs on a
+// timer, so mesh can neither raise into caller code nor exit a process it does
+// not own), plus the missing app accessor and missing graceful deregistration.
+// Eight new inline spans, and the two limits are markup-carrying list lines.
+// 1862 + 8 = 1870; 450 + 2 = 452.
 const (
-	wantInlineCodeSpans = 1846
+	wantInlineCodeSpans = 1870
 	wantListCodeSpans   = 531
-	wantMarkupListLines = 450
+	wantMarkupListLines = 452
 )
 
 // assertCorpusSize replaces the t.Logf these tests used to end on.

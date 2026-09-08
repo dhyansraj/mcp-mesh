@@ -186,12 +186,18 @@ class DecoratorRegistry:
 
     # Route-to-wrapper mapping for @mesh.route dependency injection
     # Key: "METHOD:path" (e.g., "GET:/api/v1/benchmark-services")
-    # Value: {"wrapper": Callable, "dependencies": list[str]}
+    # Value: {"wrapper": Callable, "dependencies": list[str],
+    #         "dependency_specs": list[dict]}
     _route_wrapper_registry: dict[str, dict[str, Any]] = {}
 
     @classmethod
     def register_route_wrapper(
-        cls, method: str, path: str, wrapper: Callable, dependencies: list[str]
+        cls,
+        method: str,
+        path: str,
+        wrapper: Callable,
+        dependencies: list[str],
+        dependency_specs: list[dict[str, Any]] | None = None,
     ) -> None:
         """
         Register a route's wrapper function for dependency injection.
@@ -200,12 +206,24 @@ class DecoratorRegistry:
             method: HTTP method (e.g., "GET", "POST")
             path: Route path (e.g., "/api/v1/benchmark-services")
             wrapper: The injection wrapper function
-            dependencies: List of dependency capability names
+            dependencies: List of dependency capability names. Index-aligned
+                with the wrapper's injection slots — this is what the
+                heartbeat's dependency-change handler matches against.
+            dependency_specs: Issue #1571 — the validated dependency mappings
+                the names were derived from (tags, version, required,
+                match_mode, expected schema). Index-aligned with
+                ``dependencies``. The heartbeat serializes these onto the
+                wire; without them a route edge reaches the registry as a
+                bare capability name and tag/version/required routing is
+                silently lost. Optional so pre-#1571 callers keep working.
         """
         route_id = f"{method}:{path}"
+        if dependency_specs is None:
+            dependency_specs = [{"capability": cap, "tags": []} for cap in dependencies]
         cls._route_wrapper_registry[route_id] = {
             "wrapper": wrapper,
             "dependencies": dependencies,
+            "dependency_specs": dependency_specs,
             "method": method,
             "path": path,
         }
@@ -636,7 +654,11 @@ class DecoratorRegistry:
 
         # Step 3: Fallback to synthetic defaults when no @mesh.agent decorator exists
         # This happens when only @mesh.tool decorators are used and no cached agent_id
-        from ..shared.config_resolver import ValidationRule, get_config_value
+        from ..shared.config_resolver import (
+            ValidationRule,
+            get_config_value,
+            resolve_auto_run,
+        )
         from ..shared.defaults import MeshDefaults
 
         # Check if we're in an API context (have mesh_route decorators)
@@ -685,11 +707,8 @@ class DecoratorRegistry:
                 default=MeshDefaults.HEALTH_INTERVAL,
                 rule=ValidationRule.NONZERO_RULE,
             ),
-            "auto_run": get_config_value(
-                "MCP_MESH_AUTO_RUN",
-                default=MeshDefaults.AUTO_RUN,
-                rule=ValidationRule.TRUTHY_RULE,
-            ),
+            # Issue #1589: one resolver for every MCP_MESH_AUTO_RUN reader.
+            "auto_run": resolve_auto_run(),
             "auto_run_interval": get_config_value(
                 "MCP_MESH_AUTO_RUN_INTERVAL",
                 default=MeshDefaults.AUTO_RUN_INTERVAL,

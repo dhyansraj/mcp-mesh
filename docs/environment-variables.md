@@ -187,6 +187,24 @@ export MCP_MESH_HEALTH_INTERVAL=30
 export MCP_MESH_ENABLED=true
 ```
 
+### MCP_MESH_ENABLED — the off switch
+
+`MCP_MESH_ENABLED=false` makes the runtime inert: no startup pipeline, no
+registration, no heartbeat, no dependency injection. Decorators still import and
+still record their metadata, so your module loads normally — mesh simply never
+runs. This is the flag to use in unit tests and in any process that imports an
+agent module without wanting to join a mesh.
+
+It fails **closed**. Unset means enabled; `true`, `1`, `yes` and `on` enable it;
+anything else — including `false`, `0`, `off`, an empty value and a typo —
+disables it and logs why. An empty value is a routine outcome of an unset Helm
+key, and for the one flag whose job is to turn mesh off, "I could not parse
+this" must not mean "on".
+
+Do not use `MCP_MESH_AUTO_RUN=false` for this. It gates the HTTP server and the
+process lifetime only: an agent with auto-run disabled still registers and still
+heartbeats, by design. See `meshctl man decorators` for the full split.
+
 ## Registry Server Configuration
 
 > These variables configure the **Go registry server** (`mcp-mesh-registry`)
@@ -935,7 +953,7 @@ MCP_MESH_HTTP_HOST=api-service.company.com
 # .env.testing
 MCP_MESH_LOG_LEVEL=WARNING
 MCP_MESH_DEBUG_MODE=false
-MCP_MESH_AUTO_RUN=false
+MCP_MESH_ENABLED=false          # Inert: no pipeline, no registration, no heartbeat
 MCP_MESH_REGISTRY_URL=http://test-registry:8000
 MCP_MESH_NAMESPACE=testing
 ```
@@ -1013,7 +1031,7 @@ class MyAgent:
 # Override decorator settings
 export MCP_MESH_AGENT_NAME=overridden-service
 export MCP_MESH_HTTP_PORT=9090
-export MCP_MESH_AUTO_RUN=false
+export MCP_MESH_AUTO_RUN=false   # No server, no blocking — still registers
 export MCP_MESH_NAMESPACE=custom
 
 # Runs with overridden values
@@ -1171,7 +1189,7 @@ python my_agent.py
 
 ```bash
 # Test environment variables
-export MCP_MESH_AUTO_RUN=false          # Don't auto-start in tests
+export MCP_MESH_AUTO_RUN=false          # No server, no blocking (still registers)
 export MCP_MESH_LOG_LEVEL=ERROR         # Minimal logging
 export MCP_MESH_REGISTRY_URL=http://test-registry:8000
 export MCP_MESH_NAMESPACE=ci-${BUILD_ID}

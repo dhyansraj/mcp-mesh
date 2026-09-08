@@ -249,6 +249,14 @@ def __getattr__(name):
         from _mcp_mesh.engine.llm_errors import ToolExecutionError
 
         return ToolExecutionError
+    elif name == "startup_status":
+        # Issue #1589: the observable outcome of embedded-mode startup
+        # (auto_run=False). Mesh cannot exit the process (the caller owns it)
+        # and cannot usefully raise (startup runs on a threading.Timer), so a
+        # caller that embeds mesh in its own server loop polls this instead.
+        from _mcp_mesh.pipeline.mcp_startup.embedded_status import get_status
+
+        return get_status
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 
