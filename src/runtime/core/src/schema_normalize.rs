@@ -1767,33 +1767,52 @@ mod tests {
         }
     }
 
-    /// Restores `MAX_INLINED_NODES_ENV` on scope exit, including on a panicking
-    /// assertion, so the one test that touches global state cannot leak it.
-    struct EnvGuard(Option<String>);
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match self.0.take() {
-                Some(v) => std::env::set_var(MAX_INLINED_NODES_ENV, v),
-                None => std::env::remove_var(MAX_INLINED_NODES_ENV),
-            }
-        }
-    }
-
     /// The parsing rules above say nothing about the env var actually being
-    /// read. This is the only test that touches process-global state, and it
-    /// exists solely to keep that plumbing covered.
+    /// read, and that read is load-bearing: the consumer-side `expected_type`
+    /// path hardcodes `tool_strict=true`, so this knob is an operator's only
+    /// escape from a BLOCK. If a refactor drops the read, the escape hatch
+    /// silently stops working, so the plumbing needs a test of its own.
+    ///
+    /// It runs in a re-exec of the test binary rather than calling `set_var`
+    /// here, because `resolved_node_budget` is read inside `normalize_schema`
+    /// (i.e. by *every* test in this module). Under a plain parallel
+    /// `cargo test`, an in-process override raced
+    /// `default_budget_admits_a_realistic_pydantic_model`: that test normalizes
+    /// a ~27k-node model and asserts `OK`, so observing a ceiling of 4321
+    /// turned it into a BLOCK — a failure reported in an innocent test, far
+    /// from its cause. Passing the value to a child via `Command::env` leaves
+    /// this process's environment untouched. Do not "simplify" it back.
     #[test]
     fn node_budget_env_is_wired_up() {
-        let _guard = EnvGuard(std::env::var(MAX_INLINED_NODES_ENV).ok());
+        // Set only on the child, which does the real assertion and exits.
+        const CHILD_MARKER: &str = "MCP_MESH_TEST_NODE_BUDGET_CHILD";
+        const TEST_PATH: &str = "schema_normalize::tests::node_budget_env_is_wired_up";
 
-        std::env::set_var(MAX_INLINED_NODES_ENV, "4321");
-        let observed = resolved_node_budget();
+        if std::env::var(CHILD_MARKER).is_ok() {
+            assert_eq!(
+                resolved_node_budget(),
+                4_321,
+                "resolved_node_budget must read {}",
+                MAX_INLINED_NODES_ENV
+            );
+            return;
+        }
 
-        assert_eq!(
-            observed, 4_321,
-            "resolved_node_budget must read {}",
-            MAX_INLINED_NODES_ENV
+        let exe = std::env::current_exe().expect("test binary path");
+        let output = std::process::Command::new(&exe)
+            .args(["--exact", "--nocapture", "--test-threads=1", TEST_PATH])
+            .env(CHILD_MARKER, "1")
+            .env(MAX_INLINED_NODES_ENV, "4321")
+            .output()
+            .expect("re-exec the test binary");
+
+        assert!(
+            output.status.success(),
+            "child re-exec of {} failed ({})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            TEST_PATH,
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 
