@@ -119,10 +119,12 @@ const DEFAULT_MAX_INLINED_NODES: usize = 500_000;
 /// `MCP_MESH_SCHEMA_STRICT`.
 const MAX_INLINED_NODES_ENV: &str = "MCP_MESH_SCHEMA_MAX_INLINED_NODES";
 
-fn resolved_node_budget() -> usize {
-    match std::env::var(MAX_INLINED_NODES_ENV) {
-        Err(_) => DEFAULT_MAX_INLINED_NODES,
-        Ok(raw) => match raw.trim().parse::<usize>() {
+/// Parsing half of [`resolved_node_budget`], split out so the value rules can be
+/// exercised without mutating process-global env.
+fn parse_node_budget(raw: Option<&str>) -> usize {
+    match raw {
+        None => DEFAULT_MAX_INLINED_NODES,
+        Some(raw) => match raw.trim().parse::<usize>() {
             Ok(n) if n > 0 => n,
             _ => {
                 static WARNED: std::sync::Once = std::sync::Once::new();
@@ -138,6 +140,10 @@ fn resolved_node_budget() -> usize {
             }
         },
     }
+}
+
+fn resolved_node_budget() -> usize {
+    parse_node_budget(std::env::var(MAX_INLINED_NODES_ENV).ok().as_deref())
 }
 
 /// Total number of JSON values in a tree (objects, arrays and scalars alike).
@@ -1736,37 +1742,59 @@ mod tests {
         );
     }
 
-    /// Env parsing for that knob. Kept separate from the budget behaviour tests
-    /// (which call `normalize_schema_with_budget`) so only this one test touches
-    /// process-global state.
+    /// Value rules for that knob, against the pure parser — no process-global
+    /// state, so a failing assertion cannot leak into later tests.
     #[test]
     fn node_budget_env_parsing() {
-        let restore = std::env::var(MAX_INLINED_NODES_ENV).ok();
-
-        std::env::remove_var(MAX_INLINED_NODES_ENV);
-        assert_eq!(resolved_node_budget(), DEFAULT_MAX_INLINED_NODES);
-
-        std::env::set_var(MAX_INLINED_NODES_ENV, " 12345 ");
-        assert_eq!(resolved_node_budget(), 12_345);
+        assert_eq!(parse_node_budget(None), DEFAULT_MAX_INLINED_NODES);
+        assert_eq!(parse_node_budget(Some(" 12345 ")), 12_345);
 
         // A typo must fall back to the default, NOT become a warning — a WARN
         // here would be promoted to a startup refusal by MCP_MESH_SCHEMA_STRICT.
         for bad in ["", "0", "-1", "lots"] {
-            std::env::set_var(MAX_INLINED_NODES_ENV, bad);
             assert_eq!(
-                resolved_node_budget(),
+                parse_node_budget(Some(bad)),
                 DEFAULT_MAX_INLINED_NODES,
                 "{:?} must fall back to the default",
                 bad
             );
-            let r = normalize_schema(r#"{"type":"string"}"#, SchemaOrigin::Python);
+            let r = normalize_schema_with_budget(
+                r#"{"type":"string"}"#,
+                SchemaOrigin::Python,
+                parse_node_budget(Some(bad)),
+            );
             assert_eq!(r.verdict, "OK", "a bad env value must not taint the verdict");
         }
+    }
 
-        match restore {
-            Some(v) => std::env::set_var(MAX_INLINED_NODES_ENV, v),
-            None => std::env::remove_var(MAX_INLINED_NODES_ENV),
+    /// Restores `MAX_INLINED_NODES_ENV` on scope exit, including on a panicking
+    /// assertion, so the one test that touches global state cannot leak it.
+    struct EnvGuard(Option<String>);
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(v) => std::env::set_var(MAX_INLINED_NODES_ENV, v),
+                None => std::env::remove_var(MAX_INLINED_NODES_ENV),
+            }
         }
+    }
+
+    /// The parsing rules above say nothing about the env var actually being
+    /// read. This is the only test that touches process-global state, and it
+    /// exists solely to keep that plumbing covered.
+    #[test]
+    fn node_budget_env_is_wired_up() {
+        let _guard = EnvGuard(std::env::var(MAX_INLINED_NODES_ENV).ok());
+
+        std::env::set_var(MAX_INLINED_NODES_ENV, "4321");
+        let observed = resolved_node_budget();
+
+        assert_eq!(
+            observed, 4_321,
+            "resolved_node_budget must read {}",
+            MAX_INLINED_NODES_ENV
+        );
     }
 
     #[test]
