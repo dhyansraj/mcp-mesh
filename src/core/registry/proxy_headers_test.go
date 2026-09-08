@@ -120,6 +120,39 @@ func TestProxyRequest_ForwardsCallingJobIdentityPair(t *testing.T) {
 	}
 }
 
+// TestProxyRequest_ForwardsDispatchPairTogether asserts the push-mode dispatch
+// pair survives the proxy hop INTACT (issue #1570). The producer's dispatch
+// gate reads the two together — job id to bind the row, epoch to fence
+// out-of-epoch writes — so forwarding the id while dropping the epoch silently
+// downgrades a proxied dispatch to legacy owner-only fencing.
+func TestProxyRequest_ForwardsDispatchPairTogether(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s := setupTestService(t)
+
+	var received http.Header
+	srv, host, port := newProxyDownstream(t, &received)
+	defer srv.Close()
+
+	registerProxyTargetAgent(t, s, "echo-agent", host, port)
+	h := &EntBusinessLogicHandlers{entService: s}
+
+	target := host + ":" + strconv.Itoa(port) + "/mcp/v1/tools/call"
+	w := proxyPost(t, h, target, map[string]string{
+		"X-Mesh-Job-Id":      "job-123",
+		"X-Mesh-Claim-Epoch": "9",
+	})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("proxy returned %d, body=%s", w.Code, w.Body.String())
+	}
+	if got := received.Get("X-Mesh-Job-Id"); got != "job-123" {
+		t.Errorf("X-Mesh-Job-Id not forwarded: got %q", got)
+	}
+	if got := received.Get("X-Mesh-Claim-Epoch"); got != "9" {
+		t.Errorf("X-Mesh-Claim-Epoch not forwarded: got %q", got)
+	}
+}
+
 // TestProxyRequest_ForwardsPartialCallingIdentity asserts the pair is forwarded
 // atomically as "forward what arrived": when only X-Mesh-Calling-Job-Id is
 // present, the epoch header is NOT synthesized.

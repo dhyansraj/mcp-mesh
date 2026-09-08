@@ -57,15 +57,14 @@ public class TraceContext {
         if (!names.contains("x-mesh-timeout")) {
             names.add("x-mesh-timeout");
         }
-        // Phase B MeshJob substrate: x-mesh-job-id is captured here so the
-        // inbound MeshToolWrapper can dispatch task=true tools through the
-        // job pipeline (build a JobController + bind both Java/native
-        // contexts). Adding it to the propagate list also means outbound
-        // calls forward it to downstream task=true tools — matching the
-        // Python / TypeScript propagation behavior.
-        if (!names.contains("x-mesh-job-id")) {
-            names.add("x-mesh-job-id");
-        }
+        // Issue #1570: x-mesh-job-id is NOT added here. It is the push-mode
+        // dispatch DISCRIMINATOR, and this allowlist drives BOTH the inbound
+        // capture and the outbound forward — so allowlisting it to make
+        // inbound dispatch work also made every outbound call forward it,
+        // which is the self-dispatch hazard the callingJobHeaders() javadoc
+        // below warns about. The inbound side now reads the dispatch trio
+        // from the RAW inbound request instead (see DISPATCH_HEADERS /
+        // TracingFilter), so the two concerns no longer share a switch.
         // Issue #1263: the calling job's identity rides a DEDICATED carrier —
         // x-mesh-calling-job-id + x-mesh-calling-claim-epoch — kept strictly
         // separate from the push-dispatch protocol pair (x-mesh-job-id /
@@ -87,6 +86,27 @@ public class TraceContext {
     }
 
     static final ThreadLocal<Map<String, String>> PROPAGATED_HEADERS =
+        ThreadLocal.withInitial(Collections::emptyMap);
+
+    /**
+     * Issue #1570: the push-mode dispatch protocol headers. INBOUND-ONLY —
+     * read from the raw inbound request (or the raw {@code _mesh_headers}
+     * argument map) to decide whether THIS call is a job dispatch, and never
+     * emitted on an outbound call. {@code x-mesh-job-id} doubles as the
+     * dispatch discriminator, so forwarding it makes a nested same-instance
+     * {@code task=true} call self-dispatch as the CALLER's job (owner + epoch
+     * match) and auto-complete it with the wrong result. Calling identity
+     * rides the dedicated {@code x-mesh-calling-*} pair instead.
+     */
+    public static final List<String> DISPATCH_HEADERS = List.of(
+        "x-mesh-job-id", "x-mesh-claim-epoch", "x-mesh-recv-cursor");
+
+    /**
+     * Inbound-only dispatch headers for the current request thread
+     * (issue #1570). Deliberately a SEPARATE store from
+     * {@link #PROPAGATED_HEADERS}: nothing here is ever forwarded downstream.
+     */
+    static final ThreadLocal<Map<String, String>> DISPATCH_HEADERS_STORE =
         ThreadLocal.withInitial(Collections::emptyMap);
 
     /**
@@ -177,6 +197,54 @@ public class TraceContext {
 
     public static void clearPropagatedHeaders() {
         PROPAGATED_HEADERS.set(Collections.emptyMap());
+    }
+
+    /** Issue #1570: inbound-only job-dispatch headers for this thread. */
+    public static Map<String, String> getDispatchHeaders() {
+        return DISPATCH_HEADERS_STORE.get();
+    }
+
+    /**
+     * Set the inbound job-dispatch headers for this thread. Keys are
+     * lowercased; only names in {@link #DISPATCH_HEADERS} are retained — this
+     * store must never become a general header channel, because nothing in it
+     * is forwarded downstream.
+     */
+    public static void setDispatchHeaders(Map<String, String> headers) {
+        if (headers == null || headers.isEmpty()) {
+            DISPATCH_HEADERS_STORE.set(Collections.emptyMap());
+            return;
+        }
+        Map<String, String> kept = new LinkedHashMap<>();
+        for (Map.Entry<String, String> e : headers.entrySet()) {
+            if (e.getKey() == null || e.getValue() == null) continue;
+            String name = e.getKey().toLowerCase();
+            if (DISPATCH_HEADERS.contains(name)) {
+                kept.put(name, e.getValue());
+            }
+        }
+        DISPATCH_HEADERS_STORE.set(Collections.unmodifiableMap(kept));
+    }
+
+    /** Clear the inbound job-dispatch headers. */
+    public static void clearDispatchHeaders() {
+        DISPATCH_HEADERS_STORE.set(Collections.emptyMap());
+    }
+
+    /**
+     * Issue #1570: strip the inbound-only dispatch trio from an outbound
+     * header map. Defense in depth — the names are not on the propagate
+     * allowlist, so they should never be in a captured map to begin with, but
+     * an operator-widened {@code MCP_MESH_PROPAGATE_HEADERS} (a
+     * {@code x-mesh-*} prefix entry, say) must not be able to reopen the
+     * self-dispatch hazard.
+     */
+    public static void stripDispatchHeaders(Map<String, String> headers) {
+        if (headers == null || headers.isEmpty()) {
+            return;
+        }
+        headers.keySet().removeIf(name ->
+            name != null && DISPATCH_HEADERS.contains(name.toLowerCase()));
     }
 
     /** Issue #1263: dedicated calling-job identity carrier header names. */

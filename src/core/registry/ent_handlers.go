@@ -36,6 +36,7 @@ func init() {
 	//
 	// Baked-in defaults (always forwarded, regardless of this env var):
 	//   X-Trace-ID, X-Parent-Span, X-Mesh-Timeout, X-Mesh-Job-Id,
+	//   X-Mesh-Claim-Epoch,
 	//   X-Mesh-Calling-Job-Id, X-Mesh-Calling-Claim-Epoch
 	// MCP_MESH_PROPAGATE_HEADERS is purely *additive* on top of the defaults.
 	// TODO(test): extract this parser into a pure helper so it can be unit-tested
@@ -849,6 +850,20 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		proxyReq.Header.Set("X-Mesh-Job-Id", meshJobID)
 	}
 
+	// Forward the claim generation alongside it (#1570). The producer's
+	// dispatch gate reads the pair together — job id to bind the row, epoch to
+	// fence out-of-epoch writes — so forwarding one without the other silently
+	// downgrades a proxied dispatch to legacy owner-only fencing. No in-mesh
+	// caller emits this today (both names are inbound-only as of #1570, and a
+	// claim epoch is minted by this registry, not by a peer), so in practice
+	// this carries a value only for a client that supplies one explicitly. It
+	// is forwarded rather than dropped so the proxy hop is not the reason the
+	// pair arrives split. The claim-local X-Mesh-Recv-Cursor is deliberately
+	// NOT forwarded: it never travels between agents at all.
+	if claimEpoch := c.Request.Header.Get("X-Mesh-Claim-Epoch"); claimEpoch != "" {
+		proxyReq.Header.Set("X-Mesh-Claim-Epoch", claimEpoch)
+	}
+
 	// Forward the calling-job identity pair so the downstream producer can
 	// attribute the call to the originating MeshJob (#1263). Baked-in defaults
 	// like X-Mesh-Job-Id above so registry-proxied topologies keep the identity
@@ -871,6 +886,7 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		"x-parent-span":              true,
 		"x-mesh-timeout":             true,
 		"x-mesh-job-id":              true,
+		"x-mesh-claim-epoch":         true,
 		"x-mesh-calling-job-id":      true,
 		"x-mesh-calling-claim-epoch": true,
 	}

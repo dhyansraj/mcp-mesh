@@ -254,8 +254,10 @@ server). On the producer side, the cancel token fires:
 
 - The `AbortSignal` exposed via `job?.signal` (if the handler
   subscribed) is aborted.
-- Outbound `McpMeshTool` proxy calls abort their underlying `fetch`
-  (cancel propagates through `X-Mesh-Job-Id` binding).
+- Outbound `McpMeshTool` proxy calls abort their underlying `fetch`.
+  This is `awaitJobCancel` firing on the handler's own job context, not
+  something the outbound request carries — the callee is never bound to
+  the caller's job.
 
 The registry treats cancel as terminal (idempotent — already-terminal
 jobs return ok without re-firing).
@@ -503,9 +505,14 @@ deadline is `min(parentRemaining, childRequested)`. Enforced at
 submission time, so the child's runtime sees a single coherent
 deadline regardless of depth.
 
-The header is on the default `MCP_MESH_PROPAGATE_HEADERS` allowlist
-alongside `X-Mesh-Job-Id` and `X-Mesh-Trace-Id` — no per-agent
-configuration is needed.
+`X-Mesh-Timeout` is a baked-in default: it propagates with no
+`MCP_MESH_PROPAGATE_HEADERS` configuration. `X-Mesh-Job-Id` is
+deliberately NOT propagated — it is the inbound dispatch
+discriminator, read off the incoming request and never attached to an
+outbound call, so a nested call can never dispatch as (and complete)
+its caller's job. Which job invoked the current handler travels
+separately, on the `X-Mesh-Calling-Job-Id` and
+`X-Mesh-Calling-Claim-Epoch` pair.
 
 ## Reaping and lease recovery
 
@@ -831,7 +838,8 @@ mode is future work (tracked in `MESHJOB_DESIGN.org`).
 ## See Also
 
 - `meshctl man streaming --typescript` — token-by-token progress
-- `meshctl man audit` — `X-Mesh-Job-Id` + `X-Mesh-Timeout` propagation
+- `meshctl man audit` — why the registry wired a job's `task=true`
+  provider to the consumer it did
 - `meshctl man dependency-injection --typescript` — how DDDI resolves
   `MeshJob`-typed slots
 - [`docs/concepts/jobs.md`](https://github.com/dhyansraj/mcp-mesh/blob/main/docs/concepts/jobs.md) — narrative concept doc with architecture overview

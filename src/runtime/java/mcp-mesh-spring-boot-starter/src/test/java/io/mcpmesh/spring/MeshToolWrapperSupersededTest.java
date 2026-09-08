@@ -141,10 +141,15 @@ class MeshToolWrapperSupersededTest {
             "SupersedingJobBean.jobMutate", "job_mutate", "test", bean, m,
             List.of(), JsonMapper.builder().build(), true);
 
-        TraceContext.setPropagatedHeaders(Map.of("x-mesh-job-id", "job-xyz"));
-        Object result = wrapper.invoke(Map.of("detail", "job-stale"));
+        // Issue #1570: the dispatch discriminator rides the RAW dispatch store.
+        TraceContext.setDispatchHeaders(Map.of("x-mesh-job-id", "job-xyz"));
+        try {
+            Object result = wrapper.invoke(Map.of("detail", "job-stale"));
 
-        assertEquals("{\"error\":\"claim_superseded\",\"detail\":\"job-stale\"}", textOf(result),
-            "a superseded rejection on the job-dispatch path must emit the reserved envelope");
+            assertEquals("{\"error\":\"claim_superseded\",\"detail\":\"job-stale\"}", textOf(result),
+                "a superseded rejection on the job-dispatch path must emit the reserved envelope");
+        } finally {
+            TraceContext.clearDispatchHeaders();
+        }
     }
 }

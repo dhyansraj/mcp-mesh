@@ -18,6 +18,31 @@ from unittest import mock
 import pytest
 
 
+def _seed_inbound(headers: dict) -> None:
+    """Deliver ``headers`` the way the inbound path does (issue #1570).
+
+    The dispatch protocol trio lands on the RAW dispatch store (captured from
+    the inbound request / seeded by the claim dispatcher); everything else
+    lands on the propagated store, which is what rides outbound calls. The two
+    are separate precisely so the discriminator can never be forwarded.
+    """
+    from _mcp_mesh.tracing.context import DISPATCH_HEADERS, TraceContext
+
+    TraceContext.set_dispatch_headers(
+        {k: v for k, v in headers.items() if k in DISPATCH_HEADERS}
+    )
+    TraceContext.set_propagated_headers(
+        {k: v for k, v in headers.items() if k not in DISPATCH_HEADERS}
+    )
+
+
+def _clear_inbound() -> None:
+    from _mcp_mesh.tracing.context import TraceContext
+
+    TraceContext.set_propagated_headers({})
+    TraceContext.clear_dispatch_headers()
+
+
 @pytest.fixture(autouse=True)
 def _reset_decorator_registry_state():
     """Clear cached DecoratorRegistry / shared agent_id state between tests.
@@ -189,7 +214,7 @@ class TestMaybeDispatchAsJob:
         fn._mesh_tool_metadata = {"task": True}
 
         # Seed propagated headers as the FastMCP middleware would.
-        TraceContext.set_propagated_headers(
+        _seed_inbound(
             {
                 "x-mesh-job-id": "job-test-123",
                 "x-mesh-timeout": "60",
@@ -230,7 +255,7 @@ class TestMaybeDispatchAsJob:
             assert captured["job"].job_id == "job-test-123"
             assert captured["job"].instance_id == "test-agent-1"
         finally:
-            TraceContext.set_propagated_headers({})
+            _clear_inbound()
 
     @pytest.mark.asyncio
     async def test_claim_epoch_header_flows_to_controller_and_context(
@@ -246,7 +271,7 @@ class TestMaybeDispatchAsJob:
         fn = _fixture_with_job
         fn._mesh_tool_metadata = {"task": True}
 
-        TraceContext.set_propagated_headers(
+        _seed_inbound(
             {
                 "x-mesh-job-id": "job-epoch-1",
                 "x-mesh-claim-epoch": "5",
@@ -282,7 +307,7 @@ class TestMaybeDispatchAsJob:
             assert seen["with_job_async_epoch"] == 5
             assert seen["snapshot_epoch"] == 5
         finally:
-            TraceContext.set_propagated_headers({})
+            _clear_inbound()
 
     @pytest.mark.asyncio
     async def test_missing_claim_epoch_header_yields_none(self, monkeypatch):
@@ -293,7 +318,7 @@ class TestMaybeDispatchAsJob:
 
         fn = _fixture_with_job
         fn._mesh_tool_metadata = {"task": True}
-        TraceContext.set_propagated_headers({"x-mesh-job-id": "job-noepoch"})
+        _seed_inbound({"x-mesh-job-id": "job-noepoch"})
         monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
         monkeypatch.setenv("MCP_MESH_AGENT_ID", "test-agent-1")
         try:
@@ -319,7 +344,7 @@ class TestMaybeDispatchAsJob:
             assert seen["controller_epoch"] is None
             assert seen["with_job_async_epoch"] is None
         finally:
-            TraceContext.set_propagated_headers({})
+            _clear_inbound()
 
     @pytest.mark.asyncio
     async def test_python_contextvar_set_during_invoke(self, monkeypatch):
@@ -332,9 +357,7 @@ class TestMaybeDispatchAsJob:
         fn = _fixture_with_job
         fn._mesh_tool_metadata = {"task": True}
 
-        TraceContext.set_propagated_headers(
-            {"x-mesh-job-id": "job-ctx-test", "x-mesh-timeout": "30"}
-        )
+        _seed_inbound({"x-mesh-job-id": "job-ctx-test", "x-mesh-timeout": "30"})
         monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
         monkeypatch.setenv("MCP_MESH_AGENT_ID", "ctx-agent")
 
@@ -367,7 +390,7 @@ class TestMaybeDispatchAsJob:
             # After exit, contextvar reset.
             assert current_job() is None
         finally:
-            TraceContext.set_propagated_headers({})
+            _clear_inbound()
 
     @pytest.mark.asyncio
     async def test_auto_complete_fires_when_handler_returns_without_explicit_complete(
@@ -383,9 +406,7 @@ class TestMaybeDispatchAsJob:
         fn = _fixture_with_job
         fn._mesh_tool_metadata = {"task": True}
 
-        TraceContext.set_propagated_headers(
-            {"x-mesh-job-id": "job-auto-1", "x-mesh-timeout": "30"}
-        )
+        _seed_inbound({"x-mesh-job-id": "job-auto-1", "x-mesh-timeout": "30"})
         monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://r:9999")
         monkeypatch.setenv("MCP_MESH_AGENT_ID", "auto-agent")
 
@@ -422,7 +443,7 @@ class TestMaybeDispatchAsJob:
                 "auto-complete must fire exactly once with the handler return"
             )
         finally:
-            TraceContext.set_propagated_headers({})
+            _clear_inbound()
 
     @pytest.mark.asyncio
     async def test_auto_complete_skipped_when_handler_called_complete_itself(
@@ -436,9 +457,7 @@ class TestMaybeDispatchAsJob:
         fn = _fixture_with_job
         fn._mesh_tool_metadata = {"task": True}
 
-        TraceContext.set_propagated_headers(
-            {"x-mesh-job-id": "job-noauto", "x-mesh-timeout": "30"}
-        )
+        _seed_inbound({"x-mesh-job-id": "job-noauto", "x-mesh-timeout": "30"})
         monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://r:9999")
         monkeypatch.setenv("MCP_MESH_AGENT_ID", "noauto-agent")
 
@@ -474,7 +493,7 @@ class TestMaybeDispatchAsJob:
                 "no double-flush — only the explicit complete call should land"
             )
         finally:
-            TraceContext.set_propagated_headers({})
+            _clear_inbound()
 
 
 # ===========================================================================
@@ -501,9 +520,7 @@ class TestRetryOnDispatch:
         fn = _fixture_with_job
         fn._mesh_tool_metadata = {"task": True, "retry_on": (OSError,)}
 
-        TraceContext.set_propagated_headers(
-            {"x-mesh-job-id": "job-retry-1", "x-mesh-timeout": "30"}
-        )
+        _seed_inbound({"x-mesh-job-id": "job-retry-1", "x-mesh-timeout": "30"})
         monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://r:9999")
         monkeypatch.setenv("MCP_MESH_AGENT_ID", "retry-agent")
 
@@ -549,7 +566,7 @@ class TestRetryOnDispatch:
             assert "connection refused" in release_calls[0]
             assert fail_calls == [], "fail() must NOT be called when retry_on matches"
         finally:
-            TraceContext.set_propagated_headers({})
+            _clear_inbound()
             fn._mesh_tool_metadata = {"task": True}
 
     @pytest.mark.asyncio
@@ -563,9 +580,7 @@ class TestRetryOnDispatch:
         fn = _fixture_with_job
         fn._mesh_tool_metadata = {"task": True, "retry_on": (OSError,)}
 
-        TraceContext.set_propagated_headers(
-            {"x-mesh-job-id": "job-nomatch-1", "x-mesh-timeout": "30"}
-        )
+        _seed_inbound({"x-mesh-job-id": "job-nomatch-1", "x-mesh-timeout": "30"})
         monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://r:9999")
         monkeypatch.setenv("MCP_MESH_AGENT_ID", "nomatch-agent")
 
@@ -607,7 +622,7 @@ class TestRetryOnDispatch:
                 "non-matching exception must NOT trigger release_lease"
             )
         finally:
-            TraceContext.set_propagated_headers({})
+            _clear_inbound()
             fn._mesh_tool_metadata = {"task": True}
 
     @pytest.mark.asyncio
@@ -621,9 +636,7 @@ class TestRetryOnDispatch:
         fn = _fixture_with_job
         fn._mesh_tool_metadata = {"task": True, "retry_on": (OSError,)}
 
-        TraceContext.set_propagated_headers(
-            {"x-mesh-job-id": "job-fallback-1", "x-mesh-timeout": "30"}
-        )
+        _seed_inbound({"x-mesh-job-id": "job-fallback-1", "x-mesh-timeout": "30"})
         monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://r:9999")
         monkeypatch.setenv("MCP_MESH_AGENT_ID", "fallback-agent")
 
@@ -665,7 +678,7 @@ class TestRetryOnDispatch:
             assert "OSError" in fail_calls[0]
             assert "release_lease failed" in fail_calls[0]
         finally:
-            TraceContext.set_propagated_headers({})
+            _clear_inbound()
             fn._mesh_tool_metadata = {"task": True}
 
     @pytest.mark.asyncio
@@ -681,9 +694,7 @@ class TestRetryOnDispatch:
         # No retry_on set — equivalent to the pre-#879 contract.
         fn._mesh_tool_metadata = {"task": True}
 
-        TraceContext.set_propagated_headers(
-            {"x-mesh-job-id": "job-default-1", "x-mesh-timeout": "30"}
-        )
+        _seed_inbound({"x-mesh-job-id": "job-default-1", "x-mesh-timeout": "30"})
         monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://r:9999")
         monkeypatch.setenv("MCP_MESH_AGENT_ID", "default-agent")
 
@@ -723,7 +734,7 @@ class TestRetryOnDispatch:
             # release_lease NEVER called.
             assert release_calls == []
         finally:
-            TraceContext.set_propagated_headers({})
+            _clear_inbound()
 
 
 # ===========================================================================
@@ -755,9 +766,7 @@ class TestCancelObservability:
         fn._mesh_tool_metadata = {"task": True}
 
         job_id = "job-cancel-obs-1"
-        TraceContext.set_propagated_headers(
-            {"x-mesh-job-id": job_id, "x-mesh-timeout": "30"}
-        )
+        _seed_inbound({"x-mesh-job-id": job_id, "x-mesh-timeout": "30"})
         monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://r:9999")
         monkeypatch.setenv("MCP_MESH_AGENT_ID", "cancel-obs-agent")
 
@@ -839,7 +848,7 @@ class TestCancelObservability:
             assert release_calls == []
             assert complete_calls == []
         finally:
-            TraceContext.set_propagated_headers({})
+            _clear_inbound()
             fn._mesh_tool_metadata = {"task": True}
 
 

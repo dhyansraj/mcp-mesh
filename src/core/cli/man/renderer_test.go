@@ -555,9 +555,40 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // asymmetry is now stated. The `environment.md` entry for the same env var sits
 // inside a fenced block, so it adds no spans. `schema-matching.md` has no
 // `_java` / `_typescript` variant, so the variant golden did not move.
+//
+// Issue #1570 moves the inline constant to 1843 and `wantListCodeSpans` to
+// 531. Four edits, all downstream of one contract decision — `X-Mesh-Job-Id`
+// is the inbound dispatch discriminator and is never propagated.
+//
+// +2, `jobs.md` "Timeout propagation": the paragraph claimed the header was on
+// the default `MCP_MESH_PROPAGATE_HEADERS` allowlist alongside a
+// `X-Mesh-Trace-Id` that exists in no runtime (the trace header is
+// `X-Trace-ID`). The replacement names 5 headers where it named 3.
+//
+// +19, the `3.8.0` section in `upgrading.md`: the behaviour change is silent in
+// every runtime — a nested `task=true` call stops inheriting its caller's job
+// row — and a mixed rollout has an ordering constraint, so it belongs on the
+// page whose subtitle promises skew guarantees. Most of the section is a
+// per-runtime table and a fenced log line and this test skips both, so 19 is
+// well under its size.
+//
+// -1, `jobs.md`'s cancel bullet: it credited the outbound abort to
+// "`X-Mesh-Job-Id` header binding". It is the in-process cancel registry firing
+// on the handler's OWN job context; the outbound request carries nothing, and
+// after this issue it demonstrably cannot. That span sat on the bullet's
+// CONTINUATION line, so no list constant moved with it.
+//
+// -1, `jobs.md`'s "See Also" line: it advertised `X-Mesh-Job-Id` +
+// `X-Mesh-Timeout` "propagation through the audit pipeline". `audit.md`
+// mentions neither header and no trace record carries a job id. This one IS a
+// `- ` line, which is why `wantListCodeSpans` moves -1 and is the only list
+// movement in the change.
+//
+// 1824 + 2 + 19 - 1 - 1 = 1843. `jobs.md` has both variants and took three of
+// the four edits, so the variant golden moved with it; `upgrading.md` has none.
 const (
-	wantInlineCodeSpans = 1824
-	wantListCodeSpans   = 532
+	wantInlineCodeSpans = 1843
+	wantListCodeSpans   = 531
 	wantMarkupListLines = 450
 )
 

@@ -174,6 +174,7 @@ class TestClaimHandlerSeesNoCallingJob:
         async def handler(**kwargs):
             seen["calling"] = calling_job()
             seen["headers"] = dict(TraceContext.get_propagated_headers())
+            seen["dispatch"] = dict(TraceContext.get_dispatch_headers())
 
         d = PythonClaimDispatcher(
             capability="cap",
@@ -182,7 +183,12 @@ class TestClaimHandlerSeesNoCallingJob:
             handler=handler,
         )
         await d._dispatch({"id": "job-self", "submitted_payload": {}, "claim_epoch": 4})
-        # The claim dispatcher seeds the dispatch pair (job context)…
-        assert seen["headers"].get("x-mesh-job-id") == "job-self"
+        # The claim dispatcher seeds the dispatch pair (job context) into the
+        # inbound-only DISPATCH store — never the propagated one, which is what
+        # rides outbound calls (#1570).
+        assert seen["dispatch"].get("x-mesh-job-id") == "job-self"
+        assert seen["dispatch"].get("x-mesh-claim-epoch") == "4"
+        assert "x-mesh-job-id" not in seen["headers"]
+        assert "x-mesh-claim-epoch" not in seen["headers"]
         # …but calling_job() reads the calling-* pair → None here.
         assert seen["calling"] is None

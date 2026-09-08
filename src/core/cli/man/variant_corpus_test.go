@@ -174,7 +174,16 @@ func stripLangHeader(content string) string {
 // the same commit and confirm the delta is the size you intended, the same rule
 // the default corpus follows. Measured across all 34 variant pages at the
 // commit that added this test.
-const wantVariantInlineCodeSpans = 1662
+//
+// Issue #1570 moves this to 1663. Both `jobs.md` variants took the same three
+// edits as the default page: +2 each for the corrected "Timeout
+// propagation" paragraph, -1 each for the "See Also" line that advertised
+// `X-Mesh-Job-Id` propagation through an audit pipeline that has never carried
+// it, and -1 for `jobs_java.md`'s cancel bullet, which credited the outbound
+// abort to the header rather than the per-job cancel watcher.
+// `jobs_typescript.md` names `awaitJobCancel` in the same replacement, so its
+// cancel bullet is span-neutral. 1662 + 4 - 2 - 1 = 1663.
+const wantVariantInlineCodeSpans = 1663
 
 // TestVariantCorpusCodeSpans is TestStyleInlineCorpus plus
 // TestRenderStyledCorpusListItems, run over the pages neither of them sees.

@@ -471,6 +471,9 @@ public class McpHttpClient {
                     }
                 }
             }
+            // Issue #1570: the inbound-only dispatch trio never rides an
+            // outbound call, whatever put it in the propagated store.
+            TraceContext.stripDispatchHeaders(mergedHeaders);
 
             // Inject trace context into arguments via Rust core bridge
             // (FastMCP doesn't expose HTTP headers to tool handlers)
@@ -1017,6 +1020,9 @@ public class McpHttpClient {
                     }
                 }
             }
+            // Issue #1570: the inbound-only dispatch trio never rides an
+            // outbound call, whatever put it in the propagated store.
+            TraceContext.stripDispatchHeaders(mergedHeaders);
 
             // Inject trace context into arguments via Rust core (parity with callTool)
             Map<String, Object> argsWithTrace;

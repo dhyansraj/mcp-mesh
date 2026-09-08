@@ -317,24 +317,32 @@ class PythonClaimDispatcher:
         if not isinstance(payload, dict):
             payload = {}
 
-        # Set propagated headers for this task so maybe_dispatch_as_job
-        # picks up the job_id (mirrors how the inbound HTTP path delivers
-        # it via the FastMCP middleware).
+        # Seed the inbound header contextvars for this task so
+        # maybe_dispatch_as_job picks up the job id (mirrors how the inbound
+        # HTTP path delivers it via the FastMCP middleware).
+        #
+        # Issue #1570: the dispatch protocol trio (job id / claim epoch /
+        # recv cursor) goes into the DISPATCH store, which is inbound-only and
+        # never rides an outbound call — forwarding x-mesh-job-id would make a
+        # nested task=True call self-dispatch as this job and auto-complete it
+        # with the wrong result. Only x-mesh-timeout (a genuinely propagated
+        # header) is seeded into the propagated store.
         try:
             from ..tracing.context import TraceContext
 
-            existing = TraceContext.get_propagated_headers() or {}
-            merged = dict(existing)
-            merged["x-mesh-job-id"] = job_id
+            dispatch: dict[str, str] = {"x-mesh-job-id": job_id}
             max_dur = claimed.get("max_duration")
             if max_dur:
-                merged["x-mesh-timeout"] = str(int(max_dur))
+                existing = TraceContext.get_propagated_headers() or {}
+                TraceContext.set_propagated_headers(
+                    {**existing, "x-mesh-timeout": str(int(max_dur))}
+                )
             # Seed the claim generation (issue #1252) so the dispatched
             # handler's JobController fences its deltas + executor reads and a
             # supersession aborts it. Absent on an old registry ⇒ legacy path.
             claim_epoch = _valid_claim_epoch(claimed.get("claim_epoch"))
             if claim_epoch is not None:
-                merged["x-mesh-claim-epoch"] = str(claim_epoch)
+                dispatch["x-mesh-claim-epoch"] = str(claim_epoch)
             # Seed the persisted per-filter receive cursor (issue #1277) so a
             # tool that opted into resume (`@mesh.tool(resume_cursor=True)`)
             # resumes its recv_event consumption instead of replaying from
@@ -346,7 +354,7 @@ class PythonClaimDispatcher:
             recv_cursor = claimed.get("recv_cursor")
             if isinstance(recv_cursor, dict) and recv_cursor:
                 try:
-                    merged["x-mesh-recv-cursor"] = json.dumps(recv_cursor)
+                    dispatch["x-mesh-recv-cursor"] = json.dumps(recv_cursor)
                 except (TypeError, ValueError) as e:
                     logger.debug(
                         "claim_dispatcher: could not serialize recv_cursor "
@@ -354,10 +362,10 @@ class PythonClaimDispatcher:
                         recv_cursor,
                         e,
                     )
-            TraceContext.set_propagated_headers(merged)
+            TraceContext.set_dispatch_headers(dispatch)
         except Exception as e:
             logger.debug(
-                "claim_dispatcher: could not seed propagated headers (%s); "
+                "claim_dispatcher: could not seed inbound headers (%s); "
                 "dispatching without job context",
                 e,
             )

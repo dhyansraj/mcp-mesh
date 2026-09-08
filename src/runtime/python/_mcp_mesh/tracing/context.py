@@ -30,6 +30,17 @@ for _infra in ("x-mesh-calling-job-id", "x-mesh-calling-claim-epoch"):
         PROPAGATE_HEADERS.append(_infra)
 PROPAGATE_HEADERS_CSV: str = ",".join(PROPAGATE_HEADERS)
 
+# Issue #1570: the push-mode dispatch protocol headers. These are INBOUND-ONLY
+# — read from the raw inbound request (or seeded by the claim dispatcher) to
+# decide whether THIS call is a job dispatch, and never emitted on an outbound
+# call. Forwarding ``x-mesh-job-id`` would make a nested ``task=True`` call
+# self-dispatch as the CALLER's job (owner + epoch match) and auto-complete it
+# with the wrong result. Calling identity travels on the dedicated
+# ``x-mesh-calling-*`` pair instead.
+DISPATCH_HEADERS: frozenset[str] = frozenset(
+    {"x-mesh-job-id", "x-mesh-claim-epoch", "x-mesh-recv-cursor"}
+)
+
 
 def matches_propagate_header(name: str) -> bool:
     """Check if a header name matches the propagate headers allowlist.
@@ -127,6 +138,13 @@ class TraceContext:
     _propagated_headers: contextvars.ContextVar[dict[str, str] | None] = (
         contextvars.ContextVar("propagated_headers", default=None)
     )
+    # Issue #1570: inbound-only dispatch protocol headers (see
+    # DISPATCH_HEADERS). Deliberately a SEPARATE store from the propagated
+    # headers so they can be read for dispatch without ever riding an
+    # outbound call.
+    _dispatch_headers: contextvars.ContextVar[dict[str, str] | None] = (
+        contextvars.ContextVar("dispatch_headers", default=None)
+    )
 
     @classmethod
     def set_current(
@@ -163,6 +181,28 @@ class TraceContext:
     def clear_propagated_headers(cls):
         """Clear propagated headers"""
         cls._propagated_headers.set({})
+
+    @classmethod
+    def get_dispatch_headers(cls) -> dict[str, str]:
+        """Inbound-only job-dispatch headers for this async context (#1570)."""
+        return cls._dispatch_headers.get() or {}
+
+    @classmethod
+    def set_dispatch_headers(cls, headers: dict[str, str]):
+        """Set the inbound job-dispatch headers for this async context.
+
+        Keys are expected lowercased. Only names in :data:`DISPATCH_HEADERS`
+        are retained — this store must never become a general header channel,
+        because nothing in it is ever forwarded downstream.
+        """
+        cls._dispatch_headers.set(
+            {k: v for k, v in headers.items() if k in DISPATCH_HEADERS}
+        )
+
+    @classmethod
+    def clear_dispatch_headers(cls):
+        """Clear the inbound job-dispatch headers."""
+        cls._dispatch_headers.set({})
 
     @classmethod
     def generate_new(cls) -> TraceInfo:

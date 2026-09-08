@@ -272,8 +272,10 @@ class TestJobDeadlineOverride:
     @pytest.mark.asyncio
     async def test_tighter_deadline_replaces_the_default(self):
         client = await self._capture_under_job(20.0)
-        assert client.headers["X-Mesh-Job-Id"] == "job-1584"
         assert client.headers["X-Mesh-Timeout"] == "20"
+        # Issue #1570: the dispatch discriminator never rides outbound.
+        assert "X-Mesh-Job-Id" not in client.headers
+        assert "x-mesh-job-id" not in client.headers
 
     @pytest.mark.asyncio
     async def test_sub_second_grant_advertises_one_not_zero(self):
@@ -290,6 +292,5 @@ class TestJobDeadlineOverride:
         # `<= 0` header to None. CURRENT_JOB is public API, so user code and
         # tests can still produce this snapshot directly.
         client = await self._capture_under_job(-3.0)
-        assert client.headers["X-Mesh-Job-Id"] == "job-1584"
         assert "X-Mesh-Timeout" not in client.headers
         assert "x-mesh-timeout" not in client.headers

@@ -4,9 +4,12 @@ This module wires the producer-side dispatch path: when a tool decorated
 with ``@mesh.tool(task=True)`` receives an inbound ``tools/call`` bearing
 ``X-Mesh-Job-Id``, the wrapper:
 
-1. Reads ``X-Mesh-Job-Id`` and (optionally) ``X-Mesh-Timeout`` from the
-   active propagated-headers contextvar (populated by the FastMCP session
-   middleware in ``http_wrapper.py``).
+1. Reads ``X-Mesh-Job-Id`` from the active dispatch-headers contextvar
+   (captured from the RAW inbound request by the FastMCP session middleware
+   in ``http_wrapper.py``, or seeded by the claim dispatcher) and
+   (optionally) ``X-Mesh-Timeout`` from the propagated-headers contextvar.
+   The dispatch protocol headers deliberately live in their own store: they
+   are inbound-only and must never ride an outbound call (issue #1570).
 2. Builds a :class:`mcp_mesh_core.JobController` bound to that job id and
    the running agent's instance id.
 3. Sets both the Python :data:`CURRENT_JOB` contextvar and (via
@@ -54,7 +57,9 @@ except ImportError:
 
 # Header names — lowercased to match how the FastMCP middleware stores
 # captured inbound headers (via ``str.lower()`` in
-# ``http_wrapper.py::MCPSessionRoutingMiddleware.dispatch``).
+# ``http_wrapper.py::MCPSessionRoutingMiddleware.dispatch``). The dispatch
+# trio (job id / claim epoch / recv cursor) is INBOUND-ONLY — see
+# ``tracing.context.DISPATCH_HEADERS`` (issue #1570).
 _HDR_JOB_ID = "x-mesh-job-id"
 _HDR_TIMEOUT = "x-mesh-timeout"
 # Claim generation minted by the registry on POST /jobs/claim (issue #1252).
@@ -64,12 +69,26 @@ _HDR_CLAIM_EPOCH = "x-mesh-claim-epoch"
 # dispatcher as a JSON-serialized ``dict[str, int]``; absent on the push-mode
 # inbound path and whenever the reclaimed row had no prior consumption.
 _HDR_RECV_CURSOR = "x-mesh-recv-cursor"
+# Calling-job identity (issue #1263). Read here only as the version-skew
+# discriminator described in ``_read_job_headers``; the accessor users call is
+# ``mesh.calling_job()``.
+_HDR_CALLING_JOB_ID = "x-mesh-calling-job-id"
 
 
 def _read_job_headers() -> tuple[str | None, float | None, int | None, dict | None]:
     """Pull ``X-Mesh-Job-Id`` / ``X-Mesh-Timeout`` / ``X-Mesh-Claim-Epoch`` /
-    ``X-Mesh-Recv-Cursor`` from the propagated-headers contextvar populated by
-    the MCP session middleware (or seeded by the claim dispatcher).
+    ``X-Mesh-Recv-Cursor`` from the inbound contextvars.
+
+    The dispatch protocol trio (job id / claim epoch / recv cursor) is read
+    ONLY from the DISPATCH-headers contextvar — captured from the RAW inbound
+    request by the MCP session middleware, or seeded by the claim dispatcher.
+    The propagated map is never consulted for it, matching TypeScript and
+    Java: those names are deliberately off the propagate allowlist
+    (issue #1570 — forwarding ``x-mesh-job-id`` makes a nested ``task=True``
+    call self-dispatch as the caller's job), and reading a fallback out of the
+    propagated map would let an operator who widens
+    ``MCP_MESH_PROPAGATE_HEADERS`` re-arm exactly that hazard. The propagated
+    map remains the source for ``X-Mesh-Timeout``, which genuinely propagates.
 
     Returns ``(job_id, deadline_secs_remaining, claim_epoch, recv_cursor)`` —
     any may be ``None``. ``claim_epoch`` and ``recv_cursor`` are present only
@@ -84,14 +103,40 @@ def _read_job_headers() -> tuple[str | None, float | None, int | None, dict | No
     except Exception:
         return None, None, None, None
 
-    headers = TraceContext.get_propagated_headers() or {}
-    if not headers:
-        return None, None, None, None
+    propagated = TraceContext.get_propagated_headers() or {}
+    dispatch = TraceContext.get_dispatch_headers() or {}
 
-    # Header dict is lowercased by the middleware before storing.
-    job_id = headers.get(_HDR_JOB_ID)
+    # Header dicts are lowercased by the middleware before storing. The
+    # dispatch trio comes from the raw store; only x-mesh-timeout is read off
+    # the propagated one.
+    job_id = dispatch.get(_HDR_JOB_ID)
     if not job_id:
         return None, None, None, None
+
+    # Version-skew guard (issue #1570). A pre-3.8 peer forwarded
+    # x-mesh-job-id on ordinary nested calls, and it only ever did so from
+    # inside a bound job context — which seeds x-mesh-calling-job-id on the
+    # SAME request. A genuine push-mode dispatch carries the job id WITHOUT
+    # calling identity (the submitter is not itself executing that job), so
+    # the two arriving together identifies a leaked nested call from an old
+    # caller. Dispatching on it would bind this handler to the CALLER's job
+    # row and auto-complete it with this tool's result — the very corruption
+    # this issue removes. Refuse the dispatch, run as a plain call, and say
+    # so loudly: the fix is to finish the upgrade.
+    if propagated.get(_HDR_CALLING_JOB_ID):
+        logger.warning(
+            "job_dispatch: inbound %s=%s arrived together with %s=%s — a "
+            "pre-3.8 caller leaking its own job id on a nested call, not a "
+            "push-mode dispatch. Running as a plain tool call; upgrade the "
+            "calling agent to stop this (issue #1570).",
+            _HDR_JOB_ID,
+            job_id,
+            _HDR_CALLING_JOB_ID,
+            propagated.get(_HDR_CALLING_JOB_ID),
+        )
+        return None, None, None, None
+
+    headers = {**propagated, **dispatch}
 
     timeout_raw = headers.get(_HDR_TIMEOUT)
     deadline_secs: float | None = None
@@ -668,9 +713,10 @@ async def maybe_dispatch_as_job(
             # (e.g. older mcp-mesh-core .so), still run the user
             # function with the Python contextvar set. Outbound HTTP
             # via the unified proxy reads the Python contextvar
-            # directly, so X-Mesh-Job-Id propagation still works for
-            # Python-originated downstream calls — only the Rust-core
-            # task-local is missing.
+            # directly, so the calling-job identity (x-mesh-calling-*)
+            # and the nested deadline cap still ride downstream calls —
+            # only the Rust-core task-local is missing. The dispatch id
+            # itself is never forwarded either way (issue #1570).
             logger.debug(
                 "job_dispatch: with_job_async not available; running with "
                 "Python contextvar only (Rust task-local will not be set)"

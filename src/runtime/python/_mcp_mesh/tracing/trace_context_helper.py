@@ -160,9 +160,19 @@ class TraceContextHelper:
                 headers["X-Trace-ID"] = trace_context.trace_id
                 headers["X-Parent-Span"] = trace_context.span_id
 
-            # Inject propagated headers (independent of tracing)
+            # Inject propagated headers (independent of tracing).
+            #
+            # Issue #1570: the push-mode dispatch trio is INBOUND-ONLY and is
+            # skipped here even if it somehow reached the propagated store —
+            # forwarding x-mesh-job-id makes a nested task=True call
+            # self-dispatch as the CALLER's job and auto-complete it with the
+            # wrong result. Calling identity rides x-mesh-calling-* instead.
+            from .context import DISPATCH_HEADERS
+
             propagated = TraceContext.get_propagated_headers()
             for key, value in propagated.items():
+                if key.lower() in DISPATCH_HEADERS:
+                    continue
                 headers[key] = value
         except Exception as e:
             # Tracing injection should never break MCP calls

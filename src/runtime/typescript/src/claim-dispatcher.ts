@@ -539,23 +539,29 @@ export class ClaimDispatcher {
 
     // Seed the propagated-headers ALS so outbound calls made by the
     // handler continue the submitter's trace tree and carry the job
-    // context onward. Mirrors Python's
+    // budget onward. Mirrors Python's
     // `TraceContext.set_propagated_headers` block in
     // `_mcp_mesh.engine.claim_dispatcher.PythonClaimDispatcher._dispatch`.
     //
     // Trace headers (`x-trace-id`, `x-parent-span`) are not echoed by
     // the registry's claim response in the current wire (see
-    // `src/core/registry/ent_handlers_jobs.go::ClaimJobs`), so we only
-    // seed `x-mesh-job-id` + `x-mesh-timeout` here. If a future schema
-    // adds `trace_id` to ClaimedJob, fold it in alongside.
-    const headers: Record<string, string> = {
-      "x-mesh-job-id": jobId,
-    };
+    // `src/core/registry/ent_handlers_jobs.go::ClaimJobs`), so only
+    // `x-mesh-timeout` is seeded here. If a future schema adds
+    // `trace_id` to ClaimedJob, fold it in alongside.
+    //
+    // Issue #1570: the dispatch protocol pair (`x-mesh-job-id` /
+    // `x-mesh-claim-epoch`) is deliberately NOT seeded. This store is what
+    // `buildMcpRequest` forwards on every outbound call, so seeding the job id
+    // here made a nested call into a `task:true` tool look like an inbound job
+    // dispatch to the callee — which, when that callee had a required
+    // dependency down, released the CALLER's lease and returned `""` instead
+    // of the `dependency_unavailable` refusal. The claim path passes the
+    // controller to the handler directly and binds `currentJob()` via
+    // `runWithJobContext`, so nothing on this side needs the header; calling
+    // identity rides the dedicated `x-mesh-calling-*` pair (#1263).
+    const headers: Record<string, string> = {};
     if (deadlineSecs !== null && deadlineSecs > 0) {
       headers["x-mesh-timeout"] = String(deadlineSecs);
-    }
-    if (claimEpoch !== null) {
-      headers["x-mesh-claim-epoch"] = String(claimEpoch);
     }
 
     try {

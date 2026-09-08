@@ -2,6 +2,42 @@
 
 > Order of operations, version-skew guarantees, schema migrations, in-flight job safety, and source migrations for upgrading a running mesh
 
+## 3.8.0 — A `task=true` chain no longer inherits the caller's job
+
+**Behaviour change in all three runtimes.** `X-Mesh-Job-Id` is the push-mode dispatch discriminator: a producer reads it off an *incoming* request to bind its handler to that job row. It was also being sent *outbound*, which made a nested `task=true` call dispatch as — and auto-complete — its caller's job.
+
+| Runtime | How it leaked | What a nested `task=true` callee did with it |
+| ------- | ------------- | -------------------------------------------- |
+| Java | On the propagate allowlist, so every outbound call inherited the captured inbound value | Dispatched as the caller's job, then completed the caller's row with the callee's result |
+| Python | Stamped explicitly from the active job context on every outbound mesh call | Nothing — Python discarded it inbound, which is the same filter that made push-mode dispatch over HTTP unreachable |
+| TypeScript | Seeded into the propagated-header store by the claim dispatcher, which the proxy forwards | Misread an ordinary dependency outage as a job dispatch: released the **caller's** lease and returned `""` instead of the `dependency_unavailable` refusal |
+
+As of 3.8.0 the two directions are separate everywhere. The header is read from the raw inbound request and never attached to an outbound call. A nested `task=true` call is an ordinary tool call: `null` in its `MeshJob` slot, its value returned to its caller, and the caller completes its own job. Who invoked the current handler is a separate question, answered as before by the dedicated `X-Mesh-Calling-Job-Id` / `X-Mesh-Calling-Claim-Epoch` pair, which is still propagated.
+
+### Upgrade producers before, or at the same time as, their callers
+
+A pre-3.8 caller still sends its job id. A 3.8 callee reads inbound job ids from the raw request, where it previously ignored them — so during a mixed rollout an old caller can hand a new callee its own job row. The runtime refuses that: a job id arriving **together with** `X-Mesh-Calling-Job-Id` is a leak, not a dispatch (an old peer only ever leaked the id from inside a job context, which stamps calling identity on the same request; a genuine push dispatch carries the id alone). The callee logs it and runs the call normally:
+
+```text
+inbound x-mesh-job-id=<id> arrived together with x-mesh-calling-job-id=<id> — a pre-3.8
+caller leaking its own job id on a nested call, not a push-mode dispatch. Running as a
+plain tool call; upgrade the calling agent to stop this (issue #1570).
+```
+
+Treat that line as an upgrade-completion checklist, not an error. It is safe to leave running — the callee behaves exactly as a fully-upgraded one — but it means a peer is still on the old wire.
+
+### What to check before upgrading
+
+The affected topology is a job handler in **any** runtime calling into a `task=true` tool. Start from the callee side, which is where the corruption landed: for every `task=true` tool, ask whether its `MeshJob` slot was ever non-null on a call that did not come from the registry claim path. If it was, that handler was operating on its *caller's* job, and any progress delta, event or completion it wrote landed on that row. After the upgrade the slot is `null` there, so a handler that dereferences it without a null check throws instead of corrupting the caller's row. Submit a child job explicitly (`MeshJobSubmitter` / `mesh.jobs`) where a second job is actually wanted.
+
+Java carries the extra risk that the leak needed no job context to spread: because the header was allowlisted, a plain (non-`task`) Java tool relayed an inbound job id onto its own downstream calls.
+
+### Also in this change
+
+`X-Mesh-Claim-Epoch` is now read from the raw inbound request in Java, where it was previously read from a map it could never appear in, and the registry proxy forwards it alongside the job id instead of dropping it. Both were prerequisites for out-of-epoch fencing across a proxy hop rather than a fix that changes behaviour on its own: no agent emits that header now that the dispatch names are inbound-only, so it carries a value only when a client supplies one.
+
+Push-mode dispatch over HTTP — a `tools/call` carrying `X-Mesh-Job-Id` — reaches the dispatch gate in Python and Java, where the allowlist filter had made it unreachable. It remains unreachable in TypeScript for an unrelated reason: FastMCP TS does not expose HTTP headers to a tool, so a TypeScript agent only ever sees mesh headers that a caller passed in the `_mesh_headers` argument.
+
 ## 3.5.0 — Helm chart upgrade order: 3.3.x → 3.4.x → 3.5.0
 
 **Do not upgrade the `mcp-mesh-core` chart from 3.3.x straight to 3.5.0.** Chart 3.5.0 changes `namespaceCreate` to default `false`, which drops the release's `Namespace` object from the rendered manifest — and Helm *deletes* a resource that leaves the manifest, cascading to every agent, Service, Secret and PVC in the namespace. What makes the removal safe is `helm.sh/resource-policy: keep` on the live `Namespace`, and chart 3.4.0 is the first version that applies it.

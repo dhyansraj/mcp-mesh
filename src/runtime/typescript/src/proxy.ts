@@ -172,6 +172,21 @@ const HDR_CALLING_JOB_ID = "x-mesh-calling-job-id";
 const HDR_CALLING_CLAIM_EPOCH = "x-mesh-calling-claim-epoch";
 
 /**
+ * Push-mode dispatch protocol headers (issue #1570). INBOUND-ONLY: read from
+ * the raw inbound `_mesh_headers` map to decide whether THIS call is a job
+ * dispatch, never emitted on an outbound call. `x-mesh-job-id` doubles as the
+ * dispatch discriminator, so forwarding it makes a nested `task:true` call
+ * self-dispatch as the CALLER's job (owner + epoch match) and auto-complete it
+ * with the wrong result. The claim-local recv cursor is additionally
+ * meaningless downstream.
+ */
+const DISPATCH_ONLY_HEADERS = [
+  "x-mesh-job-id",
+  "x-mesh-claim-epoch",
+  "x-mesh-recv-cursor",
+] as const;
+
+/**
  * Identity of the job whose handler made the CURRENT inbound call
  * (issue #1263). Returned by {@link callingJob}.
  */
@@ -459,6 +474,12 @@ function buildMcpRequest(
         mergedHeaders[key.toLowerCase()] = value;
       }
     }
+  }
+
+  // Issue #1570: the dispatch protocol headers never ride an outbound call,
+  // whatever put them in the propagated store or a per-call override.
+  for (const name of DISPATCH_ONLY_HEADERS) {
+    delete mergedHeaders[name];
   }
 
   // Issue #1263: overlay the CALLING job's identity so a nested outbound call
