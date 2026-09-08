@@ -404,7 +404,11 @@ impl JsAgentHandle {
 
     /// Get current dependency endpoints.
     ///
-    /// Returns an object mapping capability names to endpoint URLs.
+    /// Returns an object mapping capability names to endpoint URLs. When the
+    /// same capability is resolved at more than one declared position, the
+    /// first position wins (issue #1588 — the underlying state is keyed by
+    /// `(requesting_function, dep_index)`, so this projection is a stable
+    /// collapse rather than an arbitrary one).
     ///
     /// NB: these accessors run inside napi's tokio runtime, so they must
     /// use the `*_async` handle variants — the `*_internal` ones call

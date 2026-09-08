@@ -13,13 +13,21 @@ use std::time::Duration;
 use tokio::sync::{mpsc, Mutex, RwLock};
 
 use crate::events::{HealthStatus, MeshEvent};
-use crate::runtime::RuntimeCommand;
+use crate::runtime::{DepKey, DepValue, RuntimeCommand};
 use crate::spec::ToolSpec;
 
 /// Internal state shared between handle and runtime.
 pub struct HandleState {
-    /// Current dependency endpoints (capability -> endpoint)
-    pub dependencies: HashMap<String, String>,
+    /// Currently resolved dependencies, keyed by `(requesting_function,
+    /// dep_index)` — the same key the runtime's topology uses.
+    ///
+    /// Issue #1588: this used to be keyed by capability. A function may declare
+    /// two dependencies on the same capability (differing only by tags), so a
+    /// capability key collapsed both edges onto one entry and dropping either
+    /// one deleted the shared entry for both. The capability-keyed view the
+    /// public accessors promise is derived on read via
+    /// [`HandleState::endpoints_by_capability`].
+    pub dependencies: HashMap<DepKey, DepValue>,
 
     /// Current health status
     pub health_status: HealthStatus,
@@ -29,6 +37,29 @@ pub struct HandleState {
 
     /// Agent ID assigned by registry
     pub agent_id: Option<String>,
+}
+
+impl HandleState {
+    /// Project the positionally-keyed dependency map onto the
+    /// `capability -> endpoint` view the Python/napi accessors document.
+    ///
+    /// When a capability is resolved at more than one position the lowest
+    /// `(requesting_function, dep_index)` wins, so the projection is stable
+    /// across calls instead of depending on `HashMap` iteration order. That
+    /// collapse is inherent to a capability-keyed return type; the full set of
+    /// edges lives in [`Self::dependencies`].
+    pub fn endpoints_by_capability(&self) -> HashMap<String, String> {
+        let mut keys: Vec<&DepKey> = self.dependencies.keys().collect();
+        keys.sort();
+        let mut out: HashMap<String, String> = HashMap::new();
+        for key in keys {
+            if let Some(value) = self.dependencies.get(key) {
+                out.entry(value.capability.clone())
+                    .or_insert_with(|| value.endpoint.clone());
+            }
+        }
+        out
+    }
 }
 
 impl Default for HandleState {
@@ -162,7 +193,8 @@ impl AgentHandle {
     /// Get current dependency endpoints.
     ///
     /// Returns a dict mapping capability names to endpoint URLs.
-    /// This is a snapshot of the current state.
+    /// This is a snapshot of the current state. When the same capability is
+    /// resolved at more than one declared position, the first position wins.
     fn get_dependencies(&self) -> PyResult<HashMap<String, String>> {
         Ok(self.get_dependencies_internal())
     }
@@ -242,10 +274,10 @@ impl AgentHandle {
 
 /// Language-agnostic methods for AgentHandle (used by both Python and FFI)
 impl AgentHandle {
-    /// Get current dependency endpoints.
+    /// Get current dependency endpoints (capability -> endpoint).
     pub fn get_dependencies_internal(&self) -> HashMap<String, String> {
         let state = self.state.blocking_read();
-        state.dependencies.clone()
+        state.endpoints_by_capability()
     }
 
     /// Get current agent health status.
@@ -266,7 +298,7 @@ impl AgentHandle {
         state.shutdown_requested
     }
 
-    /// Get current dependency endpoints (async version).
+    /// Get current dependency endpoints (capability -> endpoint, async version).
     ///
     /// Use this — not the `*_internal` variant — when calling from an
     /// async context (e.g. napi-rs async methods): `blocking_read()`
@@ -274,7 +306,7 @@ impl AgentHandle {
     /// the `shutdown_async` / `update_tools_async` pattern.
     pub async fn get_dependencies_async(&self) -> HashMap<String, String> {
         let state = self.state.read().await;
-        state.dependencies.clone()
+        state.endpoints_by_capability()
     }
 
     /// Get current agent health status (async version).
@@ -415,6 +447,49 @@ impl AgentHandle {
 mod tests {
     use super::*;
 
+    fn dep_key(function: &str, index: u32) -> DepKey {
+        DepKey {
+            requesting_function: function.to_string(),
+            dep_index: index,
+        }
+    }
+
+    fn dep_value(capability: &str, endpoint: &str) -> DepValue {
+        DepValue {
+            capability: capability.to_string(),
+            endpoint: endpoint.to_string(),
+            function_name: "provider_fn".to_string(),
+            agent_id: "provider-agent".to_string(),
+            kwargs: None,
+        }
+    }
+
+    /// Issue #1588: the capability-keyed projection must be stable and must not
+    /// lose a capability just because another position also resolves it.
+    #[test]
+    fn endpoints_by_capability_is_deterministic_across_duplicate_capabilities() {
+        let mut state = HandleState::default();
+        state.dependencies.insert(
+            dep_key("consumer", 1),
+            dep_value("weather", "http://b:9000"),
+        );
+        state.dependencies.insert(
+            dep_key("consumer", 0),
+            dep_value("weather", "http://a:9000"),
+        );
+        state
+            .dependencies
+            .insert(dep_key("other", 0), dep_value("time", "http://t:9000"));
+
+        for _ in 0..20 {
+            let view = state.endpoints_by_capability();
+            assert_eq!(view.len(), 2);
+            // Lowest (function, index) wins — never HashMap iteration order.
+            assert_eq!(view["weather"], "http://a:9000");
+            assert_eq!(view["time"], "http://t:9000");
+        }
+    }
+
     #[tokio::test]
     async fn test_handle_state() {
         let (event_tx, event_rx) = mpsc::channel(10);
@@ -428,7 +503,10 @@ mod tests {
         {
             let mut s = state.write().await;
             s.agent_id = Some("test-agent".to_string());
-            s.dependencies.insert("date-service".to_string(), "http://localhost:9001".to_string());
+            s.dependencies.insert(
+                dep_key("consumer", 0),
+                dep_value("date-service", "http://localhost:9001"),
+            );
         }
 
         // Query state directly (avoid blocking_read in async context)
@@ -472,8 +550,10 @@ mod tests {
         {
             let mut s = state.write().await;
             s.agent_id = Some("async-agent".to_string());
-            s.dependencies
-                .insert("date-service".to_string(), "http://localhost:9001".to_string());
+            s.dependencies.insert(
+                dep_key("consumer", 0),
+                dep_value("date-service", "http://localhost:9001"),
+            );
             s.health_status = HealthStatus::Degraded;
         }
 
