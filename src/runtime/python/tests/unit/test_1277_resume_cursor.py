@@ -307,7 +307,12 @@ class TestDispatchSetsRecvCursorHeader:
         seen: dict = {}
 
         async def handler(**kwargs):
-            seen["headers"] = dict(TraceContext.get_propagated_headers())
+            # Issue #1570: assert against the DISPATCH store, which is where
+            # the cursor now lands. Reading the propagated store here would
+            # pass even if the empty-cursor branch DID seed a cursor, because
+            # nothing seeds that store with one any more.
+            seen["headers"] = dict(TraceContext.get_dispatch_headers())
+            seen["propagated"] = dict(TraceContext.get_propagated_headers())
 
         d = self._make_dispatcher(handler)
         try:
@@ -322,6 +327,7 @@ class TestDispatchSetsRecvCursorHeader:
             _clear_inbound()
 
         assert "x-mesh-recv-cursor" not in seen["headers"]
+        assert "x-mesh-recv-cursor" not in seen["propagated"]
 
 
 # ===========================================================================

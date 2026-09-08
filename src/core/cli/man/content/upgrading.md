@@ -24,7 +24,9 @@ caller leaking its own job id on a nested call, not a push-mode dispatch. Runnin
 plain tool call; upgrade the calling agent to stop this (issue #1570).
 ```
 
-Treat that line as an upgrade-completion checklist, not an error. It is safe to leave running — the callee behaves exactly as a fully-upgraded one — but it means a peer is still on the old wire.
+Treat that line as an upgrade-completion checklist, not an error: for the calls it names the callee behaves exactly as a fully-upgraded one, but it means a peer is still on the old wire.
+
+**The guard does not cover every skewed call, and the gap it misses is silent.** A pre-3.8 Java tool relayed an inbound `X-Mesh-Job-Id` onto its own downstream calls whether or not it was `task=true`, so a plain Java relay standing between the registry proxy and a `task=true` tool forwards a genuine dispatch's job id with **no** calling identity beside it — which is byte-for-byte what a real push dispatch looks like. The callee honours it and binds to a job row it does not own, and nothing on the wire can tell the two apart, so no warning is logged. Upgrade every pre-3.8 Java agent that sits on a job's call path, or take it off that path, before treating a mixed rollout as safe.
 
 ### What to check before upgrading
 

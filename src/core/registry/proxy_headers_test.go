@@ -182,3 +182,57 @@ func TestProxyRequest_ForwardsPartialCallingIdentity(t *testing.T) {
 		t.Errorf("X-Mesh-Calling-Claim-Epoch synthesized when absent: got %q", got)
 	}
 }
+
+// TestProxyRequest_NeverForwardsRecvCursor asserts the claim-local resume
+// cursor cannot cross the proxy hop, whatever the operator put in
+// MCP_MESH_PROPAGATE_HEADERS (#1570). X-Mesh-Recv-Cursor is minted by the
+// registry for ONE claim and consumed by the handler that claim dispatched, so
+// leaking it onto a downstream call would rewind another agent's event
+// consumption to a cursor belonging to someone else's job.
+//
+// Both matcher forms are covered because both are reachable from documented
+// configuration: an exact entry, and the "x-mesh-*" prefix form. X-Mesh-Job-Id
+// travels in the same request as the control — it IS forwarded, and the deny
+// must not be a blanket x-mesh block.
+func TestProxyRequest_NeverForwardsRecvCursor(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	for _, tc := range []struct {
+		name    string
+		entries []string
+	}{
+		{"exact allowlist entry", []string{"x-mesh-recv-cursor"}},
+		{"prefix allowlist entry", []string{"x-mesh-*"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			saved := proxyPropagateHeaderEntries
+			proxyPropagateHeaderEntries = tc.entries
+			defer func() { proxyPropagateHeaderEntries = saved }()
+
+			s := setupTestService(t)
+
+			var received http.Header
+			srv, host, port := newProxyDownstream(t, &received)
+			defer srv.Close()
+
+			registerProxyTargetAgent(t, s, "echo-agent", host, port)
+			h := &EntBusinessLogicHandlers{entService: s}
+
+			target := host + ":" + strconv.Itoa(port) + "/mcp/v1/tools/call"
+			w := proxyPost(t, h, target, map[string]string{
+				"X-Mesh-Job-Id":      "job-123",
+				"X-Mesh-Recv-Cursor": `{"work":7}`,
+			})
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("proxy returned %d, body=%s", w.Code, w.Body.String())
+			}
+			if got := received.Get("X-Mesh-Recv-Cursor"); got != "" {
+				t.Errorf("X-Mesh-Recv-Cursor crossed the proxy hop: got %q", got)
+			}
+			if got := received.Get("X-Mesh-Job-Id"); got != "job-123" {
+				t.Errorf("X-Mesh-Job-Id no longer forwarded: got %q", got)
+			}
+		})
+	}
+}

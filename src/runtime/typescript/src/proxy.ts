@@ -180,11 +180,30 @@ const HDR_CALLING_CLAIM_EPOCH = "x-mesh-calling-claim-epoch";
  * with the wrong result. The claim-local recv cursor is additionally
  * meaningless downstream.
  */
-const DISPATCH_ONLY_HEADERS = [
+const DISPATCH_ONLY_HEADERS: ReadonlySet<string> = new Set([
   "x-mesh-job-id",
   "x-mesh-claim-epoch",
   "x-mesh-recv-cursor",
-] as const;
+]);
+
+/**
+ * Delete every dispatch-protocol header from `map`, IN PLACE, matching
+ * case-insensitively.
+ *
+ * Case-insensitive because not every map this runs over is lowercased. HTTP
+ * header names are case-insensitive on the wire, the callee lowercases the
+ * `_mesh_headers` keys it receives, and `options.customHeaders` /
+ * `runWithPropagatedHeaders` are both reachable from user code with arbitrary
+ * casing — so an exact-name delete would let `X-Mesh-Job-Id` through and the
+ * callee would dispatch on it.
+ */
+function scrubDispatchHeaders(map: Record<string, string>): void {
+  for (const key of Object.keys(map)) {
+    if (DISPATCH_ONLY_HEADERS.has(key.toLowerCase())) {
+      delete map[key];
+    }
+  }
+}
 
 /**
  * Identity of the job whose handler made the CURRENT inbound call
@@ -439,7 +458,8 @@ interface BuiltMcpRequest {
  *
  * Header insertion order is byte-identical to the pre-extraction code:
  * customHeaders → Content-Type/Accept → trace headers → mergedHeaders →
- * conditional X-Mesh-Timeout.
+ * conditional X-Mesh-Timeout. The dispatch-header scrub (#1570) sits between
+ * the last two and only DELETES, so it moves nothing.
  *
  * `defaultTimeout` is the per-path fallback applied when the resolved timeout is
  * non-positive (DEFAULT_CALL_OPTIONS.timeout for buffered,
@@ -477,10 +497,10 @@ function buildMcpRequest(
   }
 
   // Issue #1570: the dispatch protocol headers never ride an outbound call,
-  // whatever put them in the propagated store or a per-call override.
-  for (const name of DISPATCH_ONLY_HEADERS) {
-    delete mergedHeaders[name];
-  }
+  // whatever put them in the propagated store or a per-call override. This map
+  // also becomes `_mesh_headers` in the request BODY, so the scrub has to
+  // happen here as well as on the final header map below.
+  scrubDispatchHeaders(mergedHeaders);
 
   // Issue #1263: overlay the CALLING job's identity so a nested outbound call
   // made from within a job execution context carries who invoked the
@@ -567,6 +587,14 @@ function buildMcpRequest(
   for (const [key, value] of Object.entries(mergedHeaders)) {
     headers[key] = value;
   }
+  // Issue #1570: last-line scrub of the FINAL map. The `mergedHeaders` scrub
+  // above cannot reach `options.customHeaders`, which is spread straight into
+  // this map — downstream of everything, allowlist-unfiltered, and with its
+  // caller-supplied casing intact. Without this, user code could put
+  // `X-Mesh-Job-Id` on the wire and a 3.8 callee would dispatch on it, which
+  // is exactly the self-dispatch corruption this contract removes. Matched
+  // case-insensitively because nothing lowercases `customHeaders` keys.
+  scrubDispatchHeaders(headers);
   // Set X-Mesh-Timeout for the registry proxy (#769). If already propagated,
   // keep it — an inbound budget always wins over a locally derived one.
   //

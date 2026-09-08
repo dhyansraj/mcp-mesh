@@ -1346,8 +1346,17 @@ class UnifiedMCPProxy:
                     and snap.job_id
                     and snap.deadline_secs_remaining is not None
                 ):
+                    # Read the current budget from EITHER casing: the
+                    # propagated store can deliver a lowercase
+                    # `x-mesh-timeout`, and looking only at the canonical
+                    # name would read 0 ("unset") and tighten against
+                    # nothing.
                     try:
-                        cur_timeout = int(headers.get("X-Mesh-Timeout", "0"))
+                        cur_timeout = int(
+                            headers.get("X-Mesh-Timeout")
+                            or headers.get("x-mesh-timeout")
+                            or "0"
+                        )
                     except (TypeError, ValueError):
                         cur_timeout = 0
                     raw_remaining = float(snap.deadline_secs_remaining)
@@ -1394,6 +1403,12 @@ class UnifiedMCPProxy:
                         headers.pop("X-Mesh-Timeout", None)
                         headers.pop("x-mesh-timeout", None)
                     elif cur_timeout == 0 or remaining < cur_timeout:
+                        # Drop the lowercase twin before assigning the
+                        # canonical name, exactly as the expired branch above
+                        # does. Leaving it would put BOTH the parent's larger
+                        # value and this tightened one on the wire, and a
+                        # receiver taking the first loses the parent's cap.
+                        headers.pop("x-mesh-timeout", None)
                         headers["X-Mesh-Timeout"] = str(remaining)
             except Exception as e:
                 self.logger.debug(

@@ -586,8 +586,26 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 //
 // 1824 + 2 + 19 - 1 - 1 = 1843. `jobs.md` has both variants and took three of
 // the four edits, so the variant golden moved with it; `upgrading.md` has none.
+//
+// Review of that change moves the inline constant to 1846 (+3), and neither
+// list constant. All three spans are one added paragraph in the `3.8.0`
+// section of `upgrading.md`, naming `X-Mesh-Job-Id` and `task=true` twice.
+// The section had said the skew warning was "safe to leave running", which is
+// true only of the calls the guard can SEE: a pre-3.8 Java relay forwarded the
+// header whether or not it was `task=true`, so a plain relay between the
+// registry proxy and a `task=true` tool passes a real dispatch's job id along
+// with no calling identity beside it — indistinguishable from a genuine push
+// dispatch, so no warning fires and the callee binds a row it does not own.
+// That is an upgrade-or-isolate instruction, not a log line, and the page's
+// subtitle promises exactly this guarantee.
+//
+// The same review clarified the "not propagated" claim on `jobs.md` and both
+// its variants (the registry proxy DOES forward an inbound job id, because
+// there it is still inbound). That rewording is span-neutral on all three
+// pages — 5 spans before and after — so neither this constant nor the variant
+// golden moved with it. 1843 + 3 = 1846.
 const (
-	wantInlineCodeSpans = 1843
+	wantInlineCodeSpans = 1846
 	wantListCodeSpans   = 531
 	wantMarkupListLines = 450
 )

@@ -414,12 +414,14 @@ chain.
 
 `X-Mesh-Job-Id` is deliberately **not** propagated. It is the inbound
 dispatch discriminator — the producer runtime reads it off the incoming
-request to bind the handler to that job row — so attaching it to an
-outbound call would make a nested `task=True` call dispatch as, and
-auto-complete, its caller's job. Which job invoked the current handler
-is a separate question, answered by the dedicated
-`X-Mesh-Calling-Job-Id` / `X-Mesh-Calling-Claim-Epoch` pair that
-`calling_job()` reads.
+request to bind the handler to that job row — so a call a runtime
+originates never carries it, and a nested `task=True` call cannot
+dispatch as, or auto-complete, its caller's job. The registry proxy is
+the one hop that does forward it: there it is still the *inbound*
+header of a push dispatch on its way to the producer that has to bind
+that row. Which job invoked the current handler is a separate question,
+answered by the dedicated `X-Mesh-Calling-Job-Id` /
+`X-Mesh-Calling-Claim-Epoch` pair that `calling_job()` reads.
 
 ## meshctl
 

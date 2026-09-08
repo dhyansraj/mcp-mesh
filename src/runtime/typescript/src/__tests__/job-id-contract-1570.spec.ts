@@ -156,6 +156,36 @@ describe("inbound dispatch reads the RAW header map (#1570)", () => {
     expect(seen[0]).not.toBeNull();
   });
 
+  // The strip that removes `_trace_id` / `_parent_span` / `_mesh_headers` from
+  // the tool's arguments used to be gated on the ALLOWLIST-FILTERED map being
+  // non-empty. A genuine push dispatch carries `x-mesh-job-id` and nothing
+  // else, which allowlist-filters to empty — so the strip never ran and the
+  // tool's `execute` was handed an internal `_mesh_headers` field alongside
+  // its own parameters.
+  it("never hands the tool its internal _mesh_headers", async () => {
+    const fastmcp = makeFastMCPStub();
+    const agent = new MeshAgent(fastmcp, { name: "strip-agent", httpPort: 0 });
+    const seenArgs: unknown[] = [];
+    agent.addTool({
+      name: "render",
+      task: true,
+      parameters: z.object({}),
+      meshJobParamIndex: 1,
+      execute: async (args: unknown) => {
+        seenArgs.push(args);
+        return "ran";
+      },
+    });
+    const execute = captureExecute(fastmcp);
+
+    await execute({
+      payload: 1,
+      _mesh_headers: { "x-mesh-job-id": "job-dispatch-only" },
+    });
+
+    expect(seenArgs[0]).toEqual({ payload: 1 });
+  });
+
   it("a task tool called WITHOUT the header still runs controller-less", async () => {
     const fastmcp = makeFastMCPStub();
     const agent = new MeshAgent(fastmcp, { name: "sync-agent", httpPort: 0 });
@@ -440,6 +470,85 @@ describe("outbound never carries the dispatch trio (#1570)", () => {
       expect(meshHeaders[name]).toBeUndefined();
     }
     // A genuinely propagated header is untouched.
+    expect(meshHeaders["x-mesh-timeout"]).toBe("30");
+  });
+
+  // `options.customHeaders` is spread into the FINAL header map, downstream of
+  // the allowlist filter and of the merged-header scrub, and nothing lowercases
+  // its keys. It was therefore the one path by which user code could put the
+  // dispatch discriminator on the wire — and a 3.8 callee reads the header raw,
+  // so it would have dispatched on it.
+  it("scrubs the trio from customHeaders, whatever the casing", async () => {
+    mockFetch();
+    await callMcpTool(
+      "http://d:9000",
+      "t",
+      { a: 1 },
+      {
+        ...DEFAULT_CALL_OPTIONS,
+        customHeaders: {
+          "X-Mesh-Job-Id": "job-from-user-code",
+          "x-mesh-claim-epoch": "9",
+          "X-MESH-RECV-CURSOR": '{"work":4}',
+          "X-Api-Key": "keep-me",
+        },
+      },
+      "cap",
+    );
+
+    const headers = (captured?.headers ?? {}) as Record<string, string>;
+    for (const name of Object.keys(headers)) {
+      expect([
+        "x-mesh-job-id",
+        "x-mesh-claim-epoch",
+        "x-mesh-recv-cursor",
+      ]).not.toContain(name.toLowerCase());
+    }
+    // A caller's own header is untouched — this is a targeted deny, not a
+    // customHeaders blocklist.
+    expect(headers["X-Api-Key"]).toBe("keep-me");
+  });
+
+  // `runWithPropagatedHeaders` is exported from the package index, so the
+  // propagated store is reachable from user code with arbitrary casing even
+  // though every in-runtime writer lowercases. The merged map becomes
+  // `_mesh_headers` in the request BODY and the callee lowercases those keys,
+  // so a case-sensitive scrub would leave the dispatch reachable through the
+  // body even with the wire header clean.
+  it("scrubs a mixed-case propagated entry from both the wire and the body", async () => {
+    mockFetch();
+    await runWithPropagatedHeaders(
+      {
+        "X-Mesh-Job-Id": "job-mixed-case",
+        "X-Mesh-Claim-Epoch": "9",
+        "x-mesh-timeout": "30",
+      },
+      async () => {
+        await callMcpTool(
+          "http://d:9000",
+          "t",
+          { a: 1 },
+          DEFAULT_CALL_OPTIONS,
+          "cap",
+        );
+      },
+    );
+
+    const headers = (captured?.headers ?? {}) as Record<string, string>;
+    const body = JSON.parse((captured?.body as string) ?? "{}");
+    const meshHeaders = (body?.params?.arguments?._mesh_headers ?? {}) as Record<
+      string,
+      string
+    >;
+    for (const map of [headers, meshHeaders]) {
+      for (const name of Object.keys(map)) {
+        expect([
+          "x-mesh-job-id",
+          "x-mesh-claim-epoch",
+          "x-mesh-recv-cursor",
+        ]).not.toContain(name.toLowerCase());
+      }
+    }
     expect(meshHeaders["x-mesh-timeout"]).toBe("30");
   });
 });

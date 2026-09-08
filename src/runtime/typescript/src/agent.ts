@@ -959,8 +959,13 @@ export class MeshAgent {
             }
           }
         }
-        // Remove trace context and mesh headers from args before passing to tool
-        if (incomingTraceId || incomingParentSpan || Object.keys(propagatedHeaders).length > 0) {
+        // Remove trace context and mesh headers from args before passing to tool.
+        // Keyed on `rawMeshHeaders`, not `propagatedHeaders` (issue #1570): a
+        // request whose only mesh header is `x-mesh-job-id` — a genuine push
+        // dispatch — allowlist-filters to an EMPTY propagated map, and gating
+        // on that would hand the tool's `execute` an internal `_mesh_headers`
+        // field in its arguments.
+        if (incomingTraceId || incomingParentSpan || rawMeshHeaders !== null) {
           const { _trace_id, _parent_span, _mesh_headers, ...rest } = argsObj;
           cleanArgs = rest as z.infer<T>;
         }

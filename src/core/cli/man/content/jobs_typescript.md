@@ -508,9 +508,11 @@ deadline regardless of depth.
 `X-Mesh-Timeout` is a baked-in default: it propagates with no
 `MCP_MESH_PROPAGATE_HEADERS` configuration. `X-Mesh-Job-Id` is
 deliberately NOT propagated — it is the inbound dispatch
-discriminator, read off the incoming request and never attached to an
-outbound call, so a nested call can never dispatch as (and complete)
-its caller's job. Which job invoked the current handler travels
+discriminator, so a call a runtime originates never carries it and a
+nested call can never dispatch as (and complete) its caller's job.
+The registry proxy does forward it, because on that hop it is still
+the inbound header of a push dispatch on its way to the producer that
+has to bind that row. Which job invoked the current handler travels
 separately, on the `X-Mesh-Calling-Job-Id` and
 `X-Mesh-Calling-Claim-Epoch` pair.
 
