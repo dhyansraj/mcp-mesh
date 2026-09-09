@@ -550,6 +550,8 @@ class RouteIntegrationStep(PipelineStep):
                     path=path,
                     wrapper=inner_wrapper,
                     dependencies=dependency_names,
+                    # Issue #1571: carry the full selector to the heartbeat.
+                    dependency_specs=dependencies,
                 )
             self.logger.info(
                 f"📡 Route {methods} {path} -> {endpoint_name}() already "
@@ -659,6 +661,8 @@ class RouteIntegrationStep(PipelineStep):
                 path=path,
                 wrapper=wrapped_handler,
                 dependencies=dependency_names,
+                # Issue #1571: carry the full selector to the heartbeat.
+                dependency_specs=dependencies,
             )
 
         if is_stream_route:

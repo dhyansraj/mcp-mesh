@@ -15,50 +15,24 @@ Python handles:
 import asyncio
 import json
 import logging
-import os
 from typing import Any, Optional
 
 from ...engine.llm_config import DEFAULT_MAX_ITERATIONS
 
+# Issue #1571: the schema-verdict policy and DependencySpec construction live
+# in the shared module so the route and A2A heartbeats build identical specs.
+# The underscore aliases keep this module's existing test surface intact.
+from ..shared.dependency_spec import (
+    build_dependency_specs,
+)
+from ..shared.dependency_spec import (
+    cluster_strict_enabled as _cluster_strict_enabled,
+)
+from ..shared.dependency_spec import (
+    should_refuse_startup as _should_refuse_startup,
+)
+
 logger = logging.getLogger(__name__)
-
-
-def _cluster_strict_enabled() -> bool:
-    """Issue #547 Phase 4: read MCP_MESH_SCHEMA_STRICT env var (cluster-wide knob).
-
-    When true, WARN verdicts are promoted to BLOCK so ops can harden a whole
-    cluster without changing every consumer.
-    """
-    return os.environ.get("MCP_MESH_SCHEMA_STRICT", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-    }
-
-
-def _should_refuse_startup(
-    verdict: str, cluster_strict: bool, tool_strict: bool
-) -> bool:
-    """Issue #547 Phase 4: schema verdict policy.
-
-    Composes two knobs:
-      * cluster_strict (env MCP_MESH_SCHEMA_STRICT): promotes WARN→BLOCK.
-      * tool_strict (per-tool output_schema_strict, default True): producer-side
-        escape hatch. When False, BLOCK is demoted to WARN for that tool.
-
-    Truth table:
-      verdict=BLOCK + tool_strict=True  -> refuse
-      verdict=BLOCK + tool_strict=False -> log only (override wins)
-      verdict=WARN  + cluster_strict=True + tool_strict=True  -> refuse
-      verdict=WARN  + cluster_strict=True + tool_strict=False -> log only
-      verdict=WARN  + cluster_strict=False -> log only
-      verdict=OK -> never refuse
-    """
-    if verdict == "BLOCK":
-        return tool_strict
-    if verdict == "WARN":
-        return cluster_strict and tool_strict
-    return False
 
 
 # Lazy import to avoid ImportError if Rust core not built
@@ -184,76 +158,11 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
         # Issue #547 Phase 4: per-tool override (default True = current behavior).
         tool_strict = bool(tool_metadata.get("output_schema_strict", True))
 
-        # Build dependency specs
-        deps = []
-        for dep_info in tool_metadata.get("dependencies", []):
-            # Serialize tags to JSON to support nested arrays for OR alternatives
-            # e.g., ["addition", ["python", "typescript"]] -> addition AND (python OR typescript)
-            tags_json = json.dumps(dep_info.get("tags", []))
-
-            # Issue #547 Phase 1D: normalize the consumer's expected schema
-            # via the Rust normalizer (deferred from decorator time to keep
-            # import cheap and consistent with producer-side normalization).
-            expected_canonical: str | None = None
-            expected_hash: str | None = None
-            match_mode = dep_info.get("match_mode")
-            expected_raw = dep_info.get("expected_schema_raw")
-            if expected_raw is not None:
-                try:
-                    normalize_fn = getattr(core, "normalize_schema_py", None)
-                    if normalize_fn is None:
-                        raise AttributeError("normalize_schema_py not in mcp_mesh_core")
-                    result = json.loads(
-                        normalize_fn(json.dumps(expected_raw), "python")
-                    )
-                    verdict = result.get("verdict", "OK")
-                    warnings_list = result.get("warnings") or []
-                    # Issue #547 Phase 4: there's no per-tool override on the
-                    # consumer side (the override is producer-side); use
-                    # tool_strict=True so cluster_strict still promotes WARN.
-                    if _should_refuse_startup(verdict, cluster_strict, True):
-                        promoted = (
-                            " (MCP_MESH_SCHEMA_STRICT=true upgraded WARN→BLOCK)"
-                            if verdict == "WARN"
-                            else ""
-                        )
-                        raise RuntimeError(
-                            f"Schema normalization {verdict} for dependency on "
-                            f"'{dep_info.get('capability', '')}'{promoted}: "
-                            f"{warnings_list}. Cannot start agent."
-                        )
-                    if verdict == "WARN":
-                        logger.warning(
-                            f"Schema WARN for dependency on "
-                            f"'{dep_info.get('capability', '')}': {warnings_list}"
-                        )
-                    if result.get("canonical"):
-                        expected_canonical = json.dumps(result["canonical"])
-                        expected_hash = result.get("hash")
-                except RuntimeError:
-                    raise
-                except Exception as e:
-                    logger.warning(
-                        f"Could not normalize expected schema for dep "
-                        f"'{dep_info.get('capability', '')}': {e}"
-                    )
-                    expected_canonical = None
-                    expected_hash = None
-
-            dep_spec = core.DependencySpec(
-                capability=dep_info.get("capability", ""),
-                tags=tags_json,
-                version=dep_info.get("version"),
-                expected_schema_canonical=expected_canonical,
-                expected_schema_hash=expected_hash,
-                match_mode=match_mode,
-                # Issue #1249: opt-in strictness flag (default False). The
-                # registry factors required edges into transitive capability
-                # availability. Absent/false is omitted from the wire payload
-                # by the core's skip_serializing_if.
-                required=bool(dep_info.get("required", False)),
-            )
-            deps.append(dep_spec)
+        # Build dependency specs (issue #1571: one builder for tool, route
+        # and A2A heartbeats so every path carries the full selector).
+        deps = build_dependency_specs(
+            core, tool_metadata.get("dependencies", []), cluster_strict=cluster_strict
+        )
 
         # Extract input schema from FastMCP tool (like heartbeat_preparation.py)
         # This is critical for LLM tool filtering - registry requires inputSchema

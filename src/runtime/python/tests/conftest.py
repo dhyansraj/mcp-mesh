@@ -11,9 +11,25 @@ Provides shared fixtures and test configuration across all test modules.
 # we ensure they're in place before any mesh code runs.
 import os
 
+# MCP_MESH_ENABLED is the inert switch: it is the only flag that stops
+# _mcp_mesh/__init__.py from calling start_runtime(), which is what hands the
+# debounce coordinator an orchestrator. Without it the suite's own decorators
+# schedule a real process_once() plus a daemon heartbeat thread that runs
+# core.start_agent(spec) and talks HTTP to MCP_MESH_REGISTRY_URL.
+#
+# Issue #1589: MCP_MESH_AUTO_RUN used to do this job as a side effect. It no
+# longer does, and must not — auto_run=False means "you own the server and the
+# process", NOT "stay out of the mesh", so it deliberately still registers.
+# The contamination is invisible if you only watch for red: the pipeline runs
+# on a threading.Timer, so its exceptions never reach pytest.
+os.environ["MCP_MESH_ENABLED"] = "false"
+
+# Still required, and NOT redundant with the above: the immediate uvicorn in
+# @mesh.agent is gated on auto_run alone (decorators.py:1753), independent of
+# both MCP_MESH_ENABLED and MCP_MESH_HTTP_ENABLED. Without this the decorator
+# binds a socket and blocks the collecting thread.
 os.environ["MCP_MESH_AUTO_RUN"] = "false"
 os.environ["MCP_MESH_HTTP_ENABLED"] = "false"
-os.environ["PYTEST_RUNNING"] = "true"
 
 import asyncio
 import shutil

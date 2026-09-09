@@ -10,6 +10,7 @@ import logging
 import os
 from typing import Any, Optional
 
+from . import embedded_status
 from .startup_pipeline import StartupPipeline
 
 logger = logging.getLogger(__name__)
@@ -551,33 +552,201 @@ class DebounceCoordinator:
                         f"Auto-run is enabled but {missing}.", self.logger
                     )
             else:
-                # Single execution mode (for testing/debugging)
-                self.logger.info("🏁 Auto-run disabled - single execution mode")
+                # Embedded mode (issue #1589). Auto-run gates the SERVER and the
+                # KEEP-ALIVE, not mesh membership: an agent that never registers
+                # is not in the mesh at all, which is the opposite of what
+                # "embed mesh in your own server loop" is for. So the pipeline
+                # still runs (the agent registers) and the background heartbeat
+                # still starts (it stays registered and its dependencies
+                # resolve) — we simply return instead of binding a socket and
+                # blocking, leaving the process lifetime to the caller's loop.
+                #
+                # This is the contract the API and A2A paths have always had:
+                # heartbeat on a daemon thread with its own event loop, then
+                # return. The heartbeat is not tied to uvicorn's loop, so it
+                # does not need the server; being a daemon, it also cannot keep
+                # the process alive on mesh's behalf.
+                self.logger.info(
+                    "🔄 Auto-run disabled - embedded mode: registering and "
+                    "heartbeating without starting a server or blocking"
+                )
 
-                if pipeline_type == "mcp":
-                    result = asyncio.run(orchestrator.process_once())
-                elif pipeline_type == "api":
-                    result = asyncio.run(orchestrator.process_api_once())
-                elif pipeline_type == "a2a":
-                    result = asyncio.run(orchestrator.process_a2a_once())
-                else:
-                    raise RuntimeError(f"Unsupported pipeline type: {pipeline_type}")
+                # Every exit from here on has to leave a terminal status
+                # behind. `pending` is worse than `failed` for a caller
+                # polling mesh.startup_status(): it cannot tell "still
+                # starting" from "crashed and never will", so it waits
+                # forever instead of shutting its server down — the same
+                # #1556 shape the failed-result branch below exists to
+                # prevent, reached by a crash instead of a clean failure.
+                status_recorded = False
+                try:
+                    if pipeline_type == "mcp":
+                        result = asyncio.run(orchestrator.process_once())
+                    elif pipeline_type == "api":
+                        result = asyncio.run(orchestrator.process_api_once())
+                    elif pipeline_type == "a2a":
+                        result = asyncio.run(orchestrator.process_a2a_once())
+                    else:
+                        raise RuntimeError(
+                            f"Unsupported pipeline type: {pipeline_type}"
+                        )
 
-                # Mirror the auto-run branch: surface pipeline failures so
-                # tests / debug runs don't report success on a broken setup.
-                if result.get("status") == "failed":
-                    err_detail = result.get("message") or "unknown error"
-                    errors = result.get("errors") or []
-                    if errors:
-                        err_detail = f"{err_detail}: {errors}"
-                    self.logger.error(
-                        f"❌ {pipeline_type.upper()} pipeline failed in single-execution mode: {err_detail}"
+                    # Embedded-mode failure contract. The auto-run branch answers
+                    # this with abort_agent_process(); neither of its options is
+                    # available here. Exiting is wrong — the caller owns the
+                    # process and mesh would be killing a server it does not
+                    # manage. Raising is USELESS: we are on a threading.Timer
+                    # thread, so the exception reaches threading.excepthook, prints
+                    # a traceback, kills that thread, and leaves the caller's
+                    # server happily serving an agent that never registered with
+                    # exit status 0 — the exact #1556 shape. So the outcome is
+                    # RECORDED for the caller to poll (mesh.startup_status()) and
+                    # announced at ERROR; the raise below only gets the traceback
+                    # to stderr, and is explicitly not the contract.
+                    if result.get("status") == "failed":
+                        err_detail = result.get("message") or "unknown error"
+                        errors = result.get("errors") or []
+                        if errors:
+                            err_detail = f"{err_detail}: {errors}"
+                        embedded_status.set_failed(pipeline_type, err_detail)
+                        status_recorded = True
+                        self.logger.error(
+                            f"❌ {pipeline_type.upper()} pipeline failed in embedded "
+                            f"mode: {err_detail}. This agent is NOT registered and "
+                            f"has NO dependency injection. Mesh cannot exit the "
+                            f"process here because your code owns it — poll "
+                            f"mesh.startup_status() and shut down your server if "
+                            f"state == 'failed'."
+                        )
+                        raise RuntimeError(
+                            f"{pipeline_type.upper()} pipeline failed: {err_detail}"
+                        )
+
+                    pipeline_context = result.get("context", {}).get(
+                        "pipeline_context", {}
                     )
-                    raise RuntimeError(
-                        f"{pipeline_type.upper()} pipeline failed: {err_detail}"
-                    )
+                    heartbeat_config = pipeline_context.get("heartbeat_config", {})
 
-                self.logger.info("✅ Pipeline execution completed, exiting")
+                    # No ``server_started_check`` on any of these branches: mesh is
+                    # not starting the server, so there is nothing to gate the first
+                    # registration on. The caller's loop owns serving, and the port
+                    # registered is the configured one (nothing bound a socket here
+                    # to override it) — same contract as the API/A2A paths.
+                    if pipeline_type == "api":
+                        from ..api_heartbeat.api_lifespan_integration import (
+                            api_heartbeat_lifespan_task,
+                        )
+
+                        heartbeat_started = self._setup_heartbeat_background(
+                            heartbeat_config,
+                            pipeline_context,
+                            api_heartbeat_lifespan_task,
+                            id_field="service_id",
+                            label="API service",
+                        )
+                    elif pipeline_type == "a2a":
+                        from ..a2a_heartbeat.a2a_lifespan_integration import (
+                            a2a_heartbeat_lifespan_task,
+                        )
+
+                        heartbeat_started = self._setup_heartbeat_background(
+                            heartbeat_config,
+                            pipeline_context,
+                            a2a_heartbeat_lifespan_task,
+                            id_field="service_id",
+                            label="A2A service",
+                        )
+                    else:
+                        heartbeat_task_fn = heartbeat_config.get("heartbeat_task_fn")
+                        if heartbeat_task_fn is None or not callable(heartbeat_task_fn):
+                            if heartbeat_task_fn is not None:
+                                self.logger.warning(
+                                    f"heartbeat_task_fn from config is not callable: "
+                                    f"{type(heartbeat_task_fn)}, using Rust heartbeat"
+                                )
+                            from ..mcp_heartbeat.rust_heartbeat import (
+                                rust_heartbeat_task,
+                            )
+
+                            heartbeat_task_fn = rust_heartbeat_task
+
+                        heartbeat_started = self._setup_heartbeat_background(
+                            heartbeat_config,
+                            pipeline_context,
+                            heartbeat_task_fn,
+                        )
+
+                    # Report what actually happened, not what was intended. The
+                    # heartbeat is skipped in standalone mode and swallowed on
+                    # setup failure, and the MCP pipeline can succeed without
+                    # producing an app for the caller to serve — announcing
+                    # "registered and heartbeating" unconditionally would paper
+                    # over all three.
+                    warnings: list[str] = []
+                    if not heartbeat_started:
+                        warnings.append(
+                            "no heartbeat thread started (standalone mode, or setup "
+                            "failed) - this agent will not stay registered"
+                        )
+                    if pipeline_type == "mcp" and not pipeline_context.get(
+                        "fastapi_app"
+                    ):
+                        if pipeline_context.get("http_transport_disabled"):
+                            warnings.append(
+                                "HTTP transport is disabled (MCP_MESH_HTTP_ENABLED), "
+                                "so there is no app to serve"
+                            )
+                        else:
+                            warnings.append(
+                                "the pipeline produced no FastAPI app, so there is "
+                                "nothing for your server loop to serve on the "
+                                "registered port"
+                            )
+
+                    embedded_status.set_ready(
+                        pipeline_type, heartbeat=heartbeat_started, warnings=warnings
+                    )
+                    status_recorded = True
+
+                    if warnings:
+                        for warning in warnings:
+                            self.logger.warning(f"⚠️ Embedded mode: {warning}")
+                        self.logger.warning(
+                            "⚠️ Embedded mode started with warnings - see "
+                            "mesh.startup_status()['warnings']"
+                        )
+                    else:
+                        self.logger.info(
+                            "✅ Embedded mode ready - agent registered and heartbeating; "
+                            "the caller owns the server and the process lifetime"
+                        )
+                except Exception as e:
+                    # The pipeline raised instead of returning a failed
+                    # result. `status_recorded` keeps this from clobbering
+                    # the richer detail the failed-result branch already
+                    # wrote before raising (set_failed is last-write-wins),
+                    # and the re-raise keeps the outer handler's behaviour
+                    # intact — nothing is swallowed, only recorded.
+                    #
+                    # This deliberately also covers the "Unsupported
+                    # pipeline type" RuntimeError above. That one is a mesh
+                    # bug rather than a runtime failure, but the caller's
+                    # situation is identical either way (nothing registered,
+                    # nothing ever will be), and a poll that only terminates
+                    # for the failures mesh anticipated is a poll the caller
+                    # still has to time out. The recorded detail names the
+                    # exception class, so a bug still reads as a bug.
+                    if not status_recorded:
+                        detail = f"{type(e).__name__}: {e}"
+                        embedded_status.set_failed(pipeline_type, detail)
+                        self.logger.error(
+                            f"❌ {pipeline_type.upper()} pipeline crashed in "
+                            f"embedded mode: {detail}. This agent is NOT "
+                            f"registered and has NO dependency injection. "
+                            f"Poll mesh.startup_status() and shut down your "
+                            f"server if state == 'failed'."
+                        )
+                    raise
 
         except Exception as e:
             self.logger.error(f"❌ Error in debounced processing: {e}")
@@ -674,7 +843,7 @@ class DebounceCoordinator:
         heartbeat_task_fn: Any,
         id_field: str = "agent_id",
         label: str = "MCP agent",
-    ) -> None:
+    ) -> bool:
         """
         Setup heartbeat to run in background thread.
 
@@ -686,6 +855,12 @@ class DebounceCoordinator:
             heartbeat_task_fn: Async function to run (api or mcp heartbeat task)
             id_field: Config key for ID ("agent_id" or "service_id")
             label: Label for log messages ("MCP agent" or "API service")
+
+        Returns:
+            True if a heartbeat thread was started. False when standalone mode
+            skipped it or setup raised — in both cases the agent will NOT stay
+            registered, which embedded mode (issue #1589) reports rather than
+            announcing a success it did not achieve.
         """
         import asyncio
         import threading
@@ -699,7 +874,7 @@ class DebounceCoordinator:
                 self.logger.info(
                     f"{label} '{entity_id}' configured in standalone mode - no heartbeat"
                 )
-                return
+                return False
 
             self.logger.info(
                 f"Setting up background heartbeat for {label} '{entity_id}'"
@@ -734,27 +909,59 @@ class DebounceCoordinator:
             self.logger.info(
                 f"Background heartbeat thread started for {label} '{entity_id}'"
             )
+            return True
 
         except Exception as e:
             self.logger.warning(f"Could not setup {label} heartbeat: {e}")
+            return False
 
     # Graceful shutdown is now handled by FastAPI lifespan in simple_shutdown.py
 
     def _check_auto_run_enabled(self) -> bool:
-        """Check if auto-run is enabled (defaults to True for persistent service behavior)."""
-        # Check environment variable - defaults to "true" for persistent service behavior
-        env_auto_run = os.getenv("MCP_MESH_AUTO_RUN", "true").lower()
-        self.logger.debug(f"🔍 MCP_MESH_AUTO_RUN='{env_auto_run}' (default: 'true')")
+        """Resolve auto-run as ENV > @mesh.agent(auto_run=...) > True.
 
-        if env_auto_run in ("false", "0", "no"):
-            self.logger.debug(
-                "🔍 Auto-run explicitly disabled via environment variable"
-            )
-            return False
-        else:
-            # Default to True - agents should run persistently by default
-            self.logger.debug("🔍 Auto-run enabled (default behavior)")
-            return True
+        Issue #1589: this used to be an env-only falsy denylist
+        (``in ("false", "0", "no")``), which had two consequences. It disagreed
+        with the other MCP_MESH_AUTO_RUN readers on values like ``off`` and on
+        unparseable input, and it never looked at the decorator argument — so
+        ``@mesh.agent(auto_run=False)``, whose documented use is to embed mesh
+        in your own server loop, still got a blocking uvicorn started on the
+        debounce timer thread. The decorator already merged env over its own
+        argument into ``metadata["auto_run"]``; feeding that back through the
+        shared resolver keeps the documented precedence with one parser.
+        """
+        from ...engine.decorator_registry import DecoratorRegistry
+        from ...shared.config_resolver import resolve_auto_run
+
+        # Read @mesh.agent metadata directly rather than via
+        # get_resolved_agent_config(): that helper synthesizes AND CACHES a
+        # fallback config (including an agent_id) when no @mesh.agent exists,
+        # and priming that cache here — before the API/A2A pipelines have
+        # written their own service identity — would change the registered
+        # service_id. API/A2A processes have no @mesh.agent, so they simply
+        # fall through to the env value.
+        decorator_auto_run = None
+        for decorated_func in DecoratorRegistry.get_mesh_agents().values():
+            value = (decorated_func.metadata or {}).get("auto_run")
+            if value is not None:
+                decorator_auto_run = value
+                break
+
+        enabled = resolve_auto_run(override=decorator_auto_run)
+        # Name the value for what it is. ``decorator_auto_run`` is @mesh.agent's
+        # metadata["auto_run"], which the decorator ALREADY resolved as
+        # ENV > argument — so logging it as "decorator auto_run" made the
+        # precedence unfalsifiable from logs (env and argument look identical
+        # once merged). Log the raw env separately and say which one won.
+        env_raw = os.getenv("MCP_MESH_AUTO_RUN")
+        source = "env" if env_raw is not None else "@mesh.agent metadata/default"
+        self.logger.debug(
+            f"🔍 Auto-run resolved to {enabled} via {source} "
+            f"(MCP_MESH_AUTO_RUN={env_raw!r}, "
+            f"@mesh.agent metadata['auto_run']={decorator_auto_run!r} "
+            f"— already env-merged by the decorator)"
+        )
+        return enabled
 
 
 # Global debounce coordinator instance

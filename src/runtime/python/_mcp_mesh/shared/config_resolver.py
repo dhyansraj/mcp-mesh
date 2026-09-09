@@ -273,3 +273,35 @@ def _validate_value(value: Any, rule: ValidationRule, env_var: str) -> Any:
 
     else:
         raise ConfigResolutionError(f"Unknown validation rule: {rule}")
+
+
+def resolve_auto_run(override: Any = None) -> bool:
+    """Resolve MCP_MESH_AUTO_RUN with the documented ENV > decorator > default order.
+
+    Issue #1589: three call sites parsed this env var three different ways —
+    a strict ``== "true"`` gate on the runtime bootstrap, this module's
+    truthy rule in the @mesh.agent decorator, and a falsy denylist in the
+    startup orchestrator. ``MCP_MESH_AUTO_RUN=1`` therefore started the
+    immediate uvicorn but never wired the orchestrator, leaving an agent
+    that serves probes and never registers. Every MCP_MESH_AUTO_RUN reader
+    now calls this: the @mesh.agent decorator, the startup orchestrator and
+    DecoratorRegistry's synthetic fallback config.
+
+    Args:
+        override: The ``auto_run=`` decorator argument, when the caller has
+            one. The env var still wins, per the documented hierarchy.
+
+    Returns:
+        True when auto-run is enabled. Unparseable values fall back to the
+        default (True) after ``get_config_value`` logs the validation error —
+        the same soft-fail every other truthy mesh knob uses.
+    """
+    from .defaults import MeshDefaults
+
+    value = get_config_value(
+        "MCP_MESH_AUTO_RUN",
+        override=override,
+        default=MeshDefaults.AUTO_RUN,
+        rule=ValidationRule.TRUTHY_RULE,
+    )
+    return bool(MeshDefaults.AUTO_RUN if value is None else value)

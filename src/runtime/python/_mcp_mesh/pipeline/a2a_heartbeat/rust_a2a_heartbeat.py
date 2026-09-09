@@ -22,6 +22,8 @@ import logging
 import re
 from typing import Any, Optional
 
+from ..shared.dependency_spec import build_dependency_specs, cluster_strict_enabled
+
 # Matches the registry/SDK convention of "{base}-{8-hex-chars}" at the end
 # of a service_id. Used to strip the suffix and recover the base name.
 _A2A_SERVICE_ID_SUFFIX_RE = re.compile(r"-[0-9a-f]{8}$")
@@ -113,24 +115,17 @@ def _build_a2a_agent_spec(
     from ...engine.decorator_registry import DecoratorRegistry
 
     tools = []
+    cluster_strict = cluster_strict_enabled()
     a2a_decorators = DecoratorRegistry.get_all_by_type("mesh_a2a")
     for func_id, decorated in a2a_decorators.items():
         meta = decorated.metadata or {}
         deps_meta = meta.get("dependencies") or []
 
-        deps = []
-        for dep in deps_meta:
-            cap = dep.get("capability") if isinstance(dep, dict) else dep
-            if not cap:
-                continue
-            dep_tags = dep.get("tags", []) if isinstance(dep, dict) else []
-            dep_version = dep.get("version") if isinstance(dep, dict) else None
-            dep_spec = core.DependencySpec(
-                capability=cap,
-                tags=json.dumps(dep_tags),
-                version=dep_version,
-            )
-            deps.append(dep_spec)
+        # Issue #1571: this path used to build its own reduced spec that
+        # carried only capability/tags/version, dropping ``required``,
+        # ``match_mode`` and the expected-schema pair. Share the tool path's
+        # builder so every surface publishes the same selector.
+        deps = build_dependency_specs(core, deps_meta, cluster_strict=cluster_strict)
 
         if not deps:
             continue

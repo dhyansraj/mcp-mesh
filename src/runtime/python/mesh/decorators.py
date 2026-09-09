@@ -14,7 +14,11 @@ from typing import Any, TypeVar
 # Import from _mcp_mesh for registry and runtime integration
 from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
 from _mcp_mesh.engine.strict_di import StrictDIError
-from _mcp_mesh.shared.config_resolver import ValidationRule, get_config_value
+from _mcp_mesh.shared.config_resolver import (
+    ValidationRule,
+    get_config_value,
+    resolve_auto_run,
+)
 from _mcp_mesh.shared.simple_shutdown import start_blocking_loop_with_shutdown_support
 
 logger = logging.getLogger(__name__)
@@ -755,6 +759,134 @@ def _trigger_debounced_processing():
         logger.debug(f"⚠️ Failed to trigger debounced processing: {e}")
 
 
+def _validate_dependency_selector(dep: Any) -> dict[str, Any]:
+    """Validate one dependency entry and normalize it to the wire mapping.
+
+    Issue #1571: @mesh.tool, @mesh.route and @mesh.a2a each carried their own
+    copy of this validation and the copies had drifted — the route copy
+    silently dropped ``expected_type``/``match_mode`` and the a2a copy dropped
+    ``required`` on top of that, so a selector that validated cleanly at
+    decoration time reached the registry with fields missing. One
+    implementation means one selector contract for every decorator family.
+
+    Accepts a bare capability name or a mapping of
+    ``capability``/``tags``/``version``/``required``/``expected_type``/
+    ``match_mode``. Returns the mapping the heartbeat serializes; optional
+    fields are omitted rather than emitted as null.
+
+    Raises:
+        ValueError: on any malformed field.
+    """
+    if isinstance(dep, str):
+        # Simple string dependency
+        return {"capability": dep, "tags": []}
+
+    if not isinstance(dep, dict):
+        raise ValueError("dependencies must be strings or dictionaries")
+
+    # Complex dependency with metadata
+    if "capability" not in dep:
+        raise ValueError("dependency must have 'capability' field")
+    if not isinstance(dep["capability"], str):
+        raise ValueError("dependency capability must be a string")
+
+    # Validate optional dependency fields
+    # Tags can be strings or arrays of strings (OR alternatives)
+    # e.g., ["required", ["python", "typescript"]] = required AND (python OR typescript)
+    dep_tags = dep.get("tags", [])
+    if not isinstance(dep_tags, list):
+        raise ValueError("dependency tags must be a list")
+    for tag in dep_tags:
+        if isinstance(tag, str):
+            continue  # Simple tag - OK
+        elif isinstance(tag, list):
+            # OR alternative - validate inner tags are all strings
+            for inner_tag in tag:
+                if not isinstance(inner_tag, str):
+                    raise ValueError("OR alternative tags must be strings")
+        else:
+            raise ValueError(
+                "tags must be strings or arrays of strings (OR alternatives)"
+            )
+
+    dep_version = dep.get("version")
+    if dep_version is not None and not isinstance(dep_version, str):
+        raise ValueError("dependency version must be a string")
+
+    # Issue #1249: opt-in strictness per dependency edge. When True, the
+    # registry factors this edge into transitive capability availability, and
+    # on @mesh.route an unavailable proxy trips the perimeter 503 before user
+    # code runs. Default False (soft-fail) keeps the null-proxy behaviour.
+    # Bool-only; string-form deps default to False (handled above).
+    dep_required = dep.get("required", False)
+    if not isinstance(dep_required, bool):
+        raise ValueError("dependency required must be a boolean")
+
+    # Issue #547 Phase 1D: optional consumer-side schema declaration.
+    # expected_type may be a Python type (Pydantic model, dataclass,
+    # TypedDict, primitive, etc.) OR a pre-built JSON Schema dict.
+    # match_mode is "subset" (default opt-in) or "strict".
+    expected_type = dep.get("expected_type")
+    match_mode = dep.get("match_mode")
+
+    if match_mode is not None and match_mode not in ("subset", "strict"):
+        raise ValueError("dependency match_mode must be 'subset' or 'strict'")
+
+    dependency_dict: dict[str, Any] = {
+        "capability": dep["capability"],
+        "tags": dep_tags,
+    }
+    if dep_version is not None:
+        dependency_dict["version"] = dep_version
+    # Only carry ``required`` when opted in (absent → false), matching the
+    # optional-field style of ``version`` above.
+    if dep_required:
+        dependency_dict["required"] = True
+
+    if expected_type is not None:
+        # Default match_mode to "subset" (most permissive opt-in) when the
+        # caller provides expected_type without match_mode.
+        if match_mode is None:
+            match_mode = "subset"
+        if isinstance(expected_type, dict):
+            # Caller supplied a pre-built JSON Schema; pass through.
+            dependency_dict["expected_schema_raw"] = expected_type
+        else:
+            # Defer the Rust-normalizer call to the heartbeat pipeline
+            # (decorator runs at import time; keep it cheap).
+            from _mcp_mesh.utils.fastmcp_schema_extractor import (
+                FastMCPSchemaExtractor,
+            )
+
+            schema = FastMCPSchemaExtractor.extract_type_schema(expected_type)
+            if schema is not None:
+                dependency_dict["expected_schema_raw"] = schema
+            # else: extraction failed; warning already logged.
+    elif match_mode is not None:
+        logger.warning(
+            f"dependency '{dep['capability']}': match_mode set "
+            "but no expected_type; schema check will be skipped"
+        )
+
+    if match_mode is not None:
+        dependency_dict["match_mode"] = match_mode
+
+    return dependency_dict
+
+
+def _validate_dependencies(dependencies: Any) -> list[dict[str, Any]]:
+    """Validate a decorator's ``dependencies`` list (issue #1571).
+
+    Shared by @mesh.tool, @mesh.route and @mesh.a2a so all three accept the
+    same selector fields and publish them identically.
+    """
+    if dependencies is None:
+        return []
+    if not isinstance(dependencies, list):
+        raise ValueError("dependencies must be a list")
+    return [_validate_dependency_selector(dep) for dep in dependencies]
+
+
 def _get_or_create_agent_id(agent_name: str | None = None) -> str:
     """
     Get or create a shared agent ID for all functions in this process.
@@ -1099,123 +1231,9 @@ def tool(
         if description is not None and not isinstance(description, str):
             raise ValueError("description must be a string")
 
-        # Validate and process dependencies
-        if dependencies is not None:
-            if not isinstance(dependencies, list):
-                raise ValueError("dependencies must be a list")
-
-            validated_dependencies = []
-            for dep in dependencies:
-                if isinstance(dep, str):
-                    # Simple string dependency
-                    validated_dependencies.append(
-                        {
-                            "capability": dep,
-                            "tags": [],
-                        }
-                    )
-                elif isinstance(dep, dict):
-                    # Complex dependency with metadata
-                    if "capability" not in dep:
-                        raise ValueError("dependency must have 'capability' field")
-                    if not isinstance(dep["capability"], str):
-                        raise ValueError("dependency capability must be a string")
-
-                    # Validate optional dependency fields
-                    # Tags can be strings or arrays of strings (OR alternatives)
-                    # e.g., ["required", ["python", "typescript"]] = required AND (python OR typescript)
-                    dep_tags = dep.get("tags", [])
-                    if not isinstance(dep_tags, list):
-                        raise ValueError("dependency tags must be a list")
-                    for tag in dep_tags:
-                        if isinstance(tag, str):
-                            continue  # Simple tag - OK
-                        elif isinstance(tag, list):
-                            # OR alternative - validate inner tags are all strings
-                            for inner_tag in tag:
-                                if not isinstance(inner_tag, str):
-                                    raise ValueError(
-                                        "OR alternative tags must be strings"
-                                    )
-                        else:
-                            raise ValueError(
-                                "tags must be strings or arrays of strings (OR alternatives)"
-                            )
-
-                    dep_version = dep.get("version")
-                    if dep_version is not None and not isinstance(dep_version, str):
-                        raise ValueError("dependency version must be a string")
-
-                    # Issue #1249: opt-in strictness per dependency edge. When
-                    # True, the registry factors this edge into transitive
-                    # capability availability. Default False (soft-fail) keeps
-                    # the existing null-proxy behaviour. Bool-only; string-form
-                    # deps default to False (handled above).
-                    dep_required = dep.get("required", False)
-                    if not isinstance(dep_required, bool):
-                        raise ValueError("dependency required must be a boolean")
-
-                    # Issue #547 Phase 1D: optional consumer-side schema declaration.
-                    # expected_type may be a Python type (Pydantic model, dataclass,
-                    # TypedDict, primitive, etc.) OR a pre-built JSON Schema dict.
-                    # match_mode is "subset" (default opt-in) or "strict".
-                    expected_type = dep.get("expected_type")
-                    match_mode = dep.get("match_mode")
-
-                    if match_mode is not None and match_mode not in (
-                        "subset",
-                        "strict",
-                    ):
-                        raise ValueError(
-                            "dependency match_mode must be 'subset' or 'strict'"
-                        )
-
-                    dependency_dict = {
-                        "capability": dep["capability"],
-                        "tags": dep_tags,
-                    }
-                    if dep_version is not None:
-                        dependency_dict["version"] = dep_version
-                    # Only carry ``required`` when opted in (absent → false),
-                    # matching the optional-field style of ``version`` above.
-                    if dep_required:
-                        dependency_dict["required"] = True
-
-                    if expected_type is not None:
-                        # Default match_mode to "subset" (most permissive opt-in)
-                        # when caller provides expected_type without match_mode.
-                        if match_mode is None:
-                            match_mode = "subset"
-                        if isinstance(expected_type, dict):
-                            # Caller supplied a pre-built JSON Schema; pass through.
-                            dependency_dict["expected_schema_raw"] = expected_type
-                        else:
-                            # Defer Rust-normalizer call to the heartbeat pipeline
-                            # (decorator runs at import time; keep it cheap).
-                            from _mcp_mesh.utils.fastmcp_schema_extractor import (
-                                FastMCPSchemaExtractor,
-                            )
-
-                            schema = FastMCPSchemaExtractor.extract_type_schema(
-                                expected_type
-                            )
-                            if schema is not None:
-                                dependency_dict["expected_schema_raw"] = schema
-                            # else: extraction failed; warning already logged.
-                    elif match_mode is not None:
-                        logger.warning(
-                            f"dependency '{dep['capability']}': match_mode set "
-                            "but no expected_type; schema check will be skipped"
-                        )
-
-                    if match_mode is not None:
-                        dependency_dict["match_mode"] = match_mode
-
-                    validated_dependencies.append(dependency_dict)
-                else:
-                    raise ValueError("dependencies must be strings or dictionaries")
-        else:
-            validated_dependencies = []
+        # Validate and process dependencies (issue #1571: one
+        # selector contract shared with @mesh.route and @mesh.a2a).
+        validated_dependencies = _validate_dependencies(dependencies)
 
         # RFC #1280: expand @mesh.service consumer-view parameters into
         # dependency edges appended AFTER the explicit deps — parameter order
@@ -1533,7 +1551,14 @@ def agent(
             ``health_check``, which degrades rather than withdrawing — see
             ``_mcp_mesh.shared.startup_check_manager``). Omitting it passes,
             so this is purely additive.
-        auto_run: Automatically start service and keep process alive (default: True)
+        auto_run: Start the HTTP server and keep the process alive (default: True)
+            auto_run gates the SERVER and the PROCESS LIFETIME — not mesh
+            membership. With auto_run=False the agent still runs its startup
+            pipeline, still registers with the registry, and still heartbeats
+            (so it stays registered and its dependencies resolve); mesh simply
+            does not start a server and does not block, leaving both to your
+            own server loop. Serve on the configured http_port — that is the
+            address the agent registers.
             Environment variable: MCP_MESH_AUTO_RUN (takes precedence)
         auto_run_interval: Keep-alive heartbeat interval in seconds (default: 10)
             Environment variable: MCP_MESH_AUTO_RUN_INTERVAL (takes precedence)
@@ -1552,6 +1577,11 @@ def agent(
     Auto-Run Feature:
         When auto_run=True, the decorator automatically starts the service and keeps
         the process alive. This eliminates the need for manual while True loops.
+
+        When auto_run=False, mesh registers and heartbeats but starts no server
+        and does not block — use this to embed a mesh agent in a server loop you
+        own. The agent is a full mesh member either way; only who owns the
+        server and the process differs.
 
         Example:
             @mesh.agent(name="my-service", auto_run=True)
@@ -1664,12 +1694,9 @@ def agent(
             rule=ValidationRule.NONZERO_RULE,
         )
 
-        final_auto_run = get_config_value(
-            "MCP_MESH_AUTO_RUN",
-            override=auto_run,
-            default=MeshDefaults.AUTO_RUN,
-            rule=ValidationRule.TRUTHY_RULE,
-        )
+        # Issue #1589: one resolver for every MCP_MESH_AUTO_RUN reader
+        # (this decorator, the runtime bootstrap and the startup orchestrator).
+        final_auto_run = resolve_auto_run(override=auto_run)
 
         final_auto_run_interval = get_config_value(
             "MCP_MESH_AUTO_RUN_INTERVAL",
@@ -1880,73 +1907,9 @@ def route(
                 f"McpMeshTool parameters with dependencies=[...] instead."
             )
 
-        # Validate and process dependencies (reuse logic from tool decorator)
-        if dependencies is not None:
-            if not isinstance(dependencies, list):
-                raise ValueError("dependencies must be a list")
-
-            validated_dependencies = []
-            for dep in dependencies:
-                if isinstance(dep, str):
-                    # Simple string dependency
-                    validated_dependencies.append(
-                        {
-                            "capability": dep,
-                            "tags": [],
-                        }
-                    )
-                elif isinstance(dep, dict):
-                    # Complex dependency with metadata
-                    if "capability" not in dep:
-                        raise ValueError("dependency must have 'capability' field")
-                    if not isinstance(dep["capability"], str):
-                        raise ValueError("dependency capability must be a string")
-
-                    # Validate optional dependency fields
-                    # Tags can be strings or arrays of strings (OR alternatives)
-                    # e.g., ["required", ["python", "typescript"]] = required AND (python OR typescript)
-                    dep_tags = dep.get("tags", [])
-                    if not isinstance(dep_tags, list):
-                        raise ValueError("dependency tags must be a list")
-                    for tag in dep_tags:
-                        if isinstance(tag, str):
-                            continue  # Simple tag - OK
-                        elif isinstance(tag, list):
-                            # OR alternative - validate inner tags are all strings
-                            for inner_tag in tag:
-                                if not isinstance(inner_tag, str):
-                                    raise ValueError(
-                                        "OR alternative tags must be strings"
-                                    )
-                        else:
-                            raise ValueError(
-                                "tags must be strings or arrays of strings (OR alternatives)"
-                            )
-
-                    dep_version = dep.get("version")
-                    if dep_version is not None and not isinstance(dep_version, str):
-                        raise ValueError("dependency version must be a string")
-
-                    # Issue #1249: required edge (default False). For routes,
-                    # a required dep whose proxy is unavailable at call time
-                    # trips the perimeter 503 before user code runs.
-                    dep_required = dep.get("required", False)
-                    if not isinstance(dep_required, bool):
-                        raise ValueError("dependency required must be a boolean")
-
-                    dependency_dict = {
-                        "capability": dep["capability"],
-                        "tags": dep_tags,
-                    }
-                    if dep_version is not None:
-                        dependency_dict["version"] = dep_version
-                    if dep_required:
-                        dependency_dict["required"] = True
-                    validated_dependencies.append(dependency_dict)
-                else:
-                    raise ValueError("dependencies must be strings or dictionaries")
-        else:
-            validated_dependencies = []
+        # Validate and process dependencies (issue #1571: one
+        # selector contract shared with @mesh.tool and @mesh.a2a).
+        validated_dependencies = _validate_dependencies(dependencies)
 
         # Build route metadata
         metadata = {
@@ -2293,57 +2256,9 @@ def a2a(
                 if not isinstance(tag, str):
                     raise ValueError("all tags must be strings")
 
-        # Validate and process dependencies (mirrors @mesh.route shape).
-        if dependencies is not None:
-            if not isinstance(dependencies, list):
-                raise ValueError("dependencies must be a list")
-
-            validated_dependencies = []
-            for dep in dependencies:
-                if isinstance(dep, str):
-                    validated_dependencies.append({"capability": dep, "tags": []})
-                elif isinstance(dep, dict):
-                    if "capability" not in dep:
-                        raise ValueError("dependency must have 'capability' field")
-                    if not isinstance(dep["capability"], str):
-                        raise ValueError("dependency capability must be a string")
-                    # Mirror @mesh.tool's tag validation — tags is a list
-                    # whose elements are either strings (AND-tags) or
-                    # nested lists of strings (OR-groups). Without this
-                    # check, malformed shapes (ints, nested ints, dicts)
-                    # would silently propagate to the registry and only
-                    # surface as confusing resolver mismatches at
-                    # capability-binding time.
-                    dep_tags = dep.get("tags", [])
-                    if not isinstance(dep_tags, list):
-                        raise ValueError("dependency tags must be a list")
-                    for tag in dep_tags:
-                        if isinstance(tag, str):
-                            continue
-                        elif isinstance(tag, list):
-                            for inner_tag in tag:
-                                if not isinstance(inner_tag, str):
-                                    raise ValueError(
-                                        "OR alternative tags must be strings"
-                                    )
-                        else:
-                            raise ValueError(
-                                "tags must be strings or arrays of strings (OR alternatives)"
-                            )
-                    dep_version = dep.get("version")
-                    if dep_version is not None and not isinstance(dep_version, str):
-                        raise ValueError("dependency version must be a string")
-                    dep_dict = {
-                        "capability": dep["capability"],
-                        "tags": dep_tags,
-                    }
-                    if dep_version is not None:
-                        dep_dict["version"] = dep_version
-                    validated_dependencies.append(dep_dict)
-                else:
-                    raise ValueError("dependencies must be strings or dictionaries")
-        else:
-            validated_dependencies = []
+        # Validate and process dependencies (issue #1571: one
+        # selector contract shared with @mesh.tool and @mesh.route).
+        validated_dependencies = _validate_dependencies(dependencies)
 
         if len(validated_dependencies) > 1:
             # v1 emits a single agent card per surface with one skill. Multi-
