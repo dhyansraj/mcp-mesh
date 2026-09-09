@@ -538,7 +538,12 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
                     if first_wrapper and hasattr(
                         first_wrapper.get("wrapper"), "get_session_stats"
                     ):
-                        session_affinity_stats = first_wrapper[
+                        # MUST be awaited: get_session_stats is async since
+                        # #1590 (the Redis client is redis.asyncio now). An
+                        # un-awaited call returns a truthy coroutine that
+                        # raises nothing here, lands in the response body, and
+                        # makes FastAPI fail to encode it -- /metadata 500s.
+                        session_affinity_stats = await first_wrapper[
                             "wrapper"
                         ].get_session_stats()
             except Exception as e:

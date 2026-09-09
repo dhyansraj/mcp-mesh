@@ -13,7 +13,8 @@ Pipeline shape:
   2. FastAPI app discovery       (locate the user's FastAPI instance)
   3. Tracing middleware          (attach distributed-tracing middleware)
   4. Health endpoints            (``/livez``, ``/ready``, ``/health``)
-  5. A2A server setup            (heartbeat config + ``service_type=a2a``)
+  5. Trace publisher init        (eager Redis connect, off the request path)
+  6. A2A server setup            (heartbeat config + ``service_type=a2a``)
 
 DI is wired by the ``@mesh.a2a`` decorator itself at module import (mirrors
 ``@mesh.route``), so this pipeline has no equivalent of
@@ -23,7 +24,7 @@ DI is wired by the ``@mesh.a2a`` decorator itself at module import (mirrors
 import logging
 
 from ..api_startup.middleware_integration import TracingMiddlewareIntegrationStep
-from ..shared import HealthEndpointsStep
+from ..shared import HealthEndpointsStep, TracePublisherInitStep
 from ..shared.mesh_pipeline import MeshPipeline
 from .a2a_server_setup import A2AServerSetupStep
 from .a2a_surface_collection import A2ASurfaceCollectionStep
@@ -41,7 +42,8 @@ class A2APipeline(MeshPipeline):
     2. FastAPI app discovery (locate the user's FastAPI instance)
     3. Tracing middleware integration (shared with api_startup)
     4. Health endpoints (``/livez``, ``/ready``, ``/health``; shared step)
-    5. A2A server setup (heartbeat metadata + ``service_type=a2a``)
+    5. Trace publisher init (eager Redis connect, off the request path)
+    6. A2A server setup (heartbeat metadata + ``service_type=a2a``)
 
     Like ``APIPipeline``, this is a consumer-style pipeline:
     - No FastAPI server is created (user owns the app + uvicorn).
@@ -63,6 +65,16 @@ class A2APipeline(MeshPipeline):
             # gateway is deployed with the same Helm chart and was 404ing
             # /livez and /ready just as hard.
             HealthEndpointsStep(service_type="a2a"),
+            # Issue #1363, ported here by #1591: build the Redis trace
+            # publisher off the request path. The MCP and API pipelines have
+            # had this step since #1363; without it an A2A agent's tool-path
+            # spans are DROPPED (``publish_trace_metadata_async`` uses the
+            # deliberately non-constructing getter and gives up when the
+            # singleton is missing), and the first request that does reach the
+            # constructing getter in the tracing middleware pays the sync
+            # ``block_on`` Redis connect on the serving loop. No-op when
+            # tracing is disabled.
+            TracePublisherInitStep(),
             A2AServerSetupStep(),  # Heartbeat + service_type=a2a
         ]
 

@@ -322,8 +322,12 @@ def _start_claim_dispatchers(app: Any) -> list:
     started: list = []
     for d in dispatchers:
         try:
-            d.start()
-            started.append(d)
+            # Only take responsibility for stopping the ones THIS loop owns
+            # (issue #1591): the heartbeat loop stages the same dispatcher
+            # objects and may already have started them there, and draining a
+            # foreign loop's task from here is illegal.
+            if d.start():
+                started.append(d)
         except Exception as e:
             logger.warning(
                 "lifespan: failed to start claim dispatcher for capability=%s: %s",

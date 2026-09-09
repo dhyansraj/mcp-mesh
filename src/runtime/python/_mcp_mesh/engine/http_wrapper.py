@@ -5,9 +5,11 @@ allowing them to communicate across network boundaries in containerized
 and distributed environments.
 """
 
+import asyncio
 import json
 import logging
 import os
+import threading
 import time
 from datetime import datetime, timedelta
 from typing import Any, Optional
@@ -36,32 +38,213 @@ def _parse_session_ttl() -> int:
 
 SESSION_TTL = _parse_session_ttl()
 
+#: Per-operation Redis budget, seconds. Applied as the connect AND socket
+#: timeout on the client and again as an ``asyncio.wait_for`` around each call
+#: (issue #1590): the middleware that owns these calls runs on the uvicorn
+#: serving loop, so an unbounded Redis operation stalls every concurrent
+#: request on this process, ``/health`` and ``/ready`` included. Session
+#: affinity is an optimisation — losing it for one request is strictly better
+#: than blocking the process.
+REDIS_OP_TIMEOUT_SECS = 2.0
+
+#: Re-probe schedule after Redis goes away: 5s, 10s, 20s ... capped at 5min.
+#: Without this the first blip latched ``redis_available = False`` forever and
+#: silently downgraded the process to the (previously unbounded) in-memory
+#: fallback for the rest of its life.
+REDIS_REPROBE_BASE_SECS = 5.0
+REDIS_REPROBE_MAX_SECS = 300.0
+
+#: Hard cap on the in-memory fallback. Entries also carry the session TTL and
+#: are purged on access; this bound is the backstop for a process that is
+#: assigning sessions faster than they expire.
+MEMORY_STORE_MAX_ENTRIES = 10_000
+
 
 class SessionStorage:
-    """Session storage with Redis backend and in-memory fallback."""
+    """Session storage with Redis backend and in-memory fallback.
+
+    Issue #1590. Three properties this type has to hold, all of which the
+    original synchronous implementation broke:
+
+    * **It must never block the serving loop.** Every caller is ASGI
+      middleware on the uvicorn loop. The client is therefore
+      ``redis.asyncio`` with connect/socket timeouts, and each operation is
+      additionally bounded by :data:`REDIS_OP_TIMEOUT_SECS`.
+    * **The client must be built on the loop that uses it.** Construction is
+      lazy and loop-checked rather than done in ``__init__`` (which runs on
+      the transient startup pipeline loop) — an asyncio Redis pool built on
+      one loop and awaited on another is the #1565 failure shape.
+    * **The fallback must be bounded and temporary.** Memory entries carry
+      the session TTL and are purged on access under a hard entry cap, and a
+      Redis failure schedules a re-probe with exponential backoff instead of
+      latching the downgrade permanently.
+    """
 
     def __init__(self):
         self.redis_client = None
-        self.memory_store = {}  # Fallback storage
+        # key -> (pod_ip, monotonic expiry)
+        self.memory_store: dict[str, tuple[str, float]] = {}
         self.redis_available = False
-        self._init_redis()
+        self._redis_loop = None
+        self._redis_failures = 0
+        self._next_redis_probe = 0.0
+        # One connect at a time per loop. Without it, N concurrent first
+        # requests each build a client (the last wins, the rest LEAK sockets)
+        # and each failure calls _mark_redis_down, advancing the backoff N
+        # times so a one-second blip jumps straight to the 300s cap and
+        # defeats the fast-recovery intent. Keyed by loop because an
+        # asyncio.Lock is loop-bound; the outer threading.Lock guards the map
+        # itself so it is safe to reach from any thread.
+        self._connect_locks: dict[int, asyncio.Lock] = {}
+        self._connect_locks_guard = threading.Lock()
 
-    def _init_redis(self):
-        """Initialize Redis client with graceful fallback."""
+    def _connect_lock(self, loop) -> asyncio.Lock:
+        with self._connect_locks_guard:
+            lock = self._connect_locks.get(id(loop))
+            if lock is None:
+                lock = asyncio.Lock()
+                self._connect_locks[id(loop)] = lock
+            return lock
+
+    async def _mark_redis_down(self, exc: Exception, what: str) -> None:
+        """Latch Redis as unavailable and schedule the next probe.
+
+        Idempotent for a burst: only the failure that actually transitions
+        us out of a live/expired-window state advances the backoff. Ten
+        concurrent requests failing on the same dead Redis therefore schedule
+        ONE 5s probe, not one 300s probe.
+        """
+        already_down = not self.redis_available and (
+            time.monotonic() < self._next_redis_probe
+        )
+        self.redis_available = False
+        client, self.redis_client = self.redis_client, None
+        self._redis_loop = None
+
+        if already_down:
+            logger.debug(
+                "Redis %s failed again while already backing off (%s)", what, exc
+            )
+        else:
+            self._redis_failures += 1
+            delay = min(
+                REDIS_REPROBE_BASE_SECS * (2 ** (self._redis_failures - 1)),
+                REDIS_REPROBE_MAX_SECS,
+            )
+            self._next_redis_probe = time.monotonic() + delay
+            logger.warning(
+                # Type AND message: an asyncio.TimeoutError stringifies to "",
+                # which would otherwise log "Redis get failed ()".
+                "⚠️ Redis %s failed (%s: %s); using in-memory sessions, "
+                "next probe in %.0fs",
+                what,
+                type(exc).__name__,
+                exc,
+                delay,
+            )
+
+        if client is not None:
+            await self._close_client(client, owning_loop=None)
+
+    async def _close_client(self, client, *, owning_loop) -> None:
+        """Best-effort ``aclose()``, on the client's own loop when needed.
+
+        A redis.asyncio pool holds asyncio primitives bound to the loop that
+        created it, so closing it from a different loop is illegal — but
+        DROPPING it leaks live sockets, which is worse than the awkwardness
+        (issue #1590 review). Fire-and-forget on the owning loop; never let a
+        teardown failure reach the request path.
+        """
         try:
-            import redis
+            running = asyncio.get_running_loop()
+        except RuntimeError:  # pragma: no cover - callers are all async
+            running = None
+
+        if owning_loop is None or owning_loop is running:
+            try:
+                await client.aclose()
+            except Exception as e:  # noqa: BLE001 - teardown of a broken client
+                logger.debug("Redis client close raised (%s); ignoring", e)
+            return
+
+        if not owning_loop.is_running():
+            logger.debug("Cannot close the previous Redis client: its loop is gone")
+            return
+        try:
+            # Fire-and-forget: the request path must not wait on a teardown.
+            asyncio.run_coroutine_threadsafe(client.aclose(), owning_loop)
+        except RuntimeError as e:
+            logger.debug("Could not schedule Redis client close (%s)", e)
+
+    def _healthy_on(self, loop) -> bool:
+        """True when a live client already exists and belongs to ``loop``."""
+        return (
+            self.redis_available
+            and self.redis_client is not None
+            and self._redis_loop is loop
+        )
+
+    async def _ensure_redis(self) -> bool:
+        """Return True when a live, loop-correct async Redis client is ready.
+
+        Cheap on the hot path: one identity check when the client is healthy,
+        one monotonic-clock comparison when it is not and the backoff window
+        has not elapsed. The connect itself is single-flight per loop, so a
+        burst of concurrent first requests produces ONE client and ONE backoff
+        step rather than N of each (issue #1590 review).
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:  # pragma: no cover - callers are all async
+            return False
+
+        # Fast path, lock-free.
+        if self._healthy_on(loop):
+            return True
+        if not self.redis_available and time.monotonic() < self._next_redis_probe:
+            return False
+
+        async with self._connect_lock(loop):
+            # Re-check under the lock: another coroutine may have connected (or
+            # latched a fresh backoff window) while we waited for it.
+            if self._healthy_on(loop):
+                return True
+            if not self.redis_available and time.monotonic() < self._next_redis_probe:
+                return False
+
+            if self.redis_client is not None:
+                # A live client owned by a DIFFERENT loop (tool-executor
+                # worker, heartbeat thread). Its asyncio primitives are bound
+                # to that loop, so it has to be rebuilt here — but it must be
+                # CLOSED on its own loop, not dropped, or its sockets leak.
+                logger.debug("Redis session client rebuilt for a different event loop")
+                stale, self.redis_client = self.redis_client, None
+                stale_loop, self._redis_loop = self._redis_loop, None
+                self.redis_available = False
+                await self._close_client(stale, owning_loop=stale_loop)
 
             redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
-            self.redis_client = redis.from_url(redis_url, decode_responses=True)
+            try:
+                import redis.asyncio as aioredis
 
-            # Test connection
-            self.redis_client.ping()
+                client = aioredis.from_url(
+                    redis_url,
+                    decode_responses=True,
+                    socket_timeout=REDIS_OP_TIMEOUT_SECS,
+                    socket_connect_timeout=REDIS_OP_TIMEOUT_SECS,
+                )
+                await asyncio.wait_for(client.ping(), timeout=REDIS_OP_TIMEOUT_SECS)
+            except Exception as e:  # noqa: BLE001 - any failure means "use memory"
+                await self._mark_redis_down(e, "connect")
+                return False
+
+            self.redis_client = client
+            self._redis_loop = loop
             self.redis_available = True
+            self._redis_failures = 0
+            self._next_redis_probe = 0.0
             logger.info(f"✅ Redis session storage connected: {redis_url}")
-
-        except Exception as e:
-            logger.warning(f"⚠️ Redis unavailable, using in-memory sessions: {e}")
-            self.redis_available = False
+            return True
 
     def _session_key(self, session_id: str, capability: str = None) -> str:
         """Build a session storage key."""
@@ -71,24 +254,94 @@ class SessionStorage:
             else f"session:{session_id}"
         )
 
+    def _memory_get(self, session_key: str) -> str | None:
+        """Read from the fallback, honouring the session TTL."""
+        entry = self.memory_store.get(session_key)
+        if entry is None:
+            return None
+        pod_ip, expires_at = entry
+        if time.monotonic() >= expires_at:
+            self.memory_store.pop(session_key, None)
+            return None
+        return pod_ip
+
+    def _memory_set(self, session_key: str, pod_ip: str, ttl: int) -> None:
+        """Write to the fallback under a TTL and a hard entry cap."""
+        now = time.monotonic()
+        expired = [k for k, (_, exp) in self.memory_store.items() if now >= exp]
+        for key in expired:
+            self.memory_store.pop(key, None)
+
+        self.memory_store[session_key] = (pod_ip, now + ttl)
+
+        overflow = len(self.memory_store) - MEMORY_STORE_MAX_ENTRIES
+        if overflow > 0:
+            # Evict the entries closest to expiry first — they are the ones a
+            # subsequent request is least likely to still need.
+            doomed = sorted(self.memory_store.items(), key=lambda kv: kv[1][1])
+            for key, _ in doomed[:overflow]:
+                self.memory_store.pop(key, None)
+            logger.warning(
+                "In-memory session store hit the %d-entry cap; evicted %d "
+                "soonest-to-expire session(s)",
+                MEMORY_STORE_MAX_ENTRIES,
+                overflow,
+            )
+
     async def get_session_pod(self, session_id: str, capability: str = None) -> str:
         """Get assigned pod for session."""
         session_key = self._session_key(session_id, capability)
 
-        if self.redis_available:
+        if await self._ensure_redis():
             try:
-                assigned_pod = self.redis_client.get(session_key)
+                assigned_pod = await asyncio.wait_for(
+                    self.redis_client.get(session_key),
+                    timeout=REDIS_OP_TIMEOUT_SECS,
+                )
                 if assigned_pod:
                     logger.debug(
                         f"📍 Redis: Found session {session_key} -> {assigned_pod}"
                     )
                     return assigned_pod
-            except Exception as e:
-                logger.warning(f"Redis get failed, falling back to memory: {e}")
-                self.redis_available = False
+                # A Redis MISS still has to consult memory (issue #1590
+                # review). Sessions assigned while Redis was down live only in
+                # the fallback, so returning None here would let the middleware
+                # re-assign an established session to THIS pod and silently
+                # move it off the pod holding its state. This path was
+                # unreachable before the re-probe existed, because the first
+                # failure latched redis_available=False for the process
+                # lifetime and Redis was never consulted again.
+                remembered = self._memory_get(session_key)
+                if remembered is not None:
+                    logger.info(
+                        f"📍 Recovering session {session_key} -> {remembered} "
+                        "from the in-memory fallback into Redis"
+                    )
+                    await self._write_through(session_key, remembered)
+                return remembered
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001 - degrade, never fail the request
+                await self._mark_redis_down(e, "get")
 
         # Fallback to memory store
-        return self.memory_store.get(session_key)
+        return self._memory_get(session_key)
+
+    async def _write_through(self, session_key: str, pod_ip: str) -> None:
+        """Best-effort re-assert of a fallback entry into a recovered Redis.
+
+        Bounded and swallowed: this is opportunistic repair on a read path and
+        must never turn a successful lookup into a failed request.
+        """
+        try:
+            await asyncio.wait_for(
+                self.redis_client.setex(session_key, SESSION_TTL, pod_ip),
+                timeout=REDIS_OP_TIMEOUT_SECS,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            logger.debug("Session write-through to Redis failed (%s); ignoring", e)
 
     async def assign_session_pod(
         self, session_id: str, pod_ip: str, capability: str = None
@@ -97,37 +350,52 @@ class SessionStorage:
         session_key = self._session_key(session_id, capability)
         ttl = SESSION_TTL
 
-        if self.redis_available:
+        if await self._ensure_redis():
             try:
-                self.redis_client.setex(session_key, ttl, pod_ip)
+                await asyncio.wait_for(
+                    self.redis_client.setex(session_key, ttl, pod_ip),
+                    timeout=REDIS_OP_TIMEOUT_SECS,
+                )
                 logger.info(f"📍 Redis: Assigned session {session_key} -> {pod_ip}")
                 return pod_ip
-            except Exception as e:
-                logger.warning(f"Redis set failed, falling back to memory: {e}")
-                self.redis_available = False
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001 - degrade, never fail the request
+                await self._mark_redis_down(e, "setex")
 
         # Fallback to memory store
-        self.memory_store[session_key] = pod_ip
+        self._memory_set(session_key, pod_ip, ttl)
         logger.info(f"📍 Memory: Assigned session {session_key} -> {pod_ip}")
         return pod_ip
 
-    def get_stats(self) -> dict:
-        """Get session storage statistics."""
+    async def get_stats(self) -> dict:
+        """Get session storage statistics.
+
+        Async since #1590: the Redis client is ``redis.asyncio`` now, so a
+        synchronous reader would have handed back un-awaited coroutines.
+        """
         stats = {
             "storage_type": "redis" if self.redis_available else "memory",
             "redis_available": self.redis_available,
         }
 
-        if self.redis_available:
+        if self.redis_available and self.redis_client is not None:
             try:
-                session_keys = self.redis_client.keys("session:*")
+                session_keys = await asyncio.wait_for(
+                    self.redis_client.keys("session:*"),
+                    timeout=REDIS_OP_TIMEOUT_SECS,
+                )
                 stats["total_sessions"] = len(session_keys)
                 stats["active_sessions"] = session_keys[:10]  # First 10 for debugging
-            except Exception:
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - stats must never raise
                 stats["total_sessions"] = 0
         else:
-            stats["total_sessions"] = len(self.memory_store)
-            stats["active_sessions"] = list(self.memory_store.keys())[:10]
+            now = time.monotonic()
+            live = [k for k, (_, exp) in self.memory_store.items() if now < exp]
+            stats["total_sessions"] = len(live)
+            stats["active_sessions"] = live[:10]
 
         return stats
 
@@ -642,9 +910,12 @@ class HttpMcpWrapper:
                 headers={"Content-Type": "application/json"},
             )
 
-    def get_session_stats(self) -> dict:
-        """Get current session affinity statistics."""
-        storage_stats = self.session_storage.get_stats()
+    async def get_session_stats(self) -> dict:
+        """Get current session affinity statistics.
+
+        Async since #1590 — see :meth:`SessionStorage.get_stats`.
+        """
+        storage_stats = await self.session_storage.get_stats()
 
         return {
             "pod_ip": self.pod_ip,

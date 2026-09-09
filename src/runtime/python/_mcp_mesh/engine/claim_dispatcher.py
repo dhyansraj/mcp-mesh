@@ -170,6 +170,18 @@ class PythonClaimDispatcher:
         self._gate_missing_cap: str | None = None
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
+        # The loop ``start()`` bound this dispatcher to (issue #1591). The
+        # SAME dispatcher objects are staged in two places — the pipeline
+        # context, which ``rust_heartbeat`` starts on the heartbeat-thread
+        # loop, and ``app.state.mesh_claim_dispatchers``, which the uvicorn
+        # lifespan starts on the serving loop — so whichever runs second used
+        # to no-op in ``start()`` yet still claim ownership, and its shutdown
+        # path would then await a Task and set an Event belonging to the OTHER
+        # loop. Awaiting a foreign-loop Task raises "got Future attached to a
+        # different loop"; setting a foreign-loop Event silently misses the
+        # wakeup because the wakeup callback is queued without waking that
+        # loop.
+        self._loop: asyncio.AbstractEventLoop | None = None
         # One httpx.AsyncClient per dispatcher instead of per poll —
         # avoids burning a TCP/TLS handshake on every claim cycle once
         # connection reuse is in play. Constructed lazily on first
@@ -656,13 +668,30 @@ class PythonClaimDispatcher:
         finally:
             self._dispatch_sem.release()
 
-    def start(self) -> None:
-        """Spawn the background loop on the current event loop."""
+    def start(self) -> bool:
+        """Spawn the background loop on the current event loop.
+
+        Returns True when the CALLING loop owns this dispatcher — i.e. it
+        started it now, or started it earlier and it is still running. Returns
+        False when another loop already owns it (issue #1591), so a second
+        starter does not add it to a shutdown list it cannot legally drain.
+        Idempotent either way: never spawns a second task.
+        """
+        running = asyncio.get_running_loop()
         if self._task is not None and not self._task.done():
-            return
+            if self._loop is running:
+                return True
+            logger.debug(
+                "claim_dispatcher: capability=%s already running on another "
+                "event loop; not starting a second task",
+                self.capability,
+            )
+            return False
+        self._loop = running
         self._task = asyncio.create_task(
             self._run_loop(), name=f"mesh-claim-{self.capability}"
         )
+        return True
 
     async def stop(self, drain_timeout: float = _STOP_DRAIN_TIMEOUT_SECS) -> None:
         """Signal the loop to exit, await it, then drain in-flight dispatches.
@@ -684,6 +713,64 @@ class PythonClaimDispatcher:
             drain_timeout: Bounded wait (seconds) for in-flight handlers.
                 ``<= 0`` skips the drain and cancels immediately (tests).
         """
+        # Cross-loop guard (issue #1591). ``start()`` hands ownership to one
+        # loop; everything below — awaiting ``self._task``, setting
+        # ``self._stop``, awaiting the dispatch tasks — is only legal on that
+        # loop. Awaiting a foreign-loop Task raises "got Future attached to a
+        # different loop" and setting a foreign-loop Event silently misses the
+        # wakeup, so we run the WHOLE shutdown on the owning loop and await the
+        # result here.
+        #
+        # It runs the real thing rather than merely signalling (#1566/#1591
+        # review): a stop() that returned early would skip the in-flight drain,
+        # so handlers would lose their chance to emit terminal
+        # ``complete``/``fail`` reports, and would leave ``_http_client`` open —
+        # while the caller's ``await d.stop(...)`` believed shutdown had
+        # finished. Same run_coroutine_threadsafe + wrap_future shape as
+        # ``close_connection_pools``, which avoids the deadlock of calling
+        # ``future.result()`` from a loop the future is bound to.
+        owner = self._loop
+        running = asyncio.get_running_loop()
+        if owner is not None and owner is not running:
+            logger.warning(
+                "claim_dispatcher: stop() for capability=%s called from a "
+                "different event loop than start(); draining on the owning "
+                "loop",
+                self.capability,
+            )
+            if not owner.is_running():
+                logger.warning(
+                    "claim_dispatcher: owning loop for capability=%s is not "
+                    "running; cannot drain (dispatchers died with it)",
+                    self.capability,
+                )
+                return
+            coro = self.stop(drain_timeout=drain_timeout)
+            try:
+                fut = asyncio.run_coroutine_threadsafe(coro, owner)
+            except RuntimeError as e:
+                coro.close()
+                logger.debug(
+                    "claim_dispatcher: could not schedule stop on the owning "
+                    "loop for capability=%s (%s); it is already closed",
+                    self.capability,
+                    e,
+                )
+                return
+            # Bounded by the drain budget the caller asked for, plus the
+            # cancel-wait the drain itself may spend, plus slack.
+            budget = max(drain_timeout, 0) + _STOP_CANCEL_WAIT_SECS + 10.0
+            try:
+                await asyncio.wait_for(asyncio.wrap_future(fut), timeout=budget)
+            except TimeoutError:
+                logger.warning(
+                    "claim_dispatcher: cross-loop stop for capability=%s did "
+                    "not complete within %.1fs; abandoning",
+                    self.capability,
+                    budget,
+                )
+            return
+
         self._stop.set()
         if self._task is not None:
             try:

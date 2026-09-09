@@ -11,6 +11,7 @@ import functools
 import inspect
 import json
 import logging
+import threading
 import weakref
 from collections.abc import Callable, Iterable
 from typing import Any, Optional
@@ -1149,7 +1150,24 @@ class DependencyInjector:
         # We record the signature of what was last wired so an identical
         # re-emit can be skipped without churning proxies + connection pools.
         self._applied_dep_signatures: dict[str, Any] = {}
-        self._lock = asyncio.Lock()
+        # Issue #1591: a ``threading.RLock``, NOT an ``asyncio.Lock``.
+        #
+        # This injector is a process-wide singleton (``get_global_injector``)
+        # reached from several event loops — the MCP heartbeat-thread loop
+        # applies dependencies, while the API and A2A heartbeat loops touch
+        # ``_applied_dep_signatures`` through the signature accessors. An
+        # asyncio.Lock binds to the first loop that awaits it and then raises
+        # "bound to a different event loop" for every other one; that is
+        # exactly the #1565 defect. It only appeared safe here because every
+        # ``register_dependency`` caller happens to be the same loop today.
+        #
+        # A threading lock is the right primitive regardless: every critical
+        # section below is fully SYNCHRONOUS (no ``await`` inside), so it can
+        # never be held across a suspension point, and it is both
+        # loop-agnostic and actually thread-safe, which asyncio.Lock is not.
+        # Reentrant so a callback reached from inside a critical section
+        # cannot self-deadlock.
+        self._lock = threading.RLock()
 
         # LLM agent injector for MeshLlmAgent parameters
         from .mesh_llm_agent_injector import get_global_llm_injector
@@ -1183,7 +1201,7 @@ class DependencyInjector:
             name: Composite key in format "function_id:dep_N" or legacy capability name
             instance: Proxy instance to register
         """
-        async with self._lock:
+        with self._lock:
             logger.debug(f"📦 Registering dependency: {name}")
             self._dependencies[name] = instance
 
@@ -1218,7 +1236,7 @@ class DependencyInjector:
         Args:
             name: Composite key in format "function_id:dep_N" or legacy capability name
         """
-        async with self._lock:
+        with self._lock:
             logger.info(f"🗑️ INJECTOR: Unregistering dependency: {name}")
             # Idempotency guard (issue #1314): drop the last-applied signature so
             # a later re-add of the same resolution rebuilds instead of skipping.
@@ -1281,11 +1299,18 @@ class DependencyInjector:
         identically (the Rust core re-emits believed-delivered edges on a
         wall-clock tick). Returns ``None`` when nothing is currently applied.
         """
-        return self._applied_dep_signatures.get(name)
+        with self._lock:
+            return self._applied_dep_signatures.get(name)
 
     def set_applied_dependency_signature(self, name: str, signature: Any) -> None:
-        """Record the resolution signature just wired for ``name`` (#1314)."""
-        self._applied_dep_signatures[name] = signature
+        """Record the resolution signature just wired for ``name`` (#1314).
+
+        Locked since #1591: the API and A2A dependency-apply paths call this
+        from their own heartbeat loops (different threads) while the MCP path
+        mutates the same map under the lock.
+        """
+        with self._lock:
+            self._applied_dep_signatures[name] = signature
 
     def clear_applied_dependency_signature(self, name: str) -> None:
         """Drop the last-applied signature for ``name`` (#1314).
@@ -1294,7 +1319,8 @@ class DependencyInjector:
         ``unregister_dependency`` (e.g. the API/route path, which updates route
         wrappers directly) so a later re-add of the same resolution rebuilds.
         """
-        self._applied_dep_signatures.pop(name, None)
+        with self._lock:
+            self._applied_dep_signatures.pop(name, None)
 
     def find_original_function(self, function_name: str) -> Any | None:
         """Find the original function by name from wrapper registry or decorator registry.

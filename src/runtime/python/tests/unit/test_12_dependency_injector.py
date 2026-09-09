@@ -180,7 +180,13 @@ class TestDependencyInjectorInit:
         assert isinstance(injector._function_registry, weakref.WeakValueDictionary)
         assert isinstance(injector._dependency_mapping, dict)
         assert len(injector._dependency_mapping) == 0
-        assert isinstance(injector._lock, asyncio.Lock)
+        # Issue #1591: a loop-agnostic threading lock, not an asyncio.Lock —
+        # the injector is a process-wide singleton reached from several event
+        # loops and every critical section it guards is synchronous.
+        assert not isinstance(injector._lock, asyncio.Lock)
+        with injector._lock:  # acquirable off any loop, and reentrant
+            with injector._lock:
+                pass
 
     def test_get_global_injector(self):
         """Test get_global_injector returns consistent instance."""
