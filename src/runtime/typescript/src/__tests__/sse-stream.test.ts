@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
+import { EventEmitter } from "node:events";
 import type { Response } from "express";
 import { sseStream } from "../sse-stream.js";
 
@@ -150,7 +151,11 @@ describe("sseStream", () => {
     expect(res.end).toHaveBeenCalledTimes(1);
   });
 
-  it("stops iterating and calls return() on consumer disconnect (write returns false)", async () => {
+  // NOTE (#1567): the disconnect signal is ``writableEnded``, NOT write()
+  // returning false — a bare false is backpressure and must not end the
+  // stream. This fake sets writableEnded inside write(), so it is a genuine
+  // disconnect; see the "resumes after drain" case below for the other half.
+  it("stops iterating and calls return() on consumer disconnect (writableEnded)", async () => {
     const res = makeFakeRes();
     let returnCalled = false;
     let yielded = 0;
@@ -171,7 +176,8 @@ describe("sseStream", () => {
       },
     };
 
-    // After first write, simulate disconnect
+    // After first write, simulate disconnect: the consumer going away is what
+    // flips writableEnded, and that is what must stop iteration.
     res.write = vi.fn(() => {
       res._written.push("first-write");
       res.writableEnded = true; // Simulate consumer disconnect
@@ -197,6 +203,119 @@ describe("sseStream", () => {
     expect(res.flushHeaders).not.toHaveBeenCalled();
     // Still writes data + [DONE]
     expect(res._written).toEqual(["data: a\n\n", "data: [DONE]\n\n"]);
+  });
+
+  // --- backpressure control flow (issue #1567) ---------------------------
+  //
+  // These use an EventEmitter-backed fake to pin the CONTROL FLOW: a write
+  // that reports backpressure pauses, then resumes on drain, and abandons the
+  // wait when the response closes. They deliberately do not try to prove Node
+  // stream semantics — that is what the real-socket suite in
+  // sse-stream-backpressure.test.ts is for.
+
+  interface EmitterRes extends EventEmitter {
+    headersSent: boolean;
+    writableEnded: boolean;
+    destroyed: boolean;
+    setHeader: ReturnType<typeof vi.fn>;
+    write: (data: string) => boolean;
+    end: () => void;
+    flushHeaders: () => void;
+    _written: string[];
+    _backpressure: boolean;
+  }
+
+  function makeEmitterRes(): EmitterRes {
+    const res = new EventEmitter() as EmitterRes;
+    res.headersSent = false;
+    res.writableEnded = false;
+    res.destroyed = false;
+    res._written = [];
+    res._backpressure = false;
+    res.setHeader = vi.fn();
+    res.flushHeaders = (): void => {
+      res.headersSent = true;
+    };
+    res.write = (data: string): boolean => {
+      res._written.push(data);
+      return !res._backpressure;
+    };
+    res.end = (): void => {
+      res.writableEnded = true;
+    };
+    return res;
+  }
+
+  it("pauses on backpressure and resumes on drain instead of cutting the stream", async () => {
+    const res = makeEmitterRes();
+    res._backpressure = true;
+
+    // Release the producer one drain at a time; clear backpressure after the
+    // second frame so the rest of the stream flows normally.
+    let drains = 0;
+    res.on("newListener", (event: string) => {
+      if (event !== "drain") return;
+      queueMicrotask(() => {
+        drains += 1;
+        if (drains >= 2) res._backpressure = false;
+        res.emit("drain");
+      });
+    });
+
+    await sseStream(res as unknown as Response, asyncIter(["a", "b", "c"]));
+
+    expect(res._written).toEqual([
+      "data: a\n\n",
+      "data: b\n\n",
+      "data: c\n\n",
+      "data: [DONE]\n\n",
+    ]);
+    expect(drains).toBe(2);
+    expect(res.writableEnded).toBe(true);
+    // The losers of each drain race are removed — no handler accumulation.
+    expect(res.listenerCount("drain")).toBe(0);
+    expect(res.listenerCount("close")).toBe(0);
+    expect(res.listenerCount("error")).toBe(0);
+  });
+
+  it("abandons the drain wait and releases upstream when the response closes", async () => {
+    const res = makeEmitterRes();
+    res._backpressure = true; // drain will never arrive
+    let returnCalled = false;
+    let pulled = 0;
+
+    async function* tracked(): AsyncGenerator<string, void, void> {
+      try {
+        for (let i = 0; i < 10; i++) {
+          pulled += 1;
+          yield `chunk${i}`;
+        }
+      } finally {
+        returnCalled = true;
+      }
+    }
+
+    let parkedOnDrain = false;
+    res.on("newListener", (event: string) => {
+      if (event !== "close") return;
+      parkedOnDrain = true;
+      queueMicrotask(() => {
+        res.destroyed = true;
+        res.emit("close");
+      });
+    });
+
+    await sseStream(res as unknown as Response, tracked());
+
+    // The producer must have PARKED (raced drain against close) rather than
+    // treating the backpressure as an immediate disconnect.
+    expect(parkedOnDrain).toBe(true);
+    expect(returnCalled).toBe(true);
+    expect(pulled).toBe(1);
+    expect(res._written).toEqual(["data: chunk0\n\n"]);
+    expect(res.listenerCount("drain")).toBe(0);
+    expect(res.listenerCount("close")).toBe(0);
+    expect(res.listenerCount("error")).toBe(0);
   });
 
   it("handles synchronous res.write throwing without crashing", async () => {

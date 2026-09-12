@@ -473,6 +473,21 @@ export MCP_MESH_PROXY_TIMEOUT=120
 export MCP_MESH_CALL_TIMEOUT=600
 ```
 
+**SSE consumer backpressure (TypeScript):**
+
+`mesh.sseStream` treats a consumer slower than the producer as slow, not
+disconnected — it waits for the response to drain before sending the next
+frame, so a browser on a slow link still receives every chunk and the
+`[DONE]` terminator. A consumer that stalls without disconnecting emits
+neither `close` nor `error`, so the wait is bounded; when the budget
+elapses the stream is ended and the upstream iterator released.
+
+```bash
+# Seconds mesh.sseStream waits for a backpressured SSE consumer to drain
+# before abandoning the stream (default: 300, 0 = wait forever)
+export MCP_MESH_SSE_DRAIN_TIMEOUT=300
+```
+
 ## MeshJob event channel
 
 Tunables for the [MeshJob event injection + stream subscription
