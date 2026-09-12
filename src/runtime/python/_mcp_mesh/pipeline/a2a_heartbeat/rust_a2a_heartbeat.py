@@ -290,7 +290,20 @@ async def _handle_a2a_dependency_change(
     )
 
     from ...engine.decorator_registry import DecoratorRegistry
+    from ...engine.dependency_injector import get_global_injector
     from ...engine.unified_mcp_proxy import EnhancedUnifiedMCPProxy
+
+    # Idempotency guard (issue #1314, ported here by #1591): the Rust core
+    # re-emits ``dependency_available`` for believed-delivered edges on an
+    # independent wall-clock tick to self-heal dropped applies. The MCP and
+    # API paths already skip identical re-emits; without the same guard here
+    # an A2A agent rebuilt every proxy — and every httpx connection pool
+    # behind it — on every reconcile tick. We reuse the shared global
+    # DependencyInjector's signature store; the A2A path wires surface
+    # wrappers directly (no injector registration), so keys are namespaced
+    # ``a2a:{func_id}:dep_{N}`` — matching the API path's ``api:`` namespace —
+    # to avoid colliding with MCP dep keys.
+    injector = get_global_injector()
 
     parsed_producer_kwargs: dict = {}
     if producer_kwargs:
@@ -311,6 +324,12 @@ async def _handle_a2a_dependency_change(
                     "falling back to empty config"
                 )
 
+    # Normalize producer kwargs to a stable string so equal-but-not-identical
+    # dicts compare equal in the idempotency signature (issue #1314).
+    normalized_kwargs = json.dumps(
+        dict(parsed_producer_kwargs), sort_keys=True, default=str
+    )
+
     a2a_decorators = DecoratorRegistry.get_all_by_type("mesh_a2a")
 
     for func_id, decorated in a2a_decorators.items():
@@ -329,11 +348,33 @@ async def _handle_a2a_dependency_change(
             if dep_cap != capability:
                 continue
 
+            sig_key = f"a2a:{func_id}:dep_{dep_index}"
+
             if not available:
                 wrapper._mesh_update_dependency(dep_index, None)
+                # Drop the last-applied signature so a later re-add of the
+                # same resolution rebuilds instead of being skipped (#1314).
+                injector.clear_applied_dependency_signature(sig_key)
                 logger.info(
                     f"Cleared dependency '{capability}' at index {dep_index} "
                     f"for A2A surface '{func_id}'"
+                )
+                continue
+
+            # ``agent_id`` is part of the signature so this composes with
+            # #1315: an agent_id-only change still rebuilds (the
+            # self-dependency proxy-kind selection below keys off agent_id),
+            # while an unchanged reconcile re-emit is correctly skipped.
+            applied_signature = (
+                endpoint,
+                function_name,
+                normalized_kwargs,
+                agent_id,
+            )
+            if injector.get_applied_dependency_signature(sig_key) == applied_signature:
+                logger.debug(
+                    f"Dependency '{capability}' for A2A surface '{func_id}' "
+                    f"unchanged (idempotent re-emit); skipping proxy rebuild"
                 )
                 continue
 
@@ -381,6 +422,7 @@ async def _handle_a2a_dependency_change(
                 )
 
             wrapper._mesh_update_dependency(dep_index, proxy)
+            injector.set_applied_dependency_signature(sig_key, applied_signature)
             logger.info(
                 f"Updated dependency '{capability}' at index {dep_index} "
                 f"for A2A surface '{func_id}' -> {endpoint}/{function_name}"
@@ -454,13 +496,21 @@ async def rust_a2a_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
         )
 
         # Track consecutive failures from ``handle.next_event()`` /
-        # ``_handle_a2a_mesh_event`` so a persistently-failing event
-        # source doesn't tight-loop on logger.error. Backoff is
-        # exponential per attempt and capped; on too many in a row we
-        # surface the failure to the caller instead of swallowing it
-        # forever.
+        # ``_handle_a2a_mesh_event`` so a persistently-failing event source
+        # doesn't tight-loop on logger.error. Backoff is exponential per
+        # attempt and capped.
+        #
+        # This loop used to RAISE after ten in a row, which ran the ``finally``
+        # block below -- ``handle.shutdown()`` -- and unregistered the service.
+        # Removed (issue #1591 review): an A2A surface is a FAN-OUT point
+        # serving many consumers, and this project already holds that such a
+        # service must never withdraw itself (health gating is deliberately
+        # provider-only for the same reason). A failure here is as likely to be
+        # one bad event handler as a dead event source. All three heartbeat
+        # loops -- MCP, API, A2A -- now soft-fail identically: back off, and
+        # escalate the LOG rather than the blast radius.
         consecutive_failures = 0
-        MAX_CONSECUTIVE = 10
+        BACKOFF_LOG_ESCALATION = 10
 
         while True:
             try:
@@ -484,7 +534,13 @@ async def rust_a2a_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
                 # stalling a dependency edge.
                 event = await handle.next_event()
                 if event is None:
-                    # Liveness tick, no event; loop back to check shutdown.
+                    # Liveness tick, no event. This PROVES the event source is
+                    # healthy, so it resets the run (issue #1591 review):
+                    # resetting only after a handled event made the counter
+                    # cumulative rather than consecutive on a low-traffic
+                    # service, where ten unrelated failures days apart would
+                    # escalate as though they were a burst.
+                    consecutive_failures = 0
                     continue
 
                 if event.event_type == "shutdown":
@@ -496,23 +552,21 @@ async def rust_a2a_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
 
             except Exception as e:
                 consecutive_failures += 1
-                logger.error(
-                    f"Error handling Rust event for A2A service "
-                    f"({consecutive_failures}/{MAX_CONSECUTIVE}): {e}"
+                log = (
+                    logger.error
+                    if consecutive_failures < BACKOFF_LOG_ESCALATION
+                    else logger.critical
                 )
-                if consecutive_failures >= MAX_CONSECUTIVE:
-                    logger.error(
-                        f"Rust A2A event loop exiting after {MAX_CONSECUTIVE} "
-                        f"consecutive failures for service '{service_id}'"
-                    )
-                    raise
+                log(
+                    "Error handling Rust event for A2A service "
+                    "(consecutive failures: %d): %s",
+                    consecutive_failures,
+                    e,
+                )
                 # Exponential backoff capped at 5s so we don't burn CPU
                 # while still recovering quickly from transient blips.
                 backoff = min(0.5 * (2 ** (consecutive_failures - 1)), 5.0)
-                try:
-                    await asyncio.sleep(backoff)
-                except asyncio.CancelledError:
-                    raise
+                await asyncio.sleep(backoff)
 
     except asyncio.CancelledError:
         logger.info(f"Rust A2A heartbeat task cancelled for service '{service_id}'")

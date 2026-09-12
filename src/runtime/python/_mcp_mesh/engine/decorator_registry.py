@@ -757,12 +757,17 @@ class DecoratorRegistry:
                 rule=ValidationRule.STRING_RULE,
             )
 
-        # Clean the service name if provided
-        if api_name:
-            cleaned_name = api_name.lower().replace(" ", "-").replace("_", "-")
-            cleaned_name = "-".join(part for part in cleaned_name.split("-") if part)
-        else:
-            cleaned_name = ""
+        # Clean the service name if provided. Issue #1591: this used to inline
+        # a WEAKER copy of the transform — lowercase + space/underscore to
+        # hyphen, but no stripping of characters outside ``[a-z0-9-]``. So a
+        # name like "Payments!! ✨" produced the service id "payments!!-✨-..."
+        # here while ``APIServerSetupStep`` produced "payments-...", and the
+        # registry rejects the former. Delegate to the shared helper both
+        # pipelines already use; the empty fallback is the sentinel that
+        # triggers the "api-{uuid8}" branch below.
+        from ..shared.slug import slugify_service_name
+
+        cleaned_name = slugify_service_name(api_name, "")
 
         # Generate UUID suffix
         uuid_suffix = str(uuid.uuid4())[:8]

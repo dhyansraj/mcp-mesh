@@ -12,6 +12,7 @@ import math
 import os
 import threading
 import uuid
+import weakref
 from collections.abc import AsyncIterator
 from typing import Any, Optional
 
@@ -76,6 +77,26 @@ def _default_call_timeout_secs() -> int:
     # Java's ``Math.round`` both give 3. The three runtimes have to agree on
     # what ``MCP_MESH_CALL_TIMEOUT=2.5`` means (issue #1584).
     return max(1, math.floor(parsed + 0.5))
+
+
+class RequestNotSentError(RuntimeError):
+    """Primary-transport failure that provably happened BEFORE the provider
+    could have run the tool.
+
+    Only these failures are safe to retry on the FastMCP fallback transport;
+    everything else means the request either reached the provider or may have
+    reached it, so retrying would invoke a non-idempotent tool a SECOND time
+    (issue #1566). ``SupersededError`` got this treatment in #1278 for one
+    error type; this generalises it to the whole classification.
+
+    Carries the per-call budget the primary attempt resolved (after the
+    ``X-Mesh-Timeout`` / job-deadline tightening in :meth:`_http_call`) so the
+    fallback runs under the same budget rather than unbounded.
+    """
+
+    def __init__(self, message: str, *, timeout_secs: int | None = None):
+        super().__init__(message)
+        self.timeout_secs = timeout_secs
 
 
 def _create_ssl_context_for_endpoint(endpoint: str):
@@ -146,6 +167,31 @@ _fastmcp_client_pool: dict[tuple[int, str], Any] = {}
 _httpx_pool: dict[tuple[int, str], Any] = {}
 _pool_lock = threading.Lock()
 
+# id(loop) -> loop, for every loop that has ever created a pooled client.
+#
+# Issue #1591: ``close_connection_pools`` used to reconstruct the owner set
+# from {current loop} ∪ {tool-executor worker loops}, and silently DROPPED —
+# without ``aclose()`` — any client whose key referenced a loop outside that
+# set. The heartbeat thread's loop is one such: it is where MeshJob claim
+# dispatchers run (``_start_claim_dispatchers_on_heartbeat_loop``), so a
+# task=True handler calling a dependency creates pooled clients there.
+#
+# WEAK values on purpose: a strong map would keep every loop this process ever
+# made an outbound call on alive forever (it is only cleared inside
+# ``close_connection_pools``), and a process that churns loops would grow it
+# without bound. A loop that has been collected cannot run ``aclose()`` anyway,
+# so losing the entry costs nothing. Registration happens UNDER ``_pool_lock``
+# at the point the client is stored, so a client can never be published to the
+# pool without its owner being registered first.
+_pool_loops: "weakref.WeakValueDictionary[int, asyncio.AbstractEventLoop]" = (
+    weakref.WeakValueDictionary()
+)
+
+
+def _current_loop() -> "asyncio.AbstractEventLoop":
+    """Return the running event loop (its id() is part of every pool key)."""
+    return asyncio.get_running_loop()
+
 
 def _current_loop_key() -> int:
     """Return id() of the running event loop (used as part of the pool key)."""
@@ -161,7 +207,8 @@ def _get_httpx_client_sync(base_endpoint: str) -> "httpx.AsyncClient":
     """
     import httpx
 
-    key = (_current_loop_key(), base_endpoint)
+    loop = _current_loop()
+    key = (id(loop), base_endpoint)
     with _pool_lock:
         client = _httpx_pool.get(key)
         if client is not None and not client.is_closed:
@@ -176,6 +223,11 @@ def _get_httpx_client_sync(base_endpoint: str) -> "httpx.AsyncClient":
             ),
             **tls_kwargs,
         )
+        # Owner registered BEFORE publishing the client, both under the same
+        # lock (issue #1591 review): registering outside the lock left a window
+        # where ``close_connection_pools`` could snapshot a client whose owner
+        # was not yet known and drop it without ``aclose()``.
+        _pool_loops[id(loop)] = loop
         _httpx_pool[key] = client
         logger.debug(
             f"Created pooled httpx client for loop={key[0]} endpoint={base_endpoint}"
@@ -206,8 +258,11 @@ async def close_connection_pools() -> None:
         # No running loop — nothing we can safely close from here.
         return
 
-    # Build {loop_id: loop} map from the current loop + worker loops so we can
-    # find the owning loop for each pooled client by its (loop_id, endpoint) key.
+    # Build {loop_id: loop} map. ``_pool_loops`` is authoritative — every loop
+    # that ever created a pooled client registered itself there (issue #1591),
+    # including the heartbeat-thread loop that the current-loop + worker-loop
+    # reconstruction below cannot see. The other two sources stay as a
+    # belt-and-braces fallback for clients cached before this registry existed.
     from ..shared.tool_executor import get_worker_loops
 
     loop_by_id: dict[int, asyncio.AbstractEventLoop] = {id(current_loop): current_loop}
@@ -217,8 +272,10 @@ async def close_connection_pools() -> None:
     with _pool_lock:
         fastmcp_to_close = list(_fastmcp_client_pool.items())
         httpx_to_close = list(_httpx_pool.items())
+        loop_by_id.update(_pool_loops)
         _fastmcp_client_pool.clear()
         _httpx_pool.clear()
+        _pool_loops.clear()
 
     async def _close_one(client, owning_loop, *, is_fastmcp: bool, label: str) -> None:
         kind = "FastMCP" if is_fastmcp else "httpx"
@@ -238,6 +295,16 @@ async def close_connection_pools() -> None:
             coro = client.__aexit__(None, None, None)
         else:
             coro = client.aclose()
+        if not owning_loop.is_running():
+            # Nothing will ever run the scheduled coroutine, so
+            # run_coroutine_threadsafe would just burn the 5s budget below
+            # before reporting a timeout. Say what actually happened instead.
+            coro.close()
+            logger.warning(
+                f"Cannot close {kind} client for {label}: owning loop is not "
+                "running (connection dropped without aclose)"
+            )
+            return
         fut = asyncio.run_coroutine_threadsafe(coro, owning_loop)
         try:
             await asyncio.wait_for(asyncio.wrap_future(fut), timeout=5)
@@ -468,7 +535,15 @@ class UnifiedMCPProxy:
         it. Note also that the proxy's primary path is the pooled httpx
         client (see ``_http_call``); FastMCP is fallback + listing methods.
         """
-        key = (_current_loop_key(), mcp_endpoint)
+        loop = _current_loop()
+        # ``stream_timeout`` is part of the KEY (issue #1566 review): it becomes
+        # the transport-level read timeout at construction time and is ignored
+        # on a cache hit, so a fallback asking for a larger per-call budget than
+        # the pooled client was built with would be silently CLIPPED back to it
+        # -- this process abandoning a request at a budget it never advertised
+        # (the #1584 invariant, inverted). Distinct budgets get distinct
+        # clients; there are only ever a handful.
+        key = (id(loop), mcp_endpoint, stream_timeout)
         with _pool_lock:
             client = _fastmcp_client_pool.get(key)
             if client is not None:
@@ -476,9 +551,12 @@ class UnifiedMCPProxy:
             client = cls._build_fastmcp_client(
                 mcp_endpoint, base_endpoint, stream_timeout
             )
+            # Owner registered before publishing — see _get_httpx_client_sync.
+            _pool_loops[id(loop)] = loop
             _fastmcp_client_pool[key] = client
             logger.debug(
-                f"Created pooled FastMCP client for loop={key[0]} endpoint={mcp_endpoint}"
+                f"Created pooled FastMCP client for loop={key[0]} "
+                f"endpoint={mcp_endpoint} stream_timeout={stream_timeout}"
             )
             return client
 
@@ -503,6 +581,12 @@ class UnifiedMCPProxy:
         # `effective_call_timeout_secs`. `self.timeout` survives only as
         # advertised producer metadata.
         self.timeout = self.kwargs_config.get("timeout", 30)
+        # INERT (issue #1566). Read only by ``call_tool_enhanced``, whose retry
+        # is now restricted to RequestNotSentError -- a class ``call_tool``
+        # already handles internally by falling back, so the loop effectively
+        # never fires. Kept as advertised producer metadata; treat it as
+        # deprecated rather than as a working knob, and do not document it as
+        # one.
         self.retry_count = self.kwargs_config.get("retry_count", 1)
         self.custom_headers = self.kwargs_config.get("custom_headers", {})
 
@@ -889,31 +973,49 @@ class UnifiedMCPProxy:
                 # HTTP direct path (PRIMARY) — pooled httpx client, no MCP session overhead
                 result = await self._http_call(name, args_with_trace)
                 return result
-            except SupersededError:
-                # Issue #1278: a superseded refusal from the PRIMARY transport is
-                # an application response, not a transport failure — propagate it
-                # typed WITHOUT falling back to the FastMCP client (which would
-                # invoke the provider a SECOND time). Specific-before-generic.
-                raise
-            except Exception as e:
-                error_msg = str(e)
-                # Don't fallback on application-level errors — the remote tool responded
-                if "Tool call error" in error_msg or "JSON-RPC error" in error_msg:
-                    raise
+            except RequestNotSentError as e:
+                # The ONLY retryable class (issue #1566). `_http_call` raises
+                # this exclusively for failures that provably happened before a
+                # byte of the request left this process, so the fallback cannot
+                # be a second execution of the tool.
+                #
+                # Everything else — read timeouts, write timeouts, HTTP status
+                # errors, protocol errors, JSON-RPC / isError application
+                # failures, and the typed SupersededError of #1278 — propagates
+                # untouched from here: the provider either ran the tool or may
+                # have, and a fallback would invoke it a SECOND time. #1278
+                # special-cased one error type; this is the general rule it was
+                # an instance of.
+                fallback_timeout = e.timeout_secs or self.effective_call_timeout_secs()
                 self.logger.warning(
-                    f"HTTP transport failed: {e}, falling back to FastMCP client"
+                    f"HTTP transport never sent the request ({e}), falling back "
+                    f"to FastMCP client (timeout: {fallback_timeout}s)"
                 )
                 try:
                     # FastMCP client path (FALLBACK)
                     mcp_endpoint = f"{self.endpoint}/mcp"
+                    # The transport read timeout must be at least the per-call
+                    # budget, or the httpx layer aborts the fallback before the
+                    # budget we advertised is spent (issue #1566 review). The
+                    # pool keys on this value, so a larger budget gets its own
+                    # client rather than silently reusing a tighter one.
                     client_instance = await self._get_or_create_fastmcp_client(
-                        mcp_endpoint, self.endpoint, self.stream_timeout
+                        mcp_endpoint,
+                        self.endpoint,
+                        max(self.stream_timeout, fallback_timeout),
                     )
                     async with client_instance as client:
                         from ..tracing.context import set_payload_sizes
 
                         set_payload_sizes(request_bytes=0, response_bytes=0)
-                        result = await client.call_tool(name, args_with_trace)
+                        # Same per-call budget the primary attempt resolved,
+                        # including any X-Mesh-Timeout / job-deadline
+                        # tightening. Without it the fallback ran on the pooled
+                        # client's stream_timeout (300s default) and could
+                        # outlive the budget this process advertised.
+                        result = await client.call_tool(
+                            name, args_with_trace, timeout=fallback_timeout
+                        )
                         converted_result = self._convert_mcp_result_to_python(result)
                         end_time = time.time()
                         duration_ms = round((end_time - start_time) * 1000, 2)
@@ -1279,10 +1381,24 @@ class UnifiedMCPProxy:
         import time
 
         start_time = time.time()
+        # Bound before the try so the except arms below can report/propagate the
+        # resolved budget even if we fail before it is narrowed.
+        enhanced_timeout: int | None = None
 
+        # Imported OUTSIDE the main try on purpose (issue #1566 review). An
+        # `except ImportError` covering the whole body would also catch the
+        # BARE ImportError that httpx's BrotliDecoder / ZStandardDecoder raise
+        # while READING a response whose Content-Encoding is br/zstd without
+        # the optional package installed. That happens after the provider ran
+        # the tool, so classifying it as "request never sent" would hand it to
+        # the fallback and double-invoke -- the exact defect this guard exists
+        # to close. Only the import itself is genuinely unsent.
         try:
             import httpx
+        except ImportError:
+            raise RequestNotSentError("httpx not available for HTTP call")
 
+        try:
             payload = {
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -1477,11 +1593,36 @@ class UnifiedMCPProxy:
                 self.logger.error(f"❌ JSON-RPC error {error_code}: {error_msg}")
                 raise RuntimeError(f"Tool call error [{error_code}]: {error_msg}")
 
-            # Return the result (compatible with CallToolResult)
-            result = data.get("result")
+            # Return the result (compatible with CallToolResult).
+            #
+            # Issue #1591: a JSON-RPC ``"result": null`` (and a response with
+            # no ``result`` member at all) used to be answered with the
+            # FABRICATED envelope {"content":[{"type":"text","text":"No result
+            # returned"}]}, handed back as a SUCCESSFUL value. That gave the
+            # caller a truthy dict where the FastMCP path's converter yields
+            # ``None`` for the same input, breaking the #1250 "null round-trips
+            # as null" contract and making a consumer's ``if result is None``
+            # unreachable on this transport. Both shapes now yield ``None``;
+            # only the protocol-invalid one (no member at all, and no
+            # ``error``) is worth a warning.
+            if "result" not in data:
+                self.logger.warning(
+                    "⚠️ JSON-RPC response carried neither 'result' nor 'error' "
+                    "- treating as null"
+                )
+                return None
+            result = data["result"]
             if result is None:
-                self.logger.warning("⚠️ No result field in response")
-                return {"content": [{"type": "text", "text": "No result returned"}]}
+                # Still a WARNING, not debug: MCP requires tools/call to answer
+                # with a CallToolResult object, so an explicit ``"result": null``
+                # is a protocol-invalid provider response and this log line is
+                # the only place it is ever visible. It just no longer gets a
+                # fabricated success value attached to it.
+                self.logger.warning(
+                    "⚠️ Provider returned a protocol-invalid explicit null "
+                    "'result' - treating as None"
+                )
+                return None
 
             # Check for CallToolResult.isError (matches FastMCP error handling)
             if isinstance(result, dict) and result.get("isError"):
@@ -1509,12 +1650,48 @@ class UnifiedMCPProxy:
             self.logger.debug(f"✅ HTTP call: {name} in {duration_ms}ms")
             return normalized_result
 
-        except ImportError:
-            raise RuntimeError("httpx not available for HTTP call")
+        except (
+            httpx.ConnectTimeout,
+            httpx.PoolTimeout,
+            httpx.ConnectError,
+            httpx.ProxyError,
+        ) as e:
+            # ---- SAFE to retry: the request provably never left this process.
+            #
+            # Ordered BEFORE the TimeoutException arm on purpose: ConnectTimeout
+            # and PoolTimeout are *subclasses* of httpx.TimeoutException, so a
+            # blanket "never retry a timeout" rule would wrongly strand the two
+            # timeouts that happen before a single byte of the request is
+            # written (issue #1566).
+            #
+            #   ConnectTimeout — TCP/TLS connect never completed.
+            #   PoolTimeout    — no connection was ever acquired from the pool.
+            #   ConnectError   — refused / DNS failure / TLS handshake failure.
+            #   ProxyError     — the proxy CONNECT tunnel was never established.
+            self.logger.warning(
+                f"🔌 HTTP connect failed (request not sent): {type(e).__name__}: {e}"
+            )
+            raise RequestNotSentError(
+                f"HTTP connect failed: {type(e).__name__}: {e}",
+                timeout_secs=enhanced_timeout,
+            )
         except httpx.TimeoutException as e:
+            # ---- NOT safe to retry. What is left here after the arm above:
+            #
+            #   ReadTimeout  — the request WAS sent; the response never came.
+            #                  The provider may well have run the tool to
+            #                  completion. This is the #1566 headline case.
+            #   WriteTimeout — ambiguous: the connection was established and an
+            #                  unknown prefix (possibly all) of the request was
+            #                  written, so the provider may already hold a
+            #                  complete request. Treated as NOT sent-safe:
+            #                  for a non-idempotent tool a silent double
+            #                  execution is strictly worse than a surfaced
+            #                  transport error the caller can retry knowingly.
             self.logger.error(f"⏰ HTTP request timeout after {enhanced_timeout}s: {e}")
             raise RuntimeError(f"HTTP request timeout: {e}")
         except httpx.HTTPStatusError as e:
+            # NOT safe: the provider responded, so it ran the tool.
             self.logger.error(
                 f"❌ HTTP error {e.response.status_code}: {e.response.text[:200]}"
             )
@@ -1529,6 +1706,27 @@ class UnifiedMCPProxy:
             # (double-invoking the provider). Specific-before-generic ordering.
             raise
         except Exception as e:
+            # Default DENY (issue #1566). Everything not proven unsent above is
+            # treated as "may have reached the provider" and surfaced to the
+            # caller instead of retried: ReadError / WriteError / CloseError
+            # (connection broke after it was established), DecodingError, a
+            # decode-time ImportError for an optional Content-Encoding, the
+            # empty-response case, and the JSON-RPC / isError application
+            # errors raised in the body above.
+            #
+            # KNOWN AVAILABILITY TRADE — httpx.RemoteProtocolError. h11 raises
+            # "Server disconnected without sending a response" both when a
+            # REUSED idle keep-alive connection was reaped by the peer before
+            # the request was processed (nothing ran; retrying is safe and used
+            # to succeed here) and when a FRESH connection's server accepted
+            # the request and then died (the tool may have run to completion).
+            # httpx exposes no "was this connection reused" discriminator, and
+            # matching on the h11 message string is not a classification we are
+            # willing to bet a double charge on. So this is deliberately denied:
+            # the transient pooled-connection case now surfaces as an error the
+            # caller can retry knowingly instead of silently double-invoking.
+            # httpx's 5s default keepalive_expiry keeps the exposure window
+            # small. Release-note this.
             self.logger.error(f"❌ HTTP call failed: {type(e).__name__}: {e}")
             raise RuntimeError(f"HTTP call failed: {e}")
 
@@ -1858,14 +2056,29 @@ class EnhancedUnifiedMCPProxy(UnifiedMCPProxy):
         )
 
     async def call_tool_enhanced(self, name: str, arguments: dict = None) -> Any:
-        """Enhanced tool call with retry logic and custom configuration."""
+        """Enhanced tool call with retry logic and custom configuration.
+
+        The retry is deliberately narrow (issue #1566): only a
+        :class:`RequestNotSentError` — a failure that provably happened before
+        the request left this process — is retried. Retrying anything else
+        would re-invoke a non-idempotent tool the provider may already have
+        run, which is the exact defect ``call_tool`` was fixed for.
+
+        In practice this loop almost never fires, because ``call_tool``
+        already handles the unsent case itself by falling back to the FastMCP
+        transport and reports a two-transport failure as a plain
+        ``RuntimeError``. It has no in-tree callers either. The guard is here
+        so that wiring it up — or ``call_tool`` growing a typed unsent
+        failure of its own — cannot silently reopen #1566 through a blind
+        ``except Exception`` retry.
+        """
         last_exception = None
 
         for attempt in range(self.retry_count + 1):
             try:
                 return await self.call_tool(name, arguments)
 
-            except Exception as e:
+            except RequestNotSentError as e:
                 last_exception = e
 
                 if attempt < self.retry_count:
@@ -1883,4 +2096,8 @@ class EnhancedUnifiedMCPProxy(UnifiedMCPProxy):
                         f"❌ All {self.retry_count + 1} attempts failed for {name}"
                     )
 
-        raise last_exception
+        # Unreachable while the loop either returns or re-raises, but a bare
+        # ``raise None`` would be a TypeError masking the real failure.
+        raise last_exception or RuntimeError(
+            f"Tool call to '{name}' failed with no recorded exception"
+        )

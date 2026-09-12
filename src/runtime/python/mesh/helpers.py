@@ -1579,6 +1579,17 @@ async def _provider_agentic_loop(
     # Issue #1355: last genuine assistant text seen on a tool-call turn, used
     # as the exhaustion envelope's ``content`` (never an English marker).
     last_assistant_text = ""
+    # Issue #1591: running token total across ALL iterations, used ONLY by the
+    # exhaustion envelope at the bottom. Normal returns keep reporting the
+    # final response's own usage (unchanged); the exhaustion path reported no
+    # usage at ALL on any channel, so a caller that burned ``max_iterations``
+    # rounds of tokens got no accounting for them. Its streaming twin at least
+    # publishes cumulative counts via ``set_llm_metadata``.
+    cumulative_usage: dict[str, Any] = {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "model": effective_model,
+    }
 
     # Pop parallel_tool_calls before it reaches completion_args
     # (Claude handler strips it, but OpenAI would pass it to API)
@@ -1666,6 +1677,12 @@ async def _provider_agentic_loop(
             vendor=vendor,
         )
         message = response.choices[0].message
+
+        if getattr(response, "usage", None):
+            _merge_mesh_usage(
+                cumulative_usage,
+                _build_mesh_usage(response.usage, effective_model),
+            )
 
         # Synthetic-format-tool recognition (native path, structured output).
         # When the model called the synthetic tool, its arguments ARE the
@@ -2013,11 +2030,14 @@ async def _provider_agentic_loop(
         loop_logger.warning(
             f"Provider-managed loop hit max iterations ({max_iterations})"
         )
-    return {
+    exhausted: dict[str, Any] = {
         "role": "assistant",
         "content": last_assistant_text,
         STOP_REASON_KEY: STOP_REASON_MAX_ITERATIONS,
     }
+    if cumulative_usage["prompt_tokens"] or cumulative_usage["completion_tokens"]:
+        exhausted["_mesh_usage"] = cumulative_usage
+    return exhausted
 
 
 async def _provider_agentic_loop_stream(

@@ -1006,8 +1006,12 @@ def _start_claim_dispatchers_on_heartbeat_loop(context: dict[str, Any]) -> list:
     started: list = []
     for d in dispatchers:
         try:
-            d.start()  # idempotent: no-op if already running on this loop
-            started.append(d)
+            # ``start()`` is idempotent and returns whether THIS loop owns the
+            # dispatcher (issue #1591). A dispatcher the uvicorn lifespan
+            # already started belongs to that loop; adding it here would make
+            # our shutdown path await a foreign-loop Task.
+            if d.start():
+                started.append(d)
         except Exception as e:
             logger.warning(
                 "heartbeat: failed to start claim dispatcher for capability=%s: %s",
@@ -1106,6 +1110,21 @@ async def rust_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
         # the architectural rationale.
         claim_dispatchers = _start_claim_dispatchers_on_heartbeat_loop(context)
 
+        # Track consecutive failures from ``handle.next_event()`` /
+        # ``_handle_mesh_event`` so a persistently-failing event source
+        # doesn't tight-loop on logger.error (issue #1591 — the A2A
+        # heartbeat has had backoff since it was written; these two spun).
+        #
+        # None of the three loops exits on repeated failure: doing so runs the
+        # ``finally`` block — ``handle.shutdown()`` — which unregisters a
+        # provider agent that is otherwise serving fine, and a failure here is as
+        # likely to be one bad event handler (a DI apply raising on a
+        # malformed resolution) as a dead event source. Soft-fail and keep
+        # reconciling; the escalated log line is the signal, not the blast
+        # radius. (#1591 removed the A2A twin's ``raise`` for this reason.)
+        consecutive_failures = 0
+        BACKOFF_LOG_ESCALATION = 10
+
         # Event loop - process events from Rust core
         while True:
             # Check for Python shutdown signal
@@ -1130,7 +1149,13 @@ async def rust_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
                 # stalling a dependency edge.
                 event = await handle.next_event()
                 if event is None:
-                    # Liveness tick, no event; loop back to check shutdown.
+                    # Liveness tick, no event. This PROVES the event source is
+                    # healthy, so it resets the run (issue #1591 review):
+                    # resetting only after a handled event made the counter
+                    # cumulative rather than consecutive on a low-traffic
+                    # agent, where ten unrelated failures days apart would
+                    # escalate as though they were a burst.
+                    consecutive_failures = 0
                     continue
 
                 if event.event_type == "shutdown":
@@ -1139,10 +1164,25 @@ async def rust_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
 
                 # Handle the event
                 await _handle_mesh_event(event, context)
+                consecutive_failures = 0
 
             except Exception as e:
-                logger.error(f"Error handling Rust event: {e}")
-                # Continue processing events
+                consecutive_failures += 1
+                log = (
+                    logger.error
+                    if consecutive_failures < BACKOFF_LOG_ESCALATION
+                    else logger.critical
+                )
+                log(
+                    "Error handling Rust event (consecutive failures: %d): %s",
+                    consecutive_failures,
+                    e,
+                )
+                # Exponential backoff capped at 5s so we don't burn CPU while
+                # still recovering quickly from a transient blip. Mirrors the
+                # A2A heartbeat.
+                backoff = min(0.5 * (2 ** (consecutive_failures - 1)), 5.0)
+                await asyncio.sleep(backoff)
 
     except asyncio.CancelledError:
         logger.info(f"Rust heartbeat task cancelled for agent '{agent_id}'")
