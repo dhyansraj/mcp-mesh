@@ -553,6 +553,18 @@ budget from `MCP_MESH_CALL_TIMEOUT`, else 300s.
 
 Streamed responses (e.g., SSE) routed through the registry proxy are bounded by the same call timeout — the proxy ends the exchange when it elapses, even mid-stream. Send a larger `X-Mesh-Timeout` header (or raise `MCP_MESH_PROXY_TIMEOUT`) for long-lived streams.
 
+On the browser-facing side, `mesh.sseStream` (TypeScript) treats a slow
+consumer as slow, not gone: it waits for the response to drain before
+sending the next frame. A consumer that stalls without ever disconnecting
+is abandoned after the drain budget below, which releases the upstream
+stream it was holding open.
+
+```bash
+# TypeScript only — seconds mesh.sseStream waits for a backpressured SSE
+# consumer to drain before abandoning the stream (default: 300, 0 = forever)
+export MCP_MESH_SSE_DRAIN_TIMEOUT=300
+```
+
 ## MeshJob event channel
 
 Tunables for the MeshJob event injection + stream subscription surface

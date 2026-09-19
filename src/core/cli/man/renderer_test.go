@@ -627,8 +627,14 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // not own), plus the missing app accessor and missing graceful deregistration.
 // Eight new inline spans, and the two limits are markup-carrying list lines.
 // 1862 + 8 = 1870; 450 + 2 = 452.
+//
+// Issue #1567 gave `environment.md` the SSE drain budget under Proxy &
+// Timeout: mesh.sseStream now parks on backpressure instead of cutting the
+// stream, so the bound on that wait needs a documented knob. One new inline
+// span (`mesh.sseStream` in the prose) — the env var itself only appears
+// inside the fenced example. 1870 + 1 = 1871.
 const (
-	wantInlineCodeSpans = 1870
+	wantInlineCodeSpans = 1871
 	wantListCodeSpans   = 531
 	wantMarkupListLines = 452
 )
