@@ -56,6 +56,8 @@ pub mod json_fast;
 pub mod mcp_client;
 pub mod trace_context;
 pub mod tracing_publish;
+#[cfg(test)]
+mod test_isolation;
 pub mod vault;
 #[cfg(feature = "spire")]
 pub mod spire;

@@ -46,6 +46,9 @@ test:
   - name: "Build meshui binary"
     handler: shell
     command: |
+      # Fail the step on the first failing command. Without this the trailing
+      # echo below sets the exit status, so a failed build reports success.
+      set -euo pipefail
       SOURCE_ABS=$(cd "${suite_path}/${config.source.path}" && pwd)
       OUTPUT_ABS=$(cd "${run_path}/${config.output.base}" && pwd)
 
@@ -65,6 +68,9 @@ test:
         -v "$OUTPUT_ABS:/out" \
         ${config.build.image} \
         bash -c "
+          # pipefail: the npm steps below pipe into tail, which exits 0 even
+          # when npm failed, so without it a failed install/build slips through.
+          set -euo pipefail
           mkdir -p /src/mcp-mesh/cmd /src/mcp-mesh/src && \
           cp /src-host/go.mod /src-host/go.sum /src/mcp-mesh/ && \
           cp -r /src-host/cmd/mcp-mesh-ui /src/mcp-mesh/cmd/ && \

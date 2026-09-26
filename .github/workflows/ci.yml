@@ -88,11 +88,34 @@ jobs:
   #
   # Test counts differ per leg, which is the point — if a leg's count drops to
   # another leg's, a feature gate has stopped doing anything:
-  #   488  --no-default-features
-  #   513  ffi        (+25, jobs_ffi.rs)
-  #   502  typescript (+14, napi.rs + jobs_napi.rs)
-  #   492  spire      (+4,  spire.rs)
+  #   543  --no-default-features
+  #   571  ffi        (+28, jobs_ffi.rs)
+  #   558  typescript (+15, napi.rs + jobs_napi.rs)
+  #   547  spire      (+4,  spire.rs)
   # The `default` leg does not run tests; see the note on it below.
+  #
+  # These legs run PARALLEL (libtest's default). They used to carry
+  # `-- --test-threads=1`, removed in #1618. Where that flag came from is worth
+  # recording, because it is the whole argument for not putting it back: it
+  # entered in #391 (2dd038e0c), the PR that ADDED the distributed tracing
+  # publisher, with no stated reason — i.e. it was almost certainly there to
+  # make that PR's own tests pass. #1595 did not introduce it, it only copied
+  # the existing single command onto the four new matrix legs. So for months
+  # CI was not tolerating a known constraint; it was serialising around an
+  # undiagnosed defect, which is why the defect surfaced on an unrelated
+  # TypeScript branch instead of on the change that caused it.
+  #
+  # The defect: `tracing_publish`'s tests share a `OnceLock` publisher
+  # singleton plus `REDIS_URL` in the process environment, so under the default
+  # parallel runner 3-4 of the 7 failed, with the failing set varying run to
+  # run. Those tests are now subprocess-isolated (`src/test_isolation.rs`),
+  # which removes the shared state instead of scheduling around it; all four
+  # legs were verified green across repeated parallel runs.
+  #
+  # Do NOT reintroduce `--test-threads=1` to silence a flake. A flake here means
+  # some test has acquired process-global state; isolate that test (see
+  # `test_isolation::isolate`) rather than serialising the other ~570. The flag
+  # also costs real time: the no-default leg is ~34s serialised vs ~7s parallel.
   rust-test:
     name: Rust Tests (${{ matrix.id }})
     runs-on: ubuntu-latest
@@ -105,16 +128,16 @@ jobs:
         include:
           - id: no-default-features
             features: "--no-default-features"
-            cmd: "cargo test --no-default-features -- --test-threads=1"
+            cmd: "cargo test --no-default-features"
           - id: ffi
             features: "--features ffi --no-default-features"
-            cmd: "cargo test --features ffi --no-default-features -- --test-threads=1"
+            cmd: "cargo test --features ffi --no-default-features"
           - id: spire
             features: "--features spire --no-default-features"
-            cmd: "cargo test --features spire --no-default-features -- --test-threads=1"
+            cmd: "cargo test --features spire --no-default-features"
           - id: typescript
             features: "--features typescript --no-default-features"
-            cmd: "cargo test --features typescript --no-default-features -- --test-threads=1"
+            cmd: "cargo test --features typescript --no-default-features"
           # `cargo check`, not `cargo test`, and not a lapse. The default set is
           # `python` + `simd`, and `python` pulls pyo3 with `extension-module`
           # (Cargo.toml:28) unconditionally — which tells pyo3 to leave the

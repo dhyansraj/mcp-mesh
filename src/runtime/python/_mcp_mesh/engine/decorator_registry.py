@@ -558,13 +558,37 @@ class DecoratorRegistry:
 
     @classmethod
     def clear_all(cls) -> None:
-        """Clear all registered decorators (useful for testing)."""
+        """Reset every piece of class-level state (testing only).
+
+        Nothing in the runtime calls this — the only caller outside tests is
+        ``clear_decorator_registry()``, which is itself documented as testing
+        only — so "all" is taken literally: after this call the class must look
+        the way it did at import. Anything left behind is a cross-test leak
+        that shows up as an ordering-dependent pass.
+
+        Keep this in step with the class attributes declared at the top of the
+        class. ``_route_wrapper_registry`` was added later and this method was
+        not updated (issue #1616), so ``@mesh.route`` registrations leaked
+        between tests for as long as it existed; that is the failure mode to
+        avoid repeating when the next registry is added.
+        """
         cls._mesh_agents.clear()
         cls._mesh_tools.clear()
         cls._mesh_resources.clear()
         cls._mesh_workflows.clear()
         cls._mesh_llm_agents.clear()
         cls._custom_decorators.clear()
+        # Issue #1616: @mesh.route registrations. Without this, a test reading
+        # get_all_route_wrappers() sees routes registered by earlier tests.
+        cls._route_wrapper_registry.clear()
+        # Runtime handles rather than decorator registrations, but they are
+        # class-level state all the same: a stale FastMCP app or lifespan from
+        # a previous test's pipeline run is exactly as contaminating as a stale
+        # decorator, and harder to notice because it fails far from its cause.
+        cls._immediate_uvicorn_server = None
+        cls._fastmcp_lifespan = None
+        cls._fastmcp_http_app = None
+        cls._fastmcp_server_info = None
         # Clear the cached resolved agent config so a subsequent test
         # with a different MCP_MESH_AGENT_ID / MCP_MESH_AGENT_NAME env
         # actually sees the new value (the cache short-circuits resolution).

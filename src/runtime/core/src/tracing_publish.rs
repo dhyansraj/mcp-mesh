@@ -551,13 +551,40 @@ mod tests {
     use std::time::Instant;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    /// Reset the process-global re-probe state so prober-sensitive tests are
-    /// order-independent (issue #1364 W3). Each `#[tokio::test]` gets its own
-    /// runtime, so a leaked immortal prober from a prior test is cancelled when
-    /// that runtime drops (and the RAII [`ReproberGuard`] clears the guard on
-    /// the way out) — but we reset the static atomics explicitly here so tests
-    /// never depend on that drop timing. Call at the START of any test that
-    /// asserts on `REPROBE_RUNNING`, connection counts, or recovery.
+    /// Subprocess isolation for the tests below (issue #1618).
+    ///
+    /// Every test in this module that calls [`init_trace_publisher`] depends on
+    /// THREE layers of process-global state, none of which is a parameter:
+    ///
+    /// 1. the environment — `REDIS_URL` and the tracing flag, which is how each
+    ///    test points the publisher at its own fake RESP server;
+    /// 2. [`PUBLISHER`], a `OnceLock` that latches the first state it is given
+    ///    and can never be reset;
+    /// 3. [`REPROBE_RUNNING`] / [`REPROBE_COOLDOWN_MS`], plain statics.
+    ///
+    /// Run two of them concurrently and they read each other's writes: one
+    /// test's span lands in another test's fake server (an empty request log),
+    /// another test's `init` is counted as a second connection. Under the
+    /// default parallel `cargo test` this failed 3-4 of 7 with the set varying
+    /// run to run, and CI's `--test-threads=1` hid it.
+    ///
+    /// Each such test therefore runs alone in a child process. A test-local
+    /// lock was considered and rejected: it preserves the singleton, so the
+    /// next env-mutating test added here is back in the same trap, and it
+    /// cannot make `std::env::set_var` sound against the ~570 other tests in
+    /// the binary that are concurrent readers of the environment. See
+    /// [`crate::test_isolation`] for the mechanics.
+    ///
+    /// The argument MUST be this test's own full path; a stale one is caught by
+    /// the "did not run exactly one test" assertion in `isolate`.
+    use crate::test_isolation::isolate;
+
+    /// Reset the process-global re-probe state (issue #1364 W3).
+    ///
+    /// Now that the prober-sensitive tests are subprocess-isolated they inherit
+    /// pristine statics, so this is no longer load-bearing for ordering. It is
+    /// kept as an explicit statement of each test's starting point — and so a
+    /// test that is ever run un-isolated still begins from a known state.
     fn reset_reprober_state() {
         REPROBE_RUNNING.store(false, Ordering::SeqCst);
         REPROBE_COOLDOWN_MS.store(5_000, Ordering::SeqCst);
@@ -625,10 +652,13 @@ mod tests {
     /// connections and answers PING/XADD.
     ///
     /// NB: mutates process env (REDIS_URL, tracing flag) and the global
-    /// publisher singleton; the test suite runs with --test-threads=1 in
-    /// CI, matching the other env-mutating tests in this crate.
+    /// publisher singleton, so it runs subprocess-isolated (issue #1618).
     #[tokio::test]
     async fn publisher_reuses_connection_across_publishes() {
+        if isolate("tracing_publish::tests::publisher_reuses_connection_across_publishes") {
+            return;
+        }
+
         // Order-independence (issue #1364 W3): clear any leaked re-probe guard
         // so this test's connection-count assertion isn't perturbed by a prober
         // spawned in a prior test.
@@ -717,10 +747,14 @@ mod tests {
     /// asserts the cap is on the wire — the previous uncapped `XADD` left the
     /// stream bounded only by a live registry.
     ///
-    /// NB: mutates process env and the global publisher singleton; the suite
-    /// runs with --test-threads=1, matching the other env-mutating tests here.
+    /// NB: mutates process env and the global publisher singleton, so it runs
+    /// subprocess-isolated (issue #1618).
     #[tokio::test]
     async fn publish_span_caps_stream_with_maxlen() {
+        if isolate("tracing_publish::tests::publish_span_caps_stream_with_maxlen") {
+            return;
+        }
+
         use std::sync::Mutex;
 
         reset_reprober_state();
@@ -824,10 +858,14 @@ mod tests {
     /// fall back to the default. Also pins that `MAXLEN=0` still takes the plain
     /// uncapped `XADD` path after caching.
     ///
-    /// NB: mutates process env and the global publisher singleton; the suite
-    /// runs with --test-threads=1, matching the other env-mutating tests here.
+    /// NB: mutates process env and the global publisher singleton, so it runs
+    /// subprocess-isolated (issue #1618).
     #[tokio::test]
     async fn publish_span_resolves_maxlen_once_at_init() {
+        if isolate("tracing_publish::tests::publish_span_resolves_maxlen_once_at_init") {
+            return;
+        }
+
         use std::sync::Mutex;
 
         reset_reprober_state();
@@ -954,10 +992,14 @@ mod tests {
     /// timeout` was added. init must soft-fail (return false) well within a
     /// few seconds instead of waiting out the OS TCP connect timeout.
     ///
-    /// NB: mutates process env + the global publisher singleton; the suite
-    /// runs --test-threads=1 in CI, matching the other env-mutating tests.
+    /// NB: mutates process env + the global publisher singleton, so it runs
+    /// subprocess-isolated (issue #1618).
     #[tokio::test]
     async fn init_bounds_blackholed_redis_connect() {
+        if isolate("tracing_publish::tests::init_bounds_blackholed_redis_connect") {
+            return;
+        }
+
         // Order-independence (issue #1364 W3): this test's failed init spawns an
         // immortal prober toward the black-holed host that leaks
         // REPROBE_RUNNING=true until the runtime drops; reset up front so a
@@ -1001,9 +1043,13 @@ mod tests {
     /// start (`conn == None` at init) within a bounded number of cooldowns.
     ///
     /// NB: mutates process env + the global publisher singleton + the shared
-    /// re-probe cooldown/guard; the suite runs --test-threads=1 in CI.
+    /// re-probe cooldown/guard, so it runs subprocess-isolated (issue #1618).
     #[tokio::test]
     async fn reprober_recovers_from_cold_start() {
+        if isolate("tracing_publish::tests::reprober_recovers_from_cold_start") {
+            return;
+        }
+
         use std::sync::atomic::AtomicUsize;
 
         // Order-independence (issue #1364 W3): a prior test may have left the

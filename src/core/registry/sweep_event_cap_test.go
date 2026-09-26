@@ -11,9 +11,38 @@ import (
 	"mcp-mesh/src/core/logger"
 )
 
+// fastSweepTicks shrinks the package-level sweep interval so a test can
+// observe more than Start's one startup tick, restoring it afterwards.
+//
+// This is what made TestEventCapEnforcedWithRetentionZero flaky in CI (issue
+// #1618). Start runs the tick body once inline and then waits
+// defaultSweepInterval — five minutes — for the next one, and tickEventCapOnly
+// swallows its errors (it logs at ERROR and returns). So the test's whole
+// outcome rested on that single unobserved tick succeeding: any transient
+// failure, an SQLITE_BUSY against the shared-cache in-memory DB the polling
+// Count() is hammering being the obvious candidate, left nothing to retry
+// inside the window. That is consistent with the CI failure taking 3.02s —
+// the poll ran its full deadline rather than sampling at the wrong instant.
+//
+// Restoring is safe against the race detector without a lock: the write below
+// happens before Start creates the goroutine that reads it, and the deferred
+// job.Stop() (which wg.Wait()s the goroutine out) runs before t.Cleanup.
+// Tests in this package never call t.Parallel().
+func fastSweepTicks(t *testing.T) {
+	t.Helper()
+	prev := sweepInterval
+	sweepInterval = 20 * time.Millisecond
+	t.Cleanup(func() { sweepInterval = prev })
+}
+
 // waitForEventCount polls the registry_events row count until it reaches want
 // or the deadline expires, returning the last observed count. Used because the
 // sweep's startup tick runs in its own goroutine.
+//
+// The timeout is a backstop, not a measurement: the loop returns the moment
+// the count is right, so a generous value costs a passing test nothing and
+// costs a failing one only its own latency. Pair it with fastSweepTicks so a
+// single failed tick is retried rather than being the whole test.
 func waitForEventCount(t *testing.T, job *SweepJob, want int, timeout time.Duration) int {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -30,6 +59,20 @@ func waitForEventCount(t *testing.T, job *SweepJob, want int, timeout time.Durat
 		time.Sleep(10 * time.Millisecond)
 	}
 	return last
+}
+
+// reportCapFailure turns "count = 5, want 3" into something diagnosable on a
+// CI run nobody can reproduce, by enforcing the cap synchronously and
+// reporting what the sweep goroutine's own attempts would have hit. The error
+// the background tick swallowed is the single most useful fact here.
+func reportCapFailure(t *testing.T, job *SweepJob, got, want int) {
+	t.Helper()
+	n, err := job.enforceEventCap(context.Background())
+	t.Fatalf(
+		"registry_events count = %d, want %d: the row cap is not enforced with MCP_MESH_RETENTION=0 "+
+			"(a synchronous enforceEventCap then purged %d rows, err=%v)",
+		got, want, n, err,
+	)
 }
 
 // TestEventCapEnforcedWithRetentionZero is issue #1425.
@@ -55,13 +98,15 @@ func TestEventCapEnforcedWithRetentionZero(t *testing.T) {
 		seedEvent(t, client, "host", now.Add(-time.Duration(5-i)*time.Minute))
 	}
 
+	fastSweepTicks(t)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	job.Start(ctx)
 	defer job.Stop()
 
-	if got := waitForEventCount(t, job, 3, 3*time.Second); got != 3 {
-		t.Fatalf("registry_events count = %d, want 3: the row cap is not enforced with MCP_MESH_RETENTION=0", got)
+	if got := waitForEventCount(t, job, 3, 30*time.Second); got != 3 {
+		reportCapFailure(t, job, got, 3)
 	}
 
 	// The agent purge must remain OFF — the operator asked for that.
@@ -91,13 +136,15 @@ func TestEventCapOnlyTickLeavesStaleAgentsAlone(t *testing.T) {
 		seedEvent(t, client, "long-dead", now.Add(-time.Duration(6-i)*time.Minute))
 	}
 
+	fastSweepTicks(t)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	job.Start(ctx)
 	defer job.Stop()
 
-	if got := waitForEventCount(t, job, 2, 3*time.Second); got != 2 {
-		t.Fatalf("registry_events count = %d, want 2", got)
+	if got := waitForEventCount(t, job, 2, 30*time.Second); got != 2 {
+		reportCapFailure(t, job, got, 2)
 	}
 
 	agents, err := client.Agent.Query().Count(ctx)
@@ -127,26 +174,39 @@ func TestSweepFullyDisabledWhenBothBoundsOff(t *testing.T) {
 		seedEvent(t, client, "host", now.Add(-time.Duration(5-i)*time.Minute))
 	}
 
+	// Ticks fast, so a regression that DID start the loop gets many chances to
+	// touch the table inside the window below rather than one slow one.
+	fastSweepTicks(t)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	job.Start(ctx)
 	defer job.Stop()
 
-	time.Sleep(200 * time.Millisecond)
-
-	n, err := client.RegistryEvent.Query().Count(ctx)
-	if err != nil {
-		t.Fatalf("count events: %v", err)
-	}
-	if n != 5 {
-		t.Fatalf("registry_events count = %d, want 5: nothing should run with both bounds off", n)
-	}
-
+	// The deterministic half of the assertion: Start returns synchronously, so
+	// this is already decided and needs no waiting at all.
 	job.mu.Lock()
 	running := job.running
 	job.mu.Unlock()
 	if running {
 		t.Error("sweep goroutine started even though both bounds are disabled")
+	}
+
+	// The other half is a negative — "nothing happens" — which no amount of
+	// polling can prove, only bound. Watch for a while and require the count to
+	// hold at 5 throughout, rather than sampling once after a fixed sleep and
+	// hoping the sample lands after whatever we are trying to rule out. The
+	// loop exits early and loudly the moment the count moves.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		n, err := client.RegistryEvent.Query().Count(ctx)
+		if err != nil {
+			t.Fatalf("count events: %v", err)
+		}
+		if n != 5 {
+			t.Fatalf("registry_events count = %d, want 5: nothing should run with both bounds off", n)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

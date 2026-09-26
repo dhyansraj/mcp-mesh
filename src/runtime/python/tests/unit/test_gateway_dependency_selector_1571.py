@@ -19,16 +19,12 @@ from _mcp_mesh.pipeline.api_heartbeat import rust_api_heartbeat
 
 @pytest.fixture(autouse=True)
 def _clean_registry():
-    # ``clear_all()`` does not touch ``_route_wrapper_registry`` (pre-existing
-    # gap, unrelated to #1571), so wrappers registered by earlier tests leak
-    # into the AgentSpec built here. Clear it explicitly at both ends.
-    def _reset():
-        DecoratorRegistry.clear_all()
-        DecoratorRegistry._route_wrapper_registry.clear()
-
-    _reset()
+    # Route wrappers registered by earlier tests would otherwise leak into the
+    # AgentSpec built here. ``clear_all()`` covers that since #1616; before it
+    # did, this fixture had to clear ``_route_wrapper_registry`` by hand.
+    DecoratorRegistry.clear_all()
     yield
-    _reset()
+    DecoratorRegistry.clear_all()
 
 
 def _dep_of(spec):

@@ -1,8 +1,34 @@
-name: "SPIRE - Java Agent Registration and Tool Call"
-description: "Verify Java agents can register using SPIRE-issued certificates (pre-provisioned via SPIRE CLI)"
+# NOT a test of the SPIRE credential provider — see issue #1597.
+#
+# Unlike tc16 (Python) and tc17 (TypeScript), this case never sets
+# MCP_MESH_TLS_PROVIDER. With it unset the runtime defaults to the `file`
+# provider (src/runtime/core/src/tls.rs), so create_provider("spire") is never
+# reached. What is exercised is the file provider consuming X.509-SVIDs that
+# SPIRE issued and the SPIRE CLI exported to disk beforehand.
+#
+# That is deliberate, not drift. The Java native library is built
+# `--no-default-features --features ffi` at BOTH of its build sites
+# (release.yml's Java FFI job and
+# tests/src-tests/suites/build/tc04a_build_java_sdk), so the `spire` cargo
+# feature is absent and create_provider("spire") returns "SPIRE provider
+# requires build with --features spire". Tracked in #1596.
+#
+# Do not repurpose this case if #1596 is fixed — add a real provider test next
+# to it, or this one silently stops covering the pre-exported-cert path, which
+# stays valid for anyone who provisions SVIDs out of band.
+#
+# The `spire-certs` tag rather than `spire` is the point: a green case tagged
+# `spire` in a suite called uc12_registration_trust reads as proof that Java
+# can use the SPIRE provider, which is the opposite of the truth.
+name: "SPIRE-issued certs via the file provider - Java Agent Registration and Tool Call"
+description: >-
+  Verify Java agents can register and serve tool calls using X.509-SVIDs that
+  SPIRE issued and the SPIRE CLI pre-exported to disk, consumed through the
+  `file` TLS provider. Java cannot use the `spire` provider itself (#1596);
+  tc16/tc17 cover that path for Python and TypeScript.
 tags:
   - registration-trust
-  - spire
+  - spire-certs
   - java
 timeout: 600
 
