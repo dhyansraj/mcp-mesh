@@ -185,22 +185,43 @@ test:
   - name: "Build tsuite-mesh:local image"
     handler: shell
     command: |
+      # Fail the step on the first failing command. Without this the trailing
+      # echo below sets the exit status, so a failed docker build reported
+      # exit_code 0 and the suite went green against a stale image tag.
+      set -euo pipefail
       BUILD_DIR=$(echo "${captured.build_context}" | grep "BUILD_DIR=" | cut -d= -f2)
       IMAGE_NAME="${config.docker.output_image}"
 
       echo "Building image: $IMAGE_NAME"
       echo "Build context: $BUILD_DIR"
 
+      # A docker tag lives in the shared daemon and survives across runs, so
+      # "the tag exists" proves nothing. Record the id it points at now.
+      IMAGE_ID_BEFORE=$(docker image inspect --format '{{.Id}}' "$IMAGE_NAME" 2>/dev/null || echo "none")
+      echo "IMAGE_ID_BEFORE=$IMAGE_ID_BEFORE"
+
       docker build \
         --no-cache \
-        -t $IMAGE_NAME \
-        -f $BUILD_DIR/Dockerfile \
-        $BUILD_DIR
+        -t "$IMAGE_NAME" \
+        -f "$BUILD_DIR/Dockerfile" \
+        "$BUILD_DIR"
+
+      IMAGE_ID_AFTER=$(docker image inspect --format '{{.Id}}' "$IMAGE_NAME")
+      echo "IMAGE_ID_AFTER=$IMAGE_ID_AFTER"
+
+      # The build is --no-cache, so a successful build always produces a new
+      # image id. An unchanged id therefore cannot be legitimate cache reuse --
+      # it means the tag still points at a previous run's image.
+      if [ "$IMAGE_ID_AFTER" = "$IMAGE_ID_BEFORE" ]; then
+        echo "ERROR: $IMAGE_NAME still points at the pre-build image id."
+        echo "docker build --no-cache cannot reuse an image, so no new image was produced."
+        exit 1
+      fi
 
       # Cleanup build context
-      rm -rf $BUILD_DIR
+      rm -rf "$BUILD_DIR"
 
-      echo "IMAGE_NAME=$IMAGE_NAME"
+      echo "IMAGE_REBUILT=$IMAGE_NAME $IMAGE_ID_AFTER"
     capture: build_output
     timeout: 1200
 
@@ -208,14 +229,32 @@ test:
   - name: "Verify image was created"
     handler: shell
     command: |
+      set -euo pipefail
       docker images ${config.docker.output_image} --format "{{.Repository}}:{{.Tag}} - {{.Size}}"
+      # inspect (unlike `docker images`) exits non-zero when the tag is missing
+      docker image inspect ${config.docker.output_image} --format 'IMAGE_ID={{.Id}} CREATED={{.Created}}'
     capture: image_info
 
-  # Test the image - verify meshctl
+  # Test the image - verify meshctl, and that it is the one this run built.
+  # `meshctl --version` reports "dev" here (tc01 builds without the version
+  # ldflags), so its output cannot distinguish a fresh image from a stale one.
+  # Comparing the copied binary byte-for-byte against tc01's output can.
   - name: "Test meshctl in image"
     handler: shell
     command: |
+      set -euo pipefail
       docker run --rm ${config.docker.output_image} meshctl --version
+
+      HOST_SHA=$(sha256sum "${run_path}/${config.output.bin}/meshctl" | cut -d' ' -f1)
+      IMAGE_SHA=$(docker run --rm ${config.docker.output_image} sha256sum /usr/local/bin/meshctl | cut -d' ' -f1)
+      echo "host  meshctl sha256: $HOST_SHA"
+      echo "image meshctl sha256: $IMAGE_SHA"
+      if [ "$HOST_SHA" != "$IMAGE_SHA" ]; then
+        echo "ERROR: /usr/local/bin/meshctl in the image does not match the meshctl this run built."
+        echo "The image was not built from the current artifacts."
+        exit 1
+      fi
+      echo "MESHCTL_MATCHES_BUILD"
     capture: meshctl_version
 
   # Test the image - verify mcp-mesh-registry
@@ -328,17 +367,19 @@ assertions:
   - expr: ${captured.artifacts_check} contains 'All artifacts ready'
     message: "All build artifacts should exist"
 
-  # Build should succeed
-  - expr: ${captured.build_output} contains 'IMAGE_NAME='
-    message: "Docker build should succeed"
+  # Build should succeed AND have produced a new image (not reused the tag).
+  # Under `set -e` plus the id-changed guard, this marker is only reached when
+  # docker build ran and replaced the image.
+  - expr: ${captured.build_output} contains 'IMAGE_REBUILT='
+    message: "Docker build should succeed and produce a new image"
 
   # Image should exist
   - expr: ${captured.image_info} contains 'tsuite-mesh:local'
     message: "Image should be created"
 
-  # meshctl should work
-  - expr: ${captured.meshctl_version} contains 'meshctl'
-    message: "meshctl should be installed and working"
+  # meshctl should work and be the binary this run built
+  - expr: ${captured.meshctl_version} contains 'MESHCTL_MATCHES_BUILD'
+    message: "meshctl in the image should be byte-identical to the one this run built"
 
   # mcp-mesh-registry should work
   - expr: ${captured.registry_check} contains 'registry'

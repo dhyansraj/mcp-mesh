@@ -6,6 +6,7 @@ app creation, K8s endpoints, and MCP wrapper integration without starting
 actual servers.
 """
 
+import os
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -280,6 +281,52 @@ class TestFastAPIAppCreation:
 class TestK8sEndpoints:
     """Test Kubernetes health endpoints."""
 
+    @pytest.fixture(autouse=True)
+    def isolated_health_state(self, monkeypatch):
+        """Give each test here a clean slate, and let it take nothing with it.
+
+        Two pieces of process-global state made this class order-dependent.
+
+        **The TTL cache.** ``get_health_status_with_cache`` keys on the agent
+        name, and every test here uses ``test-agent`` at the default TTL — so
+        the first test's verdict was served to all the rest and their own
+        ``health_check`` never ran. ``test_health_endpoint_response`` failed
+        with ``assert 'degraded' == 'healthy'`` whenever
+        ``test_metrics_endpoint_response`` (whose check raises) happened to run
+        before it. It passed only on the declared collection order.
+
+        **A leaked refresh loop.** When the config declares a ``health_check``,
+        ``_add_k8s_endpoints`` starts the real ``tool_executor`` worker threads
+        and schedules ``health_refresh_loop`` on one (``fastapiserver_setup``).
+        That loop is cancellable only by its owner, and these tests pass a
+        ``MagicMock`` app — so there is no lifespan wrapper to cancel it, and
+        no real ``app.state``, which also degrades the readiness gate to a
+        no-op. It therefore ran for the REST OF THE PYTEST SESSION, publishing
+        a verdict to ``publish_health_status_to_core`` every TTL from a
+        background thread. That sink is process-global, so the stray publishes
+        landed in whatever later test monkeypatched it — the confirmed cause of
+        the ``test_gateway_health_refresh_1502`` flakes in issue #1618, which
+        failed on a verdict none of their own code ever produced. Two loops
+        leaked from this class, one ``healthy`` and one ``degraded``.
+
+        Reporting no worker loops is what ``test_health_check_ttl_env_1492``
+        already does, and it is accurate here — nothing in these tests has a
+        user loop. The scheduling path itself is covered by
+        ``test_gateway_health_refresh_1502``.
+        """
+        from _mcp_mesh.shared import health_check_manager, tool_executor
+
+        monkeypatch.setattr(tool_executor, "_start_workers", lambda: None)
+        monkeypatch.setattr(tool_executor, "get_worker_loops", lambda: [])
+
+        def reset():
+            health_check_manager.clear_health_cache()
+            health_check_manager.clear_health_check_result()
+
+        reset()
+        yield
+        reset()
+
     @pytest.fixture
     def step(self):
         """Create a FastAPIServerSetupStep instance."""
@@ -385,6 +432,26 @@ class TestK8sEndpoints:
 
 class TestExecuteScenarios:
     """Test main execute method scenarios."""
+
+    @pytest.fixture(autouse=True)
+    def http_enabled(self):
+        """Declare the transport these tests need instead of inheriting it.
+
+        Every test here asserts ``PipelineStatus.SUCCESS``, which the step only
+        returns when ``_is_http_enabled()`` is true. But ``tests/conftest.py``
+        sets ``MCP_MESH_HTTP_ENABLED=false`` process-wide, so on their own they
+        all skip and fail. They passed in CI only because
+        ``test_01_decorator_detection_validation`` pops that variable in its
+        setup/teardown and never restores it, after which the step's own
+        ``"true"`` default takes over — i.e. they were green by accident of
+        collection order, and would have gone red under ``-p randomly`` or on
+        any run that did not include that file.
+
+        ``TestConfigurationResolution`` above already states the requirement
+        this way (``@patch.dict``); this is the same thing for a whole class.
+        """
+        with patch.dict(os.environ, {"MCP_MESH_HTTP_ENABLED": "true"}):
+            yield
 
     @pytest.fixture
     def step(self):

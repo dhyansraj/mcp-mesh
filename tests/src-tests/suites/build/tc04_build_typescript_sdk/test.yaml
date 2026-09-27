@@ -70,7 +70,7 @@ test:
         bash -c "
           set -euo pipefail
           mkdir -p /src/mcp-mesh/src/runtime/typescript /src/mcp-mesh/src/runtime/core/typescript /out/packages && \
-          # Locate tc02a's @mcpmesh/core tarball. Use `ls -t` (newest first
+          # Locate tc02a's @mcpmesh/core tarball. Use 'ls -t' (newest first
           # by mtime) so a stale older tarball left from a prior failed run
           # doesn't shadow the fresh one. Fail loudly if multiple unique
           # versions exist — that's a cleanup signal, not something to
@@ -89,7 +89,7 @@ test:
           echo \"Extracting pre-built @mcpmesh/core from \$CORE_TGZ\" && \
           tar -xzf \"\$CORE_TGZ\" -C /src/mcp-mesh/src/runtime/core/typescript --strip-components=1 && \
           # The packed @mcpmesh/core package.json still declares
-          # `scripts.build = napi build ...` (the source build pipeline).
+          # 'scripts.build = napi build ...' (the source build pipeline).
           # Strip the build/install/prepare scripts from the EXTRACTED
           # package.json so npm doesn't re-invoke napi build (which would
           # fail — no Rust source / Cargo.toml at the install location).

@@ -123,14 +123,31 @@ RUN ARCH=$(dpkg --print-architecture) && \
     rm -rf /tmp/spire.tar.gz /tmp/spire-1.12.1 && \
     chmod +x /usr/local/bin/spire-server /usr/local/bin/spire-agent
 
-# MinIO server for S3-compatible media storage tests
-RUN ARCH=$(dpkg --print-architecture) && \
-    curl -fsSL "https://dl.min.io/server/minio/release/linux-${ARCH}/minio" -o /usr/local/bin/minio && \
+# MinIO server for S3-compatible media storage tests (architecture-aware)
+# Pinned to a versioned GitHub release asset. The floating dl.min.io path
+# ("release/linux-${ARCH}/minio") was retired and now returns 410 Gone, which
+# broke this build silently. Pin, so a retirement fails loudly on a known URL
+# instead of rotting under a moving one.
+RUN MINIO_RELEASE="RELEASE.2025-09-07T16-13-09Z" && \
+    ARCH=$(dpkg --print-architecture) && \
+    case "$ARCH" in \
+      amd64) MINIO_ARCH="linux-amd64" ;; \
+      arm64) MINIO_ARCH="linux-arm64" ;; \
+      *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/minio/minio/releases/download/${MINIO_RELEASE}/minio.${MINIO_ARCH}.${MINIO_RELEASE}" -o /usr/local/bin/minio && \
     chmod +x /usr/local/bin/minio
 
-# MinIO client (mc) for bucket management
-RUN ARCH=$(dpkg --print-architecture) && \
-    curl -fsSL "https://dl.min.io/client/mc/release/linux-${ARCH}/mc" -o /usr/local/bin/mc && \
+# MinIO client (mc) for bucket management (architecture-aware)
+# Same retirement applies to the floating dl.min.io client path.
+RUN MC_RELEASE="RELEASE.2025-08-13T08-35-41Z" && \
+    ARCH=$(dpkg --print-architecture) && \
+    case "$ARCH" in \
+      amd64) MC_ARCH="linux-amd64" ;; \
+      arm64) MC_ARCH="linux-arm64" ;; \
+      *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/minio/mc/releases/download/${MC_RELEASE}/mc.${MC_ARCH}.${MC_RELEASE}" -o /usr/local/bin/mc && \
     chmod +x /usr/local/bin/mc
 
 # Verify Node.js and Java installation

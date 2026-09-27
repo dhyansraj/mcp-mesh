@@ -41,6 +41,9 @@ test:
   - name: "Build meshctl binary"
     handler: shell
     command: |
+      # Fail the step on the first failing command. Without this the trailing
+      # echo below sets the exit status, so a failed build reports success.
+      set -euo pipefail
       # Get absolute paths for docker volume mounts (relative to suite_path)
       SOURCE_ABS=$(cd "${suite_path}/${config.source.path}" && pwd)
       OUTPUT_ABS=$(cd "${run_path}/${config.output.base}" && pwd)

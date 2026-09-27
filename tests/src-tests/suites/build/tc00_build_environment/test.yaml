@@ -65,6 +65,9 @@ test:
   - name: "Build src-build:latest image"
     handler: shell
     command: |
+      # Fail the step on the first failing command. Without this the trailing
+      # echo below sets the exit status, so a failed build reports success.
+      set -euo pipefail
       IMAGE_NAME="${config.build.image}"
       BASE_REPO="192.168.10.1:5000/src-build-base"
       # Content-addressed tag: any change to Dockerfile.base -> new tag -> rebuild.

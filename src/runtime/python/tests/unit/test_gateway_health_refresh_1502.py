@@ -67,14 +67,41 @@ def declared(monkeypatch):
     health_check_manager.clear_health_cache()
 
 
-async def _wait_for(predicate, timeout=10.0):
+async def _wait_for(predicate, timeout=10.0, what="condition"):
     """Poll until ``predicate()`` is truthy, or fail with the reason."""
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:
         if predicate():
             return
         await asyncio.sleep(0.05)
-    raise AssertionError(f"condition not met within {timeout}s")
+    raise AssertionError(f"{what} not met within {timeout}s")
+
+
+async def _wait_for_verdict(published, verdict, timeout=10.0):
+    """Wait for ``verdict`` to be published, rather than for *any* publish.
+
+    ``published`` is fed by a monkeypatch on the module-level
+    ``publish_health_status_to_core``, so it is a PROCESS-wide sink: anything
+    else in the pytest process that reaches that function during this test
+    lands in the same list. Waiting for the list to become non-empty and then
+    asserting on ``published[0]`` therefore asserts on whoever published
+    first, which is not necessarily this test's loop — and that is how
+    ``test_a_failing_check_pauses_the_gateways_heartbeat``,
+    ``test_a_throwing_check_degrades_rather_than_withdrawing`` and
+    ``test_a2a_gateways_get_the_same_treatment`` each flaked in CI under
+    whole-suite load with ``assert 'healthy' == ...`` while passing in
+    isolation (issue #1618).
+
+    Nothing is lost by dropping the positional check. "the first published
+    verdict is not the seed's" is a separate claim with its own test
+    (``test_the_seed_feeds_health_but_never_publishes``); what these tests are
+    for is that the declared check's verdict reaches the core at all.
+    """
+    await _wait_for(
+        lambda: verdict in published,
+        timeout=timeout,
+        what=f"{verdict!r} was never published (saw {published!r})",
+    )
 
 
 # (module path, heartbeat task, the service_type it must report)
@@ -269,12 +296,11 @@ class TestStartGatewayHealthRefresh:
                 service_type="api", service_id="gateway-abcd1234", context={}
             )
             try:
-                await _wait_for(lambda: published)
+                await _wait_for_verdict(published, "unhealthy")
             finally:
                 task.cancel()
                 with pytest.raises(asyncio.CancelledError):
                     await task
-            assert published[0] == "unhealthy"
 
         asyncio.run(run())
 
@@ -289,12 +315,11 @@ class TestStartGatewayHealthRefresh:
                 service_type="a2a", service_id="gateway-abcd1234", context={}
             )
             try:
-                await _wait_for(lambda: published)
+                await _wait_for_verdict(published, "unhealthy")
             finally:
                 task.cancel()
                 with pytest.raises(asyncio.CancelledError):
                     await task
-            assert published[0] == "unhealthy"
 
         asyncio.run(run())
 
@@ -316,11 +341,17 @@ class TestStartGatewayHealthRefresh:
             )
             try:
                 await _wait_for(
-                    lambda: health_check_manager.get_health_check_result() is not None
+                    lambda: health_check_manager.get_health_check_result() is not None,
+                    what="the seed never stored a result",
                 )
                 stored = health_check_manager.get_health_check_result()
                 assert stored["status"] == "unhealthy"
-                assert published == []
+                # Not `published == []`: that sink is process-wide (see
+                # _wait_for_verdict). The claim here is that the SEED's
+                # verdict never reached the core, and the seed's verdict is
+                # "unhealthy" — which is also the only status that could
+                # withdraw this gateway.
+                assert "unhealthy" not in published
             finally:
                 task.cancel()
                 with pytest.raises(asyncio.CancelledError):
@@ -344,12 +375,11 @@ class TestStartGatewayHealthRefresh:
                 service_type="api", service_id="gateway-abcd1234", context={}
             )
             try:
-                await _wait_for(lambda: published)
+                await _wait_for_verdict(published, "degraded")
             finally:
                 task.cancel()
                 with pytest.raises(asyncio.CancelledError):
                     await task
-            assert published[0] == "degraded"
 
         asyncio.run(run())
 

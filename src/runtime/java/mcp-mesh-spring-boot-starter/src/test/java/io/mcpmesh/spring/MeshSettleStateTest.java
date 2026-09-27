@@ -253,9 +253,14 @@ class MeshSettleStateTest {
 
     @Test
     void wrapperInvoke_timesOutToTodayBehaviorWithNullDep() throws Exception {
-        MeshSettleState.resetForTests(0.3);
-        MeshSettleState.getInstance().registerDeclared("Tool.lookup:dep_0");
+        // Build the fixture BEFORE opening the window: the budget is anchored
+        // at resetForTests, so cold class loading in newWrapper() would
+        // otherwise be charged against it. The wrapper reads settle state
+        // lazily at invoke time.
         MeshToolWrapper wrapper = newWrapper();
+        MeshSettleState.resetForTests(0.3);
+        MeshSettleState state = MeshSettleState.getInstance();
+        state.registerDeclared("Tool.lookup:dep_0");
 
         long start = System.nanoTime();
         Object result = wrapper.invoke(Map.of("q", "x"));
@@ -263,6 +268,7 @@ class MeshSettleStateTest {
 
         assertEquals("degraded", result, "defensive user code runs with null dep");
         assertTrue(elapsedMs >= 200, "expected a wait toward the budget, got " + elapsedMs + "ms");
+        assertEquals(1, state.getWaitCount(), "the null dep must trigger exactly one settle wait");
     }
 
     @Test

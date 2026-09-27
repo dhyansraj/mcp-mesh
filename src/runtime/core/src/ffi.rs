@@ -2587,10 +2587,18 @@ mod tests {
     /// * `mesh_free_handle` drains the queue, so spans published right
     ///   before teardown are not lost.
     ///
-    /// NB: mutates process env (REDIS_URL, tracing flag); the suite runs
-    /// with --test-threads=1 like the other env-mutating tests.
+    /// NB: mutates process env (REDIS_URL, tracing flag) and drives the same
+    /// global trace-publisher singleton as the `tracing_publish` tests, so it
+    /// runs subprocess-isolated (issue #1618). Without that it is a latent
+    /// racer against them — it happened to pass, which is not the same thing.
     #[test]
     fn test_mesh_span_queue_lifecycle_publish_flush_free() {
+        if crate::test_isolation::isolate(
+            "ffi::tests::test_mesh_span_queue_lifecycle_publish_flush_free",
+        ) {
+            return;
+        }
+
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         // Fake RESP server that records every byte it reads and answers
