@@ -115,16 +115,20 @@ class McpMeshToolProxySettleGraceTest {
     void beanInjectedProxy_timesOutToUnavailableWhenEndpointNeverLands() {
         // The dep never resolves within the (tiny) budget → after the bounded
         // wait the call falls through to today's fail-fast unavailable error.
-        MeshSettleState.resetForTests(0.3);
-        MeshSettleState.getInstance().registerDeclared("remote_cap");
-
+        // Build the fixture BEFORE opening the window: the budget is anchored
+        // at resetForTests, so fixture construction would otherwise be charged
+        // against it. The proxy reads settle state lazily at call time.
         McpMeshToolProxy<String> proxy = new McpMeshToolProxy<>("remote_cap", new StubHttpClient());
+        MeshSettleState.resetForTests(0.3);
+        MeshSettleState state = MeshSettleState.getInstance();
+        state.registerDeclared("remote_cap");
 
         long start = System.nanoTime();
         assertThrows(MeshToolUnavailableException.class, () -> proxy.call(Map.of("q", "x")));
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;
         assertTrue(elapsedMs >= 200,
             "expected a wait toward the budget before failing, got " + elapsedMs + "ms");
+        assertEquals(1, state.getWaitCount(), "the unresolved dep must trigger exactly one settle wait");
     }
 
     @Test
