@@ -663,10 +663,24 @@ func (h *EntBusinessLogicHandlers) FastHeartbeatCheck(c *gin.Context, agentId st
 
 // UnregisterAgent implements DELETE /agents/{agent_id}
 func (h *EntBusinessLogicHandlers) UnregisterAgent(c *gin.Context, agentId string) {
-	err := h.entService.UnregisterAgent(c.Request.Context(), agentId)
+	// Extract entity_id from TLS verification (set by TLSVerifyMiddleware)
+	entityID := ""
+	if v, exists := c.Get("entity_id"); exists {
+		if eid, ok := v.(string); ok {
+			entityID = eid
+		}
+	}
+
+	err := h.entService.UnregisterAgent(c.Request.Context(), agentId, entityID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
-			Error:     err.Error(),
+		status := http.StatusInternalServerError
+		msg := err.Error()
+		if errors.Is(err, ErrEntityIDMismatch) {
+			status = http.StatusForbidden
+			msg = "entity_id mismatch: agent owned by another entity" // sanitized — full detail in server log
+		}
+		c.JSON(status, generated.ErrorResponse{
+			Error:     msg,
 			Timestamp: time.Now().UTC(),
 		})
 		return

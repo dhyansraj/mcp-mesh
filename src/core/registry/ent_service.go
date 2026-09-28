@@ -27,10 +27,10 @@ import (
 	"entgo.io/ent/dialect/sql"
 )
 
-// ErrEntityIDMismatch is returned when a heartbeat or registration update is
-// attempted by an entity that does not own the target agent. The mesh enforces
-// "first-claim wins": once an agent_id is registered with a TLS-verified
-// entity_id, only heartbeats from that same entity can update it. Empty
+// ErrEntityIDMismatch is returned when a heartbeat, registration update or
+// unregister is attempted by an entity that does not own the target agent.
+// The mesh enforces "first-claim wins": once an agent_id is registered with a
+// TLS-verified entity_id, only that same entity can update or unregister it. Empty
 // entity_id requests are rejected when the existing agent has been claimed
 // (prevents downgrade attacks where TLS-off heartbeats modify TLS-claimed
 // agents).
@@ -2176,13 +2176,18 @@ func (s *EntService) TriggerRotation(ctx context.Context, entityID string) (int,
 	return affected, nil
 }
 
-// UnregisterAgent gracefully unregisters an agent by marking it as unhealthy
-func (s *EntService) UnregisterAgent(ctx context.Context, agentID string) error {
+// UnregisterAgent gracefully unregisters an agent by marking it as unhealthy.
+//
+// entityID is the caller's TLS-verified entity ("" when certless). The same
+// first-claim-wins rule as RegisterAgent and UpdateHeartbeat applies: a
+// claimed agent can only be unregistered by its owning entity, and an
+// unclaimed one by anyone. A mismatch returns ErrEntityIDMismatch.
+func (s *EntService) UnregisterAgent(ctx context.Context, agentID, entityID string) error {
 	const maxRetries = 5
 
 	var lastErr error
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		err := s.unregisterAgentAttempt(ctx, agentID)
+		err := s.unregisterAgentAttempt(ctx, agentID, entityID)
 		if err == nil {
 			return nil // Success
 		}
@@ -2203,7 +2208,7 @@ func (s *EntService) UnregisterAgent(ctx context.Context, agentID string) error 
 }
 
 // unregisterAgentAttempt performs a single unregister attempt within a transaction
-func (s *EntService) unregisterAgentAttempt(ctx context.Context, agentID string) error {
+func (s *EntService) unregisterAgentAttempt(ctx context.Context, agentID, entityID string) error {
 	// Start a transaction for atomic operation
 	tx, err := s.entDB.Client.Tx(ctx)
 	if err != nil {
@@ -2219,6 +2224,10 @@ func (s *EntService) unregisterAgentAttempt(ctx context.Context, agentID string)
 			return nil
 		}
 		return fmt.Errorf("failed to query agent: %w", err)
+	}
+
+	if err := s.checkEntityOwnership("UnregisterAgent", agentID, entityID, currentAgent.EntityID); err != nil {
+		return err
 	}
 
 	// Create explicit unregister event before updating status (skip for API services)

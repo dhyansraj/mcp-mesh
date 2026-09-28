@@ -270,7 +270,7 @@ func TestUnregisterAgentFlipsResolutions(t *testing.T) {
 	seedAgent(t, client, "consumer", agent.StatusHealthy, time.Now().UTC())
 	seedProviderResolutions(t, client, "consumer", "provider")
 
-	if err := service.UnregisterAgent(ctx, "provider"); err != nil {
+	if err := service.UnregisterAgent(ctx, "provider", ""); err != nil {
 		t.Fatalf("UnregisterAgent: %v", err)
 	}
 
@@ -300,7 +300,7 @@ func TestReturningProviderRestoresResolutions(t *testing.T) {
 	seedProviderResolutions(t, client, "consumer", "provider")
 
 	// Provider goes away gracefully — rows flip to unavailable.
-	if err := service.UnregisterAgent(ctx, "provider"); err != nil {
+	if err := service.UnregisterAgent(ctx, "provider", ""); err != nil {
 		t.Fatalf("UnregisterAgent: %v", err)
 	}
 	assertProviderResolutionStatuses(t, client, "consumer", false)

@@ -202,6 +202,36 @@ CASES: list[Case] = [
         {"mcp-mesh-grafana": {"grafana": {"image": {"tag": ""}}}},
         expect_fail="grafana.image.tag must not be empty",
     ),
+    # --- mcp-mesh-registry (through the umbrella): trust backend guard ----
+    # Issue #1600: the registry refuses to start in any TLS mode other than
+    # off without a trust backend, so the chart fails the render instead of
+    # shipping a crash-looping pod.
+    Case(
+        "mcp-mesh-core",
+        "registry TLS mode auto with no trust backend",
+        {"mcp-mesh-registry": {"registry": {"security": {"tls": {"mode": "auto"}}}}},
+        expect_fail="registry.security.tls.mode=auto requires registry.security.trust.backend",
+    ),
+    Case(
+        "mcp-mesh-core",
+        "registry TLS mode strict with no trust backend",
+        {"mcp-mesh-registry": {"registry": {"security": {"tls": {"mode": "strict"}}}}},
+        expect_fail="registry.security.tls.mode=strict requires registry.security.trust.backend",
+    ),
+    Case(
+        "mcp-mesh-core",
+        "...and the same mode once a trust backend is named",
+        {
+            "mcp-mesh-registry": {
+                "registry": {
+                    "security": {
+                        "tls": {"mode": "auto"},
+                        "trust": {"backend": "filestore"},
+                    }
+                }
+            }
+        },
+    ),
     # --- mcp-mesh-postgres (through the umbrella) -------------------------
     Case(
         "mcp-mesh-core",
