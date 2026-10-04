@@ -2,6 +2,7 @@ package scaffold
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -731,6 +732,40 @@ func TestGenerateDockerCompose_MergeRejectsHostPortClash(t *testing.T) {
 	after, err := os.ReadFile(filepath.Join(tmpDir, "docker-compose.yml"))
 	require.NoError(t, err)
 	assert.Equal(t, existing, string(after), "a rejected merge must not touch the file")
+}
+
+// TestGenerateDockerCompose_DryRunNilOutUsesStdout: a caller that sets DryRun
+// without DryRunOut must get the YAML on stdout, not a nil-writer panic.
+func TestGenerateDockerCompose_DryRunNilOutUsesStdout(t *testing.T) {
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	orig := os.Stdout
+	os.Stdout = w
+	t.Cleanup(func() { os.Stdout = orig })
+
+	tmpDir := t.TempDir()
+	agents := []DetectedAgent{{Name: "a1", Dir: "a1", Port: 9702, Language: "python"}}
+	_, genErr := GenerateDockerCompose(&ComposeConfig{Agents: agents, ProjectName: "t", DryRun: true}, tmpDir)
+
+	// Merge path too: an existing file is printed merged, not rewritten.
+	existing := "services:\n  other:\n    image: x\n"
+	mergeDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(mergeDir, "docker-compose.yml"), []byte(existing), 0644))
+	_, mergeErr := GenerateDockerCompose(&ComposeConfig{Agents: agents, ProjectName: "t", DryRun: true}, mergeDir)
+
+	require.NoError(t, w.Close())
+	os.Stdout = orig
+	out, err := io.ReadAll(r)
+	require.NoError(t, err)
+
+	require.NoError(t, genErr)
+	require.NoError(t, mergeErr)
+	assert.Contains(t, string(out), `"9702:9702"`)
+	assert.Contains(t, string(out), "other:")
+	assert.NoFileExists(t, filepath.Join(tmpDir, "docker-compose.yml"))
+	after, err := os.ReadFile(filepath.Join(mergeDir, "docker-compose.yml"))
+	require.NoError(t, err)
+	assert.Equal(t, existing, string(after))
 }
 
 // TestGenerateDockerCompose_DryRun: no files are written; the YAML goes to DryRunOut.

@@ -45,7 +45,8 @@ type ComposeConfig struct {
 	Force         bool   // Force regenerate agent configurations
 
 	// DryRun writes the docker-compose.yml that would be produced to
-	// DryRunOut and touches no files (no tempo/grafana configs either).
+	// DryRunOut (os.Stdout when nil) and touches no files (no tempo/grafana
+	// configs either).
 	DryRun    bool
 	DryRunOut io.Writer
 }
@@ -666,6 +667,9 @@ func validateAgentPorts(agents []DetectedAgent) error {
 // GenerateDockerCompose generates a docker-compose.yml file for the given configuration
 // If the file already exists, it merges new agents without overwriting existing services
 func GenerateDockerCompose(config *ComposeConfig, outputDir string) (*GenerateResult, error) {
+	if config.DryRun && config.DryRunOut == nil {
+		config.DryRunOut = os.Stdout
+	}
 	if err := validateAgentNames(config.Agents); err != nil {
 		return nil, err
 	}
