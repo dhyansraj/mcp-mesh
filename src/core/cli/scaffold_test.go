@@ -83,6 +83,93 @@ func TestScaffoldCommand_HasKeepListFlags(t *testing.T) {
 	assert.Nil(t, cmd.Flags().Lookup("api-key"))
 }
 
+// TestScaffoldCommand_LegacyParentFlagsHidden covers #1575: the parent
+// --help listed pre-subcommand flags (--llm-selector, a never-read
+// --provider, --template, --tool-name, the LLM knobs) as if they were the
+// canonical UX. They stay registered for back-compat but are hidden.
+func TestScaffoldCommand_LegacyParentFlagsHidden(t *testing.T) {
+	cmd := NewScaffoldCommand()
+	for _, d := range deprecatedParentFlags {
+		f := cmd.Flags().Lookup(d.flag)
+		require.NotNil(t, f, "--%s must stay registered for back-compat", d.flag)
+		assert.True(t, f.Hidden, "--%s must be hidden from 'meshctl scaffold --help'", d.flag)
+	}
+
+	var help bytes.Buffer
+	cmd.SetOut(&help)
+	cmd.SetArgs([]string{"--help"})
+	require.NoError(t, cmd.Execute())
+	for _, name := range []string{"--llm-selector", "--provider", "--template ", "--tool-name", "--max-iterations", "--model"} {
+		assert.NotContains(t, help.String(), name)
+	}
+	for _, name := range []string{"--compose", "--observability", "--config", "--project-name"} {
+		assert.Contains(t, help.String(), name)
+	}
+}
+
+// TestScaffoldCommand_LegacyParentFlagsWarn: every hidden legacy parent flag
+// must announce its deprecation and name the canonical form when used.
+func TestScaffoldCommand_LegacyParentFlagsWarn(t *testing.T) {
+	cmd := NewScaffoldCommand()
+	errOut := bytes.NewBufferString("")
+	cmd.SetErr(errOut)
+	cmd.SetOut(bytes.NewBufferString(""))
+	cmd.SetArgs([]string{
+		"--name", "foo", "--no-interactive", "--dry-run",
+		"--llm-selector", "openai", "--provider", "openai", "--template", "llm-agent",
+		"--tool-name", "t", "--tool-description", "d", "--max-iterations", "3",
+		"--system-prompt", "p", "--response-format", "json", "--context-param", "c",
+		"--filter", "x", "--filter-mode", "best_match", "--model", "openai/gpt-4o", "--tags", "a",
+	})
+	_ = cmd.Execute()
+
+	stderr := errOut.String()
+	for _, d := range deprecatedParentFlags {
+		assert.Contains(t, stderr, "Warning: --"+d.flag+" on 'meshctl scaffold' is deprecated",
+			"no deprecation warning for --%s; stderr:\n%s", d.flag, stderr)
+		assert.Contains(t, stderr, "use "+d.use+" instead.",
+			"warning for --%s must name the canonical form; stderr:\n%s", d.flag, stderr)
+	}
+	assert.Contains(t, stderr, "--provider on 'meshctl scaffold' is deprecated and has no effect here")
+}
+
+// TestScaffoldCommand_TemplateWithTemplateDirIsNotDeprecated: with
+// --template-dir, --template picks a subdirectory of the user's own template
+// tree, which no subcommand can do, so it must not be called deprecated.
+func TestScaffoldCommand_TemplateWithTemplateDirIsNotDeprecated(t *testing.T) {
+	cmd := NewScaffoldCommand()
+	errOut := bytes.NewBufferString("")
+	cmd.SetErr(errOut)
+	cmd.SetOut(bytes.NewBufferString(""))
+	cmd.SetArgs([]string{
+		"--name", "foo", "--no-interactive", "--dry-run",
+		"--template-dir", t.TempDir(), "--template", "basic",
+	})
+	_ = cmd.Execute()
+	assert.NotContains(t, errOut.String(), "--template on 'meshctl scaffold' is deprecated")
+}
+
+// TestScaffoldCommand_AgentTypeReportsRenamedAndDroppedFlags: through the
+// --agent-type shim, --llm-selector is renamed to --vendor and flags the
+// target subcommand lacks are dropped; both must be reported, not silent.
+func TestScaffoldCommand_AgentTypeReportsRenamedAndDroppedFlags(t *testing.T) {
+	cmd := NewScaffoldCommand()
+	errOut := bytes.NewBufferString("")
+	cmd.SetErr(errOut)
+	cmd.SetOut(bytes.NewBufferString(""))
+	cmd.SetArgs([]string{
+		"--name", "foo", "--agent-type", "llm-agent", "--no-interactive", "--dry-run",
+		"--llm-selector", "openai", "--model", "openai/gpt-4o", "--provider", "gemini",
+	})
+	_ = cmd.Execute()
+
+	stderr := errOut.String()
+	assert.Contains(t, stderr, "Warning: --llm-selector is deprecated; use --vendor instead.")
+	assert.Contains(t, stderr, "Warning: --model is not supported by 'meshctl scaffold llm' and was ignored.")
+	// --provider is carried onto the subcommand's own alias, which warns.
+	assert.Contains(t, stderr, "Warning: --provider is deprecated; use --vendor instead")
+}
+
 func TestScaffoldCommand_DefaultLanguage(t *testing.T) {
 	cmd := NewScaffoldCommand()
 

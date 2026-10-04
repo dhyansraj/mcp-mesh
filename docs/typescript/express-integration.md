@@ -8,7 +8,7 @@
 
 MCP Mesh provides `mesh.route()` middleware for Express applications that need to consume mesh capabilities without being MCP agents themselves. This enables traditional REST APIs to leverage the mesh service layer.
 
-**Important**: This is for integrating MCP Mesh into your EXISTING Express app. There is no `meshctl scaffold` command for Express backends. To create a new MCP agent, use `meshctl scaffold --lang typescript` instead.
+**Important**: This is for integrating MCP Mesh into your EXISTING Express app. To generate a new Express gateway instead, use `meshctl scaffold api --lang typescript`; to create a new MCP agent, use `meshctl scaffold basic --lang typescript`.
 
 ## Installation
 

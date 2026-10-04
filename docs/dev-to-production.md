@@ -38,7 +38,7 @@ Documentation: [mcp-mesh.ai](https://mcp-mesh.ai) | CLI: `meshctl man <topic>` |
 ## Develop
 
 ```bash
-meshctl scaffold --name my-agent --agent-type tool                      # Generate tool agent
+meshctl scaffold basic --name my-agent                    # Generate tool agent
 meshctl scaffold llm --vendor claude --lang python --name my-llm     # Generate LLM consumer
 meshctl scaffold llm-provider --vendor claude --lang python --name my-api  # Generate provider
 

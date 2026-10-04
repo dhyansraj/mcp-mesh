@@ -51,7 +51,7 @@ Today has four parts:
 ### Scaffold the gateway
 
 ```shell
-$ meshctl scaffold --name gateway --agent-type api --lang python --port 8080
+$ meshctl scaffold api --name gateway --lang python --port 8080
 ```
 
 Replace the generated `main.py` with:

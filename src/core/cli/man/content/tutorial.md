@@ -1533,7 +1533,8 @@ $ meshctl scaffold --compose --observability
 ```
 
 The scaffold scanned every subdirectory, found `@mesh.agent` decorators in
-twelve Python files, extracted each agent's name and port, and generated a
+twelve Python files and the `@mesh.route` gateway, extracted each agent's
+name and port, and generated a
 complete `docker-compose.yml` with infrastructure services, health checks,
 and networking.
 

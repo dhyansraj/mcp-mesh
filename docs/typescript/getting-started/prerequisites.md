@@ -59,7 +59,7 @@ meshctl --version
 
 ```bash
 # 1. Scaffold TypeScript agent
-meshctl scaffold --name hello --agent-type basic --lang typescript
+meshctl scaffold basic --name hello --lang typescript
 
 # 2. Install dependencies
 cd hello

@@ -1,6 +1,7 @@
 package scaffold
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -366,4 +367,173 @@ func TestValidateAgentPorts_NoConflict(t *testing.T) {
 
 	err := validateAgentPorts(agents)
 	require.NoError(t, err)
+}
+
+// scaffoldAPIGateway renders a real `meshctl scaffold api` agent from the
+// in-repo templates into outputDir, so detection is tested against what the
+// scaffold actually emits rather than a hand-written fixture.
+func scaffoldAPIGateway(t *testing.T, outputDir, lang, name string, port int) {
+	t.Helper()
+	t.Setenv("MESHCTL_TEMPLATE_DIR", getProjectRoot()+"/cmd/meshctl/templates")
+	cmd := newScaffoldAPICommand()
+	out := bytes.NewBufferString("")
+	cmd.SetOut(out)
+	cmd.SetErr(out)
+	cmd.SetArgs([]string{
+		"--name", name, "--lang", lang, "--port", itoa(port),
+		"--output", outputDir, "--no-interactive",
+	})
+	require.NoError(t, cmd.Execute(), "scaffold api --lang %s failed:\n%s", lang, out.String())
+}
+
+// TestScanForAgents_DetectsAPIGateways covers #1575: `meshctl scaffold
+// --compose` only recognised @mesh.agent / mesh(server, ...) / @MeshAgent,
+// so every `meshctl scaffold api` gateway was silently left out of the
+// generated docker-compose.yml.
+func TestScanForAgents_DetectsAPIGateways(t *testing.T) {
+	tmpDir := t.TempDir()
+	scaffoldAPIGateway(t, tmpDir, "python", "gw-py", 9301)
+	scaffoldAPIGateway(t, tmpDir, "typescript", "gw-ts", 9302)
+	scaffoldAPIGateway(t, tmpDir, "java", "gw-java", 9303)
+	writePyAgent(t, tmpDir, "tool-agent", 9304)
+
+	agents, err := ScanForAgents(tmpDir)
+	require.NoError(t, err)
+
+	got := map[string]DetectedAgent{}
+	for _, a := range agents {
+		got[a.Name] = a
+	}
+	require.Len(t, got, 4, "expected 3 gateways + 1 tool agent, got %+v", agents)
+
+	for _, want := range []DetectedAgent{
+		{Name: "gw-py", Port: 9301, Language: "python", Dir: "gw-py"},
+		{Name: "gw-ts", Port: 9302, Language: "typescript", Dir: "gw-ts"},
+		{Name: "gw-java", Port: 9303, Language: "java", Dir: "gw-java"},
+		{Name: "tool-agent", Port: 9304, Language: "python", Dir: "tool-agent"},
+	} {
+		a, ok := got[want.Name]
+		require.True(t, ok, "agent %s not detected", want.Name)
+		assert.Equal(t, want.Port, a.Port, want.Name)
+		assert.Equal(t, want.Language, a.Language, want.Name)
+		assert.Equal(t, want.Dir, a.Dir, want.Name)
+	}
+
+	// And the generated compose file carries a service for each of them.
+	_, err = GenerateDockerCompose(&ComposeConfig{Agents: agents, ProjectName: "t"}, tmpDir)
+	require.NoError(t, err)
+	content, err := os.ReadFile(filepath.Join(tmpDir, "docker-compose.yml"))
+	require.NoError(t, err)
+	var parsed map[string]interface{}
+	require.NoError(t, yaml.Unmarshal(content, &parsed))
+	services, ok := parsed["services"].(map[string]interface{})
+	require.True(t, ok, "compose file has no services map")
+	for _, name := range []string{"gw-py", "gw-ts", "gw-java", "tool-agent"} {
+		assert.Contains(t, services, name)
+	}
+}
+
+// TestNextAvailablePort_CountsAPIGateways: auto-port assignment shares the
+// scanner, so an undetected gateway used to let the next scaffold reuse its port.
+func TestNextAvailablePort_CountsAPIGateways(t *testing.T) {
+	tmpDir := t.TempDir()
+	scaffoldAPIGateway(t, tmpDir, "typescript", "gw-ts", 9400)
+	assert.Equal(t, 9401, NextAvailablePort(tmpDir))
+}
+
+func TestParsePythonAPIAgent(t *testing.T) {
+	t.Run("route_with_uvicorn_port", func(t *testing.T) {
+		src := "import mesh\n@app.get('/x')\n@mesh.route(dependencies=['a'])\nasync def x(): ...\n" +
+			"if __name__ == '__main__':\n    uvicorn.run(app, host='0.0.0.0', port=9010)\n"
+		a := parsePythonAPIAgent(src, "/tmp/some/gw")
+		require.NotNil(t, a)
+		assert.Equal(t, "gw", a.Name)
+		assert.Equal(t, 9010, a.Port)
+		assert.Equal(t, "python", a.Language)
+	})
+	t.Run("no_uvicorn_defaults_port", func(t *testing.T) {
+		a := parsePythonAPIAgent("@mesh.route(dependencies=['a'])\ndef x(): ...\n", "/tmp/gw")
+		require.NotNil(t, a)
+		assert.Equal(t, DefaultScaffoldPort, a.Port)
+	})
+	t.Run("commented_route_is_not_a_gateway", func(t *testing.T) {
+		assert.Nil(t, parsePythonAPIAgent("# @mesh.route(dependencies=['a'])\nprint('hi')\n", "/tmp/x"))
+	})
+	t.Run("plain_script_is_not_a_gateway", func(t *testing.T) {
+		assert.Nil(t, parsePythonAPIAgent("print('hello')\n", "/tmp/x"))
+	})
+}
+
+func TestParseTypeScriptAPIAgent(t *testing.T) {
+	t.Run("env_port_default", func(t *testing.T) {
+		src := "const PORT = process.env.PORT || 9020;\napp.get('/x', mesh.route([{ capability: 'a' }], async () => {}));\n"
+		a := parseTypeScriptAPIAgent(src, "/tmp/gw-ts")
+		require.NotNil(t, a)
+		assert.Equal(t, "gw-ts", a.Name)
+		assert.Equal(t, 9020, a.Port)
+		assert.Equal(t, "typescript", a.Language)
+	})
+	t.Run("listen_literal_port", func(t *testing.T) {
+		src := "app.get('/x', mesh.route([{ capability: 'a' }], h));\napp.listen(9021);\n"
+		a := parseTypeScriptAPIAgent(src, "/tmp/gw-ts")
+		require.NotNil(t, a)
+		assert.Equal(t, 9021, a.Port)
+	})
+	t.Run("comment_only_mentions_are_ignored", func(t *testing.T) {
+		src := "/**\n * consumes capabilities via mesh.route().\n */\n// app.get('/x', mesh.route([], h));\n"
+		assert.Nil(t, parseTypeScriptAPIAgent(src, "/tmp/x"))
+	})
+}
+
+func TestParseJavaAgent_APIGatewayPortSources(t *testing.T) {
+	writeJava := func(t *testing.T, dir, body string) {
+		t.Helper()
+		pkg := filepath.Join(dir, "src", "main", "java", "com", "example")
+		require.NoError(t, os.MkdirAll(pkg, 0755))
+		require.NoError(t, os.WriteFile(filepath.Join(pkg, "App.java"), []byte(body), 0644))
+	}
+	writeResource := func(t *testing.T, dir, file, body string) {
+		t.Helper()
+		res := filepath.Join(dir, "src", "main", "resources")
+		require.NoError(t, os.MkdirAll(res, 0755))
+		require.NoError(t, os.WriteFile(filepath.Join(res, file), []byte(body), 0644))
+	}
+	route := "class C {\n    @GetMapping(\"/x\")\n    @MeshRoute(dependencies = @MeshDependency(capability = \"a\"))\n    public void x() {}\n}\n"
+
+	t.Run("properties_port", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "gw-props")
+		writeJava(t, dir, route)
+		writeResource(t, dir, "application.properties", "server.port=9031\n")
+		a, err := parseJavaAgent(dir)
+		require.NoError(t, err)
+		require.NotNil(t, a)
+		assert.Equal(t, "gw-props", a.Name)
+		assert.Equal(t, 9031, a.Port)
+		assert.Equal(t, "java", a.Language)
+	})
+	t.Run("plain_yaml_port", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "gw-yaml")
+		writeJava(t, dir, route)
+		writeResource(t, dir, "application.yaml", "server:\n  port: 9032\n")
+		a, err := parseJavaAgent(dir)
+		require.NoError(t, err)
+		require.NotNil(t, a)
+		assert.Equal(t, 9032, a.Port)
+	})
+	t.Run("javadoc_mention_is_not_a_gateway", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "plain")
+		writeJava(t, dir, "/**\n * Uses @MeshRoute elsewhere.\n */\nclass C {}\n")
+		a, err := parseJavaAgent(dir)
+		require.NoError(t, err)
+		assert.Nil(t, a)
+	})
+	t.Run("mesh_agent_still_wins", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "dir-name")
+		writeJava(t, dir, "@MeshAgent(name = \"real-name\", port = 9033)\nclass C {}\n")
+		a, err := parseJavaAgent(dir)
+		require.NoError(t, err)
+		require.NotNil(t, a)
+		assert.Equal(t, "real-name", a.Name)
+		assert.Equal(t, 9033, a.Port)
+	})
 }

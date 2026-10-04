@@ -25,7 +25,7 @@ meshctl --help
 meshctl man
 
 # Scaffold a new agent project
-meshctl scaffold my-agent --dry-run
+meshctl scaffold basic --name my-agent --dry-run
 
 # List running agents
 meshctl list
@@ -52,14 +52,14 @@ MCP Mesh is a distributed service mesh built on the Model Context Protocol (MCP)
 
 ## Key Commands
 
-| Command                   | Description                 |
-| ------------------------- | --------------------------- |
-| `meshctl man`             | Comprehensive documentation |
-| `meshctl scaffold <name>` | Generate new agent project  |
-| `meshctl list`            | List running agents         |
-| `meshctl list --tools`    | List all tools              |
-| `meshctl call <tool>`     | Invoke an MCP tool          |
-| `meshctl registry`        | Manage the registry         |
+| Command                                | Description                 |
+| -------------------------------------- | --------------------------- |
+| `meshctl man`                          | Comprehensive documentation |
+| `meshctl scaffold basic --name <name>` | Generate new agent project  |
+| `meshctl list`                         | List running agents         |
+| `meshctl list --tools`                 | List all tools              |
+| `meshctl call <tool>`                  | Invoke an MCP tool          |
+| `meshctl registry`                     | Manage the registry         |
 
 ## For LLMs
 

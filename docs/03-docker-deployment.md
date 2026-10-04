@@ -9,8 +9,11 @@ MCP Mesh provides pre-built Docker images and a scaffold tool to generate Docker
 ## Quick Start (30 seconds)
 
 ```bash
-# Generate a new agent with Dockerfile and compose file
-meshctl scaffold --name my-agent --compose
+# Generate a new agent (includes a Dockerfile)
+meshctl scaffold basic --name my-agent
+
+# Generate docker-compose.yml for every agent in this directory
+meshctl scaffold --compose --observability
 
 # Start everything (docker-compose.yml is in current directory)
 docker-compose up

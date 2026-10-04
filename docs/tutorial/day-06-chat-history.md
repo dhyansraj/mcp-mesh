@@ -57,7 +57,7 @@ and other agents call it like any other tool.
 ### Scaffold the agent
 
 ```shell
-$ meshctl scaffold --name chat-history-agent --agent-type tool --port 9109
+$ meshctl scaffold basic --name chat-history-agent --port 9109
 ```
 
 ```

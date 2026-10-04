@@ -41,7 +41,7 @@ npm install -g @mcpmesh/cli
 meshctl scaffold
 
 # Or non-interactive
-meshctl scaffold --name hello --agent-type basic --lang java
+meshctl scaffold basic --name hello --lang java
 
 # Run (recommended)
 meshctl start hello/

@@ -128,6 +128,12 @@ Infrastructure:
 		provider.RegisterFlags(cmd)
 	}
 
+	// Pre-subcommand flags kept for back-compat only: hidden from --help and
+	// warned about when used (see warnDeprecatedParentFlags).
+	for _, d := range deprecatedParentFlags {
+		_ = cmd.Flags().MarkHidden(d.flag)
+	}
+
 	// Attach `basic` subcommand (#957). Explicit replacement for the legacy
 	// `--agent-type tool` form. Generates a plain @mesh.agent skeleton.
 	scaffold.AttachBasicSubcommand(cmd)
@@ -159,6 +165,8 @@ func runScaffoldCommand(cmd *cobra.Command, args []string) error {
 	if agentType, _ := cmd.Flags().GetString("agent-type"); agentType != "" {
 		return routeDeprecatedAgentType(cmd, agentType, args)
 	}
+
+	warnDeprecatedParentFlags(cmd)
 
 	// Check if generating docker-compose
 	compose, _ := cmd.Flags().GetBool("compose")
@@ -216,6 +224,76 @@ func runScaffoldCommand(cmd *cobra.Command, args []string) error {
 	return provider.Execute(ctx)
 }
 
+// deprecatedParentFlags are flags on the parent `meshctl scaffold` command
+// that predate the per-agent-type subcommands. Each one only feeds the legacy
+// generate-without-a-subcommand path (or the --agent-type shim), so they are
+// hidden from --help and warn when used; `use` names the canonical form.
+var deprecatedParentFlags = []struct {
+	flag string
+	use  string
+}{
+	{"llm-selector", "'meshctl scaffold llm --vendor'"},
+	{"provider", "'meshctl scaffold llm --vendor' or 'meshctl scaffold llm-provider --vendor'"},
+	{"template", "'meshctl scaffold <basic|llm|llm-provider|api>'"},
+	{"tool-name", "'meshctl scaffold basic' and rename the generated tool"},
+	{"tool-description", "'meshctl scaffold basic' and edit the generated tool's description"},
+	{"max-iterations", "'meshctl scaffold llm --max-iterations'"},
+	{"system-prompt", "'meshctl scaffold llm --system-prompt'"},
+	{"response-format", "'meshctl scaffold llm --response-format'"},
+	{"context-param", "'meshctl scaffold llm --context-param'"},
+	{"filter", "'meshctl scaffold llm --filter'"},
+	{"filter-mode", "'meshctl scaffold llm --filter-mode'"},
+	{"model", "'meshctl scaffold llm-provider --model'"},
+	{"tags", "'meshctl scaffold <subcommand> --tags'"},
+}
+
+// warnDeprecatedParentFlags prints a deprecation warning for every legacy
+// parent flag the user set on a non --agent-type invocation.
+func warnDeprecatedParentFlags(cmd *cobra.Command) {
+	for _, d := range deprecatedParentFlags {
+		if !cmd.Flags().Changed(d.flag) {
+			continue
+		}
+		// With --template-dir, --template selects a subdirectory of the
+		// user's own template tree; there is no subcommand equivalent.
+		if d.flag == "template" && cmd.Flags().Changed("template-dir") {
+			continue
+		}
+		// --provider was never read on this path (only the --agent-type
+		// shim forwards it), so say so rather than imply it took effect.
+		effect := ""
+		if d.flag == "provider" {
+			effect = " and has no effect here"
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"Warning: --%s on 'meshctl scaffold' is deprecated%s; use %s instead.\n", d.flag, effect, d.use)
+	}
+}
+
+// warnParentFlagsDroppedByAgentType reports legacy parent flags that the
+// --agent-type shim cannot carry over to the target subcommand. Flags the
+// subcommand accepts under the same name are copied silently (the
+// --agent-type warning already points at the subcommand); --llm-selector is
+// renamed to --vendor; --provider is copied onto the subcommand's own
+// deprecated alias, which warns for itself.
+func warnParentFlagsDroppedByAgentType(parent, sub *cobra.Command) {
+	for _, d := range deprecatedParentFlags {
+		if !parent.Flags().Changed(d.flag) {
+			continue
+		}
+		if d.flag == "llm-selector" && sub.Flags().Lookup("vendor") != nil {
+			fmt.Fprintf(parent.ErrOrStderr(),
+				"Warning: --llm-selector is deprecated; use --vendor instead.\n")
+			continue
+		}
+		if sub.Flags().Lookup(d.flag) != nil {
+			continue
+		}
+		fmt.Fprintf(parent.ErrOrStderr(),
+			"Warning: --%s is not supported by 'meshctl scaffold %s' and was ignored.\n", d.flag, sub.Name())
+	}
+}
+
 // agentTypeToSubcommand maps the legacy --agent-type value to the
 // canonical subcommand name introduced by PR #958.
 var agentTypeToSubcommand = map[string]string{
@@ -267,6 +345,7 @@ func routeDeprecatedAgentType(cmd *cobra.Command, agentType string, _ []string) 
 	// RunE sees what it expects. Then dispatch the subcommand RunE
 	// directly — calling sub.Execute() would walk back through the root
 	// and re-enter this parent RunE, recursing infinitely.
+	warnParentFlagsDroppedByAgentType(cmd, sub)
 	copyParentFlagsToSub(cmd, sub)
 	if sub.RunE != nil {
 		return sub.RunE(sub, nil)
@@ -536,7 +615,7 @@ func runComposeGeneration(cmd *cobra.Command) error {
 
 	if len(agents) == 0 {
 		if !observability {
-			return fmt.Errorf("no agents found in %s; create agents first with 'meshctl scaffold --name <agent-name>'", output)
+			return fmt.Errorf("no agents found in %s; create agents first with 'meshctl scaffold basic --name <agent-name>'", output)
 		}
 		cmd.Println("No agents found, generating registry + observability stack only...")
 		cmd.Println()

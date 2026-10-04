@@ -149,6 +149,45 @@ func TestResolveAliasedString(t *testing.T) {
 	})
 }
 
+// TestResolveAliasedString_WarnsOnDeprecatedAlias covers #1575: the hidden
+// --runtime / --provider aliases used to be accepted silently.
+func TestResolveAliasedString_WarnsOnDeprecatedAlias(t *testing.T) {
+	for _, tc := range []struct{ canonical, alias, value string }{
+		{"lang", "runtime", "java"},
+		{"vendor", "provider", "openai"},
+	} {
+		for _, build := range []func() *cobra.Command{newScaffoldLLMCommand, newScaffoldLLMProviderCommand} {
+			t.Run(tc.alias+"_alone", func(t *testing.T) {
+				cmd := build()
+				var errOut bytes.Buffer
+				cmd.SetErr(&errOut)
+				require.NoError(t, cmd.Flags().Set(tc.alias, tc.value))
+				assert.Equal(t, tc.value, resolveAliasedString(cmd, tc.canonical, tc.alias))
+				assert.Contains(t, errOut.String(),
+					"Warning: --"+tc.alias+" is deprecated; use --"+tc.canonical+" instead.")
+			})
+			t.Run(tc.alias+"_with_canonical", func(t *testing.T) {
+				cmd := build()
+				var errOut bytes.Buffer
+				cmd.SetErr(&errOut)
+				require.NoError(t, cmd.Flags().Set(tc.alias, tc.value))
+				require.NoError(t, cmd.Flags().Set(tc.canonical, "python"))
+				resolveAliasedString(cmd, tc.canonical, tc.alias)
+				assert.Contains(t, errOut.String(), "--"+tc.alias+" is deprecated; use --"+tc.canonical)
+				assert.Contains(t, errOut.String(), "ignoring --"+tc.alias)
+			})
+			t.Run(tc.alias+"_unused_is_silent", func(t *testing.T) {
+				cmd := build()
+				var errOut bytes.Buffer
+				cmd.SetErr(&errOut)
+				require.NoError(t, cmd.Flags().Set(tc.canonical, "python"))
+				resolveAliasedString(cmd, tc.canonical, tc.alias)
+				assert.Empty(t, errOut.String())
+			})
+		}
+	}
+}
+
 func TestAttachLLMSubcommands(t *testing.T) {
 	parent := &cobra.Command{Use: "scaffold"}
 	AttachLLMSubcommands(parent)
@@ -164,7 +203,7 @@ func TestAttachLLMSubcommands(t *testing.T) {
 func TestRunScaffoldLLMProvider_InvalidVendor(t *testing.T) {
 	cmd := newScaffoldLLMProviderCommand()
 	require.NoError(t, cmd.Flags().Set("vendor", "bogus"))
-	require.NoError(t, cmd.Flags().Set("runtime", "python"))
+	require.NoError(t, cmd.Flags().Set("lang", "python"))
 
 	err := runScaffoldLLMProvider(cmd, nil)
 	require.Error(t, err)
@@ -174,7 +213,7 @@ func TestRunScaffoldLLMProvider_InvalidVendor(t *testing.T) {
 func TestRunScaffoldLLMProvider_InvalidRuntime(t *testing.T) {
 	cmd := newScaffoldLLMProviderCommand()
 	require.NoError(t, cmd.Flags().Set("vendor", "claude"))
-	require.NoError(t, cmd.Flags().Set("runtime", "rust"))
+	require.NoError(t, cmd.Flags().Set("lang", "rust"))
 
 	err := runScaffoldLLMProvider(cmd, nil)
 	require.Error(t, err)
@@ -183,7 +222,7 @@ func TestRunScaffoldLLMProvider_InvalidRuntime(t *testing.T) {
 func TestRunScaffoldLLMConsumer_InvalidVendor(t *testing.T) {
 	cmd := newScaffoldLLMCommand()
 	require.NoError(t, cmd.Flags().Set("vendor", "bogus"))
-	require.NoError(t, cmd.Flags().Set("runtime", "python"))
+	require.NoError(t, cmd.Flags().Set("lang", "python"))
 
 	err := runScaffoldLLMConsumer(cmd, nil)
 	require.Error(t, err)
@@ -202,7 +241,7 @@ func TestRunScaffoldLLMProvider_DryRun_Python(t *testing.T) {
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
 	require.NoError(t, cmd.Flags().Set("vendor", "claude"))
-	require.NoError(t, cmd.Flags().Set("runtime", "python"))
+	require.NoError(t, cmd.Flags().Set("lang", "python"))
 	require.NoError(t, cmd.Flags().Set("name", "my-claude"))
 	require.NoError(t, cmd.Flags().Set("dry-run", "true"))
 
@@ -226,7 +265,7 @@ func TestRunScaffoldLLMConsumer_DryRun_Python(t *testing.T) {
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
 	require.NoError(t, cmd.Flags().Set("vendor", "openai"))
-	require.NoError(t, cmd.Flags().Set("runtime", "python"))
+	require.NoError(t, cmd.Flags().Set("lang", "python"))
 	require.NoError(t, cmd.Flags().Set("name", "my-consumer"))
 	require.NoError(t, cmd.Flags().Set("dry-run", "true"))
 
@@ -250,7 +289,7 @@ func TestRunScaffoldLLMProvider_PrintsFollowupMessage(t *testing.T) {
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
 	require.NoError(t, cmd.Flags().Set("vendor", "claude"))
-	require.NoError(t, cmd.Flags().Set("runtime", "python"))
+	require.NoError(t, cmd.Flags().Set("lang", "python"))
 	require.NoError(t, cmd.Flags().Set("name", "claude-prov-test"))
 	require.NoError(t, cmd.Flags().Set("output", tmp))
 
@@ -258,7 +297,8 @@ func TestRunScaffoldLLMProvider_PrintsFollowupMessage(t *testing.T) {
 
 	output := out.String()
 	assert.Contains(t, output, "Provider agent created")
-	assert.Contains(t, output, "meshctl scaffold llm --runtime python --vendor claude")
+	assert.Contains(t, output, "meshctl scaffold llm --lang python --vendor claude")
+	assert.NotContains(t, output, "--runtime", "banner must teach the canonical --lang flag")
 	assert.Contains(t, output, "+claude")
 
 	// Sanity-check that a main.py was actually written.
@@ -275,7 +315,7 @@ func TestRunScaffoldLLMConsumer_PrintsFollowupMessage(t *testing.T) {
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
 	require.NoError(t, cmd.Flags().Set("vendor", "gemini"))
-	require.NoError(t, cmd.Flags().Set("runtime", "python"))
+	require.NoError(t, cmd.Flags().Set("lang", "python"))
 	require.NoError(t, cmd.Flags().Set("name", "gemini-cons-test"))
 	require.NoError(t, cmd.Flags().Set("output", tmp))
 
@@ -283,7 +323,8 @@ func TestRunScaffoldLLMConsumer_PrintsFollowupMessage(t *testing.T) {
 
 	output := out.String()
 	assert.Contains(t, output, "Consumer agent created")
-	assert.Contains(t, output, "meshctl scaffold llm-provider --vendor gemini --runtime python")
+	assert.Contains(t, output, "meshctl scaffold llm-provider --vendor gemini --lang python")
+	assert.NotContains(t, output, "--runtime", "banner must teach the canonical --lang flag")
 }
 
 // findRepoRoot walks up from the test working directory until it finds a go.mod,

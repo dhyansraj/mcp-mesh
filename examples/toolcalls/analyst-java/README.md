@@ -64,7 +64,7 @@ The analyst agent delegates LLM calls to a provider via mesh.
 
 ```bash
 # Step 1: Generate a Python provider (one-per-vendor, holds the API key)
-meshctl scaffold llm-provider --vendor claude --runtime python --name claude-provider
+meshctl scaffold llm-provider --vendor claude --lang python --name claude-provider
 
 # Step 2: Start it
 meshctl start -d ./claude-provider/main.py

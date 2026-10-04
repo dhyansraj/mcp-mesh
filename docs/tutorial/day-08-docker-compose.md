@@ -109,12 +109,13 @@ $ meshctl scaffold --compose --observability
 
 ```text
 Scanning for agents...
-Found 12 agent(s):
+Found 13 agent(s):
   - adventure-advisor (port 9111) in adventure-advisor/
   - budget-analyst (port 9110) in budget-analyst/
   - chat-history-agent (port 9109) in chat-history-agent/
   - claude-provider (port 9106) in claude-provider/
   - flight-agent (port 9101) in flight-agent/
+  - gateway (port 8080) in gateway/
   - hotel-agent (port 9102) in hotel-agent/
   - logistics-planner (port 9112) in logistics-planner/
   - openai-provider (port 9108) in openai-provider/
@@ -136,6 +137,7 @@ Services included:
   - chat-history-agent (9109)
   - claude-provider (9106)
   - flight-agent (9101)
+  - gateway (8080)
   - hotel-agent (9102)
   - logistics-planner (9112)
   - openai-provider (9108)
@@ -146,9 +148,12 @@ Services included:
 ```
 
 The scaffold scanned every subdirectory, found `@mesh.agent` decorators in
-twelve Python files, extracted each agent's name and port, and generated a
-complete `docker-compose.yml` with infrastructure services, health checks,
-and networking.
+twelve Python files and the `@mesh.route` handlers in the gateway, extracted
+each agent's name and port, and generated a complete `docker-compose.yml`
+with infrastructure services, health checks, and networking. The gateway is
+a FastAPI app rather than a `@mesh.agent` class, so its service is named after
+its directory and its port comes from the `uvicorn.run(...)` call in
+`gateway/main.py`.
 
 It also generated observability configuration files:
 
@@ -163,19 +168,6 @@ It also generated observability configuration files:
     └── provisioning/
         ├── dashboards/dashboards.yaml
         └── datasources/datasources.yaml
-```
-
-### What about the gateway?
-
-The scaffold detected twelve agents, not thirteen. The gateway uses
-`@mesh.route` on a FastAPI app -- it is not a `@mesh.agent` class.
-The scaffold looks for `@mesh.agent` decorators to auto-detect agents, so
-the gateway needs to be added manually.
-
-Add the gateway service to `docker-compose.yml`:
-
-```yaml
---8<-- "examples/tutorial/trip-planner/day-08/python/docker-compose.yml:gateway"
 ```
 
 ### Add the Mesh UI
@@ -209,7 +201,7 @@ Make sure these variables are set in your shell or in a `.env` file next to
     it. When you add a new agent, re-run `meshctl scaffold --compose` and
     the compose file updates automatically. The scaffold merges new agents
     into the existing file without overwriting your manual additions like
-    the gateway and API keys.
+    the Mesh UI and API keys.
 
 ## Part 2: Start the containerized mesh
 
@@ -422,9 +414,9 @@ before it starts.
 ## Recap
 
 You generated a Docker Compose file from your agent code with a single
-command. The scaffold detected twelve agents, extracted their names and
+command. The scaffold detected all thirteen agents, extracted their names and
 ports, and produced a complete compose file with infrastructure, health
-checks, and observability. You added the gateway and Mesh UI manually,
+checks, and observability. You added the Mesh UI and API keys manually,
 started everything with `docker compose up -d`, and verified the mesh
 works identically to the local setup. The Mesh UI dashboard gave you
 real-time visibility into agent topology, traffic, and traces.

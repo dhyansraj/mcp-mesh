@@ -55,7 +55,7 @@ import java.util.List;
  * meshctl start --registry-only
  *
  * # Step 1: Generate a Claude provider agent (one-per-vendor, holds the API key)
- * meshctl scaffold llm-provider --vendor claude --runtime python --name claude-provider
+ * meshctl scaffold llm-provider --vendor claude --lang python --name claude-provider
  *
  * # Step 2: Start the provider
  * meshctl start -d ./claude-provider/main.py

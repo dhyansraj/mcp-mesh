@@ -174,8 +174,11 @@ If your upstream A2A producer publishes a `/.well-known/agent.json` card, you ca
 ```bash
 meshctl scaffold a2a-consumer \
     --url http://localhost:9090/agents/date \
+    --allow-private-network \
     --lang python --name date-bridge --port 9201
 ```
+
+`--allow-private-network` is needed because the producer is on `localhost`; the card fetch refuses loopback and private addresses by default.
 
 Same flag set generates Java (`--lang java`) and TypeScript (`--lang typescript`) consumers. See [Scaffolding](scaffolding.md).
 

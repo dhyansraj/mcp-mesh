@@ -98,8 +98,8 @@ meshctl status my-agent        # Specific agent
 
 ```bash
 meshctl scaffold                              # Interactive wizard
-meshctl scaffold --name my-agent              # Python agent
-meshctl scaffold --name my-agent -l ts        # TypeScript agent
+meshctl scaffold basic --name my-agent        # Python agent
+meshctl scaffold basic --name my-agent -l ts  # TypeScript agent
 meshctl scaffold --compose                    # Generate docker-compose
 meshctl scaffold --compose --observability    # With tracing stack
 ```

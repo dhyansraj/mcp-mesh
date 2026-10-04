@@ -16,7 +16,7 @@ Capabilities are named services that agents register with the mesh. When an agen
 
 ## Capability Selector Syntax
 
-MCP Mesh uses a unified syntax for selecting capabilities throughout the framework. This same pattern appears in `dependencies`, `mesh.llm()` provider/filter, `mesh.route()`, and `meshctl scaffold --filter`.
+MCP Mesh uses a unified syntax for selecting capabilities throughout the framework. This same pattern appears in `dependencies`, `mesh.llm()` provider/filter, `mesh.route()`, and `meshctl scaffold llm --filter`.
 
 ### Selector Fields
 
@@ -48,13 +48,13 @@ dependencies: [
 
 ### Where This Syntax Is Used
 
-| Context                     | Example                                                 |
-| --------------------------- | ------------------------------------------------------- |
-| `addTool()` dependencies    | `dependencies: ["svc"]` or `[{ capability: "svc" }]`    |
-| `mesh.llm()` provider       | `provider: { capability: "llm", tags: ["+claude"] }`    |
-| `mesh.llm()` filter         | `filter: [{ capability: "calc" }, { tags: ["tools"] }]` |
-| `mesh.route()` dependencies | `[{ capability: "api", tags: ["+v2"] }]`                |
-| `meshctl scaffold --filter` | `--filter '[{"capability": "x"}]'`                      |
+| Context                         | Example                                                 |
+| ------------------------------- | ------------------------------------------------------- |
+| `addTool()` dependencies        | `dependencies: ["svc"]` or `[{ capability: "svc" }]`    |
+| `mesh.llm()` provider           | `provider: { capability: "llm", tags: ["+claude"] }`    |
+| `mesh.llm()` filter             | `filter: [{ capability: "calc" }, { tags: ["tools"] }]` |
+| `mesh.route()` dependencies     | `[{ capability: "api", tags: ["+v2"] }]`                |
+| `meshctl scaffold llm --filter` | `--filter '[{"capability": "x"}]'`                      |
 
 ### Tag Operators
 

@@ -21,9 +21,6 @@ func newScaffoldBasicCommand() *cobra.Command {
 		Short: "Generate a basic @mesh.agent skeleton",
 		Long: `Generate a basic MCP Mesh agent (no LLM, no A2A bridging).
 
-This is the explicit subcommand replacement for the old
-'meshctl scaffold --agent-type tool' form.
-
 Examples:
   # Default runtime (Python)
   meshctl scaffold basic --name my-agent

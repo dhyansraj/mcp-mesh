@@ -39,9 +39,13 @@ type GenerateResult struct {
 	SkippedAgents []string // Names of agents that already existed (preserved)
 }
 
-// ScanForAgents walks the directory tree looking for Python and TypeScript agent files
-// Python: main.py with @mesh.agent decorator
-// TypeScript: src/index.ts with mesh(server, {...}) call
+// ScanForAgents walks the directory tree looking for Python, TypeScript and Java agents.
+// Python: main.py with @mesh.agent, or an API gateway with @mesh.route
+// TypeScript: src/index.ts with mesh(server, {...}), or an API gateway with mesh.route()
+// Java: pom.xml whose sources carry @MeshAgent, or an API gateway with @MeshRoute
+//
+// API gateways (`meshctl scaffold api`) declare no agent name in code, so
+// their name is the directory name, which is what the scaffold wrote.
 func ScanForAgents(dir string) ([]DetectedAgent, error) {
 	var agents []DetectedAgent
 
@@ -77,8 +81,11 @@ func ScanForAgents(dir string) ([]DetectedAgent, error) {
 			}
 
 			agent, err := parseAgentDecorator(string(content))
+			if err == nil && agent == nil {
+				agent = parsePythonAPIAgent(string(content), filepath.Dir(path))
+			}
 			if err != nil || agent == nil {
-				return nil // Skip files without @mesh.agent
+				return nil // Skip files without @mesh.agent or @mesh.route
 			}
 
 			// Set directory relative to scan root
@@ -99,14 +106,18 @@ func ScanForAgents(dir string) ([]DetectedAgent, error) {
 				return nil // Skip unreadable files
 			}
 
-			agent, err := parseTypeScriptAgent(string(content))
-			if err != nil || agent == nil {
-				return nil // Skip files without mesh() call
-			}
-
 			// For TypeScript, the agent dir is parent of 'src' (where package.json lives)
 			srcDir := filepath.Dir(path)
 			agentDir := filepath.Dir(srcDir)
+
+			agent, err := parseTypeScriptAgent(string(content))
+			if err == nil && agent == nil {
+				agent = parseTypeScriptAPIAgent(string(content), agentDir)
+			}
+			if err != nil || agent == nil {
+				return nil // Skip files without mesh() or mesh.route() call
+			}
+
 			relDir, err := filepath.Rel(absDir, agentDir)
 			if err != nil {
 				relDir = agentDir
@@ -354,7 +365,119 @@ func parseJavaAgent(dir string) (*DetectedAgent, error) {
 		return filepath.SkipAll // Found it, stop walking
 	})
 
+	if agent == nil {
+		agent = parseJavaAPIAgent(dir, srcDir)
+	}
 	return agent, nil
+}
+
+// hasLiveCodeLine reports whether any non-comment line of a source file
+// contains marker. Lines starting with a comment leader ("//", "/*", "*",
+// "#") are skipped so that prose and commented-out examples don't count.
+func hasLiveCodeLine(content, marker string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") ||
+			strings.HasPrefix(trimmed, "*") || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.Contains(trimmed, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+var (
+	pythonAPIPortPattern = regexp.MustCompile(`port\s*=\s*(\d+)`)
+	tsAPIPortPattern     = regexp.MustCompile(`process\.env\.PORT\s*\|\|\s*(\d+)|\.listen\(\s*(\d+)`)
+	springPortYAML       = regexp.MustCompile(`(?m)^\s*port:\s*["']?(?:\$\{[A-Za-z0-9_.]+:)?(\d+)`)
+	springPortProperties = regexp.MustCompile(`(?m)^\s*server\.port\s*=\s*(?:\$\{[A-Za-z0-9_.]+:)?(\d+)`)
+)
+
+// firstPortMatch returns the first non-empty capture group of pattern in
+// content as a port, or DefaultScaffoldPort when there is none.
+func firstPortMatch(pattern *regexp.Regexp, content string) int {
+	m := pattern.FindStringSubmatch(content)
+	if len(m) < 2 {
+		return DefaultScaffoldPort
+	}
+	for _, g := range m[1:] {
+		if g != "" {
+			if port, err := strconv.Atoi(g); err == nil {
+				return port
+			}
+		}
+	}
+	return DefaultScaffoldPort
+}
+
+// parsePythonAPIAgent detects a FastAPI gateway that consumes mesh
+// capabilities through @mesh.route (no @mesh.agent). The port comes from the
+// uvicorn.run(...) call the `api` scaffold emits.
+func parsePythonAPIAgent(content, agentDir string) *DetectedAgent {
+	if !hasLiveCodeLine(content, "@mesh.route") {
+		return nil
+	}
+	port := DefaultScaffoldPort
+	if run := extractBalancedParen(content, "uvicorn.run"); run != "" {
+		port = firstPortMatch(pythonAPIPortPattern, run)
+	}
+	return &DetectedAgent{Name: filepath.Base(agentDir), Port: port, Language: "python"}
+}
+
+// parseTypeScriptAPIAgent detects an Express gateway that consumes mesh
+// capabilities through mesh.route() (no mesh(server, {...}) call). The port
+// comes from `process.env.PORT || N` or `app.listen(N)`.
+func parseTypeScriptAPIAgent(content, agentDir string) *DetectedAgent {
+	if !hasLiveCodeLine(content, "mesh.route(") {
+		return nil
+	}
+	return &DetectedAgent{
+		Name:     filepath.Base(agentDir),
+		Port:     firstPortMatch(tsAPIPortPattern, content),
+		Language: "typescript",
+	}
+}
+
+// parseJavaAPIAgent detects a Spring Boot gateway that consumes mesh
+// capabilities through @MeshRoute (no @MeshAgent). The port comes from
+// server.port in application.yml / application.properties.
+func parseJavaAPIAgent(dir, srcDir string) *DetectedAgent {
+	found := false
+	filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".java") {
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err == nil && hasLiveCodeLine(string(content), "@MeshRoute") {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if !found {
+		return nil
+	}
+
+	port := DefaultScaffoldPort
+	resources := filepath.Join(dir, "src", "main", "resources")
+	for _, cfg := range []struct {
+		file    string
+		pattern *regexp.Regexp
+	}{
+		{"application.yml", springPortYAML},
+		{"application.yaml", springPortYAML},
+		{"application.properties", springPortProperties},
+	} {
+		content, err := os.ReadFile(filepath.Join(resources, cfg.file))
+		if err != nil {
+			continue
+		}
+		port = firstPortMatch(cfg.pattern, string(content))
+		break
+	}
+	return &DetectedAgent{Name: filepath.Base(dir), Port: port, Language: "java"}
 }
 
 // validateAgentPorts checks for port conflicts among agents

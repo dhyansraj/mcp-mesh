@@ -37,7 +37,7 @@ npm install -g @mcpmesh/cli
 meshctl man quickstart
 
 # Or scaffold a new agent
-meshctl scaffold --name my-agent
+meshctl scaffold basic --name my-agent
 ```
 
 ## Documentation

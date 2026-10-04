@@ -32,10 +32,10 @@ outdoor activities. The other three — `hotel-agent`, `weather-agent`, and
 You know `meshctl scaffold` from Day 1. Scaffold four new agents:
 
 ```shell
-$ meshctl scaffold --name hotel-agent --agent-type tool --port 9102
-$ meshctl scaffold --name weather-agent --agent-type tool --port 9103
-$ meshctl scaffold --name poi-agent --agent-type tool --port 9104
-$ meshctl scaffold --name user-prefs-agent --agent-type tool --port 9105
+$ meshctl scaffold basic --name hotel-agent --port 9102
+$ meshctl scaffold basic --name weather-agent --port 9103
+$ meshctl scaffold basic --name poi-agent --port 9104
+$ meshctl scaffold basic --name user-prefs-agent --port 9105
 ```
 
 Each command creates the same set of files you saw on Day 1: `main.py`,

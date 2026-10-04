@@ -10,7 +10,7 @@ import (
 // supportedLLMVendors are the vendor shortcuts accepted by `meshctl scaffold llm-provider --vendor`.
 var supportedLLMVendors = []string{"claude", "openai", "gemini", "litellm-fallback"}
 
-// supportedLLMRuntimes are the language runtimes accepted by `--runtime`.
+// supportedLLMRuntimes are the language runtimes accepted by `--lang`.
 // They mirror NormalizeLanguage but are documented as runtime-oriented for the subcommand UX.
 var supportedLLMRuntimes = []string{"python", "typescript", "java"}
 
@@ -402,7 +402,7 @@ func printLLMProviderFollowup(cmd *cobra.Command, name, vendor, runtime string) 
 	cmd.Printf("\n──────────────────────────────────────────────────────────────\n")
 	cmd.Printf("Provider agent created: ./%s/\n\n", name)
 	cmd.Printf("To consume this provider from another agent, use:\n\n")
-	cmd.Printf("  meshctl scaffold llm --runtime %s --vendor %s\n\n", NormalizeLanguage(runtime), vendor)
+	cmd.Printf("  meshctl scaffold llm --lang %s --vendor %s\n\n", NormalizeLanguage(runtime), vendor)
 	cmd.Printf("Then in your consumer agent's @mesh.llm decorator:\n\n")
 	cmd.Printf("  @mesh.llm(provider={\"capability\": \"llm\", \"tags\": [\"%s\"]})\n", consumerTag)
 	cmd.Printf("  def my_agent(messages): ...\n\n")
@@ -416,7 +416,7 @@ func printLLMConsumerFollowup(cmd *cobra.Command, name, vendor, runtime string) 
 	cmd.Printf("\n──────────────────────────────────────────────────────────────\n")
 	cmd.Printf("Consumer agent created: ./%s/\n\n", name)
 	cmd.Printf("To run this, you'll need an LLM provider agent reachable via mesh:\n\n")
-	cmd.Printf("  meshctl scaffold llm-provider --vendor %s --runtime %s\n\n", vendor, NormalizeLanguage(runtime))
+	cmd.Printf("  meshctl scaffold llm-provider --vendor %s --lang %s\n\n", vendor, NormalizeLanguage(runtime))
 	cmd.Printf("Then start both agents and meshctl will resolve the provider for you.\n")
 	cmd.Printf("──────────────────────────────────────────────────────────────\n")
 }
@@ -480,10 +480,21 @@ func parseScaffoldToolFilter(filterStr string) ([]map[string]interface{}, error)
 // the alias's value wins. Used to keep 1.4.1-era flag names working as
 // hidden aliases (e.g., --runtime for --lang, --provider for --vendor)
 // without forcing both flags to share a single Go variable. See issue #956
-// (#7 scaffold flag consolidation).
+// (#7 scaffold flag consolidation). Any use of the alias prints a
+// deprecation warning naming the canonical flag (#1575).
 func resolveAliasedString(cmd *cobra.Command, canonical, alias string) string {
 	canonChanged := cmd.Flags().Changed(canonical)
 	aliasChanged := cmd.Flags().Changed(alias)
+	if aliasChanged {
+		if canonChanged {
+			fmt.Fprintf(cmd.ErrOrStderr(),
+				"Warning: --%s is deprecated; use --%s instead (ignoring --%s because --%s is also set).\n",
+				alias, canonical, alias, canonical)
+		} else {
+			fmt.Fprintf(cmd.ErrOrStderr(),
+				"Warning: --%s is deprecated; use --%s instead.\n", alias, canonical)
+		}
+	}
 	if aliasChanged && !canonChanged {
 		v, _ := cmd.Flags().GetString(alias)
 		return v
