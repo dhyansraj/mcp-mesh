@@ -83,6 +83,10 @@ dependencies = @Selector(capability = "api_client", version = ">=2.0.0")
 | `+`    | Preferred | `"+fast"`       |
 | `-`    | Excluded  | `"-deprecated"` |
 
+Write `a|b` as one tag to require at least one alternative: `tags = {"api", "python|typescript"}`
+means `api` AND (`python` OR `typescript`). A `+` alternative is preferred:
+`"+python|typescript"` prefers python. See `meshctl man tags --java`.
+
 ## Multiple Capabilities on One Agent
 
 A single agent class can declare multiple capabilities:

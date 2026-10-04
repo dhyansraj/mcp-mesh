@@ -38,9 +38,12 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
 
     private final String capability;
     private final McpHttpClient mcpClient;
-    private volatile Type returnType;
-    private final AtomicReference<EndpointInfo> endpointRef = new AtomicReference<>();
-    private volatile ExecutionTracer tracer;
+    private final Type returnType;
+    // Shared by every typed view of one capability (see typedView), so an
+    // endpoint/availability update lands on all of them at once.
+    private final AtomicReference<EndpointInfo> endpointRef;
+    // Shared with typed views, like endpointRef, so a later setTracer reaches them.
+    private final AtomicReference<ExecutionTracer> tracerRef;
 
     public McpMeshToolProxy(String capability) {
         this(capability, new McpHttpClient(), null);
@@ -55,9 +58,32 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
     }
 
     public McpMeshToolProxy(String capability, McpHttpClient mcpClient, Type returnType) {
+        this(capability, mcpClient, returnType, new AtomicReference<>(), new AtomicReference<>());
+    }
+
+    private McpMeshToolProxy(String capability, McpHttpClient mcpClient, Type returnType,
+                             AtomicReference<EndpointInfo> endpointRef,
+                             AtomicReference<ExecutionTracer> tracerRef) {
         this.capability = capability;
         this.mcpClient = mcpClient;
         this.returnType = returnType;
+        this.endpointRef = endpointRef;
+        this.tracerRef = tracerRef;
+    }
+
+    /**
+     * A sibling proxy for the same capability that deserializes into
+     * {@code returnType} but shares this proxy's endpoint state (issue #1568).
+     *
+     * <p>The return type is fixed per proxy, so two consumers that declare
+     * different {@code McpMeshTool<T>} for one capability can never rewrite
+     * each other's deserialization target. Because the endpoint reference is
+     * the same object, {@link #updateEndpoint} / {@link #markUnavailable} on
+     * any sibling is immediately visible to all of them — a typed view cannot
+     * go stale or miss a rebind. The tracer is shared the same way.
+     */
+    McpMeshToolProxy<?> typedView(Type returnType) {
+        return new McpMeshToolProxy<>(capability, mcpClient, returnType, endpointRef, tracerRef);
     }
 
     /**
@@ -97,11 +123,7 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
     }
 
     void setTracer(ExecutionTracer tracer) {
-        this.tracer = tracer;
-    }
-
-    void setReturnType(Type returnType) {
-        this.returnType = returnType;
+        this.tracerRef.set(tracer);
     }
 
     Type getReturnType() {
@@ -122,7 +144,7 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
 
         log.debug("Calling tool {} at {} with params: {}", info.functionName(), info.endpoint(), params);
 
-        ExecutionTracer t = this.tracer;
+        ExecutionTracer t = this.tracerRef.get();
         Map<String, Object> spanMeta = Map.of(
             "endpoint", info.endpoint(),
             "tool_name", info.functionName(),
@@ -154,7 +176,7 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
         log.debug("Calling tool {} at {} with params: {} and {} extra headers",
             info.functionName(), info.endpoint(), params, headers != null ? headers.size() : 0);
 
-        ExecutionTracer t = this.tracer;
+        ExecutionTracer t = this.tracerRef.get();
         Map<String, Object> spanMeta = Map.of(
             "endpoint", info.endpoint(),
             "tool_name", info.functionName(),

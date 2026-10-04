@@ -8,9 +8,10 @@ import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.core.annotation.AnnotationUtils;
-import org.springframework.util.ReflectionUtils;
+import org.springframework.core.MethodIntrospector;
 
 import java.lang.reflect.Method;
+import java.util.Map;
 
 /**
  * Bean post-processor that scans beans for {@code @MeshLlm} annotations.
@@ -49,27 +50,35 @@ public class MeshLlmBeanPostProcessor implements BeanPostProcessor {
         // Get the target class (unwrap CGLIB proxies)
         Class<?> targetClass = AopUtils.getTargetClass(bean);
 
-        // Check all methods for @MeshLlm annotation
-        ReflectionUtils.doWithMethods(targetClass, method -> {
-            MeshLlm llmAnnotation = AnnotationUtils.findAnnotation(method, MeshLlm.class);
-            if (llmAnnotation != null) {
-                log.debug("Found @MeshLlm on {}.{}", targetClass.getSimpleName(), method.getName());
+        // One entry per logical method, inherited declarations included, bridge
+        // and synthetic methods excluded — the same selection
+        // MeshToolBeanPostProcessor makes. An unfiltered doWithMethods walk
+        // visited an overridden @MeshLlm method once per declaring class.
+        Map<Method, MeshLlm> annotated = MethodIntrospector.selectMethods(targetClass,
+            (MethodIntrospector.MetadataLookup<MeshLlm>) m ->
+                m.isBridge() || m.isSynthetic() ? null : AnnotationUtils.findAnnotation(m, MeshLlm.class));
 
-                // Verify method also has @MeshTool (required for MCP exposure)
-                MeshTool toolAnnotation = AnnotationUtils.findAnnotation(method, MeshTool.class);
-                if (toolAnnotation == null) {
-                    log.warn("@MeshLlm on {}.{} without @MeshTool - method won't be exposed via MCP",
-                        targetClass.getSimpleName(), method.getName());
-                }
+        annotated.forEach((specificMethod, llmAnnotation) -> {
+            log.debug("Found @MeshLlm on {}.{}", targetClass.getSimpleName(), specificMethod.getName());
 
-                // Register with LLM registry
-                llmRegistry.register(targetClass, method, llmAnnotation);
+            // Verify method also has @MeshTool (required for MCP exposure)
+            MeshTool toolAnnotation = AnnotationUtils.findAnnotation(specificMethod, MeshTool.class);
+            if (toolAnnotation == null) {
+                log.warn("@MeshLlm on {}.{} without @MeshTool - method won't be exposed via MCP",
+                    targetClass.getSimpleName(), specificMethod.getName());
+            }
 
-                // Verify method has MeshLlmAgent parameter
-                if (!hasMeshLlmAgentParameter(method)) {
-                    log.warn("@MeshLlm on {}.{} has no MeshLlmAgent parameter - LLM won't be injected",
-                        targetClass.getSimpleName(), method.getName());
-                }
+            // Register under the same Method MeshToolBeanPostProcessor registers
+            // the tool with, so a Method-keyed lookup agrees across the two.
+            Method method = toolAnnotation != null
+                ? MeshToolBeanPostProcessor.selectRegistrationTarget(specificMethod)
+                : specificMethod;
+            llmRegistry.register(targetClass, method, llmAnnotation);
+
+            // Verify method has MeshLlmAgent parameter
+            if (!hasMeshLlmAgentParameter(method)) {
+                log.warn("@MeshLlm on {}.{} has no MeshLlmAgent parameter - LLM won't be injected",
+                    targetClass.getSimpleName(), method.getName());
             }
         });
 

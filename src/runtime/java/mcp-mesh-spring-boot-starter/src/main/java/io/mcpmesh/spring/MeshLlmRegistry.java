@@ -84,6 +84,19 @@ public class MeshLlmRegistry {
             );
         }
 
+        // Issue #1572: "a|b" OR groups are expanded for dependency selectors
+        // only. The registry's LLM provider / tool-filter matching has no OR
+        // groups, so the tag is sent (and matched) literally here.
+        boolean filterHasOr = false;
+        for (Selector f : annotation.filter()) {
+            filterHasOr |= MeshTagSpecs.hasAlternatives(f.tags());
+        }
+        if (MeshTagSpecs.hasAlternatives(selector.tags()) || filterHasOr) {
+            log.warn("@MeshLlm on {}: a tag containing '|' in providerSelector/filter is matched "
+                + "literally — OR alternatives are supported in dependency selectors only. Use "
+                + "'+' preferences to rank providers instead.", functionId);
+        }
+
         LlmConfig config = new LlmConfig(
             functionId,
             selector,

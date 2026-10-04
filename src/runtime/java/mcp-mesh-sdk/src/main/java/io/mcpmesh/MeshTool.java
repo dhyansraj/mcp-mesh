@@ -48,7 +48,7 @@ import java.lang.annotation.Target;
  *     tags = {"math", "calculator"},
  *     dependencies = @Selector(
  *         capability = "math_ops",
- *         tags = {"addition", "(python|+typescript)"}  // Try Python, prefer TypeScript
+ *         tags = {"addition", "python|+typescript"}  // python OR typescript, prefer typescript
  *     )
  * )
  * public int calculate(int a, int b, McpMeshTool mathOps) {
@@ -78,16 +78,11 @@ public @interface MeshTool {
     String version() default "1.0.0";
 
     /**
-     * Tags for filtering.
+     * Tags this tool advertises, which consumers filter on.
      *
-     * <p>Supports tag operators:
-     * <ul>
-     *   <li>{@code "tag"} - Required tag</li>
-     *   <li>{@code "+tag"} - Preferred tag (bonus score)</li>
-     *   <li>{@code "-tag"} - Excluded tag (hard fail)</li>
-     *   <li>{@code "(a|b)"} - OR alternatives (try in order)</li>
-     *   <li>{@code "(a|+b)"} - OR with preference</li>
-     * </ul>
+     * <p>Plain strings, advertised verbatim. Operators ({@code +}, {@code -},
+     * {@code a|b}) belong to consumer-side selectors — see
+     * {@link Selector#tags()} — not to the tags a tool declares.
      */
     String[] tags() default {};
 

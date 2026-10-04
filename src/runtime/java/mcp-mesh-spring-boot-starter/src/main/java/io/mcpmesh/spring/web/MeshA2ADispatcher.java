@@ -941,7 +941,16 @@ public class MeshA2ADispatcher {
                 surface.handlerMethodId());
             return null;
         }
-        return injector.getToolProxy(plan.binding().capabilities().get(depIndex));
+        String capability = plan.binding().capabilities().get(depIndex);
+        // Issue #1568: request this slot's own typed proxy (the parameter's
+        // McpMeshTool<T>, else the declared expectedType) — a shared proxy's
+        // type would be whatever another consumer of the capability last set.
+        List<MeshRouteRegistry.DependencySpec> deps = surface.dependencies();
+        java.lang.reflect.Type proxyType = deps != null && depIndex < deps.size()
+            ? deps.get(depIndex).getProxyType() : null;
+        return proxyType != null
+            ? injector.getToolProxy(capability, proxyType)
+            : injector.getToolProxy(capability);
     }
 
     // ─────────────────────────────────────────────────────────────────

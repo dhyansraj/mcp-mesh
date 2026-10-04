@@ -60,6 +60,15 @@ public class MeshToolRegistry {
             outputType = null;
         }
 
+        // Issue #1572: "a|b" is consumer-side selector syntax; a tool's own
+        // tags are advertised verbatim, so a '|' here is almost certainly a
+        // selector pasted into the wrong attribute.
+        if (MeshTagSpecs.hasAlternatives(annotation.tags())) {
+            log.warn("@MeshTool '{}' declares a tag containing '|' in tags={} — a tool's own tags "
+                + "are advertised literally; 'a|b' OR alternatives apply only to consumer "
+                + "selectors (dependencies).", capability, Arrays.toString(annotation.tags()));
+        }
+
         ToolMetadata metadata = new ToolMetadata(
             capability,
             annotation.description(),
@@ -323,7 +332,7 @@ public class MeshToolRegistry {
                 AgentSpec.DependencySpec depSpec = new AgentSpec.DependencySpec();
                 depSpec.setCapability(dep.capability());
                 try {
-                    depSpec.setTags(jsonMapper.writeValueAsString(dep.tags()));
+                    depSpec.setTags(jsonMapper.writeValueAsString(MeshTagSpecs.toWire(dep.tags())));
                 } catch (Exception e) {
                     log.warn("Failed to serialize tags for dependency '{}' — registering with no tag constraint: {}",
                         dep.capability(), e.getMessage());
@@ -445,7 +454,7 @@ public class MeshToolRegistry {
                 // Convert List<String> to JSON array string
                 try {
                     spec.setTags(JsonMapper.builder().build()
-                        .writeValueAsString(dep.tags()));
+                        .writeValueAsString(MeshTagSpecs.toWire(dep.tags())));
                 } catch (Exception e) {
                     spec.setTags("[]");
                 }

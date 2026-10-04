@@ -207,7 +207,7 @@ public class MeshToolBeanPostProcessor implements BeanPostProcessor, Ordered {
      * declaration — the specialized types are what the schema must describe.
      * Annotate {@code @Param} on the specialized override in that case.
      */
-    private static Method selectRegistrationTarget(Method specificMethod) {
+    static Method selectRegistrationTarget(Method specificMethod) {
         if (hasAnyParamAnnotation(specificMethod)) {
             return specificMethod;
         }

@@ -194,7 +194,13 @@ func stripLangHeader(content string) string {
 // spellings (6 -> 21 spans, +15), and the arity paragraph gains a sentence on
 // what the source scan skips (`arguments`, `keep_fargs: false`,
 // `MCP_MESH_STRICT_DI`, +3). 1678 + 15 + 3 = 1696.
-const wantVariantInlineCodeSpans = 1696
+//
+// Issue #1572 moves this to 1719. `tags_java.md`'s "Tag OR Alternatives"
+// section is rewritten for the now-implemented `a|b` syntax (wire form,
+// `+` preference, `-` semantics, scope; +15), and `capabilities_java.md`
+// gains an `a|b` paragraph under its tag-operator table (+8).
+// 1696 + 15 + 8 = 1719.
+const wantVariantInlineCodeSpans = 1719
 
 // TestVariantCorpusCodeSpans is TestStyleInlineCorpus plus
 // TestRenderStyledCorpusListItems, run over the pages neither of them sees.

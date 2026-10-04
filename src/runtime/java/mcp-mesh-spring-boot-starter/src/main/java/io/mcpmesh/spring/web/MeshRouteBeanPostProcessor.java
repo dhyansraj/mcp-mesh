@@ -6,9 +6,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.BeanPostProcessor;
+import org.springframework.core.MethodIntrospector;
 import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.stereotype.Controller;
+import org.springframework.util.ClassUtils;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -20,6 +22,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Scans Spring MVC controllers for @MeshRoute annotations and registers
@@ -41,7 +44,7 @@ public class MeshRouteBeanPostProcessor implements BeanPostProcessor {
 
     @Override
     public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
-        Class<?> targetClass = AopUtils.getTargetClass(bean);
+        Class<?> targetClass = ClassUtils.getUserClass(AopUtils.getTargetClass(bean));
 
         // Only process @RestController or @Controller beans
         if (AnnotationUtils.findAnnotation(targetClass, RestController.class) == null &&
@@ -52,12 +55,36 @@ public class MeshRouteBeanPostProcessor implements BeanPostProcessor {
         // Get base path from @RequestMapping on class
         String basePath = getClassBasePath(targetClass);
 
-        // Scan methods for @MeshRoute
-        for (Method method : targetClass.getDeclaredMethods()) {
-            MeshRoute meshRoute = AnnotationUtils.findAnnotation(method, MeshRoute.class);
-            if (meshRoute == null) {
-                continue;
-            }
+        // Scan methods for @MeshRoute.
+        //
+        // Issue #1569: the full method set, like Spring MVC's own handler
+        // detection — getDeclaredMethods() missed a handler declared on a base
+        // controller, which Spring then served with a null McpMeshTool and no
+        // advertised dependency. MethodIntrospector (as for @MeshTool, #1164)
+        // resolves each logical handler to its most-derived declaration and
+        // folds bridge methods into it, which is also the Method that
+        // HandlerMethod.getMethod() reports and the interceptor looks up.
+        if (!AnnotationUtils.isCandidateClass(targetClass, MeshRoute.class)) {
+            return bean;
+        }
+        Map<Method, MeshRoute> annotated;
+        try {
+            annotated = MethodIntrospector.selectMethods(targetClass,
+                (MethodIntrospector.MetadataLookup<MeshRoute>) m ->
+                    m.isBridge() || m.isSynthetic()
+                        ? null
+                        : AnnotationUtils.findAnnotation(m, MeshRoute.class));
+        } catch (Exception | LinkageError ex) {
+            // As Spring's EventListenerMethodProcessor: an unresolvable type in a
+            // signature means no handlers we can serve, not a failed boot.
+            log.debug("Could not resolve methods of bean '{}' ({}) for @MeshRoute scanning",
+                beanName, targetClass.getName(), ex);
+            return bean;
+        }
+
+        for (Map.Entry<Method, MeshRoute> entry : annotated.entrySet()) {
+            Method method = entry.getKey();
+            MeshRoute meshRoute = entry.getValue();
 
             // Get HTTP methods and paths from Spring mapping annotations
             List<MappingInfo> mappings = getMappingInfo(method);
@@ -72,7 +99,7 @@ public class MeshRouteBeanPostProcessor implements BeanPostProcessor {
                 MeshRouteRegistry.DependencySpec.fromAnnotation(meshRoute);
 
             // Enrich dependency specs with generic return type info from method parameters
-            enrichDependencyReturnTypes(method, deps);
+            enrichDependencyReturnTypes(method, targetClass, deps);
 
             // Issue #1401: @MeshRoute binds positionally. Fail the boot on a
             // @MeshInject value that contradicts the position, and warn on a
@@ -87,6 +114,7 @@ public class MeshRouteBeanPostProcessor implements BeanPostProcessor {
             // overloaded @MeshRoute handlers share it and the interceptor served
             // one of them the other's (positional) dependency list.
             MeshRouteRegistry.RouteMetadata metadata = new MeshRouteRegistry.RouteMetadata(
+                targetClass,
                 method,
                 deps,
                 meshRoute.description(),
@@ -119,29 +147,30 @@ public class MeshRouteBeanPostProcessor implements BeanPostProcessor {
      * it by name while the proxy is chosen by position would deserialize a
      * reordered handler's response into the wrong type — silently.
      */
-    private void enrichDependencyReturnTypes(Method method, List<MeshRouteRegistry.DependencySpec> deps) {
-        java.lang.reflect.Type[] genericTypes = method.getGenericParameterTypes();
-        List<io.mcpmesh.spring.MeshPositionalBinder.Slot> slots =
-            MeshInjectableSlots.routeSlots(method);
+    private void enrichDependencyReturnTypes(Method method, Class<?> targetClass,
+                                             List<MeshRouteRegistry.DependencySpec> deps) {
+        applySlotReturnTypes(method, targetClass, MeshInjectableSlots.routeSlots(method), deps);
+    }
 
+    /**
+     * Shared by the {@code @MeshRoute} and {@code @MeshA2A} scanners: the Nth
+     * injectable slot's {@code McpMeshTool<T>} argument becomes the return type
+     * of the Nth declared dependency.
+     */
+    static void applySlotReturnTypes(Method method, Class<?> targetClass,
+                                     List<io.mcpmesh.spring.MeshPositionalBinder.Slot> slots,
+                                     List<MeshRouteRegistry.DependencySpec> deps) {
         for (int slot = 0; slot < slots.size(); slot++) {
             int position = slots.get(slot).parameterPosition();
 
             // Extract generic type argument (e.g., GreetResponse from McpMeshTool<GreetResponse>)
-            java.lang.reflect.Type returnType = null;
-            if (genericTypes[position] instanceof java.lang.reflect.ParameterizedType pt) {
-                java.lang.reflect.Type[] typeArgs = pt.getActualTypeArguments();
-                if (typeArgs.length > 0) {
-                    returnType = typeArgs[0];
-                }
-            }
-
+            java.lang.reflect.Type returnType = MeshInjectableSlots.proxyTypeArgument(method, position, targetClass);
             if (returnType == null) {
                 continue;
             }
 
             if (slot >= deps.size()) {
-                log.warn("@MeshRoute {}.{}: McpMeshTool parameter {} is injectable slot {}, but "
+                log.warn("{}.{}: McpMeshTool parameter {} is injectable slot {}, but "
                         + "only {} dependenc{} declared — its generic type is ignored and the "
                         + "parameter is injected null. dependencies[i] binds to the i-th "
                         + "injectable parameter.",

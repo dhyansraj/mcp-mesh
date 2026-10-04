@@ -313,6 +313,40 @@ class MeshRoutePositionalBindingTest {
         org.mockito.Mockito.verify(injector).getToolProxy(eq("alpha"), eq(Beta.class));
     }
 
+    @RestController
+    public static class ExpectedTypeController {
+        @GetMapping("/expected")
+        @MeshRoute(dependencies = {
+            @MeshDependency(capability = "declared", expectedType = Beta.class),
+            @MeshDependency(capability = "dynamic")})
+        public String expected(
+                @SuppressWarnings("rawtypes") McpMeshTool declared,
+                @SuppressWarnings("rawtypes") McpMeshTool dynamic) {
+            return "";
+        }
+    }
+
+    @Test
+    @DisplayName("#1568: a raw McpMeshTool takes the declared expectedType, else the untyped proxy")
+    void rawParameterFallsBackToExpectedType() throws Exception {
+        new MeshRouteBeanPostProcessor(registry)
+            .postProcessAfterInitialization(new ExpectedTypeController(), "expectedTypeController");
+
+        McpMeshTool declared = mock(McpMeshTool.class, "declared");
+        when(declared.isAvailable()).thenReturn(true);
+        when(injector.getToolProxy(eq("declared"), eq(Beta.class))).thenReturn(declared);
+        McpMeshTool dynamic = live("dynamic");
+
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/expected");
+        assertTrue(interceptor.preHandle(request, mock(HttpServletResponse.class),
+            new HandlerMethod(new ExpectedTypeController(),
+                methodOf(ExpectedTypeController.class, "expected"))));
+
+        // The injector keys proxies by return type, so the typed request is what
+        // keeps this handler's type from depending on another consumer's.
+        assertEquals(Arrays.asList(declared, dynamic), resolved(request));
+    }
+
     // ─────────────────────────────────────────────────────────────────
     // Harness
     // ─────────────────────────────────────────────────────────────────

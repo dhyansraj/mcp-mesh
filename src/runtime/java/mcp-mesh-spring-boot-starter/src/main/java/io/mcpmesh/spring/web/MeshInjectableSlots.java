@@ -2,11 +2,19 @@ package io.mcpmesh.spring.web;
 
 import io.mcpmesh.spring.MeshPositionalBinder;
 import io.mcpmesh.types.McpMeshTool;
+import org.springframework.core.ResolvableType;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
+import java.lang.reflect.TypeVariable;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
+import java.util.Set;
 
 /**
  * "Is this parameter an injectable dependency slot?" for the two web
@@ -109,6 +117,168 @@ public final class MeshInjectableSlots {
             }
         }
         return slots;
+    }
+
+    /**
+     * The {@code T} of an {@code McpMeshTool<T>} parameter — the type the
+     * proxy injected there deserializes into — resolved against
+     * {@code targetClass}, so a handler inherited from a generic base
+     * ({@code Base<T>.h(McpMeshTool<T>)} on {@code Foo extends Base<Foo>})
+     * yields {@code Foo}, not the variable {@code T}.
+     *
+     * <p>The result never contains a type variable or wildcard: one that cannot
+     * be resolved falls back to its bound. A result of {@code Object} (raw
+     * parameter, {@code McpMeshTool<Object>}, unbounded {@code T} or {@code ?})
+     * is reported as {@code null} — the dynamic, untyped proxy.
+     *
+     * @param method      the handler method
+     * @param position    signature position of the parameter
+     * @param targetClass the bean class the handler is invoked on
+     * @return the type argument, or {@code null} for the untyped proxy
+     */
+    public static Type proxyTypeArgument(Method method, int position, Class<?> targetClass) {
+        if (!McpMeshTool.class.isAssignableFrom(method.getParameterTypes()[position])) {
+            return null;
+        }
+        ResolvableType arg = ResolvableType
+            .forMethodParameter(method, position, targetClass)
+            .as(McpMeshTool.class)
+            .getGeneric(0);
+        Type reified;
+        try {
+            reified = reify(arg, new HashSet<>());
+        } catch (SelfReferentialBound e) {
+            // An unresolved self-bounded variable (E extends Enum<E>,
+            // T extends Comparable<T>) has no finite reified form: keep only
+            // its erased bound.
+            reified = arg.resolve();
+        }
+        return reified == null || reified == Object.class ? null : reified;
+    }
+
+    /** Thrown by {@link #reify} on re-entering a type variable it is already expanding. */
+    private static final class SelfReferentialBound extends RuntimeException {
+        SelfReferentialBound() {
+            super(null, null, false, false);
+        }
+    }
+
+    /**
+     * A concrete {@link Type} for {@code type}: a {@link Class}, or a
+     * {@link ParameterizedType} whose arguments are themselves reified. Type
+     * variables and wildcards resolve through {@code type}'s context, falling
+     * back to their bound.
+     */
+    private static Type reify(ResolvableType type, Set<TypeVariable<?>> expanding) {
+        if (type == ResolvableType.NONE) {
+            return null;
+        }
+        Type raw = type.getType();
+        if (raw instanceof Class<?>) {
+            return raw;
+        }
+        if (raw instanceof ParameterizedType pt && isConcrete(pt)) {
+            return pt;
+        }
+        // Path-scoped: a variable re-entered while it is still being expanded
+        // is self-referential; the same variable in a sibling position is not.
+        TypeVariable<?> variable = raw instanceof TypeVariable<?> v ? v : null;
+        if (variable != null && !expanding.add(variable)) {
+            throw new SelfReferentialBound();
+        }
+        try {
+            return reifyResolved(type, expanding);
+        } finally {
+            if (variable != null) {
+                expanding.remove(variable);
+            }
+        }
+    }
+
+    private static Type reifyResolved(ResolvableType type, Set<TypeVariable<?>> expanding) {
+        Class<?> resolved = type.resolve();
+        if (resolved == null) {
+            return null;
+        }
+        ResolvableType[] generics = type.getGenerics();
+        if (generics.length == 0 || resolved.getTypeParameters().length != generics.length) {
+            return resolved;
+        }
+        Type[] args = new Type[generics.length];
+        for (int i = 0; i < generics.length; i++) {
+            Type a = reify(generics[i], expanding);
+            args[i] = a != null ? a : Object.class;
+        }
+        return new ReifiedParameterizedType(resolved, args, resolved.getDeclaringClass());
+    }
+
+    private static boolean isConcrete(Type type) {
+        if (type instanceof Class<?>) {
+            return true;
+        }
+        if (type instanceof ParameterizedType pt) {
+            for (Type a : pt.getActualTypeArguments()) {
+                if (!isConcrete(a)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * A {@link ParameterizedType} built from resolved parts. {@code equals} and
+     * {@code hashCode} follow the JDK's contract, so it is interchangeable with
+     * a reflected {@code ParameterizedType} as a map key.
+     */
+    private record ReifiedParameterizedType(Class<?> rawType, Type[] actualTypeArguments, Type ownerType)
+            implements ParameterizedType {
+
+        @Override
+        public Type[] getActualTypeArguments() {
+            return actualTypeArguments.clone();
+        }
+
+        @Override
+        public Type getRawType() {
+            return rawType;
+        }
+
+        @Override
+        public Type getOwnerType() {
+            return ownerType;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            return o instanceof ParameterizedType other
+                && rawType.equals(other.getRawType())
+                && Objects.equals(ownerType, other.getOwnerType())
+                && Arrays.equals(actualTypeArguments, other.getActualTypeArguments());
+        }
+
+        @Override
+        public int hashCode() {
+            return Arrays.hashCode(actualTypeArguments) ^ Objects.hashCode(ownerType) ^ rawType.hashCode();
+        }
+
+        @Override
+        public String getTypeName() {
+            StringBuilder sb = new StringBuilder(rawType.getTypeName()).append('<');
+            for (int i = 0; i < actualTypeArguments.length; i++) {
+                if (i > 0) {
+                    sb.append(", ");
+                }
+                sb.append(actualTypeArguments[i].getTypeName());
+            }
+            return sb.append('>').toString();
+        }
+
+        @Override
+        public String toString() {
+            return getTypeName();
+        }
     }
 
     /**

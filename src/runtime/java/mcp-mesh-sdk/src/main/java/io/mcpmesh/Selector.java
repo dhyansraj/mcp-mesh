@@ -23,9 +23,19 @@ import java.lang.annotation.Target;
  * tag             Required                        "api"
  * +tag            Preferred (bonus score)         "+fast"
  * -tag            Excluded (hard fail)            "-deprecated"
- * (a|b)           OR alternatives (try in order)  "(python|typescript)"
- * (a|+b)          OR with preference              "(python|+typescript)"
+ * a|b             OR: at least one must match     "python|typescript"
+ * a|+b            OR, preferring b                "python|+typescript"
  * </pre>
+ *
+ * <p>An {@code a|b} entry is one OR group: the provider must carry at least one
+ * of its alternatives, alongside every other required tag. The order of the
+ * alternatives expresses no preference — use {@code +} on an alternative to
+ * rank it higher. A {@code -} alternative never counts as a match; it only
+ * rejects providers carrying that tag ({@code "python|-legacy"} = python
+ * required, legacy forbidden), so write exclusions as separate tags. OR groups apply to dependency selectors
+ * ({@link MeshTool#dependencies()}, {@link MeshService} view methods); in
+ * {@link MeshLlm#providerSelector()} and {@link MeshLlm#filter()} a tag
+ * containing {@code |} is matched literally.
  *
  * <h2>Schema-Aware Matching (issue #547)</h2>
  *
@@ -52,7 +62,7 @@ import java.lang.annotation.Target;
  * // With OR alternatives (polyglot)
  * @Selector(
  *     capability = "math_ops",
- *     tags = {"addition", "(python|+typescript)"}
+ *     tags = {"addition", "python|+typescript"}
  * )
  *
  * // With version constraint
@@ -86,7 +96,7 @@ public @interface Selector {
      *   <li>{@code "tag"} - Required</li>
      *   <li>{@code "+tag"} - Preferred</li>
      *   <li>{@code "-tag"} - Excluded</li>
-     *   <li>{@code "(a|b)"} - OR alternatives</li>
+     *   <li>{@code "a|b"} - OR alternatives (dependency selectors only)</li>
      * </ul>
      */
     String[] tags() default {};

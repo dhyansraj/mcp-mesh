@@ -169,7 +169,7 @@ public class MeshA2ARegistry {
                     // (the Rust core JSON-parses it; a comma-joined string
                     // silently degrades to "no tag constraint").
                     try {
-                        agentDep.setTags(jsonMapper.writeValueAsString(dep.getTags()));
+                        agentDep.setTags(jsonMapper.writeValueAsString(io.mcpmesh.spring.MeshTagSpecs.toWire(dep.getTags())));
                     } catch (Exception e) {
                         log.warn("Failed to serialize tags for dependency '{}' — registering with no tag constraint: {}",
                             dep.getCapability(), e.getMessage());

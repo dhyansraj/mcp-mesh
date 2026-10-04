@@ -41,9 +41,11 @@ public @interface MeshDependency {
      *
      * <p>Tags use the mesh tag syntax:
      * <ul>
-     *   <li>{@code "+tag"} - require this tag (AND)</li>
+     *   <li>{@code "tag"} - require this tag</li>
+     *   <li>{@code "+tag"} - prefer this tag (bonus score, not required)</li>
      *   <li>{@code "-tag"} - exclude this tag</li>
-     *   <li>{@code "tag1|tag2"} - either tag (OR)</li>
+     *   <li>{@code "tag1|tag2"} - require at least one of the tags (OR); a
+     *       {@code +} alternative is preferred</li>
      * </ul>
      *
      * @return array of tag filters

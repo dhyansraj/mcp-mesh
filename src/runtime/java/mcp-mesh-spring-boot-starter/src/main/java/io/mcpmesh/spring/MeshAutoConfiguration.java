@@ -1183,7 +1183,7 @@ public class MeshAutoConfiguration {
                     // (the Rust core JSON-parses it; a comma-joined string
                     // silently degrades to "no tag constraint").
                     try {
-                        agentDep.setTags(jsonMapper.writeValueAsString(dep.tags()));
+                        agentDep.setTags(jsonMapper.writeValueAsString(MeshTagSpecs.toWire(dep.tags())));
                     } catch (Exception e) {
                         log.warn("Failed to serialize tags for dependency '{}' — registering with no tag constraint: {}",
                             capability, e.getMessage());
@@ -1339,7 +1339,7 @@ public class MeshAutoConfiguration {
                 if (binding.tags().length > 0) {
                     // Issue #1158: tags is contractually a JSON-array string.
                     try {
-                        agentDep.setTags(jsonMapper.writeValueAsString(binding.tags()));
+                        agentDep.setTags(jsonMapper.writeValueAsString(MeshTagSpecs.toWire(binding.tags())));
                     } catch (Exception e) {
                         log.warn("Failed to serialize tags for dependency '{}' — registering with no tag constraint: {}",
                             capability, e.getMessage());

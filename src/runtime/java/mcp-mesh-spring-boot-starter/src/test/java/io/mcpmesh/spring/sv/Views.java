@@ -109,6 +109,10 @@ public final class Views {
 
         @Selector(capability = "wire.opt")
         String opt();
+
+        /** Issue #1572: an "a|b" OR tag on a view method. */
+        @Selector(capability = "wire.or", tags = {"addition", "python|typescript"})
+        String or();
     }
 
     /**
