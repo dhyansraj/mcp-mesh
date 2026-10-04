@@ -19,9 +19,13 @@ import java.util.Objects;
  * <p>A record rather than a {@code Map<String, Object>}: the status is the field
  * the mesh acts on, and a map makes it a string that can be misspelled into
  * silence. Here a wrong status does not compile. The detail stays a map because
- * it genuinely is open-ended — one provider's {@code anthropic_api_reachable} is
- * another's {@code pool_connections_free} — and it is rendered straight into the
- * {@code /health} JSON body.
+ * its keys genuinely are open-ended — one provider's {@code anthropic_api_reachable}
+ * is another's {@code pool_connections_free} — and it is rendered into the
+ * {@code /health} JSON body. Each value is a boolean, as in Python and
+ * TypeScript: the runtime keeps a value it can read as one (Pydantic's lax
+ * spellings — {@code "true"}, {@code 1}, {@code "off"} — included, normalised to
+ * a boolean), and drops anything else, reporting it in {@code errors} with
+ * {@code health_check_checks_type: false}. The verdict is never changed by it.
  *
  * <p>Instances are immutable; the {@code with*} methods return copies, so a
  * check reads as a chain:
@@ -32,7 +36,8 @@ import java.util.Objects;
  * }</pre>
  *
  * @param status the verdict — the only field that affects mesh routing
- * @param checks per-probe detail, rendered into {@code /health}; never null
+ * @param checks per-probe detail, check name to {@code true}/{@code false},
+ *               rendered into {@code /health}; never null
  * @param errors human-readable failure reasons, rendered into {@code /health}
  *               and {@code /ready}; never null
  */
@@ -169,7 +174,13 @@ public record MeshHealth(
         return cleaned;
     }
 
-    /** A copy with one more entry in {@link #checks()}. */
+    /**
+     * A copy with one more entry in {@link #checks()}.
+     *
+     * @param value {@code true} or {@code false}; a value that cannot be read
+     *              as a boolean is dropped by the runtime and reported in
+     *              {@link #errors()}
+     */
     public MeshHealth withCheck(String name, Object value) {
         Map<String, Object> merged = new LinkedHashMap<>(checks);
         merged.put(name, value);

@@ -171,6 +171,14 @@ public class AnthropicHandler implements LlmProviderHandler {
             ChatModel model,
             List<Map<String, Object>> messages,
             Map<String, Object> options) {
+        return generateWithMessagesFull(model, messages, options).content();
+    }
+
+    @Override
+    public LlmResponse generateWithMessagesFull(
+            ChatModel model,
+            List<Map<String, Object>> messages,
+            Map<String, Object> options) {
 
         log.debug("AnthropicHandler: Processing {} messages", messages.size());
 
@@ -189,7 +197,7 @@ public class AnthropicHandler implements LlmProviderHandler {
         log.debug("AnthropicHandler: Generated response ({} chars)",
             content != null ? content.length() : 0);
 
-        return content;
+        return new LlmResponse(content, List.of(), extractUsage(response));
     }
 
     @Override

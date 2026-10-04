@@ -94,11 +94,12 @@ public class LlmProviderToolWrapper implements McpToolHandler {
         // Use method name for trace (llm_generate)
         String traceName = getMethodName();
         try (SpanScope span = tracer != null ? tracer.startSpan(traceName, spanMetadata) : SpanScope.NOOP) {
-            Object result = processor.handleGenerateRequest(capability, cleanArgs);
+            MeshLlmProviderProcessor.GenerateResult generated = processor.generate(capability, cleanArgs);
+            Object result = generated.response();
             span.withResult(result);
 
             // Extract LLM usage metadata and enrich span
-            enrichSpanWithLlmMeta(span, result);
+            enrichSpanWithLlmMeta(span, result, generated.reportedModel());
 
             return result;
         } catch (Exception e) {
@@ -178,23 +179,33 @@ public class LlmProviderToolWrapper implements McpToolHandler {
     }
 
     /**
-     * Extract LLM usage metadata from the response and enrich the span.
+     * Read the response's {@code _mesh_usage} block and enrich the span.
+     *
+     * <p>Read-only: {@code _mesh_usage} is part of the wire contract — the
+     * consumer accumulates it into its own span — so it stays on the response
+     * whether or not tracing is on (issue #1592).
+     *
+     * <p>{@code llm_model} is the model the vendor reported running, falling
+     * back to the requested one — what Python's provider span records
+     * ({@code iter_model or effective_model}).
      */
     @SuppressWarnings("unchecked")
-    private void enrichSpanWithLlmMeta(SpanScope span, Object result) {
+    private void enrichSpanWithLlmMeta(SpanScope span, Object result, String reportedModel) {
         if (span.isNoop() || !(result instanceof Map)) {
             return;
         }
         try {
             Map<String, Object> resultMap = (Map<String, Object>) result;
-            Map<String, Object> usage = (Map<String, Object>) resultMap.get("_usage");
-            if (usage == null) {
+            Object usageObj = resultMap.get(MeshLlmProviderProcessor.MESH_USAGE_KEY);
+            if (!(usageObj instanceof Map<?, ?>)) {
                 return;
             }
+            Map<String, Object> usage = (Map<String, Object>) usageObj;
 
-            long inputTokens = toLong(usage.get("input_tokens"));
-            long outputTokens = toLong(usage.get("output_tokens"));
-            String model = (String) usage.get("model");
+            long inputTokens = toLong(usage.get("prompt_tokens"));
+            long outputTokens = toLong(usage.get("completion_tokens"));
+            String model = reportedModel != null && !reportedModel.isBlank() ? reportedModel
+                : usage.get("model") instanceof String m ? m : null;
 
             // Resolve provider: prefer explicit fields, then derive from model, then capability
             String modelFull = (String) resultMap.get("model");
@@ -211,9 +222,6 @@ public class LlmProviderToolWrapper implements McpToolHandler {
 
             span.withLlmMeta(provider, model != null ? model : (modelFull != null ? modelFull : "unknown"),
                 inputTokens, outputTokens);
-
-            // Remove _usage from response so it doesn't leak into MCP response
-            resultMap.remove("_usage");
         } catch (Exception e) {
             log.debug("Failed to extract LLM usage for span: {}", e.getMessage());
         }

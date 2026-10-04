@@ -204,7 +204,19 @@ func stripLangHeader(content string) string {
 // #1572 review follow-up: `capabilities_java.md` scopes `a|b` to dependency
 // selectors (+12) and `tags_java.md` adds the startup-rejection sentence and
 // a tool's own `tags` (+4). 1719 + 12 + 4 = 1735.
-const wantVariantInlineCodeSpans = 1735
+//
+// Issues #1592/#1593 (Java half) move this to 1764. `health_java.md` gains the
+// TypeScript page's `checks` boolean-spellings paragraph (+21) and a
+// `@MeshHealthCheck` / `starting` clause on its `/health` sentence (+2);
+// `deployment_java.md`'s `/health` bullet gains the same clause (+2) and the
+// "both answer 503 until the runtime is up" line now separates `/ready` from a
+// `starting` `/health` (+1); and `dependency-injection_java.md`'s LLM
+// Injection lead-in gains the settle sentence (`MCP_MESH_SETTLE_TIMEOUT`,
+// `isAvailable()`, `false`; +3). 1735 + 21 + 2 + 2 + 1 + 3 = 1764.
+// Review follow-up: `deployment_java.md`'s Helm port sentence gains the
+// precedence rule for apps without `@MeshAgent` on the main class
+// (`@MeshAgent`, `server.port`, `server.ssl.*`; +3). 1764 + 3 = 1767.
+const wantVariantInlineCodeSpans = 1767
 
 // TestVariantCorpusCodeSpans is TestStyleInlineCorpus plus
 // TestRenderStyledCorpusListItems, run over the pages neither of them sees.

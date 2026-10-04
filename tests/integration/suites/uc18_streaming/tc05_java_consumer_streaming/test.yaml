@@ -100,21 +100,21 @@ test:
     capture: start_gateway
 
   # Java gateway uses @MeshRoute without @MeshAgent, so it registers as
-  # "api-<hash>" (no stable name). Wait for the HTTP listener to come up
-  # by polling /health rather than grepping `meshctl list`.
-  - name: "Wait for java-stream-gateway /health to respond"
+  # "api-<hash>" (no stable name). Wait for the mesh runtime by polling
+  # /ready rather than grepping `meshctl list`: /ready answers 200 only once
+  # the runtime is up. (/health is NOT that signal — it reports the health
+  # check alone, and a check-less agent is healthy before the runtime starts.)
+  - name: "Wait for java-stream-gateway /ready"
     handler: shell
     command: |
       for i in $(seq 1 60); do
-        # Framework's MeshHealthController returns {"status":"healthy"}
-        # when the mesh runtime is up — match on that.
-        if curl -sf http://localhost:8091/health 2>/dev/null | grep -q '"status":"healthy"'; then
-          echo "java-stream-gateway healthy after $((i * 2))s"
+        if curl -sf http://localhost:8091/ready 2>/dev/null | grep -q '"ready":true'; then
+          echo "java-stream-gateway ready after $((i * 2))s"
           exit 0
         fi
         sleep 2
       done
-      echo "ERROR: java-stream-gateway /health did not respond within 120s"
+      echo "ERROR: java-stream-gateway /ready did not report ready within 120s"
       echo "===== meshctl list ====="
       meshctl list 2>/dev/null || true
       echo "===== java-stream-gateway log (last 200 lines) ====="

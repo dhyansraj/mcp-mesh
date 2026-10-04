@@ -69,23 +69,27 @@ public class MeshHandle implements Closeable {
      * @throws MeshException if the agent fails to start
      */
     public static MeshHandle start(AgentSpec spec) {
-        MeshCore core = MeshCore.load();
+        return start(MeshCore.load(), spec);
+    }
 
+    // Package-private for tests (MeshHandleTest injects a fake MeshCore).
+    static MeshHandle start(MeshCore core, AgentSpec spec) {
+        String specJson;
         try {
-            String specJson = objectMapper.writeValueAsString(spec);
-            log.debug("Starting agent with spec: {}", specJson);
-
-            Pointer handle = core.mesh_start_agent(specJson);
-            if (handle == null) {
-                String error = getLastError(core);
-                throw new MeshException("Failed to start agent: " + error);
-            }
-
-            log.info("Agent '{}' started successfully", spec.getName());
-            return new MeshHandle(core, handle);
+            specJson = objectMapper.writeValueAsString(spec);
         } catch (Exception e) {
             throw new MeshException("Failed to serialize AgentSpec", e);
         }
+        log.debug("Starting agent with spec: {}", specJson);
+
+        Pointer handle = core.mesh_start_agent(specJson);
+        if (handle == null) {
+            String error = getLastError(core);
+            throw new MeshException("Failed to start agent: " + error);
+        }
+
+        log.info("Agent '{}' started successfully", spec.getName());
+        return new MeshHandle(core, handle);
     }
 
     /**

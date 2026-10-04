@@ -15,6 +15,7 @@ import java.lang.reflect.Method;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -319,5 +320,16 @@ class MeshDiValidatorTest {
             }
         }
         throw new AssertionError("No such shape: " + name);
+    }
+
+    @Test
+    void strictDiKnobUsesPythonsTruthyVocabulary() {
+        // Python TRUTHY_RULE / TS parseTruthyEnv: true/1/yes/on, any case.
+        for (String v : new String[]{"true", "TRUE", "1", "yes", "Yes", "on", "ON", " on "}) {
+            assertTrue(MeshDiValidator.isTruthy(v), v);
+        }
+        for (String v : new String[]{null, "", "false", "0", "no", "off", "enabled"}) {
+            assertFalse(MeshDiValidator.isTruthy(v), String.valueOf(v));
+        }
     }
 }

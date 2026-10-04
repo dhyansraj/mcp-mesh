@@ -1,8 +1,6 @@
 package io.mcpmesh;
 
 import io.mcpmesh.core.MeshException;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -27,8 +25,6 @@ import java.util.Map;
  * registry URL discovery + proxy caching.
  */
 public final class MeshJobs {
-
-    private static final Logger log = LoggerFactory.getLogger(MeshJobs.class);
 
     /**
      * Default cap for the process-wide {@code JobProxy} LRU cache.
@@ -69,21 +65,17 @@ public final class MeshJobs {
             protected boolean removeEldestEntry(Map.Entry<CacheKey, JobProxy> eldest) {
                 // Bound the cache so a long-lived sender posting events
                 // to many distinct jobs can't grow it without limit.
-                // Closing the evicted proxy frees the underlying FFI
-                // handle's reqwest::Client connection pool — without
-                // close(), the native handle would leak until GC ran
-                // (and GC of off-heap-backed objects is unpredictable).
-                int max = proxyCacheMax();
-                if (size() > max) {
-                    try {
-                        eldest.getValue().close();
-                    } catch (RuntimeException e) {
-                        log.warn("Failed to close evicted JobProxy for {}: {}",
-                            eldest.getKey(), e.getMessage());
-                    }
-                    return true;
-                }
-                return false;
+                //
+                // Eviction only DROPS the entry, exactly as Python and
+                // TypeScript do — it never closes the proxy (issue #1592).
+                // The evicted proxy may still be held: an EventSubscription
+                // returned by subscribeEvents keeps it for its whole life,
+                // and another thread may be mid-call on it after a cache
+                // hit. Closing it here failed those holders with "JobProxy
+                // is closed" (and could block this cache lock behind a
+                // long-poll's read lock). The native handle is freed by
+                // JobProxy's Cleaner once the last holder lets go.
+                return size() > proxyCacheMax();
             }
         };
 

@@ -464,4 +464,16 @@ class MeshHandleTest {
 
         assertFalse(fake.calledAfterFree.get(), "isRunning reached native code after free");
     }
+
+    @Test
+    void startFailureKeepsTheNativeErrorInsteadOfASerializationMessage() {
+        // Issue #1592: start() used to rewrap its own "Failed to start agent"
+        // MeshException as "Failed to serialize AgentSpec", hiding the real
+        // native error. mesh_start_agent returning null must surface as-is.
+        FakeCore fake = new FakeCore();
+        MeshException e = assertThrows(MeshException.class,
+            () -> MeshHandle.start(fake.asCore(), new AgentSpec("a", "http://localhost:8000")));
+        assertTrue(e.getMessage().startsWith("Failed to start agent:"), e.getMessage());
+        assertNull(e.getCause(), "native start failure must not be wrapped");
+    }
 }

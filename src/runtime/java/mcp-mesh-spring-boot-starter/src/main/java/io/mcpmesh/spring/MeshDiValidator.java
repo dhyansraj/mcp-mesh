@@ -13,17 +13,30 @@ import java.util.Locale;
  * mismatch is <i>reported</i>. Without that, declaring one dependency too many
  * silently drops it ({@code depIndexToSlot = -1}) and declaring one too few
  * silently injects {@code null} — the two failure modes that make a reordered
- * declaration list indistinguishable from a correct one. Python has had this
- * check since {@code validate_mesh_dependencies}; this is its Java counterpart,
- * with the same default posture and the same opt-in knob.
+ * declaration list indistinguishable from a correct one. This is the Java
+ * counterpart of Python's dependency-count checks, with the same default posture
+ * and the same opt-in knob.
  *
  * <h2>Posture</h2>
  * <ul>
  *   <li><b>Default: WARN.</b> Mesh DI is permissive by design — a mismatched
  *       arity still boots, still registers, and still serves.</li>
- *   <li><b>{@code MCP_MESH_STRICT_DI=true}: boot failure.</b> Same env var,
- *       same truthy spellings and the same message text as Python, so a team
- *       that wants rigor gets it in every runtime with one variable.</li>
+ *   <li><b>{@code MCP_MESH_STRICT_DI} truthy: boot failure.</b> One env var, read
+ *       with Python's truthy vocabulary ({@code true/1/yes/on}, case-insensitive)
+ *       in all three runtimes, so a team that wants rigor gets it everywhere with
+ *       one variable. The message is modelled on Python's, not identical to it.</li>
+ * </ul>
+ *
+ * <h2>What each runtime checks</h2>
+ * <ul>
+ *   <li><b>Java</b> (here): both directions, at boot — more declared
+ *       dependencies than dependency-backed parameters, and fewer.</li>
+ *   <li><b>Python</b>: both directions — excess dependencies warn (raise under
+ *       strict) at decoration; unfilled typed slots raise at decoration under
+ *       strict and warn per call otherwise.</li>
+ *   <li><b>TypeScript</b> (since #1628): excess dependencies only, and only
+ *       where the function's parameter list can be read reliably from its
+ *       source; it skips the check rather than guess.</li>
  * </ul>
  *
  * <h2>Three things this deliberately does not count</h2>
@@ -61,7 +74,7 @@ public final class MeshDiValidator {
 
     private static final Logger log = LoggerFactory.getLogger(MeshDiValidator.class);
 
-    /** Opt-in strictness knob, shared with Python and TypeScript. */
+    /** Opt-in strictness knob — the same variable in Python and TypeScript. */
     public static final String STRICT_DI_ENV = "MCP_MESH_STRICT_DI";
 
     private MeshDiValidator() {}
@@ -69,19 +82,24 @@ public final class MeshDiValidator {
     /**
      * Whether {@code MCP_MESH_STRICT_DI} is truthy.
      *
-     * <p>Truthy spellings match {@link MeshSchemaSupport#clusterStrictEnabled()}
-     * ({@code 1} / {@code true} / {@code yes}, case- and whitespace-insensitive)
-     * so mesh's two strictness knobs never disagree about what "on" means.
+     * <p>Truthy spellings are Python's {@code TRUTHY_RULE} and TypeScript's
+     * {@code parseTruthyEnv}: {@code true} / {@code 1} / {@code yes} /
+     * {@code on}, case- and whitespace-insensitive — so the same value turns
+     * strict DI on in every runtime.
      *
      * @return true when strict DI is enabled
      */
     public static boolean strictDiEnabled() {
-        String v = System.getenv(STRICT_DI_ENV);
-        if (v == null) {
+        return isTruthy(System.getenv(STRICT_DI_ENV));
+    }
+
+    /** The env-free core of {@link #strictDiEnabled()}. */
+    static boolean isTruthy(String raw) {
+        if (raw == null) {
             return false;
         }
-        String lc = v.trim().toLowerCase(Locale.ROOT);
-        return "1".equals(lc) || "true".equals(lc) || "yes".equals(lc);
+        String lc = raw.trim().toLowerCase(Locale.ROOT);
+        return "1".equals(lc) || "true".equals(lc) || "yes".equals(lc) || "on".equals(lc);
     }
 
     /**

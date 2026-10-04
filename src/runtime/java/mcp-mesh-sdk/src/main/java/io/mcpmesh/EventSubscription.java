@@ -221,7 +221,8 @@ public final class EventSubscription implements Iterator<Map<String, Object>>, C
      * is cached by {@link MeshJobs} and may be shared across
      * subscriptions or with {@link MeshJobs#postEvent(String, String, Map)}
      * callers. Dropping the iterator's strong reference is sufficient
-     * for cleanup; the cache's LRU eviction handles proxy lifecycle.
+     * for cleanup: cache eviction only drops the cache's reference, and the
+     * proxy's native handle is freed once nothing references it.
      */
     @Override
     public void close() {

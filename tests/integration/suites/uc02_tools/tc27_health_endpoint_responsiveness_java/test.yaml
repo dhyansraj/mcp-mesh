@@ -75,7 +75,7 @@ test:
     timeout: 150
 
   # Probe baseline before any blocking work.
-  # Java runtime (MeshHealthController) exposes only /health — no /ready or /livez.
+  # Probes /health only (MeshHealthController also serves /ready, /livez, /startupz).
   - name: "Probe baseline /health (idle)"
     handler: shell
     workdir: /workspace

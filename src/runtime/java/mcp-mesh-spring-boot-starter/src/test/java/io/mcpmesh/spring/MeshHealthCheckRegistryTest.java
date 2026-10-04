@@ -189,4 +189,57 @@ class MeshHealthCheckRegistryTest {
         assertSame(health, registry.latest().health());
         assertNotNull(registry.latest().timestamp());
     }
+
+    // ---- unusable `checks` values (issue #1593, Python #1556/#1557) -----------
+
+    @Test
+    void nonBoolCheckValuesAreDroppedAndReported_verdictUnchanged() {
+        MeshHealthCheckRegistry.resetUnusableChecksWarning();
+        MeshHealth raw = MeshHealth.unhealthy("vendor down")
+            .withCheck("vendor_reachable", false)
+            .withCheck("disk_space", "ok")
+            .withCheck("pool", java.util.Map.of("free", 3));
+
+        MeshHealth out = MeshHealthCheckRegistry.coerce(raw);
+
+        assertEquals(MeshHealthStatus.UNHEALTHY, out.status(),
+            "a typo in checks must never change the verdict");
+        assertEquals(false, out.checks().get("vendor_reachable"));
+        assertFalse(out.checks().containsKey("disk_space"));
+        assertFalse(out.checks().containsKey("pool"));
+        assertEquals(false, out.checks().get(MeshHealthCheckRegistry.CHECKS_TYPE_CHECK));
+        assertEquals("vendor down", out.errors().get(0));
+        assertTrue(out.errors().stream().anyMatch(e ->
+            e.equals("Unusable check 'disk_space': \"ok\" is a String, not a bool.")), out.errors().toString());
+        assertTrue(out.errors().stream().anyMatch(e -> e.startsWith("Unusable check 'pool':")));
+    }
+
+    @Test
+    void eachValueIsReadIndependently_withPydanticLaxBoolSpellings() {
+        MeshHealth raw = MeshHealth.healthy()
+            .withCheck("a", "true").withCheck("b", "OFF").withCheck("c", "y")
+            .withCheck("d", "f").withCheck("e", 1).withCheck("f", 0L)
+            .withCheck("g", 1.0d).withCheck("h", 2).withCheck("i", null);
+
+        MeshHealth out = MeshHealthCheckRegistry.coerce(raw);
+
+        assertEquals(MeshHealthStatus.HEALTHY, out.status());
+        assertEquals(true, out.checks().get("a"));
+        assertEquals(false, out.checks().get("b"));
+        assertEquals(true, out.checks().get("c"));
+        assertEquals(false, out.checks().get("d"));
+        assertEquals(true, out.checks().get("e"));
+        assertEquals(false, out.checks().get("f"));
+        assertEquals(true, out.checks().get("g"));
+        assertFalse(out.checks().containsKey("h"), "2 is not a bool");
+        assertFalse(out.checks().containsKey("i"), "null is not a bool");
+        assertEquals(false, out.checks().get(MeshHealthCheckRegistry.CHECKS_TYPE_CHECK));
+        assertEquals(2, out.errors().size());
+    }
+
+    @Test
+    void allBoolChecksPassThroughUntouched() {
+        MeshHealth raw = MeshHealth.healthy().withCheck("db", true).withCheck("cache", false);
+        assertSame(raw, MeshHealthCheckRegistry.coerce(raw));
+    }
 }

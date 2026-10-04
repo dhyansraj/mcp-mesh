@@ -9,6 +9,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.ObjectMapper;
 
+import java.lang.ref.Cleaner;
+import java.lang.ref.Reference;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -27,8 +29,13 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * </ul>
  *
  * <p>Implements {@link AutoCloseable}; the underlying native handle is
- * lightweight (just a backend reference + job id) but still needs an
- * explicit {@link #close} to drop the FFI box. Idempotent.
+ * lightweight (just a backend reference + job id). {@link #close} drops the FFI
+ * box deterministically and is idempotent. A proxy that is never closed is
+ * freed when it becomes unreachable (a {@link Cleaner}), which is how the
+ * Python and TypeScript bindings release theirs — so a holder that simply
+ * drops its reference (the {@link MeshJobs} cache on eviction, an
+ * {@link EventSubscription}, an A2A task record) never leaks the handle and
+ * never has it freed underneath it.
  */
 public final class JobProxy implements MeshJob, AutoCloseable {
 
@@ -58,10 +65,45 @@ public final class JobProxy implements MeshJob, AutoCloseable {
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
     private volatile boolean closed = false;
 
+    /** Frees the native handle for proxies that are never explicitly closed. */
+    private static final Cleaner CLEANER = Cleaner.create();
+
+    /**
+     * Frees one native handle at most once. Must not reference the
+     * {@link JobProxy} itself, or the proxy could never become unreachable.
+     */
+    private static final class NativeRelease implements Runnable {
+        private final MeshCore core;
+        private final Pointer handle;
+        private final String jobId;
+
+        NativeRelease(MeshCore core, Pointer handle, String jobId) {
+            this.core = core;
+            this.handle = handle;
+            this.jobId = jobId;
+        }
+
+        @Override
+        public void run() {
+            if (handle == null) {
+                return;
+            }
+            try {
+                core.mesh_job_proxy_free(handle);
+            } catch (RuntimeException e) {
+                log.warn("mesh_job_proxy_free threw for job {}: {}", jobId, e.getMessage());
+                throw e;
+            }
+        }
+    }
+
+    private final Cleaner.Cleanable cleanable;
+
     JobProxy(MeshCore core, Pointer handle, String jobId) {
         this.core = core;
         this.handle = handle;
         this.jobId = jobId;
+        this.cleanable = CLEANER.register(this, new NativeRelease(core, handle, jobId));
     }
 
     /**
@@ -121,6 +163,9 @@ public final class JobProxy implements MeshJob, AutoCloseable {
             p = out.getValue();
         } finally {
             lock.readLock().unlock();
+            // Keep `this` (and so its Cleaner) reachable until the native
+            // call that used `handle` has returned.
+            Reference.reachabilityFence(this);
         }
         if (p == null) {
             throw new MeshException("mesh_job_proxy_status returned null payload");
@@ -196,6 +241,9 @@ public final class JobProxy implements MeshJob, AutoCloseable {
             p = out.getValue();
         } finally {
             lock.readLock().unlock();
+            // Keep `this` (and so its Cleaner) reachable until the native
+            // call that used `handle` has returned.
+            Reference.reachabilityFence(this);
         }
         if (p == null) {
             // await() succeeded but produced no payload — treat as JSON null.
@@ -236,6 +284,9 @@ public final class JobProxy implements MeshJob, AutoCloseable {
             }
         } finally {
             lock.readLock().unlock();
+            // Keep `this` (and so its Cleaner) reachable until the native
+            // call that used `handle` has returned.
+            Reference.reachabilityFence(this);
         }
     }
 
@@ -312,6 +363,9 @@ public final class JobProxy implements MeshJob, AutoCloseable {
             }
         } finally {
             lock.readLock().unlock();
+            // Keep `this` (and so its Cleaner) reachable until the native
+            // call that used `handle` has returned.
+            Reference.reachabilityFence(this);
         }
         if (p == null) {
             throw new MeshException("mesh_job_proxy_send_event returned null receipt");
@@ -413,6 +467,9 @@ public final class JobProxy implements MeshJob, AutoCloseable {
             }
         } finally {
             lock.readLock().unlock();
+            // Keep `this` (and so its Cleaner) reachable until the native
+            // call that used `handle` has returned.
+            Reference.reachabilityFence(this);
         }
         if (p == null) {
             throw new MeshException("mesh_job_proxy_list_events returned null envelope");
@@ -438,16 +495,10 @@ public final class JobProxy implements MeshJob, AutoCloseable {
         try {
             if (!closed) {
                 closed = true;
-                Pointer h = handle;
                 handle = null;
-                try {
-                    if (h != null) {
-                        core.mesh_job_proxy_free(h);
-                    }
-                } catch (RuntimeException e) {
-                    log.warn("mesh_job_proxy_free threw for job {}: {}", jobId, e.getMessage());
-                    throw e;
-                }
+                // Runs NativeRelease now, and unregisters it so the Cleaner
+                // never frees the handle a second time.
+                cleanable.clean();
             }
         } finally {
             lock.writeLock().unlock();

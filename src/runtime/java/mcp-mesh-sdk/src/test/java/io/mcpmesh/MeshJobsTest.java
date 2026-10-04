@@ -235,61 +235,45 @@ class MeshJobsTest {
      * Direct eviction-path coverage: populate the cache past the default
      * cap of 256 and verify that {@code removeEldestEntry} fires —
      * (a) cache size stays bounded at the cap,
-     * (b) the evicted {@link JobProxy} has {@code close()} called (its
-     *     {@code toString()} reports {@code closed=true}), and
+     * (b) the evicted {@link JobProxy} is NOT closed — eviction only drops
+     *     the cache's reference, exactly as Python and TypeScript do (issue
+     *     #1592). A holder such as an {@link EventSubscription} returned by
+     *     {@code subscribeEvents} still uses it; closing it failed that
+     *     holder with "JobProxy is closed". The native handle is freed by
+     *     {@code JobProxy}'s Cleaner once the last holder lets go
+     *     ({@code JobProxyLifecycleTest}), and
      * (c) re-fetching the evicted key constructs a NEW proxy instance.
      *
-     * <p>The companion {@link #getOrCreateProxy_cacheGrowsUpToCap()}
-     * exercises only the pre-eviction growth path; this test exercises
-     * the resource-cleanup guarantee (the {@code JobProxy.close()} call
-     * inside {@code removeEldestEntry}) that the growth-only test
-     * cannot reach.
-     *
-     * <p>Mirrors the Python {@code test_meshjob_events.py} and TypeScript
-     * {@code jobs.spec.ts} LRU-eviction tests. Those runtimes can mutate
-     * their env at test time (pytest's {@code monkeypatch.setenv} /
-     * mutating {@code process.env}); the JVM's env table is effectively
-     * read-only without {@code --add-opens java.base/java.lang}, so we
-     * exercise the eviction path at the default cap (256) instead of
-     * lowering it to 2. The eviction logic is identical at any cap —
-     * what matters is that {@code removeEldestEntry} fires and that
-     * {@code JobProxy.close()} is invoked on the evicted entry. 257
-     * lightweight FFI proxy allocations stay well under 1 second.
+     * <p>The JVM's env table is effectively read-only, so this exercises the
+     * eviction path at the default cap (256) instead of lowering it to 2.
+     * 257 lightweight FFI proxy allocations stay well under 1 second.
      */
     @Test
-    void getOrCreateProxy_evictsLruAndClosesProxyAtCap() {
+    void getOrCreateProxy_evictsLruWithoutClosingTheProxyAtCap() {
         int cap = MeshJobs.proxyCacheMax();
         assumeTrue(cap <= 1024,
             "Skipping eviction test: cache cap " + cap + " exceeds bound (1024). "
                 + "Unset MCP_MESH_JOBPROXY_CACHE_MAX or set it <= 1024 to run.");
-        // Insert the LRU sentinel first — this entry will be the
-        // least-recently-used after we populate the cache to the cap.
+        // The LRU sentinel, held the way subscribeEvents holds it.
         JobProxy lru = MeshJobs.getOrCreateProxy(FAKE_REGISTRY, "job-lru");
-        assertFalse(lru.toString().contains("closed=true"),
-            "freshly constructed proxy must not be closed");
-        // Fill the cache to its cap; each new insert pushes job-lru
-        // further from the most-recent end.
+        EventSubscription holder = new EventSubscription(lru, SubscribeOptions.defaults());
         for (int i = 0; i < cap - 1; i++) {
             MeshJobs.getOrCreateProxy(FAKE_REGISTRY, "filler-" + i);
         }
         assertEquals(cap, MeshJobs.cacheSizeForTest(),
             "cache should be exactly at cap before the eviction-triggering put");
-        // One more insert — this is the put that overflows and triggers
-        // removeEldestEntry, which closes the LRU and drops it from the map.
         JobProxy overflow = MeshJobs.getOrCreateProxy(FAKE_REGISTRY, "overflow");
         assertEquals(cap, MeshJobs.cacheSizeForTest(),
             "cache must stay bounded at cap after overflow");
-        // The eldest (job-lru) must have been close()d by removeEldestEntry.
-        assertTrue(lru.toString().contains("closed=true"),
-            "evicted JobProxy must have close() called by removeEldestEntry; "
-                + "toString reported: " + lru.toString());
-        // overflow itself is still open — only the eldest is evicted.
+        // The evicted proxy is still open for whoever holds it.
+        assertFalse(lru.toString().contains("closed=true"),
+            "eviction must not close a proxy a live holder still uses; toString reported: "
+                + lru.toString());
         assertFalse(overflow.toString().contains("closed=true"));
-        // Re-fetching the evicted key constructs a NEW proxy instance —
-        // the original was dropped from the cache.
         JobProxy refetch = MeshJobs.getOrCreateProxy(FAKE_REGISTRY, "job-lru");
         assertNotSame(lru, refetch,
             "re-fetching the evicted key must construct a new proxy instance");
+        holder.close();
     }
 
     /**

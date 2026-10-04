@@ -47,13 +47,44 @@ public class MeshA2ATaskStore {
     private final Map<String, TaskRecord> store = new ConcurrentHashMap<>();
 
     /**
-     * Store the task record for {@code taskId}. Caller is responsible for
-     * having checked for duplicates via {@link #contains(String)} when
-     * uniqueness matters (spec §4.3 idempotency window).
+     * Store the task record for {@code taskId}, replacing any record there.
+     * Where uniqueness matters (spec §4.3 idempotency window), first claim the
+     * id with {@link #reserve(String, TaskRecord)} — a separate
+     * {@link #contains(String)} check races — and then {@code put} the real
+     * record over the reservation.
      */
     public void put(String taskId, TaskRecord record) {
         sweepExpired();
         store.put(taskId, record);
+    }
+
+    /**
+     * Atomically reserve {@code taskId} for an in-flight request by inserting
+     * {@code placeholder} only when no record exists (issue #1592).
+     *
+     * <p>Closes the window between a {@link #contains(String)} pre-check and the
+     * final {@link #put(String, TaskRecord)}: the handler runs in between, so two
+     * concurrent requests carrying the same id could both pass the check. Same
+     * contract as TypeScript's {@code reserveTask}; the caller overwrites the
+     * placeholder with the real record via {@link #put}.
+     *
+     * @return {@code true} when the id was free and is now reserved by the
+     *     caller; {@code false} when it is already in use
+     */
+    public boolean reserve(String taskId, TaskRecord placeholder) {
+        sweepExpired();
+        return store.putIfAbsent(taskId, placeholder) == null;
+    }
+
+    /**
+     * Drop {@code placeholder} if it is still the record for {@code taskId}
+     * (issue #1592) — a no-op once the caller has {@link #put} the real record.
+     * Callers run this in a {@code finally} after {@link #reserve}, so a request
+     * that fails before storing its record never leaves the id "in use" for
+     * the life of the process. Same role as TypeScript's {@code remove()}.
+     */
+    public void release(String taskId, TaskRecord placeholder) {
+        store.remove(taskId, placeholder);
     }
 
     /**
@@ -151,13 +182,18 @@ public class MeshA2ATaskStore {
      * @param jobProxy         live consumer-side handle to the underlying mesh
      *                         job; {@code null} for sync (state=completed/failed)
      *                         records that never had a backing JobProxy
+     * @param inFlight         {@code true} only for the reservation a request
+     *                         holds while its handler is still running — no
+     *                         terminal envelope and no JobProxy YET, as opposed
+     *                         to a record that will never have either
      */
     public record TaskRecord(
         String sessionId,
         Map<String, Object> requestMessage,
         Map<String, Object> terminalEnvelope,
         Long terminalAt,
-        JobProxy jobProxy
+        JobProxy jobProxy,
+        boolean inFlight
     ) {
         public TaskRecord {
             // Defensive copies: callers should not be able to mutate the
@@ -168,6 +204,25 @@ public class MeshA2ATaskStore {
             if (terminalEnvelope != null) {
                 terminalEnvelope = Collections.unmodifiableMap(new LinkedHashMap<>(terminalEnvelope));
             }
+        }
+
+        /** A stored (not in-flight) record. */
+        public TaskRecord(
+            String sessionId,
+            Map<String, Object> requestMessage,
+            Map<String, Object> terminalEnvelope,
+            Long terminalAt,
+            JobProxy jobProxy
+        ) {
+            this(sessionId, requestMessage, terminalEnvelope, terminalAt, jobProxy, false);
+        }
+
+        /**
+         * The reservation a {@code tasks/send} / {@code tasks/sendSubscribe}
+         * holds while its handler runs (see {@link MeshA2ATaskStore#reserve}).
+         */
+        public static TaskRecord inFlight(String sessionId, Map<String, Object> requestMessage) {
+            return new TaskRecord(sessionId, requestMessage, null, null, null, true);
         }
 
         /**

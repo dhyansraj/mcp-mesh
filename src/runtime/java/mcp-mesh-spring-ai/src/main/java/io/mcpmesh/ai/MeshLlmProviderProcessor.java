@@ -73,7 +73,11 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
     /** Default tool name for LLM provider (matches Python/TypeScript SDKs). */
     public static final String LLM_TOOL_NAME = "llm_generate";
 
+    /** Response key carrying token usage (matches Python/TypeScript SDKs). */
+    public static final String MESH_USAGE_KEY = "_mesh_usage";
+
     private ApplicationContext applicationContext;
+    private volatile McpHttpClient sharedMcpClient;
     private final List<LlmProviderConfig> registeredProviders = new ArrayList<>();
     private final List<AgentSpec.ToolSpec> toolSpecs = new ArrayList<>();
 
@@ -295,8 +299,19 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
      * @param params     Request parameters (messages, tools, output_schema, etc.)
      * @return Response map with content and optional tool_calls
      */
-    @SuppressWarnings("unchecked")
     public Map<String, Object> handleGenerateRequest(String capability, Map<String, Object> params) {
+        return generate(capability, params).response();
+    }
+
+    /**
+     * A generate response plus the model the vendor reported running (from its
+     * usage metadata), which the provider span records the way Python's
+     * provider span does; {@code null} when the vendor reported none.
+     */
+    record GenerateResult(Map<String, Object> response, String reportedModel) {}
+
+    @SuppressWarnings("unchecked")
+    GenerateResult generate(String capability, Map<String, Object> params) {
         log.debug("handleGenerateRequest called with capability: {}", capability);
 
         // Find provider config
@@ -323,6 +338,13 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
 
         // Extract request parameters
         List<Map<String, Object>> messages = (List<Map<String, Object>>) requestData.get("messages");
+        // `messages` is required (Python's MeshLlmRequest has no default for it).
+        // An EMPTY list is passed to the vendor as-is, exactly as Python does —
+        // the vendor's own validation answers it; nothing is invented here.
+        if (messages == null) {
+            throw new IllegalArgumentException(
+                "LLM request is missing 'messages' [provider=" + config.provider() + "]");
+        }
         List<Map<String, Object>> tools = (List<Map<String, Object>>) requestData.get("tools");
 
         // Extract model_params (contains output_schema for mesh delegation)
@@ -400,17 +422,12 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
         // Build response
         Map<String, Object> response = new LinkedHashMap<>();
 
+        String effectiveModel = effectiveModel(config, handler, handlerOptions);
+        String reportedModel = null;
         try {
             LlmProviderHandler.UsageMeta usageMeta = null;
 
-            if (messages == null || messages.isEmpty()) {
-                // Fallback to simple generation if no messages
-                String content = llmProvider.generate(config.provider(), "", "Hello");
-                // Note: simple generate() doesn't return token usage metadata.
-                // usageMeta remains null — this is expected for non-structured paths.
-                response.put("content", content);
-                response.put("tool_calls", List.of());
-            } else if (tools == null || tools.isEmpty()) {
+            if (tools == null || tools.isEmpty()) {
                 // No tools - use simple message generation with optional structured output
                 if (outputSchemaData != null) {
                     // Format system prompt with output schema
@@ -421,11 +438,14 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                     response.put("tool_calls", List.of());
                     usageMeta = llmResponse.usage();
                 } else {
-                    String content = llmProvider.generateWithMessages(config.provider(), messages, handlerOptions);
-                    // Note: generateWithMessages() doesn't return token usage metadata.
-                    // usageMeta remains null — this is expected for non-structured paths.
-                    response.put("content", content);
+                    // Plain text — the most common @MeshLlm shape. The handler's
+                    // Full variant keeps the vendor's usage so this path reports
+                    // _mesh_usage like every other (issue #1592).
+                    LlmProviderHandler.LlmResponse llmResponse =
+                        handler.generateWithMessagesFull(model, messages, handlerOptions);
+                    response.put("content", llmResponse.content());
                     response.put("tool_calls", List.of());
+                    usageMeta = llmResponse.usage();
                 }
             } else {
                 // Tools present - extract _mesh_endpoint for provider-side execution
@@ -443,18 +463,22 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                     // Parallel mode: manual agentic loop with CompletableFuture
                     log.info("Provider-managed parallel loop: {} tools with endpoints", toolEndpoints.size());
 
-                    McpHttpClient mcpClient = new McpHttpClient(objectMapper);
+                    McpHttpClient mcpClient = getMcpHttpClient();
                     MediaStore mediaStore = getMediaStore();
                     List<Map<String, Object>> currentMessages = new ArrayList<>(messages);
                     LlmProviderHandler.LlmResponse lastResponse = null;
                     int maxIterations = resolvedMaxIterations;
                     boolean completed = false;
+                    // Usage is summed across every LLM call the loop makes, as
+                    // Python's provider loop does — not just the last one.
+                    LlmProviderHandler.UsageMeta loopUsage = null;
 
                     for (int iteration = 0; iteration < maxIterations; iteration++) {
                         // Call LLM WITHOUT auto-execution (toolExecutor=null returns tool_calls)
                         LlmProviderHandler.LlmResponse llmResponse = handler.generateWithTools(
                             model, currentMessages, toolDefs, null, outputSchema, handlerOptions
                         );
+                        loopUsage = addUsage(loopUsage, llmResponse.usage());
 
                         if (llmResponse.toolCalls() == null || llmResponse.toolCalls().isEmpty()) {
                             lastResponse = llmResponse;
@@ -534,11 +558,11 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                         log.warn("Provider parallel loop hit max iterations ({}) without final response", maxIterations);
                         applyExhaustionSignal(
                             response, lastResponse != null ? lastResponse.content() : null);
-                        usageMeta = lastResponse != null ? lastResponse.usage() : null;
+                        usageMeta = loopUsage;
                     } else if (lastResponse != null) {
                         response.put("content", lastResponse.content());
                         response.put("tool_calls", List.of());
-                        usageMeta = lastResponse.usage();
+                        usageMeta = loopUsage;
                     }
                 } else if (!toolEndpoints.isEmpty()) {
                     // Sequential mode: provider-managed agentic loop with auto-execution
@@ -570,16 +594,12 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                 }
             }
 
-            // Include usage metadata in response for span enrichment
+            // Token usage rides the response as `_mesh_usage` — the same key,
+            // field names and placement Python (helpers._build_mesh_usage) and
+            // TypeScript emit, and the one every consumer reads (issue #1592).
             if (usageMeta != null) {
-                Map<String, Object> usageMap = new LinkedHashMap<>();
-                usageMap.put("input_tokens", usageMeta.inputTokens());
-                usageMap.put("output_tokens", usageMeta.outputTokens());
-                usageMap.put("total_tokens", usageMeta.totalTokens());
-                if (usageMeta.model() != null) {
-                    usageMap.put("model", usageMeta.model());
-                }
-                response.put("_usage", usageMap);
+                response.put(MESH_USAGE_KEY, buildMeshUsage(usageMeta, effectiveModel));
+                reportedModel = usageMeta.model();
             }
         } catch (Exception e) {
             log.error("LLM generation failed: {}", e.getMessage(), e);
@@ -587,8 +607,61 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                 "LLM generation failed [provider=" + config.provider() + ", model=" + config.modelName() + "]: " + e.getMessage(), e);
         }
 
-        response.put("model", config.provider() + "/" + config.modelName());
-        return response;
+        // Same value as _mesh_usage.model, so the two never disagree.
+        response.put("model", effectiveModel);
+        return new GenerateResult(response, reportedModel);
+    }
+
+    /** Sum two usage reports; either may be null. The later model wins. */
+    static LlmProviderHandler.UsageMeta addUsage(
+            LlmProviderHandler.UsageMeta total, LlmProviderHandler.UsageMeta next) {
+        if (next == null) {
+            return total;
+        }
+        if (total == null) {
+            return next;
+        }
+        return new LlmProviderHandler.UsageMeta(
+            total.inputTokens() + next.inputTokens(),
+            total.outputTokens() + next.outputTokens(),
+            next.model() != null ? next.model() : total.model());
+    }
+
+    /**
+     * The {@code _mesh_usage} block: {@code {prompt_tokens, completion_tokens,
+     * model}} — exactly Python's {@code _build_mesh_usage} shape.
+     */
+    static Map<String, Object> buildMeshUsage(LlmProviderHandler.UsageMeta usage, String model) {
+        Map<String, Object> block = new LinkedHashMap<>();
+        block.put("prompt_tokens", usage.inputTokens());
+        block.put("completion_tokens", usage.outputTokens());
+        block.put("model", model);
+        return block;
+    }
+
+    /**
+     * The model this request ran on, vendor-qualified like Python's
+     * {@code effective_model}: a vendor-matched per-call override, else the
+     * provider's declared model.
+     */
+    static String effectiveModel(
+            LlmProviderConfig config, LlmProviderHandler handler, Map<String, Object> handlerOptions) {
+        String bare = handler.resolveEffectiveModelName(handlerOptions);
+        if (bare == null || bare.isBlank()) {
+            bare = config.modelName();
+        }
+        // An accepted vendor-qualified override is reported as given, the way
+        // Python reports override_model — so a vertex_ai/ override on a Gemini
+        // provider reads vertex_ai/..., not gemini/...
+        Object raw = handlerOptions != null ? handlerOptions.get(LlmProviderHandler.OPTION_MODEL) : null;
+        if (raw instanceof String override) {
+            String trimmed = override.trim();
+            int slash = trimmed.indexOf('/');
+            if (slash > 0 && trimmed.substring(slash + 1).equals(bare)) {
+                return trimmed;
+            }
+        }
+        return config.provider() + "/" + bare;
     }
 
     /**
@@ -758,7 +831,7 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
             String vendor,
             MediaStore mediaStore) {
 
-        McpHttpClient mcpClient = new McpHttpClient(objectMapper);
+        McpHttpClient mcpClient = getMcpHttpClient();
 
         return (toolName, argsJson) -> {
             String endpoint = toolEndpoints.get(toolName);
@@ -807,6 +880,40 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                 return "{\"error\": \"" + errMsg.replace("\"", "\\\"") + "\"}";
             }
         };
+    }
+
+    /**
+     * The runtime's shared {@link McpHttpClient} (issue #1592).
+     *
+     * <p>Every provider-side tool call used to build its own client — a new
+     * OkHttp connection pool and dispatcher, and with mTLS a new SSLContext read
+     * back from the PEM files — per {@code llm_generate} request. The starter
+     * already exposes one client as a bean, which every other outbound path
+     * uses; per-call timeouts are applied with {@code newBuilder()} off its base,
+     * so sharing it changes no timeout behaviour. Outside a full starter context
+     * (tests, hand-wired processors) one client is built lazily and reused.
+     */
+    McpHttpClient getMcpHttpClient() {
+        McpHttpClient client = sharedMcpClient;
+        if (client != null) {
+            return client;
+        }
+        synchronized (this) {
+            if (sharedMcpClient == null) {
+                McpHttpClient bean = null;
+                if (applicationContext != null) {
+                    try {
+                        var provider = applicationContext.getBeanProvider(McpHttpClient.class);
+                        bean = provider != null ? provider.getIfAvailable() : null;
+                    } catch (BeansException e) {
+                        log.debug("McpHttpClient bean unavailable — building a provider-local client: {}",
+                            e.getMessage());
+                    }
+                }
+                sharedMcpClient = bean != null ? bean : new McpHttpClient(objectMapper);
+            }
+            return sharedMcpClient;
+        }
     }
 
     /**

@@ -112,6 +112,25 @@ public interface LlmProviderHandler {
     );
 
     /**
+     * {@link #generateWithMessages} with the vendor's token usage kept, so the
+     * provider can report {@code _mesh_usage} on the plain-text path too (issue
+     * #1592). The default wraps {@link #generateWithMessages} and reports no
+     * usage; the built-in handlers override it.
+     *
+     * @param model    The Spring AI ChatModel for this vendor
+     * @param messages List of messages with role and content
+     * @param options  Generation options (max_tokens, temperature, etc.)
+     * @return the generated text, no tool calls, and usage when the vendor reported it
+     */
+    default LlmResponse generateWithMessagesFull(
+        ChatModel model,
+        List<Map<String, Object>> messages,
+        Map<String, Object> options
+    ) {
+        return new LlmResponse(generateWithMessages(model, messages, options), List.of());
+    }
+
+    /**
      * Generate a response with tools and structured output support.
      *
      * <p>This is the main method for LLM generation with full feature support:
@@ -428,6 +447,11 @@ public interface LlmProviderHandler {
      * @return the bare model name to apply, or {@code null} to keep the default
      */
     static String resolveModelOverride(Map<String, Object> options, String expectedVendor, String[] aliases) {
+        return resolveModelOverride(options, expectedVendor, aliases, true);
+    }
+
+    private static String resolveModelOverride(
+            Map<String, Object> options, String expectedVendor, String[] aliases, boolean warn) {
         if (options == null) {
             return null;
         }
@@ -448,6 +472,9 @@ public interface LlmProviderHandler {
         }
         if (vendorMatches(declaredVendor, expectedVendor, aliases)) {
             return modelName;
+        }
+        if (!warn) {
+            return null;
         }
         LoggerFactory.getLogger(LlmProviderHandler.class).warn(
             "Ignoring cross-vendor model override '{}' (declared vendor '{}' does not match provider vendor '{}'); "
@@ -484,6 +511,32 @@ public interface LlmProviderHandler {
     static String effectiveModel(Map<String, Object> options, String expectedVendor, String[] aliases) {
         String override = resolveModelOverride(options, expectedVendor, aliases);
         return override != null ? override : declaredModelOption(options);
+    }
+
+    /**
+     * The bare model name this handler applies for {@code options} — the same
+     * resolution {@link #effectiveModel} performs, without re-logging the
+     * cross-vendor warning the generate path already emitted. Used to report
+     * the model a request actually ran on (e.g. {@code _mesh_usage.model}).
+     *
+     * @param options the generation options (may be null)
+     * @return the bare model name, or {@code null} if neither an override nor a
+     *         declared model is available
+     */
+    default String resolveEffectiveModelName(Map<String, Object> options) {
+        String override = resolveModelOverride(options, getVendor(), getModelOverrideAliases(), false);
+        return override != null ? override : declaredModelOption(options);
+    }
+
+    /**
+     * Vendor aliases accepted for a {@code model_params.model} override.
+     * Defaults to {@link #getAliases()}; a handler that accepts a wider set for
+     * overrides (Gemini: Vertex AI) widens it here.
+     *
+     * @return accepted vendor aliases for override resolution
+     */
+    default String[] getModelOverrideAliases() {
+        return getAliases();
     }
 
     /**

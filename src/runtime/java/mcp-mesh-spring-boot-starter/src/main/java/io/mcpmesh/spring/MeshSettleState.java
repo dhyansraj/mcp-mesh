@@ -47,20 +47,24 @@ import java.util.concurrent.TimeUnit;
  *       keying was wrong here: with tools A and B both depending on the
  *       same capability, A's resolution event would wake B's waiter
  *       before B's slot was written — B proceeded with {@code null}.</li>
- *   <li><b>{@code @MeshRoute} requests</b> use capability keys, counted
- *       down by {@link MeshDependencyInjector#updateToolDependency}. That
- *       keying is safe for routes because every route resolves through
- *       the injector's SHARED per-capability proxy, which is updated
- *       ({@code updateEndpoint}) immediately before the countdown — a
- *       woken route request re-reads a live proxy regardless of which
- *       consumer's event fired.</li>
+ *   <li><b>{@code @MeshRoute} requests and {@code @MeshA2A} handlers</b> use
+ *       capability keys, counted down by
+ *       {@link MeshDependencyInjector#updateToolDependency}. That keying is
+ *       safe for both because they resolve through the injector's SHARED
+ *       per-capability proxy, which is updated ({@code updateEndpoint})
+ *       immediately before the countdown — a woken request re-reads a live
+ *       proxy regardless of which consumer's event fired.</li>
+ *   <li><b>{@code @MeshLlm} provider slots</b> use a per-consumer key,
+ *       {@code llm:<funcId>} (Python's {@code _llm_settle_key}), resolved by
+ *       {@link MeshToolWrapper#markLlmProviderResolved} once the consumer's
+ *       provider lands (issue #1592, Python #1456).</li>
  * </ul>
  *
- * <p>Scope (deliberate): the grace covers the dependency-injection
- * invocation paths only — {@link MeshToolWrapper} argument building and the
- * {@code @MeshRoute} interceptor. Startup-hook dependency usage and
- * {@code @MeshLlm} provider/filter assembly (registration-time, with its own
- * update mechanism) are NOT covered.
+ * <p>Scope (deliberate): the grace covers the injection paths — {@link
+ * MeshToolWrapper} argument building (tool dependencies and the
+ * {@code MeshLlmAgent} provider), the {@code @MeshRoute} interceptor, the
+ * {@code @MeshA2A} dispatcher, and bean-injected {@code @MeshDependsOn}
+ * proxies. Startup-hook dependency usage is NOT covered.
  *
  * <p>This is environmental, not a declaration mistake: strict-DI style
  * diagnostics never interact with the settle window in any way.

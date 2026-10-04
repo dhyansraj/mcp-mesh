@@ -797,6 +797,19 @@ public class MeshToolWrapper implements McpToolHandler {
     }
 
     /**
+     * Record that this consumer's {@code @MeshLlm} provider has resolved, waking
+     * any call parked on it during the settling window (issue #1592). Call AFTER
+     * the provider is installed on the agent in this wrapper's slot, so a woken
+     * call re-reads an available agent.
+     */
+    public void markLlmProviderResolved() {
+        if (injectedLlmAgents.length() > 0) {
+            MeshSettleState.getInstance().markResolved(
+                MeshToolWrapperRegistry.buildLlmSettleKey(funcId));
+        }
+    }
+
+    /**
      * Set the ExecutionTracer for this wrapper.
      *
      * @param tracer The tracer to use
@@ -1315,6 +1328,22 @@ public class MeshToolWrapper implements McpToolHandler {
         for (int i = 0; i < llmAgentPositions.size(); i++) {
             int paramPos = llmAgentPositions.get(i);
             MeshLlmAgent agent = injectedLlmAgents.get(i);
+
+            // Settling-window grace for the provider slot (issue #1592,
+            // Python #1456): while settling, wait — bounded by the remaining
+            // budget — for this consumer's provider, then re-read the slot.
+            // Keyed on availability: the proxy is usually installed before
+            // its provider lands. On expiry the call proceeds exactly as
+            // before (null / unavailable agent).
+            // Only a declared key waits: one is declared for a real @MeshLlm
+            // consumer, never for a bare MeshLlmAgent parameter, whose provider
+            // would never arrive.
+            String llmKey = MeshToolWrapperRegistry.buildLlmSettleKey(funcId);
+            if ((agent == null || !agent.isAvailable()) && !settleState.isSettled()
+                    && settleState.isDeclared(llmKey)) {
+                settleState.awaitDependency(llmKey, "LLM provider for " + funcId);
+                agent = injectedLlmAgents.get(i);
+            }
 
             if (agent == null) {
                 log.warn("LLM agent at index {} is null for {} - passing null for graceful degradation",

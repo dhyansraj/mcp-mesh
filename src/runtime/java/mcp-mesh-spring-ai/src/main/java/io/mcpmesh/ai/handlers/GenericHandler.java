@@ -50,6 +50,14 @@ public class GenericHandler implements LlmProviderHandler {
             ChatModel model,
             List<Map<String, Object>> messages,
             Map<String, Object> options) {
+        return generateWithMessagesFull(model, messages, options).content();
+    }
+
+    @Override
+    public LlmResponse generateWithMessagesFull(
+            ChatModel model,
+            List<Map<String, Object>> messages,
+            Map<String, Object> options) {
 
         log.debug("GenericHandler: Processing {} messages (fallback mode)", messages.size());
 
@@ -69,7 +77,7 @@ public class GenericHandler implements LlmProviderHandler {
         log.debug("GenericHandler: Generated response ({} chars)",
             content != null ? content.length() : 0);
 
-        return content;
+        return new LlmResponse(content, List.of(), extractUsage(response));
     }
 
     @Override

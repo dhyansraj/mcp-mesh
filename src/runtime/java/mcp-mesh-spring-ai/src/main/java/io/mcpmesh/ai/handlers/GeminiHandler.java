@@ -63,6 +63,11 @@ public class GeminiHandler implements LlmProviderHandler {
      */
     private static final String[] MODEL_OVERRIDE_ALIASES = {"google", "vertex_ai", "vertex"};
 
+    @Override
+    public String[] getModelOverrideAliases() {
+        return MODEL_OVERRIDE_ALIASES.clone();
+    }
+
     /** Gemini uses a shorter previous-turn prefix than the Anthropic/OpenAI default. */
     @Override
     public String previousResponsePrefix() {
@@ -106,6 +111,14 @@ public class GeminiHandler implements LlmProviderHandler {
             ChatModel model,
             List<Map<String, Object>> messages,
             Map<String, Object> options) {
+        return generateWithMessagesFull(model, messages, options).content();
+    }
+
+    @Override
+    public LlmResponse generateWithMessagesFull(
+            ChatModel model,
+            List<Map<String, Object>> messages,
+            Map<String, Object> options) {
 
         log.debug("GeminiHandler: Processing {} messages", messages.size());
 
@@ -124,7 +137,7 @@ public class GeminiHandler implements LlmProviderHandler {
         log.debug("GeminiHandler: Generated response ({} chars)",
             content != null ? content.length() : 0);
 
-        return content;
+        return new LlmResponse(content, List.of(), extractUsage(response));
     }
 
     @Override
