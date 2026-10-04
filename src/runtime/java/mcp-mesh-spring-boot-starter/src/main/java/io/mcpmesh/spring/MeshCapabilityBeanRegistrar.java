@@ -3,7 +3,7 @@ package io.mcpmesh.spring;
 import io.mcpmesh.spring.web.MeshA2A;
 import io.mcpmesh.spring.web.MeshDependency;
 import io.mcpmesh.spring.web.MeshDependsOn;
-import io.mcpmesh.spring.web.MeshInject;
+import io.mcpmesh.spring.web.MeshInjectableSlots;
 import io.mcpmesh.spring.web.MeshRoute;
 import io.mcpmesh.types.McpMeshTool;
 import org.slf4j.Logger;
@@ -14,13 +14,12 @@ import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.beans.factory.support.BeanDefinitionBuilder;
 import org.springframework.beans.factory.support.BeanDefinitionRegistry;
 import org.springframework.beans.factory.support.BeanDefinitionRegistryPostProcessor;
+import org.springframework.core.MethodIntrospector;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.util.ClassUtils;
+import org.springframework.util.ReflectionUtils;
 
 import java.lang.reflect.Method;
-import java.lang.reflect.Parameter;
-import java.lang.reflect.ParameterizedType;
-import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -34,8 +33,9 @@ import java.util.concurrent.atomic.AtomicReference;
  * annotations and registers a singleton {@link McpMeshTool} bean per
  * declared capability, named by the capability string.
  *
- * <p>Issue #1088: additionally scans each resolved bean class's declared
- * methods for {@link MeshRoute} and {@link MeshA2A} annotations and feeds
+ * <p>Issue #1088: additionally scans each resolved bean class's methods
+ * (inherited ones included, #1569) for {@link MeshRoute} and {@link MeshA2A}
+ * annotations and feeds
  * their {@code dependencies()} into the same capability map. This lets
  * constructor/field injection of {@code @Qualifier("cap") McpMeshTool<...>}
  * resolve for capabilities declared via {@code @MeshRoute(dependencies=...)}
@@ -60,7 +60,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * overload when the {@code @MeshDependency.expectedType} is set). The same
  * proxy instance is returned forever after (Spring caches it as a singleton),
  * which preserves the heartbeat-driven auto-rewiring semantics — the
- * injector mutates the same proxy in place.
+ * injector updates the capability's shared endpoint state in place.
  *
  * <p>Conflict policy: if a bean name equal to a capability is already
  * defined (user owns it), we log an ERROR — including the conflicting bean's
@@ -129,7 +129,19 @@ public class MeshCapabilityBeanRegistrar implements BeanDefinitionRegistryPostPr
                 continue;
             }
 
-            Class<?> expectedType = declaration.expectedType();
+            Class<?> expectedType = declaration.beanType();
+            if (expectedType == null && declaration.paramTypes().size() > 1) {
+                // A singleton bean cannot vary by injection point, so it can't
+                // honour each @Qualifier consumer's own T: say so loudly.
+                log.warn("Capability '{}' is consumed as different McpMeshTool<T> types {} by "
+                        + "handlers in [{}]. Each handler gets its own typed proxy, but "
+                        + "@Qualifier(\"{}\") injection points receive the untyped bean, whose "
+                        + "results are dynamic (Map) — a typed McpMeshTool<Foo> field would fail "
+                        + "with ClassCastException at the call site. Set "
+                        + "@MeshDependency(expectedType = ...) to type the bean.",
+                    capability, declaration.paramTypes(),
+                    String.join(", ", declaration.declarerClassNames()), capability);
+            }
             BeanDefinitionBuilder builder = BeanDefinitionBuilder
                 .genericBeanDefinition(McpMeshTool.class,
                     () -> resolveProxy(beanFactory, capability, expectedType));
@@ -213,6 +225,9 @@ public class MeshCapabilityBeanRegistrar implements BeanDefinitionRegistryPostPr
             MeshDependsOn annotation = AnnotationUtils.findAnnotation(beanClass, MeshDependsOn.class);
             if (annotation != null) {
                 for (MeshDependency dep : annotation.value()) {
+                    // Issue #1572: a malformed "a|b" selector tag fails the boot here.
+                    MeshTagSpecs.validate(dep.tags(), "@MeshDependsOn on " + beanClass.getName()
+                        + " dependency '" + dep.capability() + "'");
                     mergeDependency(capabilities, dep, beanClass, "@MeshDependsOn", null);
                 }
             }
@@ -221,22 +236,81 @@ public class MeshCapabilityBeanRegistrar implements BeanDefinitionRegistryPostPr
             // (their BeanPostProcessors run later), so we read the annotations
             // straight off the bean class via reflection — mirroring
             // MeshRouteBeanPostProcessor / MeshA2ABeanPostProcessor.
-            for (Method method : beanClass.getDeclaredMethods()) {
+            //
+            // Issue #1569: the full method set, inherited handlers included, via
+            // the same MethodIntrospector selection the scanners use — so an
+            // override annotated on both levels, or a bridge method, is seen
+            // once, and a base-class handler is seen at all.
+            for (Method method : handlerMethods(beanClass)) {
                 MeshRoute meshRoute = AnnotationUtils.findAnnotation(method, MeshRoute.class);
                 if (meshRoute != null) {
-                    for (MeshDependency dep : meshRoute.dependencies()) {
-                        mergeDependency(capabilities, dep, beanClass, "@MeshRoute", method);
-                    }
+                    mergeHandlerDependencies(capabilities, meshRoute.dependencies(), beanClass,
+                        "@MeshRoute", method, MeshInjectableSlots.routeSlots(method));
                 }
                 MeshA2A meshA2A = AnnotationUtils.findAnnotation(method, MeshA2A.class);
                 if (meshA2A != null) {
-                    for (MeshDependency dep : meshA2A.dependencies()) {
-                        mergeDependency(capabilities, dep, beanClass, "@MeshA2A", method);
-                    }
+                    mergeHandlerDependencies(capabilities, meshA2A.dependencies(), beanClass,
+                        "@MeshA2A", method, MeshInjectableSlots.a2aSlots(method));
                 }
             }
         }
         return capabilities;
+    }
+
+    /**
+     * {@code @MeshRoute} / {@code @MeshA2A} candidates of {@code beanClass}:
+     * one entry per logical method, inherited declarations included, bridge and
+     * synthetic methods excluded.
+     */
+    private static Set<Method> handlerMethods(Class<?> beanClass) {
+        // Runs over every bean definition: skip classes that cannot carry
+        // either annotation, and — as Spring's EventListenerMethodProcessor —
+        // treat an unresolvable signature as "no handlers".
+        if (!AnnotationUtils.isCandidateClass(beanClass, MeshRoute.class)
+                && !AnnotationUtils.isCandidateClass(beanClass, MeshA2A.class)) {
+            return Set.of();
+        }
+        try {
+            return MethodIntrospector.selectMethods(beanClass,
+                (ReflectionUtils.MethodFilter) m -> !m.isBridge() && !m.isSynthetic()
+                    && (AnnotationUtils.findAnnotation(m, MeshRoute.class) != null
+                        || AnnotationUtils.findAnnotation(m, MeshA2A.class) != null));
+        } catch (Exception | LinkageError ex) {
+            log.debug("Could not resolve methods of {} for @MeshRoute/@MeshA2A scanning",
+                beanClass.getName(), ex);
+            return Set.of();
+        }
+    }
+
+    /**
+     * Merge one handler's declared dependencies, pairing each with the
+     * {@code McpMeshTool<T>} parameter it binds to <b>positionally</b> — the
+     * same {@link MeshPositionalBinder} pairing the route and A2A resolvers use
+     * to hand that parameter its proxy (issue #1568). Parameter names and
+     * {@code @MeshInject} values take no part.
+     */
+    private void mergeHandlerDependencies(Map<String, CapabilityDeclaration> capabilities,
+                                          MeshDependency[] deps, Class<?> declarerClass,
+                                          String sourceLabel, Method method,
+                                          List<MeshPositionalBinder.Slot> slots) {
+        List<String> declared = new ArrayList<>(deps.length);
+        for (MeshDependency dep : deps) {
+            declared.add(dep.capability());
+        }
+        MeshPositionalBinder.Binding binding =
+            MeshPositionalBinder.bind(method, slots, declared, declared.size());
+        for (int k = 0; k < deps.length; k++) {
+            Class<?> paramType = null;
+            int ordinal = binding.depIndexToSlot()[k];
+            if (ordinal >= 0) {
+                // Route/A2A slots are all PROXY, so slot k is dependency k's slot.
+                int position = binding.slots().get(k).parameterPosition();
+                if (MeshInjectableSlots.proxyTypeArgument(method, position, declarerClass) instanceof Class<?> concrete) {
+                    paramType = concrete;
+                }
+            }
+            mergeDependency(capabilities, deps[k], declarerClass, sourceLabel, paramType);
+        }
     }
 
     /**
@@ -245,19 +319,18 @@ public class MeshCapabilityBeanRegistrar implements BeanDefinitionRegistryPostPr
      * by every source ({@code @MeshDependsOn}, {@code @MeshRoute},
      * {@code @MeshA2A}).
      *
-     * <p>{@code expectedType} resolution: an explicit non-{@code Void}
-     * {@link MeshDependency#expectedType()} always wins. When the attribute is
-     * left at its {@code Void.class} default AND the declaration originates
-     * from a {@code @MeshRoute} / {@code @MeshA2A} method (i.e. {@code method}
-     * is non-null), we replicate {@code MeshRouteBeanPostProcessor.enrichDependencyReturnTypes}
-     * by reading the generic type argument from a matching
-     * {@code McpMeshTool<Foo>} parameter (matched by {@code @MeshInject} value
-     * or parameter name against the capability / parameter name) — but only
-     * when {@code Foo} is a concrete {@code Class<?>}.
+     * <p>Only an explicit {@link MeshDependency#expectedType()} takes part in
+     * the hard conflict check: two different explicit types for one capability
+     * fail the boot. {@code paramType} — the concrete {@code Foo} of the
+     * {@code McpMeshTool<Foo>} parameter the dependency positionally binds to
+     * on a handler — is only a fallback for the {@code @Qualifier} bean's
+     * default type (see {@link CapabilityDeclaration#beanType()}). Handlers
+     * that declare different {@code T} for one capability are legal: each gets
+     * its own typed proxy at request time (issue #1568).
      */
     private void mergeDependency(Map<String, CapabilityDeclaration> capabilities,
                                  MeshDependency dep, Class<?> declarerClass,
-                                 String sourceLabel, Method method) {
+                                 String sourceLabel, Class<?> paramType) {
         String capability = dep.capability();
         if (capability == null || capability.isBlank()) {
             log.warn("{} on {} has @MeshDependency with empty capability — skipping",
@@ -269,22 +342,11 @@ public class MeshCapabilityBeanRegistrar implements BeanDefinitionRegistryPostPr
         if (incomingExpectedType == Void.class || incomingExpectedType == void.class) {
             incomingExpectedType = null;
         }
-        // Param-generic enrichment only when the attribute was left at default
-        // and we have a @MeshRoute/@MeshA2A method to inspect.
-        if (incomingExpectedType == null && method != null) {
-            incomingExpectedType = resolveParamGenericType(method, dep, capability);
-        }
 
-        CapabilityDeclaration existing = capabilities.get(capability);
-        if (existing == null) {
-            CapabilityDeclaration fresh = new CapabilityDeclaration(incomingExpectedType);
-            fresh.addDeclarer(declarerClass.getName());
-            fresh.addSourceLabel(sourceLabel);
-            capabilities.put(capability, fresh);
-            return;
-        }
+        CapabilityDeclaration declaration = capabilities.computeIfAbsent(
+            capability, k -> new CapabilityDeclaration());
 
-        Class<?> existingExpectedType = existing.expectedType();
+        Class<?> existingExpectedType = declaration.explicitType();
         if (existingExpectedType != null && incomingExpectedType != null
                 && !existingExpectedType.equals(incomingExpectedType)) {
             throw new IllegalStateException(String.format(
@@ -294,8 +356,8 @@ public class MeshCapabilityBeanRegistrar implements BeanDefinitionRegistryPostPr
                     + "capability, or split into separate capability names.",
                 capability,
                 existingExpectedType.getName(),
-                String.join("/", existing.sourceLabels()),
-                String.join(", ", existing.declarerClassNames()),
+                String.join("/", declaration.sourceLabels()),
+                String.join(", ", declaration.declarerClassNames()),
                 incomingExpectedType.getName(),
                 sourceLabel,
                 declarerClass.getName()));
@@ -304,52 +366,13 @@ public class MeshCapabilityBeanRegistrar implements BeanDefinitionRegistryPostPr
         // later one supplies it. The non-null type wins so the registered
         // proxy bean gets typed deserialisation from the very first call.
         if (existingExpectedType == null && incomingExpectedType != null) {
-            existing.setExpectedType(incomingExpectedType);
+            declaration.setExplicitType(incomingExpectedType);
         }
-        existing.addDeclarer(declarerClass.getName());
-        existing.addSourceLabel(sourceLabel);
-    }
-
-    /**
-     * Replicate {@code MeshRouteBeanPostProcessor.enrichDependencyReturnTypes}:
-     * scan ALL {@code McpMeshTool<Foo>} parameters on {@code method} that match
-     * {@code dep} (by {@code @MeshInject} value or parameter name against the
-     * capability or {@link MeshDependency#name()}), and return the concrete
-     * generic type argument {@code Foo} of the first match that has one.
-     * A matched parameter whose generic argument is not a concrete
-     * {@code Class<?>} (raw {@code McpMeshTool} / type variable / wildcard) is
-     * skipped and the scan continues. Returns {@code null} only when no matching
-     * parameter with a concrete {@code Class<?>} generic argument exists.
-     */
-    private Class<?> resolveParamGenericType(Method method, MeshDependency dep, String capability) {
-        Type[] genericTypes = method.getGenericParameterTypes();
-        Parameter[] params = method.getParameters();
-        String depName = dep.name();
-        for (int i = 0; i < params.length; i++) {
-            if (!McpMeshTool.class.isAssignableFrom(params[i].getType())) {
-                continue;
-            }
-            MeshInject meshInject = params[i].getAnnotation(MeshInject.class);
-            String matchKey;
-            if (meshInject != null && !meshInject.value().isEmpty()) {
-                matchKey = meshInject.value();
-            } else {
-                matchKey = params[i].getName();
-            }
-            boolean matches = capability.equals(matchKey)
-                || (depName != null && !depName.isBlank() && depName.equals(matchKey));
-            if (!matches) {
-                continue;
-            }
-            if (genericTypes[i] instanceof ParameterizedType pt) {
-                Type[] typeArgs = pt.getActualTypeArguments();
-                if (typeArgs.length > 0 && typeArgs[0] instanceof Class<?> concrete) {
-                    return concrete;
-                }
-            }
-            continue;
+        if (incomingExpectedType == null && paramType != null) {
+            declaration.addParamType(paramType);
         }
-        return null;
+        declaration.addDeclarer(declarerClass.getName());
+        declaration.addSourceLabel(sourceLabel);
     }
 
     /**
@@ -418,24 +441,16 @@ public class MeshCapabilityBeanRegistrar implements BeanDefinitionRegistryPostPr
     }
 
     /**
-     * Per-capability accumulator: tracks the accumulated expected type and
-     * every {@code @MeshDependsOn}-annotated class that mentions the
-     * capability (for conflict-diagnostic log messages).
-     *
-     * <p>{@code expectedType} is mutable so the upgrade path in
-     * {@link #collectCapabilities} can replace an initial {@code null}
-     * (a declarer that omitted {@code expectedType}) with a non-null type
-     * supplied by a later declarer for the same capability. Conflicts
-     * between two non-null types fail fast — see the caller.
+     * Per-capability accumulator: the explicit {@code expectedType} (if any
+     * declarer set one), the {@code McpMeshTool<T>} types of handler parameters
+     * bound to the capability, and every declaring class (for conflict
+     * diagnostics).
      */
     private static final class CapabilityDeclaration {
-        private Class<?> expectedType;
+        private Class<?> explicitType;
+        private final Set<Class<?>> paramTypes = new LinkedHashSet<>();
         private final List<String> declarerClassNames = new ArrayList<>();
         private final Set<String> sourceLabels = new LinkedHashSet<>();
-
-        CapabilityDeclaration(Class<?> expectedType) {
-            this.expectedType = expectedType;
-        }
 
         void addDeclarer(String className) {
             if (!declarerClassNames.contains(className)) {
@@ -447,12 +462,32 @@ public class MeshCapabilityBeanRegistrar implements BeanDefinitionRegistryPostPr
             sourceLabels.add(label);
         }
 
-        Class<?> expectedType() {
-            return expectedType;
+        Class<?> explicitType() {
+            return explicitType;
         }
 
-        void setExpectedType(Class<?> expectedType) {
-            this.expectedType = expectedType;
+        void setExplicitType(Class<?> explicitType) {
+            this.explicitType = explicitType;
+        }
+
+        void addParamType(Class<?> type) {
+            paramTypes.add(type);
+        }
+
+        /**
+         * The default type of the capability's {@code @Qualifier} bean: the
+         * explicit {@code expectedType} when set; else the handler parameter
+         * type when every handler agrees; else {@code null} (dynamic).
+         */
+        Class<?> beanType() {
+            if (explicitType != null) {
+                return explicitType;
+            }
+            return paramTypes.size() == 1 ? paramTypes.iterator().next() : null;
+        }
+
+        Set<Class<?>> paramTypes() {
+            return Set.copyOf(paramTypes);
         }
 
         List<String> declarerClassNames() {

@@ -9,17 +9,20 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.HandlerInterceptor;
 import tools.jackson.databind.ObjectMapper;
 
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -46,6 +49,9 @@ public class MeshRouteHandlerInterceptor implements HandlerInterceptor {
     /** Serializes the issue #1249 perimeter 503 body as real JSON (safe for
      * any characters a capability name might carry). */
     private static final ObjectMapper JSON = MeshObjectMappers.create();
+
+    /** Handlers already reported as unresolvable — log once, not per request. */
+    private final java.util.Set<Method> unresolvableReported = ConcurrentHashMap.newKeySet();
 
     /**
      * Request attribute key for the resolved dependencies.
@@ -124,10 +130,39 @@ public class MeshRouteHandlerInterceptor implements HandlerInterceptor {
         // registration indexed. Deriving it from the BEAN TYPE instead diverged
         // for a handler inherited from a base class (declaring class = base,
         // bean type = concrete controller) and the fallback silently missed.
+        Method method = handlerMethod.getMethod();
         MeshRouteRegistry.RouteMetadata metadata =
-            registry.getByHandlerMethod(handlerMethod.getMethod());
-        String handlerMethodId = MeshRouteRegistry.RouteMetadata.buildHandlerMethodId(
-            handlerMethod.getMethod());
+            registry.getByHandlerMethod(handlerMethod.getBeanType(), method);
+        String handlerMethodId = MeshRouteRegistry.RouteMetadata.buildHandlerMethodId(method);
+        if (metadata == null && registry.isAmbiguousHandlerMethod(method)) {
+            // An inherited handler bound differently per controller (issue
+            // #1569): only (controller class, Method) is exact. getBeanType()
+            // misses for a JDK-proxied controller ($ProxyN), so retry with the
+            // AOP target class before giving up.
+            Object bean = handlerMethod.getBean();
+            if (!(bean instanceof String)) {
+                metadata = registry.getByHandlerMethod(AopUtils.getTargetClass(bean), method);
+            }
+            if (metadata == null) {
+                // Known mesh route, unresolvable binding: fail CLOSED. Serving
+                // it would hand the handler null McpMeshTools and skip the
+                // required-dependency 503.
+                if (unresolvableReported.add(method)) {
+                    log.error("@MeshRoute {} is inherited by several controllers with different "
+                            + "dependency bindings, and the controller serving this request ({}) "
+                            + "matches none of them — returning 503. Register the controller as a "
+                            + "class-proxied (CGLIB) bean, or declare the handler on each controller.",
+                        method, handlerMethod.getBeanType().getName());
+                }
+                response.setStatus(HttpStatus.SERVICE_UNAVAILABLE.value());
+                response.setContentType("application/json");
+                Map<String, String> errorBody = new LinkedHashMap<>();
+                errorBody.put("error", "route_binding_unresolved");
+                errorBody.put("handler", handlerMethodId);
+                response.getWriter().write(JSON.writeValueAsString(errorBody));
+                return false;
+            }
+        }
         if (metadata == null) {
             // Compatibility fallback for metadata registered without a Method
             // identity, and for the exotic proxying arrangements where the
@@ -292,22 +327,15 @@ public class MeshRouteHandlerInterceptor implements HandlerInterceptor {
         }
 
         // Get proxy from injector (populated by DEPENDENCY_AVAILABLE events)
+        // Issue #1568: the injector hands out one proxy per return type, so
+        // this handler's declared type can't be rewritten by another consumer
+        // of the same capability.
         McpMeshTool proxy;
-        if (dep.getReturnType() != null) {
-            proxy = injector.getToolProxy(dep.getCapability(), dep.getReturnType());
+        java.lang.reflect.Type proxyType = dep.getProxyType();
+        if (proxyType != null) {
+            proxy = injector.getToolProxy(dep.getCapability(), proxyType);
         } else {
             proxy = injector.getToolProxy(dep.getCapability());
-        }
-
-        if (proxy == null) {
-            return null;
-        }
-
-        // Log tag filtering note
-        if (dep.hasTags()) {
-            // TODO: Implement tag-based resolution in MeshDependencyInjector
-            log.debug("Tag filtering not yet implemented, using capability only: {}",
-                dep.getCapability());
         }
 
         return proxy;

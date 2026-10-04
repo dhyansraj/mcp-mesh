@@ -11,10 +11,10 @@ import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.BeanInitializationException;
 import org.springframework.beans.factory.config.BeanPostProcessor;
+import org.springframework.core.MethodIntrospector;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.core.env.Environment;
-import org.springframework.util.ReflectionUtils;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
@@ -79,17 +79,22 @@ public class A2AConsumerBeanPostProcessor implements BeanPostProcessor, Ordered 
     @Override
     public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
         Class<?> targetClass = AopUtils.getTargetClass(bean);
-        ReflectionUtils.doWithMethods(targetClass, method -> {
-            A2AConsumer annotation = AnnotationUtils.findAnnotation(method, A2AConsumer.class);
-            if (annotation == null) {
-                return;
-            }
+        // One entry per logical method (MethodIntrospector, as
+        // MeshToolBeanPostProcessor): an unfiltered doWithMethods walk wired an
+        // overridden @A2AConsumer method once per declaring class.
+        Map<Method, A2AConsumer> annotated = MethodIntrospector.selectMethods(targetClass,
+            (MethodIntrospector.MetadataLookup<A2AConsumer>) m ->
+                m.isBridge() || m.isSynthetic() ? null : AnnotationUtils.findAnnotation(m, A2AConsumer.class));
+        annotated.forEach((specificMethod, annotation) -> {
+            // Bind under the Method MeshToolBeanPostProcessor registers the
+            // tool with — that is the key its bindingFor(method) lookup uses.
+            Method method = MeshToolBeanPostProcessor.selectRegistrationTarget(specificMethod);
             // @A2AConsumer is meaningful only when paired with @MeshTool —
             // a bare @A2AConsumer on a non-mesh method has nothing to
             // bridge, so building an A2AClient here would just leak. Skip
             // it cleanly rather than constructing an HttpClient that no
             // dispatch path will ever consult.
-            if (AnnotationUtils.findAnnotation(method, MeshTool.class) == null) {
+            if (AnnotationUtils.findAnnotation(specificMethod, MeshTool.class) == null) {
                 return;
             }
             try {

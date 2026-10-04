@@ -404,6 +404,10 @@ class MeshServiceIntegrationTest {
             assertThat(MAPPER.writeValueAsString(opt))
                 .as("optional view dep must OMIT the required field")
                 .doesNotContain("required");
+
+            // Issue #1572: "a|b" expands to the nested-array OR group on the wire.
+            assertThat(serviceDep(spec, "wire.or").getTags())
+                .isEqualTo("[\"addition\",[\"python\",\"typescript\"]]");
         });
     }
 

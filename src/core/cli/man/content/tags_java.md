@@ -163,24 +163,41 @@ public String assist(
 
 ## Tag OR Alternatives
 
-Use nested arrays in tags to express OR conditions with fallback behavior. In Java `@Selector`, tag-level OR alternatives follow the same convention as other SDKs:
+Write `a|b` as one tag to require at least one of the alternatives:
 
 ```java
-// Prefer python implementation, fallback to typescript
+// Require "addition" AND ("python" OR "typescript")
 dependencies = @Selector(capability = "math",
                           tags = {"addition", "python|typescript"})
 ```
 
-### Fallback Behavior
+Each `a|b` entry is one OR group, and a selector can carry several. The SDK
+sends it to the registry as a nested array (`["addition", ["python", "typescript"]]`),
+the same wire form Python and TypeScript use. Every `|` must separate two
+non-empty alternatives: a tag such as `"python|"` or `"a||b"` fails the agent
+at startup.
 
-When using tag-level OR, alternatives are tried in order:
+### Preferring One Alternative
 
-1. First, try to find provider with `addition` AND `python`
-2. If not found, try provider with `addition` AND `typescript`
-3. If neither found, dependency is injected as `null`
+The order of the alternatives does not matter: any provider that carries one
+of them qualifies, and the highest-scoring provider wins. To prefer one
+alternative, give it a `+`:
 
-This is useful when you have multiple implementations and want to prefer
-one but gracefully fallback to another when your preferred is unavailable.
+```java
+// Prefer the python implementation, accept typescript
+tags = {"addition", "+python|typescript"}
+```
+
+A `-` alternative never counts as a match. It only rejects providers that
+carry the tag, so `"python|-legacy"` means `python` required and `legacy`
+forbidden, and a group of only `-` alternatives can never match. Write
+exclusions as separate tags (`"-legacy"`).
+
+OR groups work in dependency selectors (`@MeshTool` dependencies,
+`@MeshDependency` on `@MeshRoute`/`@MeshA2A`/`@MeshDependsOn`, `@MeshService`
+view methods). In `@MeshLlm` `providerSelector` and `filter`, and in a tool's
+own `tags`, a tag containing `|` is matched literally. Use `+` tags to rank
+providers there.
 
 ## Complete Example
 

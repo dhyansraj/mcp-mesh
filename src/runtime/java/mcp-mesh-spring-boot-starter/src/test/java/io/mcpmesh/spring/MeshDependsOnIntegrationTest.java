@@ -296,6 +296,27 @@ class MeshDependsOnIntegrationTest {
         @Bean public RequiredCapDeclarer requiredCapDeclarer() { return new RequiredCapDeclarer(); }
     }
 
+    // Issue #1572: "a|b" tag alternatives
+    @Component
+    @MeshDependsOn(@MeshDependency(capability = "or_cap", tags = {"addition", "python|typescript"}))
+    static class OrTagDeclarer {}
+
+    @Configuration
+    @MeshAgent(name = "or-tag-agent")
+    static class OrTagAgentConfig {
+        @Bean public OrTagDeclarer orTagDeclarer() { return new OrTagDeclarer(); }
+    }
+
+    @Component
+    @MeshDependsOn(@MeshDependency(capability = "bad_or_cap", tags = {"+python|"}))
+    static class BadOrTagDeclarer {}
+
+    @Configuration
+    @MeshAgent(name = "bad-or-tag-agent")
+    static class BadOrTagAgentConfig {
+        @Bean public BadOrTagDeclarer badOrTagDeclarer() { return new BadOrTagDeclarer(); }
+    }
+
     // Heartbeat-driven availability
     @Component
     @MeshDependsOn(@MeshDependency(capability = "avail_cap"))
@@ -835,6 +856,42 @@ class MeshDependsOnIntegrationTest {
                 assertThat(opt.isRequired())
                     .as("default @MeshDependsOn edge must stay required=false")
                     .isFalse();
+            });
+    }
+
+    @Test
+    @DisplayName("#1572: a|b tags expand to the nested-array wire form for @MeshDependsOn")
+    void orTagsExpandForMeshDependsOn() {
+        baseRunner
+            .withUserConfiguration(OrTagAgentConfig.class)
+            .run(context -> {
+                assertThat(context).hasNotFailed();
+                AgentSpec spec = context.getBean(MeshRuntime.class).getAgentSpec();
+                AgentSpec.DependencySpec dep = spec.getTools().stream()
+                    .filter(t -> "__mesh_depends_on_deps".equals(t.getCapability()))
+                    .flatMap(t -> t.getDependencies().stream())
+                    .filter(d -> "or_cap".equals(d.getCapability()))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("or_cap dependency missing"));
+                assertThat(dep.getTags()).isEqualTo("[\"addition\",[\"python\",\"typescript\"]]");
+            });
+    }
+
+    @Test
+    @DisplayName("#1572: an a|b tag with an empty alternative fails context startup")
+    void malformedOrTagFailsBoot() {
+        baseRunner
+            .withUserConfiguration(BadOrTagAgentConfig.class)
+            .run(context -> {
+                assertThat(context).hasFailed();
+                StringBuilder messages = new StringBuilder();
+                for (Throwable t = context.getStartupFailure(); t != null; t = t.getCause()) {
+                    messages.append(t.getMessage()).append('\n');
+                }
+                assertThat(messages.toString())
+                    .contains("@MeshDependsOn on " + BadOrTagDeclarer.class.getName())
+                    .contains("'+python|'")
+                    .contains("each '|' must separate two non-empty alternatives");
             });
     }
 

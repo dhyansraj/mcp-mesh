@@ -70,6 +70,22 @@ public class MeshRouteRegistry {
      */
     private final Map<String, RouteMetadata> routesByHandlerId = new ConcurrentHashMap<>();
 
+    /**
+     * Routes indexed by (controller class, handler {@link Method}) — exact even
+     * for a handler inherited by several controllers from one base class, where
+     * {@link #routesByHandlerMethod} alone cannot tell them apart (issue #1569).
+     */
+    private final Map<HandlerKey, RouteMetadata> routesByHandler = new ConcurrentHashMap<>();
+
+    /**
+     * Methods shared by several controllers with DIFFERENT dependency metadata
+     * (an inherited generic handler bound to different {@code McpMeshTool<T>}).
+     * A Method-only lookup refuses them; the (class, Method) lookup is exact.
+     */
+    private final Set<Method> ambiguousHandlerMethods = ConcurrentHashMap.newKeySet();
+
+    private record HandlerKey(Class<?> beanType, Method method) {}
+
     /** Handler method IDs claimed by more than one distinct handler. */
     private final Set<String> ambiguousHandlerIds = ConcurrentHashMap.newKeySet();
 
@@ -147,7 +163,41 @@ public class MeshRouteRegistry {
      */
     private void indexHandler(RouteMetadata metadata) {
         Method handlerMethod = metadata.getHandlerMethod();
-        if (handlerMethod != null) {
+        if (handlerMethod != null && metadata.getBeanType() != null) {
+            HandlerKey key = new HandlerKey(metadata.getBeanType(), handlerMethod);
+            RouteMetadata previous = routesByHandler.putIfAbsent(key, metadata);
+            if (previous != null && previous != metadata
+                    && !previous.getDependencies().equals(metadata.getDependencies())) {
+                throw new IllegalStateException(
+                    "@MeshRoute handler collision: " + handlerMethod + " on "
+                        + metadata.getBeanType().getName()
+                        + " is already registered with a different route metadata"
+                        + " (dependencies " + previous.getDependencies() + " vs "
+                        + metadata.getDependencies() + "). Each handler method must be"
+                        + " registered exactly once.");
+            }
+            routesByHandler.put(key, metadata);
+            RouteMetadata byMethod = routesByHandlerMethod.putIfAbsent(handlerMethod, metadata);
+            if (byMethod != null && byMethod != metadata) {
+                if (byMethod.getDependencies().equals(metadata.getDependencies())) {
+                    routesByHandlerMethod.put(handlerMethod, metadata);
+                } else if (byMethod.getBeanType() != null
+                        && !byMethod.getBeanType().equals(metadata.getBeanType())) {
+                    // One inherited Method, several controllers, different
+                    // bindings: legal, but only the (class, Method) key is exact.
+                    ambiguousHandlerMethods.add(handlerMethod);
+                } else {
+                    // The earlier registration carried no controller class, so
+                    // nothing tells the two apart: a genuine collision.
+                    throw new IllegalStateException(
+                        "@MeshRoute handler collision: " + handlerMethod
+                            + " is already registered with a different route metadata"
+                            + " (dependencies " + byMethod.getDependencies() + " vs "
+                            + metadata.getDependencies() + "). Each handler method must be"
+                            + " registered exactly once.");
+                }
+            }
+        } else if (handlerMethod != null) {
             RouteMetadata previous = routesByHandlerMethod.putIfAbsent(handlerMethod, metadata);
             if (previous != null && previous != metadata) {
                 if (!previous.getDependencies().equals(metadata.getDependencies())) {
@@ -187,7 +237,51 @@ public class MeshRouteRegistry {
      * @return route metadata or null if this method carries no {@code @MeshRoute}
      */
     public RouteMetadata getByHandlerMethod(Method handlerMethod) {
-        return handlerMethod == null ? null : routesByHandlerMethod.get(handlerMethod);
+        if (handlerMethod == null) {
+            return null;
+        }
+        if (ambiguousHandlerMethods.contains(handlerMethod)) {
+            // No log here: the interceptor fails such a request closed and
+            // reports it once; this accessor stays quiet on the hot path.
+            return null;
+        }
+        return routesByHandlerMethod.get(handlerMethod);
+    }
+
+    /**
+     * Whether {@code handlerMethod} is one inherited {@code @MeshRoute} handler
+     * bound differently by several controllers — known to be a mesh route, but
+     * resolvable only together with its controller class.
+     *
+     * @param handlerMethod the handler method
+     * @return true when a Method-only lookup refuses it
+     */
+    public boolean isAmbiguousHandlerMethod(Method handlerMethod) {
+        return handlerMethod != null && ambiguousHandlerMethods.contains(handlerMethod);
+    }
+
+    /**
+     * Get route metadata by controller class and handler {@link Method} — exact
+     * even for a handler several controllers inherit from one base class.
+     * Falls back to {@link #getByHandlerMethod(Method)} when nothing was
+     * registered under that class.
+     *
+     * @param beanType      the controller class ({@code HandlerMethod.getBeanType()})
+     * @param handlerMethod the resolved handler method
+     * @return route metadata or null
+     */
+    public RouteMetadata getByHandlerMethod(Class<?> beanType, Method handlerMethod) {
+        if (handlerMethod == null) {
+            return null;
+        }
+        if (beanType != null) {
+            RouteMetadata exact = routesByHandler.get(
+                new HandlerKey(org.springframework.util.ClassUtils.getUserClass(beanType), handlerMethod));
+            if (exact != null) {
+                return exact;
+            }
+        }
+        return getByHandlerMethod(handlerMethod);
     }
 
     /**
@@ -285,8 +379,10 @@ public class MeshRouteRegistry {
                     // Issue #1158: tags is contractually a JSON-array string
                     // (the Rust core JSON-parses it; a comma-joined string
                     // silently degrades to "no tag constraint").
+                    // Outside the try: a malformed OR group must fail, not degrade to "[]".
+                    List<Object> wireTags = io.mcpmesh.spring.MeshTagSpecs.toWire(dep.getTags());
                     try {
-                        agentDep.setTags(jsonMapper.writeValueAsString(dep.getTags()));
+                        agentDep.setTags(jsonMapper.writeValueAsString(wireTags));
                     } catch (Exception e) {
                         log.warn("Failed to serialize tags for dependency '{}' — registering with no tag constraint: {}",
                             dep.getCapability(), e.getMessage());
@@ -449,6 +545,7 @@ public class MeshRouteRegistry {
      * Metadata for a @MeshRoute annotated endpoint.
      */
     public static class RouteMetadata {
+        private final Class<?> beanType;
         private final Method handlerMethod;
         private final String handlerMethodId;
         private final List<DependencySpec> dependencies;
@@ -463,7 +560,21 @@ public class MeshRouteRegistry {
          */
         public RouteMetadata(Method handlerMethod, List<DependencySpec> dependencies,
                             String description, boolean failOnMissingDependency) {
-            this(handlerMethod, buildHandlerMethodId(handlerMethod), dependencies,
+            this(null, handlerMethod, buildHandlerMethodId(handlerMethod), dependencies,
+                description, failOnMissingDependency);
+        }
+
+        /**
+         * As {@link #RouteMetadata(Method, List, String, boolean)}, for a handler
+         * served on {@code beanType}. A handler inherited from a base class is
+         * one {@link Method} shared by every subclass controller, and with a
+         * generic base ({@code Base<T>}) each subclass can bind a different
+         * {@code McpMeshTool<T>} — so the controller class is part of the
+         * identity (issue #1569).
+         */
+        public RouteMetadata(Class<?> beanType, Method handlerMethod, List<DependencySpec> dependencies,
+                            String description, boolean failOnMissingDependency) {
+            this(beanType, handlerMethod, buildHandlerMethodId(handlerMethod), dependencies,
                 description, failOnMissingDependency);
         }
 
@@ -479,12 +590,13 @@ public class MeshRouteRegistry {
          */
         public RouteMetadata(String handlerMethodId, List<DependencySpec> dependencies,
                             String description, boolean failOnMissingDependency) {
-            this(null, handlerMethodId, dependencies, description, failOnMissingDependency);
+            this(null, null, handlerMethodId, dependencies, description, failOnMissingDependency);
         }
 
-        private RouteMetadata(Method handlerMethod, String handlerMethodId,
+        private RouteMetadata(Class<?> beanType, Method handlerMethod, String handlerMethodId,
                             List<DependencySpec> dependencies,
                             String description, boolean failOnMissingDependency) {
+            this.beanType = beanType;
             this.handlerMethod = handlerMethod;
             this.handlerMethodId = handlerMethodId;
             this.dependencies = dependencies != null ? dependencies : Collections.emptyList();
@@ -512,6 +624,14 @@ public class MeshRouteRegistry {
          */
         public Method getHandlerMethod() {
             return handlerMethod;
+        }
+
+        /**
+         * The controller class this route is served on, or {@code null} when
+         * the metadata was built without one.
+         */
+        public Class<?> getBeanType() {
+            return beanType;
         }
 
         /**
@@ -716,6 +836,15 @@ public class MeshRouteRegistry {
         public Type getReturnType() { return returnType; }
 
         public void setReturnType(Type returnType) { this.returnType = returnType; }
+
+        /**
+         * The type the injected proxy deserializes into: the bound parameter's
+         * {@code McpMeshTool<T>} argument when there is one, else the declared
+         * {@link #getExpectedType() expectedType}, else {@code null} (dynamic).
+         */
+        public Type getProxyType() {
+            return returnType != null ? returnType : expectedType;
+        }
 
         public boolean hasTags() {
             return tags != null && tags.length > 0;

@@ -60,6 +60,15 @@ public class MeshToolRegistry {
             outputType = null;
         }
 
+        // Issue #1572: "a|b" is consumer-side selector syntax; a tool's own
+        // tags are advertised verbatim, so a '|' here is almost certainly a
+        // selector pasted into the wrong attribute.
+        if (MeshTagSpecs.hasAlternatives(annotation.tags())) {
+            log.warn("@MeshTool '{}' declares a tag containing '|' in tags={} — a tool's own tags "
+                + "are advertised literally; 'a|b' OR alternatives apply only to consumer "
+                + "selectors (dependencies).", capability, Arrays.toString(annotation.tags()));
+        }
+
         ToolMetadata metadata = new ToolMetadata(
             capability,
             annotation.description(),
@@ -322,8 +331,10 @@ public class MeshToolRegistry {
             for (DependencyInfo dep : meta.dependencies()) {
                 AgentSpec.DependencySpec depSpec = new AgentSpec.DependencySpec();
                 depSpec.setCapability(dep.capability());
+                // Outside the try: a malformed OR group must fail, not degrade to "[]".
+                List<Object> wireTags = MeshTagSpecs.toWire(dep.tags());
                 try {
-                    depSpec.setTags(jsonMapper.writeValueAsString(dep.tags()));
+                    depSpec.setTags(jsonMapper.writeValueAsString(wireTags));
                 } catch (Exception e) {
                     log.warn("Failed to serialize tags for dependency '{}' — registering with no tag constraint: {}",
                         dep.capability(), e.getMessage());
@@ -443,9 +454,11 @@ public class MeshToolRegistry {
                 AgentSpec.DependencySpec spec = new AgentSpec.DependencySpec();
                 spec.setCapability(dep.capability());
                 // Convert List<String> to JSON array string
+                // Outside the try: a malformed OR group must fail, not degrade to "[]".
+                List<Object> wireTags = MeshTagSpecs.toWire(dep.tags());
                 try {
                     spec.setTags(JsonMapper.builder().build()
-                        .writeValueAsString(dep.tags()));
+                        .writeValueAsString(wireTags));
                 } catch (Exception e) {
                     spec.setTags("[]");
                 }
