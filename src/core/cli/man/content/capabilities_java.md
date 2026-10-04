@@ -77,7 +77,12 @@ dependencies = @Selector(capability = "api_client", version = ">=2.0.0")
 
 Write `a|b` as one tag to require at least one alternative: `tags = {"api", "python|typescript"}`
 means `api` AND (`python` OR `typescript`). A `+` alternative is preferred:
-`"+python|typescript"` prefers python. See `meshctl man tags --java`.
+`"+python|typescript"` prefers python. OR groups work only in dependency
+selectors (`@MeshTool` dependencies, `@MeshDependency` on
+`@MeshRoute`/`@MeshA2A`/`@MeshDependsOn`, `@MeshService` view methods). In
+`@MeshLlm` `providerSelector` and `filter`, and in a tool's own `tags`, a tag
+containing `|` is matched literally. Use `+` tags to rank providers there.
+See `meshctl man tags --java`.
 
 ## Multiple Capabilities on One Agent
 

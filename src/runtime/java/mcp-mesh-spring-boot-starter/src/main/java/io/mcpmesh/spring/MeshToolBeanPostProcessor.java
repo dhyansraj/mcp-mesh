@@ -128,6 +128,13 @@ public class MeshToolBeanPostProcessor implements BeanPostProcessor, Ordered {
                     "remove resumeCursor or set task = true.");
             }
 
+            // Issue #1572: a malformed "a|b" selector tag fails the boot here,
+            // not later in spec building.
+            for (Selector dep : annotation.dependencies()) {
+                MeshTagSpecs.validate(dep.tags(), "@MeshTool '" + targetClass.getName() + "#"
+                    + method.getName() + "' dependency '" + dep.capability() + "'");
+            }
+
             // RFC #1280 phase 2 (item 7b): analyze @MeshService view params
             // ONCE and hand the result to both the registry and the wrapper.
             List<MeshServiceToolSupport.ViewParamInfo> viewParams =

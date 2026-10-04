@@ -1132,6 +1132,10 @@ public class MeshAutoConfiguration {
             }
             for (MeshDependency dep : annotation.value()) {
                 String capability = dep.capability();
+                // Already checked by MeshCapabilityBeanRegistrar; repeated so a
+                // deduped edge (which never reaches toWire) is covered too.
+                MeshTagSpecs.validate(dep.tags(), "@MeshDependsOn on " + targetClass.getName()
+                    + " dependency '" + capability + "'");
                 if (capability == null || capability.isBlank()) {
                     log.warn("@MeshDependsOn on {} has @MeshDependency with empty capability — skipping",
                         targetClass.getName());
@@ -1182,8 +1186,10 @@ public class MeshAutoConfiguration {
                     // Issue #1158: tags is contractually a JSON-array string
                     // (the Rust core JSON-parses it; a comma-joined string
                     // silently degrades to "no tag constraint").
+                    // Outside the try: a malformed OR group must fail, not degrade to "[]".
+                    List<Object> wireTags = MeshTagSpecs.toWire(dep.tags());
                     try {
-                        agentDep.setTags(jsonMapper.writeValueAsString(MeshTagSpecs.toWire(dep.tags())));
+                        agentDep.setTags(jsonMapper.writeValueAsString(wireTags));
                     } catch (Exception e) {
                         log.warn("Failed to serialize tags for dependency '{}' — registering with no tag constraint: {}",
                             capability, e.getMessage());
@@ -1338,8 +1344,10 @@ public class MeshAutoConfiguration {
                 agentDep.setCapability(capability);
                 if (binding.tags().length > 0) {
                     // Issue #1158: tags is contractually a JSON-array string.
+                    // Outside the try: a malformed OR group must fail, not degrade to "[]".
+                    List<Object> wireTags = MeshTagSpecs.toWire(binding.tags());
                     try {
-                        agentDep.setTags(jsonMapper.writeValueAsString(MeshTagSpecs.toWire(binding.tags())));
+                        agentDep.setTags(jsonMapper.writeValueAsString(wireTags));
                     } catch (Exception e) {
                         log.warn("Failed to serialize tags for dependency '{}' — registering with no tag constraint: {}",
                             capability, e.getMessage());

@@ -87,6 +87,10 @@ public class MeshA2ABeanPostProcessor implements BeanPostProcessor {
 
             List<MeshRouteRegistry.DependencySpec> deps = new ArrayList<>();
             for (MeshDependency dep : annotation.dependencies()) {
+                // Issue #1572: a malformed "a|b" selector tag fails the boot here.
+                io.mcpmesh.spring.MeshTagSpecs.validate(dep.tags(), "@MeshA2A '"
+                    + targetClass.getName() + "#" + method.getName() + "' dependency '"
+                    + dep.capability() + "'");
                 deps.add(MeshRouteRegistry.DependencySpec.fromAnnotation(dep));
             }
 

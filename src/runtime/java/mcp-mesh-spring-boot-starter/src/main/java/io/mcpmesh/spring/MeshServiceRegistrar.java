@@ -284,6 +284,10 @@ public class MeshServiceRegistrar implements BeanDefinitionRegistryPostProcessor
                         + "capability.", iface.getName(), method.getName()));
             }
 
+            // Issue #1572: a malformed "a|b" selector tag fails the boot here.
+            MeshTagSpecs.validate(selector.tags(), "@MeshService interface " + iface.getName()
+                + " method '" + method.getName() + "'");
+
             ReturnBinding returnBinding = analyzeReturn(iface, method);
             ParamBinding paramBinding = analyzeParams(iface, method);
 

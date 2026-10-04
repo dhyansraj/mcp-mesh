@@ -173,7 +173,9 @@ dependencies = @Selector(capability = "math",
 
 Each `a|b` entry is one OR group, and a selector can carry several. The SDK
 sends it to the registry as a nested array (`["addition", ["python", "typescript"]]`),
-the same wire form Python and TypeScript use.
+the same wire form Python and TypeScript use. Every `|` must separate two
+non-empty alternatives: a tag such as `"python|"` or `"a||b"` fails the agent
+at startup.
 
 ### Preferring One Alternative
 
@@ -193,8 +195,9 @@ exclusions as separate tags (`"-legacy"`).
 
 OR groups work in dependency selectors (`@MeshTool` dependencies,
 `@MeshDependency` on `@MeshRoute`/`@MeshA2A`/`@MeshDependsOn`, `@MeshService`
-view methods). In `@MeshLlm` `providerSelector` and `filter`, a tag containing
-`|` is matched literally. Use `+` tags to rank providers there.
+view methods). In `@MeshLlm` `providerSelector` and `filter`, and in a tool's
+own `tags`, a tag containing `|` is matched literally. Use `+` tags to rank
+providers there.
 
 ## Complete Example
 

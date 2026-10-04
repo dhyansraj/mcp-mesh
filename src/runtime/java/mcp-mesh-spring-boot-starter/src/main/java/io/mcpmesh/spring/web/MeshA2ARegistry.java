@@ -168,8 +168,10 @@ public class MeshA2ARegistry {
                     // Issue #1158: tags is contractually a JSON-array string
                     // (the Rust core JSON-parses it; a comma-joined string
                     // silently degrades to "no tag constraint").
+                    // Outside the try: a malformed OR group must fail, not degrade to "[]".
+                    List<Object> wireTags = io.mcpmesh.spring.MeshTagSpecs.toWire(dep.getTags());
                     try {
-                        agentDep.setTags(jsonMapper.writeValueAsString(io.mcpmesh.spring.MeshTagSpecs.toWire(dep.getTags())));
+                        agentDep.setTags(jsonMapper.writeValueAsString(wireTags));
                     } catch (Exception e) {
                         log.warn("Failed to serialize tags for dependency '{}' — registering with no tag constraint: {}",
                             dep.getCapability(), e.getMessage());

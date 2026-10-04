@@ -307,6 +307,16 @@ class MeshDependsOnIntegrationTest {
         @Bean public OrTagDeclarer orTagDeclarer() { return new OrTagDeclarer(); }
     }
 
+    @Component
+    @MeshDependsOn(@MeshDependency(capability = "bad_or_cap", tags = {"+python|"}))
+    static class BadOrTagDeclarer {}
+
+    @Configuration
+    @MeshAgent(name = "bad-or-tag-agent")
+    static class BadOrTagAgentConfig {
+        @Bean public BadOrTagDeclarer badOrTagDeclarer() { return new BadOrTagDeclarer(); }
+    }
+
     // Heartbeat-driven availability
     @Component
     @MeshDependsOn(@MeshDependency(capability = "avail_cap"))
@@ -864,6 +874,24 @@ class MeshDependsOnIntegrationTest {
                     .findFirst()
                     .orElseThrow(() -> new AssertionError("or_cap dependency missing"));
                 assertThat(dep.getTags()).isEqualTo("[\"addition\",[\"python\",\"typescript\"]]");
+            });
+    }
+
+    @Test
+    @DisplayName("#1572: an a|b tag with an empty alternative fails context startup")
+    void malformedOrTagFailsBoot() {
+        baseRunner
+            .withUserConfiguration(BadOrTagAgentConfig.class)
+            .run(context -> {
+                assertThat(context).hasFailed();
+                StringBuilder messages = new StringBuilder();
+                for (Throwable t = context.getStartupFailure(); t != null; t = t.getCause()) {
+                    messages.append(t.getMessage()).append('\n');
+                }
+                assertThat(messages.toString())
+                    .contains("@MeshDependsOn on " + BadOrTagDeclarer.class.getName())
+                    .contains("'+python|'")
+                    .contains("each '|' must separate two non-empty alternatives");
             });
     }
 

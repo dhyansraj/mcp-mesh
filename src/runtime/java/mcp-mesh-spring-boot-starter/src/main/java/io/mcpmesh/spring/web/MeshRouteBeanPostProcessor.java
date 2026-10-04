@@ -94,6 +94,13 @@ public class MeshRouteBeanPostProcessor implements BeanPostProcessor {
                 continue;
             }
 
+            // Issue #1572: a malformed "a|b" selector tag fails the boot here.
+            for (MeshDependency dep : meshRoute.dependencies()) {
+                io.mcpmesh.spring.MeshTagSpecs.validate(dep.tags(), "@MeshRoute '"
+                    + targetClass.getName() + "#" + method.getName() + "' dependency '"
+                    + dep.capability() + "'");
+            }
+
             // Build dependency specs
             List<MeshRouteRegistry.DependencySpec> deps =
                 MeshRouteRegistry.DependencySpec.fromAnnotation(meshRoute);

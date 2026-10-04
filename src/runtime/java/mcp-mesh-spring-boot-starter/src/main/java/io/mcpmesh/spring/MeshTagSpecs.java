@@ -29,9 +29,13 @@ import java.util.concurrent.ConcurrentHashMap;
  * score.
  *
  * <p>One pair of surrounding parentheses ({@code "(python|typescript)"}) and
- * whitespace around each alternative are tolerated; empty alternatives are
- * dropped. A group left with one alternative degrades to that plain tag, and a
- * group left with none is dropped with a WARN.
+ * whitespace around each alternative are tolerated. Every {@code |} must
+ * separate two non-empty alternatives: {@code "|"}, {@code "a|"},
+ * {@code "|a"}, {@code "a||b"}, {@code "()"} and {@code "( | )"} are rejected
+ * with an {@link IllegalArgumentException}, because dropping or collapsing
+ * the missing alternative would weaken the constraint. The annotation
+ * scanners call {@link #validate} so the agent fails at startup, naming the
+ * annotated element.
  */
 public final class MeshTagSpecs {
 
@@ -48,6 +52,7 @@ public final class MeshTagSpecs {
      *
      * @param tags the declared tags (may be {@code null})
      * @return the wire-form list; never {@code null}
+     * @throws IllegalArgumentException if an OR group has an empty alternative
      */
     public static List<Object> toWire(Collection<String> tags) {
         List<Object> wire = new ArrayList<>();
@@ -59,39 +64,54 @@ public final class MeshTagSpecs {
                 wire.add(tag);
                 continue;
             }
-            String body = tag.trim();
-            if (body.length() >= 2 && body.charAt(0) == '(' && body.charAt(body.length() - 1) == ')') {
-                body = body.substring(1, body.length() - 1);
+            List<String> group = alternatives(tag, null);
+            if (group.stream().allMatch(t -> t.startsWith("-"))) {
+                warnOnce(tag, "Tag '{}' is an OR group of only '-' exclusions, which can never "
+                    + "match: a '-' alternative rejects providers carrying the tag but never "
+                    + "counts as a match. Write the exclusions as separate tags instead.");
             }
-            List<String> group = new ArrayList<>();
-            for (String alternative : body.split("\\|")) {
-                String trimmed = alternative.trim();
-                if (!trimmed.isEmpty()) {
-                    group.add(trimmed);
-                }
-            }
-            if (group.isEmpty()) {
-                warnOnce(tag, "Tag '{}' is an OR group with no alternatives — ignoring it.");
-            } else if (group.size() == 1) {
-                String only = group.get(0);
-                if (only.startsWith("+") || only.startsWith("-")) {
-                    // As a one-element group "+a" would be required and "-a"
-                    // could never match; as a plain tag they are preferred /
-                    // excluded. The plain reading is the likely intent.
-                    warnOnce(tag, "Tag '{}' has a single alternative — the '|' is ignored and it is "
-                        + "sent as the plain tag '" + only + "'.");
-                }
-                wire.add(only);
-            } else {
-                if (group.stream().allMatch(t -> t.startsWith("-"))) {
-                    warnOnce(tag, "Tag '{}' is an OR group of only '-' exclusions, which can never "
-                        + "match: a '-' alternative rejects providers carrying the tag but never "
-                        + "counts as a match. Write the exclusions as separate tags instead.");
-                }
-                wire.add(group);
-            }
+            wire.add(group);
         }
         return wire;
+    }
+
+    /**
+     * Reject any {@code a|b} tag with an empty alternative. Called by the
+     * annotation scanners during context refresh so a malformed selector
+     * fails the boot instead of surfacing later in spec building.
+     *
+     * @param tags  the declared tags (may be {@code null})
+     * @param where the annotated element, named in the error message
+     * @throws IllegalArgumentException if an OR group has an empty alternative
+     */
+    public static void validate(String[] tags, String where) {
+        if (tags == null) {
+            return;
+        }
+        for (String tag : tags) {
+            if (tag != null && tag.indexOf('|') >= 0) {
+                alternatives(tag, where);
+            }
+        }
+    }
+
+    private static List<String> alternatives(String tag, String where) {
+        String body = tag.trim();
+        if (body.length() >= 2 && body.charAt(0) == '(' && body.charAt(body.length() - 1) == ')') {
+            body = body.substring(1, body.length() - 1);
+        }
+        List<String> group = new ArrayList<>();
+        // limit -1 keeps trailing empty strings so "a|" is seen as malformed.
+        for (String alternative : body.split("\\|", -1)) {
+            String trimmed = alternative.trim();
+            if (trimmed.isEmpty()) {
+                throw new IllegalArgumentException("Invalid tag '" + tag + "'"
+                    + (where != null ? " on " + where : "")
+                    + ": each '|' must separate two non-empty alternatives.");
+            }
+            group.add(trimmed);
+        }
+        return group;
     }
 
     private static void warnOnce(String tag, String message) {

@@ -225,6 +225,9 @@ public class MeshCapabilityBeanRegistrar implements BeanDefinitionRegistryPostPr
             MeshDependsOn annotation = AnnotationUtils.findAnnotation(beanClass, MeshDependsOn.class);
             if (annotation != null) {
                 for (MeshDependency dep : annotation.value()) {
+                    // Issue #1572: a malformed "a|b" selector tag fails the boot here.
+                    MeshTagSpecs.validate(dep.tags(), "@MeshDependsOn on " + beanClass.getName()
+                        + " dependency '" + dep.capability() + "'");
                     mergeDependency(capabilities, dep, beanClass, "@MeshDependsOn", null);
                 }
             }

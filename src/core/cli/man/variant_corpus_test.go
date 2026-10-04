@@ -200,7 +200,11 @@ func stripLangHeader(content string) string {
 // `+` preference, `-` semantics, scope; +15), and `capabilities_java.md`
 // gains an `a|b` paragraph under its tag-operator table (+8).
 // 1696 + 15 + 8 = 1719.
-const wantVariantInlineCodeSpans = 1719
+//
+// #1572 review follow-up: `capabilities_java.md` scopes `a|b` to dependency
+// selectors (+12) and `tags_java.md` adds the startup-rejection sentence and
+// a tool's own `tags` (+4). 1719 + 12 + 4 = 1735.
+const wantVariantInlineCodeSpans = 1735
 
 // TestVariantCorpusCodeSpans is TestStyleInlineCorpus plus
 // TestRenderStyledCorpusListItems, run over the pages neither of them sees.

@@ -35,7 +35,9 @@ import java.lang.annotation.Target;
  * required, legacy forbidden), so write exclusions as separate tags. OR groups apply to dependency selectors
  * ({@link MeshTool#dependencies()}, {@link MeshService} view methods); in
  * {@link MeshLlm#providerSelector()} and {@link MeshLlm#filter()} a tag
- * containing {@code |} is matched literally.
+ * containing {@code |} is matched literally. Every {@code |} must separate two
+ * non-empty alternatives: {@code "python|"} or {@code "a||b"} fails the agent
+ * at startup.
  *
  * <h2>Schema-Aware Matching (issue #547)</h2>
  *

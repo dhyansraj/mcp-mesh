@@ -331,8 +331,10 @@ public class MeshToolRegistry {
             for (DependencyInfo dep : meta.dependencies()) {
                 AgentSpec.DependencySpec depSpec = new AgentSpec.DependencySpec();
                 depSpec.setCapability(dep.capability());
+                // Outside the try: a malformed OR group must fail, not degrade to "[]".
+                List<Object> wireTags = MeshTagSpecs.toWire(dep.tags());
                 try {
-                    depSpec.setTags(jsonMapper.writeValueAsString(MeshTagSpecs.toWire(dep.tags())));
+                    depSpec.setTags(jsonMapper.writeValueAsString(wireTags));
                 } catch (Exception e) {
                     log.warn("Failed to serialize tags for dependency '{}' — registering with no tag constraint: {}",
                         dep.capability(), e.getMessage());
@@ -452,9 +454,11 @@ public class MeshToolRegistry {
                 AgentSpec.DependencySpec spec = new AgentSpec.DependencySpec();
                 spec.setCapability(dep.capability());
                 // Convert List<String> to JSON array string
+                // Outside the try: a malformed OR group must fail, not degrade to "[]".
+                List<Object> wireTags = MeshTagSpecs.toWire(dep.tags());
                 try {
                     spec.setTags(JsonMapper.builder().build()
-                        .writeValueAsString(MeshTagSpecs.toWire(dep.tags())));
+                        .writeValueAsString(wireTags));
                 } catch (Exception e) {
                     spec.setTags("[]");
                 }
