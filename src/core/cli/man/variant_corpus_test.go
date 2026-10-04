@@ -218,7 +218,18 @@ func stripLangHeader(content string) string {
 // (`@MeshAgent`, `server.port`, `server.ssl.*`; +3). 1764 + 3 = 1767.
 // Issue #1574: `deployment_typescript.md`'s Helm note no longer contrasts with
 // Python's `agent.script`, which was never a chart key (-1). 1767 - 1 = 1766.
-const wantVariantInlineCodeSpans = 1766
+//
+// The docs truth sweep (#1576, #1578, #1596, #1598, #1610) moves this to
+// 1809. headers_java.md +11 and headers_typescript.md +10: exact-vs-prefix
+// allowlist bullets and the capture-and-relay / withholding section.
+// proxies_typescript.md +7 for dependencyKwargs replacing the nonexistent
+// dependencyConfig options. llm_typescript.md +6 and decorators_typescript.md
+// +4 for the server.addTool(mesh.llm({...})) pattern that replaces the spread
+// form that throws. tags_typescript.md +4 and capabilities_typescript.md +2 for
+// score-based OR groups, dependency-injection_typescript.md +2 for the
+// isolation knob and the proxy-type sentence. llm_java.md -3 for the Spring AI
+// 2.0 google-genai Vertex setup. 1766 + 43 = 1809.
+const wantVariantInlineCodeSpans = 1809
 
 // TestVariantCorpusCodeSpans is TestStyleInlineCorpus plus
 // TestRenderStyledCorpusListItems, run over the pages neither of them sees.

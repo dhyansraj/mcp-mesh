@@ -126,7 +126,7 @@ calls the LLM with a single prompt, and the return type `BudgetAnalysis`
 tells mesh to validate the response as structured JSON. The `max_iterations=1`
 setting means no tool loop -- the specialist makes one LLM call and returns.
 
-Replace the prompt template at `prompts/budget_analysis.j2`:
+Create `prompts/budget_analysis.j2`, the file the `system_prompt` in `main.py` above loads (delete the scaffolded `prompts/budget-analyst.jinja2`):
 
 ```jinja
 --8<-- "examples/tutorial/trip-planner/day-07/python/budget-analyst/prompts/budget_analysis.j2:full_file"
@@ -150,7 +150,7 @@ The `AdventureAdvice` model returns `unique_experiences` (a list of
 `Experience` sub-models with name, description, and why_special),
 `local_gems` (list of strings), and `off_beaten_path` (a paragraph of text).
 
-Replace the prompt at `prompts/adventure_advice.j2`:
+Create `prompts/adventure_advice.j2`, which `main.py` loads (delete the scaffolded `prompts/adventure-advisor.jinja2`):
 
 ```jinja
 --8<-- "examples/tutorial/trip-planner/day-07/python/adventure-advisor/prompts/adventure_advice.j2:full_file"
@@ -174,7 +174,7 @@ The `LogisticsPlan` model returns `daily_schedule`, `transit_tips`, and
 `time_optimization`. Each specialist follows the same pattern: define a
 Pydantic model, write a Jinja prompt, return the model type from the function.
 
-Replace the prompt at `prompts/logistics_plan.j2`:
+Create `prompts/logistics_plan.j2`, which `main.py` loads (delete the scaffolded `prompts/logistics-planner.jinja2`):
 
 ```jinja
 --8<-- "examples/tutorial/trip-planner/day-07/python/logistics-planner/prompts/logistics_plan.j2:full_file"

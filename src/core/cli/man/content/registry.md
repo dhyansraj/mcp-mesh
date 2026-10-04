@@ -57,7 +57,7 @@ export DATABASE_URL=postgresql://user:pass@host:5432/db  # PostgreSQL
 # Health monitoring
 export DEFAULT_TIMEOUT_THRESHOLD=20  # Mark unhealthy after (seconds)
 export HEALTH_CHECK_INTERVAL=10      # Scan frequency (seconds)
-export DEFAULT_EVICTION_THRESHOLD=60 # Remove stale agents (seconds)
+export MCP_MESH_RETENTION=1h         # Purge unhealthy agents after (Go duration)
 
 # Logging
 export MCP_MESH_LOG_LEVEL=INFO
@@ -66,14 +66,14 @@ export MCP_MESH_DEBUG_MODE=false
 
 ## API Endpoints
 
-| Endpoint       | Method    | Description                                |
-| -------------- | --------- | ------------------------------------------ |
-| `/health`      | GET       | Registry health check                      |
-| `/agents`      | GET       | List registered agents (capabilities embedded per agent) |
-| `/agents/{id}` | GET       | Get agent details                          |
-| `/schemas`     | GET       | List canonical schemas (issue #547)        |
-| `/register`    | POST      | Register/update agent                      |
-| `/heartbeat`   | HEAD/POST | Agent heartbeat                            |
+| Endpoint                | Method    | Description                                |
+| ----------------------- | --------- | ------------------------------------------ |
+| `/health`               | GET/HEAD  | Registry health check                      |
+| `/agents`               | GET       | List registered agents (capabilities embedded per agent) |
+| `/agents/{agent_id}`    | DELETE    | Unregister an agent                        |
+| `/schemas`              | GET       | List canonical schemas (issue #547)        |
+| `/heartbeat`            | POST      | Full heartbeat: registers or updates the agent and returns its resolved dependencies |
+| `/heartbeat/{agent_id}` | HEAD      | Fast liveness heartbeat                    |
 
 > Capability data is surfaced per-agent inside `/agents` responses; there is no dedicated `/capabilities` endpoint.
 
@@ -144,9 +144,6 @@ curl http://localhost:8000/health
 
 # List all agents
 curl http://localhost:8000/agents | jq .
-
-# Get specific agent
-curl http://localhost:8000/agents/hello-world | jq .
 
 # Using meshctl
 meshctl status

@@ -25,7 +25,7 @@ meshctl start my_agent.py
 For custom configurations:
 
 ```bash
-meshctl registry start --port 8000 --host 0.0.0.0
+meshctl start --registry-only --registry-port 8000 --registry-host 0.0.0.0
 ```
 
 ## Registry API
@@ -57,12 +57,6 @@ Response:
 }
 ```
 
-### Get Agent Status
-
-```bash
-curl http://localhost:8000/agents/my-agent
-```
-
 ### Health Check
 
 ```bash
@@ -78,12 +72,12 @@ sequenceDiagram
     participant A as Agent
     participant R as Registry
 
-    A->>R: POST /register
+    A->>R: POST /heartbeat (full registration)
     Note right of R: Store agent info
-    R->>A: 200 OK (agent ID)
+    R->>A: 200 OK (resolved dependencies)
     loop Heartbeat
-        A->>R: POST /heartbeat
-        R->>A: 200 OK
+        A->>R: HEAD /heartbeat/{agent_id}
+        R->>A: 200 OK (202 when topology changed)
     end
 ```
 
@@ -127,15 +121,13 @@ graph LR
 ### Environment Variables
 
 ```bash
-# Registry host/port
+# Agents: where the registry is
 export MCP_MESH_REGISTRY_URL=http://localhost:8000
-
-# Custom registry host
-export MCP_MESH_REGISTRY_HOST=0.0.0.0
-export MCP_MESH_REGISTRY_PORT=8000
-
-# Health check settings
 export MCP_MESH_HEALTH_INTERVAL=5      # Agent heartbeat cadence (seconds, default 5)
+
+# Registry binary: listen address
+export HOST=0.0.0.0
+export PORT=8000
 
 # Registry-side: mark an agent unhealthy after N seconds of missed
 # heartbeats (default 20 = 4 missed heartbeats at the 5s cadence)
@@ -151,8 +143,8 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - MCP_MESH_REGISTRY_HOST=0.0.0.0
-      - MCP_MESH_HEALTH_INTERVAL=5
+      - HOST=0.0.0.0
+      - PORT=8000
 
   my-agent:
     build: ./my-agent

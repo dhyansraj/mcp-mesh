@@ -27,35 +27,44 @@ import { FastMCP, mesh } from "@mcpmesh/sdk";
 import { z } from "zod";
 
 const server = new FastMCP({ name: "Smart Assistant", version: "1.0.0" });
-const agent = mesh(server, { name: "smart-assistant", httpPort: 9003 });
 
-agent.addTool({
-  name: "assist",
-  ...mesh.llm({
+server.addTool(
+  mesh.llm({
+    name: "assist",
+    capability: "smart_assistant",
+    description: "LLM-powered assistant",
     provider: { capability: "llm", tags: ["+claude"] },
     maxIterations: 5,
     systemPrompt: "file://prompts/assistant.hbs",
     contextParam: "ctx",
     filter: [{ tags: ["tools"] }],
     filterMode: "all",
-  }),
-  capability: "smart_assistant",
-  description: "LLM-powered assistant",
-  parameters: z.object({
-    ctx: z.object({
-      query: z.string(),
+    parameters: z.object({
+      ctx: z.object({
+        query: z.string(),
+      }),
     }),
+    execute: async ({ ctx }, { llm }) => {
+      return llm("Help the user with their request");
+    },
   }),
-  execute: async ({ ctx }, { llm }) => {
-    return llm("Help the user with their request");
-  },
-});
+);
+
+const agent = mesh(server, { name: "smart-assistant", httpPort: 9003 });
 ```
+
+`mesh.llm()` takes the whole tool definition, including `name`,
+`parameters` and `execute`, and returns a tool you pass to the FastMCP
+server's `addTool`. It is not a fragment to spread into another definition.
 
 ## Parameters
 
 | Parameter       | Type              | Description                                      |
 | --------------- | ----------------- | ------------------------------------------------ |
+| `name`          | `string`          | Tool name (required)                             |
+| `capability`    | `string`          | Capability name (default: `name`)                |
+| `parameters`    | `ZodType`         | Input schema (required)                          |
+| `execute`       | `(args, { llm })` | Handler; receives the parsed args and the `llm` callable (required) |
 | `provider`      | `LlmProviderSpec` | LLM provider selector (capability + tags)        |
 | `maxIterations` | `number`          | Max agentic loop iterations (default: 10)        |
 | `systemPrompt`  | `string`          | System prompt or file path (Handlebars template) |
@@ -136,24 +145,24 @@ const AssistResponse = z.object({
   sources: z.array(z.string()).optional(),
 });
 
-agent.addTool({
-  name: "analyze",
-  ...mesh.llm({
+server.addTool(
+  mesh.llm({
+    name: "analyze",
+    capability: "analyzer",
+    description: "Analyzes queries with structured output",
     provider: { capability: "llm", tags: ["+claude"] },
     systemPrompt: "Analyze the query and provide a structured response.",
     returns: AssistResponse, // Enables structured output
+    parameters: z.object({
+      query: z.string(),
+    }),
+    execute: async ({ query }, { llm }) => {
+      // Returns AssistResponse type
+      const result = await llm(query);
+      return JSON.stringify(result);
+    },
   }),
-  capability: "analyzer",
-  description: "Analyzes queries with structured output",
-  parameters: z.object({
-    query: z.string(),
-  }),
-  execute: async ({ query }, { llm }) => {
-    // Returns AssistResponse type
-    const result = await llm(query);
-    return JSON.stringify(result);
-  },
-});
+);
 ```
 
 ### Separating LLM output from deterministic fields
@@ -344,11 +353,12 @@ See `examples/typescript/vertex-ai-agent/` for a working minimal agent.
 
 ## Complete Example
 
-```typescript
-import { FastMCP, mesh } from "@mcpmesh/sdk";
-import { z } from "zod";
+Three agents, one per process (a process hosts one `MeshAgent`):
 
-// 1. Create LLM Provider
+```typescript
+// claude-provider/src/index.ts
+import { FastMCP, mesh } from "@mcpmesh/sdk";
+
 const providerServer = new FastMCP({ name: "Claude", version: "1.0.0" });
 const provider = mesh(providerServer, {
   name: "claude-provider",
@@ -361,8 +371,13 @@ provider.addLlmProvider({
   capability: "llm",
   tags: ["llm", "claude"],
 });
+```
 
-// 2. Create Tool Agent
+```typescript
+// calculator/src/index.ts
+import { FastMCP, mesh } from "@mcpmesh/sdk";
+import { z } from "zod";
+
 const toolServer = new FastMCP({ name: "Calculator", version: "1.0.0" });
 const calculator = mesh(toolServer, { name: "calculator", httpPort: 9002 });
 
@@ -374,27 +389,30 @@ calculator.addTool({
   parameters: z.object({ a: z.number(), b: z.number() }),
   execute: async ({ a, b }) => String(a + b),
 });
+```
 
-// 3. Create LLM Agent
+```typescript
+// smart-assistant/src/index.ts
+import { FastMCP, mesh } from "@mcpmesh/sdk";
+import { z } from "zod";
+
 const agentServer = new FastMCP({ name: "Smart Assistant", version: "1.0.0" });
-const assistant = mesh(agentServer, {
-  name: "smart-assistant",
-  httpPort: 9003,
-});
 
-assistant.addTool({
-  name: "assist",
-  ...mesh.llm({
+agentServer.addTool(
+  mesh.llm({
+    name: "assist",
+    capability: "assistant",
+    description: "LLM-powered assistant",
     provider: { capability: "llm", tags: ["+claude"] },
     systemPrompt: "You are a helpful assistant with access to a calculator.",
     filter: [{ tags: ["tools"] }],
     maxIterations: 5,
+    parameters: z.object({ message: z.string() }),
+    execute: async ({ message }, { llm }) => llm(message),
   }),
-  capability: "assistant",
-  description: "LLM-powered assistant",
-  parameters: z.object({ message: z.string() }),
-  execute: async ({ message }, { llm }) => llm(message),
-});
+);
+
+mesh(agentServer, { name: "smart-assistant", httpPort: 9003 });
 ```
 
 ## See Also

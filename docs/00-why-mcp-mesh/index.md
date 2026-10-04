@@ -177,7 +177,7 @@ helm install my-mesh oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
 
 ```bash
 meshctl scaffold --compose --observability
-docker-compose up
+docker compose up
 ```
 
 **Result**: 5 files + 1 command

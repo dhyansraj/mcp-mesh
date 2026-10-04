@@ -12,7 +12,7 @@ Every time the registry resolves a dependency for a consumer, it records the sta
 
 When a consumer asks the registry to resolve a dependency, candidates flow through these stages in order:
 
-1. **`health`** — drop unhealthy or deregistering candidates first. Running this stage first keeps the downstream stage tables clean (no stale agents listed in the tag-eviction trace).
+1. **`health`** — drop unhealthy candidates, and healthy ones whose capability is unavailable because a `required` dependency of theirs is unresolved, first. Running this stage first keeps the downstream stage tables clean (no stale agents listed in the tag-eviction trace).
 2. **`capability_match`** — survivors from the indexed query for `capability=X`. This stage records the universe the rest of the pipeline operates on.
 3. **`tags`** — apply required / preferred / excluded tag filters and compute scores. See [Tag Matching](tag-matching.md).
 4. **`version`** — apply semver constraint (`>=2.0.0`, `^1.4`, etc.).
@@ -27,7 +27,8 @@ The registry deliberately doesn't emit an event for every resolution — single-
 
 - For `dependency_resolved`:
     - **≥2 candidates** entered any stage of the pipeline (a real choice was made), OR
-    - The chosen producer **changed** since the last resolution (re-wiring observable for ops).
+    - The chosen producer **changed** since the last resolution (re-wiring observable for ops), OR
+    - The previous event for this dependency was `dependency_unresolved` (a provider appeared), even with a single candidate.
 
 - For `dependency_unresolved`:
     - **≥1 eviction** happened (something was filtered out), OR
@@ -115,8 +116,7 @@ Reasons are typed (not freeform strings) so audit consumers can pattern-match. T
 | `VersionConstraintFailed`    | Provider's version doesn't satisfy the consumer's semver constraint  |
 | `SchemaIncompatible`         | Provider's schema doesn't satisfy the consumer's `match_mode`        |
 | `Unhealthy`                  | Provider was not healthy at resolution time                          |
-| `Deregistering`              | Provider is in the middle of a graceful shutdown                     |
-| `Unreachable`                | Provider's endpoint can't be reached for invocation                  |
+| `Unavailable`                | Provider is healthy, but a `required` dependency of its capability is unresolved, so the capability is unavailable |
 
 `SchemaIncompatible` carries structured `details` describing the mismatch:
 

@@ -10,7 +10,7 @@ This directory contains examples demonstrating different deployment scenarios fo
 
 ```bash
 cd docker-examples/
-docker-compose up
+docker compose up
 ```
 
 **Features**:
@@ -139,6 +139,6 @@ Each directory contains detailed README files with step-by-step instructions, tr
 ## 🆘 Need Help?
 
 - 📖 Check the specific README in each example directory
-- 🐛 Look at logs: `docker-compose logs` or `kubectl logs`
+- 🐛 Look at logs: `docker compose logs` or `kubectl logs`
 - 🔧 Use meshctl for debugging: `meshctl status --verbose`
 - 💬 Review the main project documentation

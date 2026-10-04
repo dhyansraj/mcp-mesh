@@ -491,8 +491,8 @@ A handful of anti-patterns this decomposition exists to prevent:
   per-attempt deadlines — in application code, and breaks horizontal
   scaling because state pins the agent to one replica. It also drags
   in hand-rolled cross-thread plumbing (`sys.modules['__main__']`
-  lookups for DI-wired functions, `dependency_kwargs.timeout` knobs
-  for long-poll). There IS a narrow class of agents where this
+  lookups for DI-wired functions, raised call timeouts for
+  long-poll). There IS a narrow class of agents where this
   pattern is the right answer (GPU contexts, real-time aggregators
   with sub-10ms latency budgets) — see
   [In-Process State](in-process-state.md) — but it should never be

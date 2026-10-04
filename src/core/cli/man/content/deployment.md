@@ -371,9 +371,7 @@ Every runtime serves four endpoints, and Kubernetes probes must not share one:
 
 Pointing liveness at `/health` turns an upstream outage into a pod restart, which cannot fix the outage. Probe Wiring below has the manifest.
 
-Route (`@mesh.route`) and A2A (`@mesh.a2a`) agents run `health_check` on the same timer, and a failing one pauses their heartbeat too. A withdrawn gateway keeps serving the ingress it already had - `/ready` stays 200, so the pod keeps its Service endpoints - and stops being discovered. Mesh registers the four paths on the gateway's own FastAPI app, and a path your application already defines wins.
-
-Declaring either hook is another matter, and issue #1506 closes that as by design: `startup_check` and `health_check` are `@mesh.agent` arguments, and that decorator cannot share a process with `@mesh.route` or `@mesh.a2a`, so the examples above apply to `@mesh.agent` agents only. Mesh gives a gateway dependency injection, not lifecycle management - it is an ordinary FastAPI application, so validate its configuration at import time and exit non-zero, which Kubernetes reports as `CrashLoopBackOff` exactly as a failing `startup_check` would. `meshctl man health` has the detail.
+Route (`@mesh.route`) and A2A (`@mesh.a2a`) agents serve the same four paths, registered on the gateway's own FastAPI app; a path your application already defines wins. They have no checks to report: `startup_check` and `health_check` are `@mesh.agent` arguments, and that decorator cannot share a process with `@mesh.route` or `@mesh.a2a`, so the examples above apply to `@mesh.agent` agents only and a gateway's `/startupz` and `/health` always pass. Issue #1506 closes that as by design. Mesh gives a gateway dependency injection, not lifecycle management - it is an ordinary FastAPI application, so validate its configuration at import time and exit non-zero, which Kubernetes reports as `CrashLoopBackOff` exactly as a failing `startup_check` would. `meshctl man health` has the detail.
 
 ### Probe Wiring
 

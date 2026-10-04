@@ -75,8 +75,8 @@ Use nested arrays in tags to specify fallback providers:
 @mesh.tool(
     capability="calculator",
     dependencies=[
-        # Prefer python provider, fallback to typescript
-        {"capability": "math", "tags": ["addition", ["python", "typescript"]]},
+        # Require addition AND (python OR typescript), preferring python
+        {"capability": "math", "tags": ["addition", ["+python", "typescript"]]},
     ],
 )
 async def calculate(a: int, b: int, math: mesh.McpMeshTool = None):
@@ -237,24 +237,7 @@ Each dotted `capability` is segment-validated against the dotted-capability gram
 
 ## Proxy Configuration
 
-Configure proxy behavior via `dependency_kwargs`:
-
-```python
-@mesh.tool(
-    dependencies=["slow_service"],
-    dependency_kwargs={
-        "slow_service": {
-            "timeout": 60,           # Request timeout (seconds)
-            "retry_count": 3,        # Retry attempts
-            "streaming": True,       # Enable streaming
-            "session_required": True, # Require session affinity
-        }
-    },
-)
-async def my_tool(slow_service: mesh.McpMeshTool = None):
-    result = await slow_service(data="large_payload")
-    ...
-```
+The Python runtime has no per-dependency proxy settings. Every outgoing call runs on one budget: `MCP_MESH_CALL_TIMEOUT` (default 300 seconds), replaced by an inbound `X-Mesh-Timeout` when the current call carries one. Per-dependency options are TypeScript-only (`dependencyKwargs`); `@mesh.tool` ignores a `dependency_kwargs` argument and logs a warning.
 
 ## Proxy Types (Auto-Selected)
 

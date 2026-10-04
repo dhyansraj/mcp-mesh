@@ -135,9 +135,11 @@ def smart_assistant(): ...
 
 ## Tag OR Alternatives
 
-Tags also support nested-array OR alternatives for fallback semantics
-(e.g., prefer `python`, fallback `typescript`). See the **Tag-Level OR**
-section in `meshctl man capabilities` for the full pattern.
+Tags also support nested-array OR groups: `["addition", ["python", "typescript"]]`
+requires `addition` and at least one of the alternatives. The alternatives are
+not tried in order; every qualifying provider is scored and the highest wins,
+so write `["+python", "typescript"]` to prefer `python`. See the **Tag-Level
+OR** section in `meshctl man capabilities` for the full pattern.
 
 ## See Also
 

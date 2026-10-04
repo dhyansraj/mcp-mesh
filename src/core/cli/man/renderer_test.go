@@ -675,10 +675,33 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // agents and `scaffold api` gateways) and that a gateway with an unreadable
 // port is skipped. Three new inline spans; the --dry-run example is fenced.
 // 1901 + 3 = 1904.
+//
+// The docs truth sweep (#1576, #1577, #1578, #1579, #1596, #1598, #1602,
+// #1610) moves all three: inline +73, list +13, markup list lines +4.
+// observability.md +13 inline (+13 list, +1 markup): the credentials and
+// trace-store bullets that replace the invented dashboards and admin/admin
+// claim. security.md +12: the Java SPIRE refusal, the registry spire-tag
+// paragraph and the "No Token Alternative" section that replaces the
+// MCP_MESH_AUTH_TOKEN claim. proxies.md +12: the Python page stops teaching
+// dependency_kwargs and states the call budget, streaming and session_id
+// affinity instead. environment.md +8 (+5 list, +6 markup): the rewrite into
+// per-component tables moves most spans into table lines, which count for
+// nothing, and the new prose (reader legend, empty-means-unset, Vertex,
+// Java provider keys) adds them back. kwargs.md +7 for the TypeScript-only
+// dependency kwargs section. cli.md +6 for meshctl job / registry. headers.md
+// +5 (+1, +1) for the capture-and-relay section. dependency-injection.md +4,
+// audit.md +2 (+2, +1) for the Unavailable reason and the
+// unresolved-to-resolved rule, capabilities.md +2 (-4 list, -2 markup) and
+// tags.md +2 for score-based OR groups, health.md +1 for the Python gateway
+// paragraph. llm.md 0 inline (-2 list, -3 markup) for the Vertex env names,
+// streaming.md -1 (-2 list) for TypeScript proxy.stream(). The removed
+// DEFAULT_EVICTION_THRESHOLD, registry.md API-table and tutorial.md
+// --project-name edits are fenced, table lines or span swaps.
+// 1904 + 73 = 1977; 537 + 13 = 550; 455 + 4 = 459.
 const (
-	wantInlineCodeSpans = 1904
-	wantListCodeSpans   = 537
-	wantMarkupListLines = 455
+	wantInlineCodeSpans = 1977
+	wantListCodeSpans   = 550
+	wantMarkupListLines = 459
 )
 
 // assertCorpusSize replaces the t.Logf these tests used to end on.

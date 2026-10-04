@@ -208,26 +208,33 @@ The discipline:
 
 If a consumer calls a tool on this agent that long-polls on engine
 state (e.g., "wait until the aggregator has at least N samples"), the
-consumer's mesh proxy enforces a default timeout (~30s). Calls that
-exceed it abort.
+consumer's mesh proxy enforces its call budget: `MCP_MESH_CALL_TIMEOUT`
+(default 300 seconds), or the inbound `X-Mesh-Timeout` when the
+consumer is itself serving a call that carries one. Calls that exceed
+it abort.
 
-To allow longer polls, the **consumer** declares it explicitly:
+To allow longer polls, raise the budget on the **consumer**:
 
-=== "Python"
+=== "Python / Java"
 
-    ```python
-    @mesh.tool(
-        capability="my_tool",
-        dependencies=["wait_for_threshold"],
-        dependency_kwargs={
-            "wait_for_threshold": {"timeout": 300},  # 5 minutes
-        },
-    )
-    async def my_tool(wait_for_threshold: mesh.McpMeshTool = None):
-        return await wait_for_threshold(min_samples=1000)
+    ```bash
+    export MCP_MESH_CALL_TIMEOUT=900   # 15 minutes, for every outgoing call
     ```
 
-The kwarg lives on the caller side because it's the caller's HTTP
+=== "TypeScript"
+
+    ```typescript
+    agent.addTool({
+      name: "my_tool",
+      dependencies: ["wait_for_threshold"],
+      dependencyKwargs: [{ timeout: 900 }], // this dependency only
+      parameters: z.object({}),
+      execute: async ({}, waitForThreshold: McpMeshTool | null = null) =>
+        waitForThreshold ? waitForThreshold({ min_samples: 1000 }) : null,
+    });
+    ```
+
+The setting lives on the caller side because it's the caller's HTTP
 proxy that's enforcing the timeout. The engine agent has no way to
 override it from its own side.
 
@@ -267,9 +274,9 @@ Mitigations are all imperfect:
 - Run with `replicas: 1` and accept the loss of redundancy. This is
   the only mitigation that is actually correct, and it is the one to
   reach for first.
-- Use session-affinity routing (`session_required: True` in
-  `dependency_kwargs`) to pin a consumer to a replica for the
-  duration of a logical session. This shifts the problem rather
+- Use session-affinity routing (a Python provider pins every call
+  carrying the same `session_id` argument to one replica) to pin a
+  consumer to a replica for the duration of a logical session. This shifts the problem rather
   than solving it: cross-session reads still hit the wrong replica.
   It also only applies behind a Service — with a pod-IP endpoint
   there is nothing to pin, because the calls were never spreading.

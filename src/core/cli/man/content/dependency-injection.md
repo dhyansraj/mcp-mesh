@@ -326,19 +326,9 @@ A legacy *union* capability (a single `session_state` tool that multiplexes seve
 
 ## Proxy Configuration
 
-Per-dependency proxy options (timeout, retry, streaming, session affinity, auth, custom headers, etc.) are configured via `dependency_kwargs`. See `meshctl man proxies` for the full options table.
+The Python runtime has no per-dependency proxy settings. Every outgoing call runs on one budget: `MCP_MESH_CALL_TIMEOUT` (default 300 seconds), replaced by an inbound `X-Mesh-Timeout` when the current call carries one. Per-dependency options are TypeScript-only (`dependencyKwargs`); `@mesh.tool` ignores a `dependency_kwargs` argument and logs a warning.
 
-```python
-@mesh.tool(
-    dependencies=["slow_service"],
-    dependency_kwargs={
-        "slow_service": {"timeout": 60, "retry_count": 3},
-    },
-)
-async def my_tool(slow_service: mesh.McpMeshTool = None):
-    result = await slow_service(data="large_payload")
-    ...
-```
+See `meshctl man proxies` for streaming and session affinity.
 
 ## Proxy Types (Auto-Selected)
 

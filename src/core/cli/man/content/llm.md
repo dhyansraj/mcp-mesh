@@ -203,28 +203,22 @@ Mesh routes Gemini calls via the model prefix:
 | Backend                    | Model prefix                 | Auth                                            |
 | -------------------------- | ---------------------------- | ----------------------------------------------- |
 | Google AI Studio (API key) | `gemini/gemini-2.5-flash`    | `GOOGLE_API_KEY` env                            |
-| Google Vertex AI (IAM)     | `vertex_ai/gemini-2.5-flash` | ADC + `VERTEXAI_PROJECT` + `VERTEXAI_LOCATION`  |
+| Google Vertex AI (IAM)     | `vertex_ai/gemini-2.5-flash` | ADC + `GOOGLE_CLOUD_PROJECT` (+ `GOOGLE_CLOUD_LOCATION`) |
 
 Same `GeminiHandler` runs for both — identical HINT-mode prompt shaping for
 structured output with tools. Switch backends by changing only the model
 prefix and the auth env vars; no agent code changes.
 
-For Vertex AI:
-- **Python**: install the optional extra: `pip install 'mcp-mesh[vertex]'`
-- **TypeScript**: `@mcpmesh/sdk` already depends on `@ai-sdk/google-vertex` —
-  no extra install needed
-- **Java**: add `org.springframework.ai:spring-ai-starter-model-vertex-ai-gemini`
-  to your `pom.xml` (the mesh starter only auto-wires it when present)
+For Vertex AI no extra install is needed in Python (the bundled `google-genai` SDK serves both backends) or TypeScript (`@mcpmesh/sdk` depends on `@ai-sdk/google-vertex`). Java uses the same `spring-ai-starter-model-google-genai` dependency as AI Studio.
 
-**Per-language env var names** (each runtime follows its ecosystem's convention):
+**Per-language env var names**:
 
-- **Python (LiteLLM)**: `VERTEXAI_PROJECT`, `VERTEXAI_LOCATION`
-- **TypeScript (Vercel AI SDK)**: `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`
-- **Java (Spring AI)**: `SPRING_AI_VERTEX_AI_GEMINI_PROJECT_ID`,
-  `SPRING_AI_VERTEX_AI_GEMINI_LOCATION`
+- **Python**: `GOOGLE_CLOUD_PROJECT` (else the ADC quota project), `GOOGLE_CLOUD_LOCATION` (default `us-central1`)
+- **TypeScript**: `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` (both required)
+- **Java**: `SPRING_AI_GOOGLE_GENAI_PROJECT_ID`, `SPRING_AI_GOOGLE_GENAI_LOCATION`
 
 `GOOGLE_APPLICATION_CREDENTIALS` (path to SA JSON / ADC) is shared across all
-three. See `meshctl man env` for the full matrix.
+three. See `meshctl man environment` for the full matrix.
 
 ## Tool Filtering
 

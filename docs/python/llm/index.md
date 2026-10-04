@@ -208,44 +208,39 @@ auth env vars (each follows its own ecosystem's naming convention).
 
 ### Setup
 
-1. Install the `vertex` extra:
+No extra install is needed: the bundled `google-genai` SDK serves both
+AI Studio and Vertex AI.
 
-   ```bash
-   pip install 'mcp-mesh[vertex]'
-   ```
-
-   This adds `google-auth` (required by LiteLLM for ADC).
-
-2. Configure auth + project + location (pick one path):
+1. Configure auth + project + location (pick one path). The project comes
+   from `GOOGLE_CLOUD_PROJECT`, else from the quota project of your
+   Application Default Credentials; the location from
+   `GOOGLE_CLOUD_LOCATION`, default `us-central1`.
 
    **User ADC** (dev):
 
    ```bash
    gcloud auth application-default login
-   export VERTEXAI_PROJECT=my-gcp-project
-   export VERTEXAI_LOCATION=us-central1
+   export GOOGLE_CLOUD_PROJECT=my-gcp-project
+   export GOOGLE_CLOUD_LOCATION=us-central1
    ```
 
    **Service account** (CI / prod):
 
    ```bash
    export GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json
-   # VERTEXAI_PROJECT is technically optional with SA JSON (LiteLLM can read
-   # the project from the JSON), but recommended for explicitness:
-   export VERTEXAI_PROJECT=my-gcp-project
-   export VERTEXAI_LOCATION=us-central1
+   export GOOGLE_CLOUD_PROJECT=my-gcp-project
+   export GOOGLE_CLOUD_LOCATION=us-central1
    ```
 
    **Workload Identity** (GKE):
 
    ```bash
-   # VERTEXAI_PROJECT is recommended even when ADC carries project info via
-   # the WI binding / metadata server — explicit beats implicit across envs:
-   export VERTEXAI_PROJECT=my-gcp-project
-   export VERTEXAI_LOCATION=us-central1
+   # Set the project explicitly even when the WI binding carries one:
+   export GOOGLE_CLOUD_PROJECT=my-gcp-project
+   export GOOGLE_CLOUD_LOCATION=us-central1
    ```
 
-3. Use the `vertex_ai/*` prefix in your decorator:
+2. Use the `vertex_ai/*` prefix in your decorator:
 
    ```python
    @mesh.llm_provider(
@@ -272,8 +267,8 @@ model="vertex_ai/gemini-2.5-flash"   # was: "gemini/gemini-2.5-flash"
 ```bash
 # Switch the env vars:
 unset GOOGLE_API_KEY
-export VERTEXAI_PROJECT=my-project
-export VERTEXAI_LOCATION=us-central1
+export GOOGLE_CLOUD_PROJECT=my-project
+export GOOGLE_CLOUD_LOCATION=us-central1
 gcloud auth application-default login
 ```
 

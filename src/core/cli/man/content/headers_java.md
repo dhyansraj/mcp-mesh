@@ -18,9 +18,11 @@ Set the allowlist via environment variable on every agent in the chain:
 export MCP_MESH_PROPAGATE_HEADERS=authorization,x-request-id,x-tenant-id
 ```
 
-- Comma-separated header name **prefixes**
+- Comma-separated header names
+- A plain token is an exact match: `authorization` matches only `authorization`
+- A token ending in `*` is a prefix match: `x-audit-*` matches `x-audit-id`, `x-audit-source`, etc.
+- A bare `*` is rejected (it would match every header, credentials included)
 - Case-insensitive (normalized to lowercase internally)
-- Prefix matching: `x-audit` matches `x-audit-id`, `x-audit-source`, etc.
 - Whitespace around names is trimmed
 - Parsed once at startup — restart to change
 - Must be set on **every agent** in the chain that should participate
@@ -49,7 +51,7 @@ Client                Agent A              Agent B              Agent C
    into the outgoing HTTP request automatically
 4. The downstream agent repeats the process — headers flow end-to-end
 
-Java uses `InheritableThreadLocal` for thread-safe, request-scoped storage
+Java uses `ThreadLocal` for thread-safe, request-scoped storage
 so concurrent requests are fully isolated.
 
 ## Reading Headers in Tool Handlers
@@ -128,7 +130,7 @@ Session propagated headers (from incoming request)
 ```
 
 Per-call headers **win** on conflict. All headers (session and per-call)
-are filtered by the `MCP_MESH_PROPAGATE_HEADERS` prefix allowlist — agents
+are filtered by the `MCP_MESH_PROPAGATE_HEADERS` allowlist — agents
 cannot inject arbitrary headers unless the operator explicitly allows them.
 
 ## Example: Auth Token Forwarding
@@ -160,6 +162,36 @@ public Map<String, Object> secureTool(@Param("data") String data) {
 
 Spring Security reads the `Authorization` header from the HTTP request
 automatically — no extra wiring needed when headers are propagated.
+
+## The Allowlist Is Not Access Control
+
+`MCP_MESH_PROPAGATE_HEADERS` is a capture-and-relay setting scoped to the agent it is set on:
+
+- It decides which inbound headers this agent captures and then sends on every outbound mesh call. It never looks at the destination, so a captured header goes to every dependency the agent calls.
+- A callee cannot refuse a header. Leaving `authorization` out of agent B's allowlist means B does not relay it to C; B still receives it on the wire and holds it for the whole call.
+- A credential that enters the chain therefore reaches every downstream agent, at every hop whose allowlist relays it.
+
+Trace headers (`X-Trace-ID`, `X-Parent-Span`) travel separately, so withholding business headers does not break tracing.
+
+### Withholding Headers from One Call
+
+There is no per-dependency setting, and per-call headers can only add. To keep a header away from one downstream, replace the thread's propagated set around that call and restore it afterwards:
+
+```java
+import io.mcpmesh.spring.tracing.TraceContext;
+
+Map<String, String> saved = TraceContext.getPropagatedHeaders();
+Map<String, String> withoutAuth = new HashMap<>(saved);
+withoutAuth.remove("authorization");
+TraceContext.setPropagatedHeaders(withoutAuth);
+try {
+    return untrustedSvc.call(Map.of("query", query));
+} finally {
+    TraceContext.setPropagatedHeaders(saved);
+}
+```
+
+Remove only the names you mean to withhold. Keys are lowercase, and the set also carries mesh infrastructure headers such as `x-mesh-timeout`, which carries the inbound call budget downstream. The set is read on the calling thread when the request is built, so make the withheld call with `call`, inside the `try`.
 
 ## Calling Mesh Tools from Spring Filters
 
@@ -255,7 +287,7 @@ SDK combination is in the chain.
 
 | Variable                     | Description                                       | Default  |
 | ---------------------------- | ------------------------------------------------- | -------- |
-| `MCP_MESH_PROPAGATE_HEADERS` | Comma-separated header name prefixes to forward   | _(none)_ |
+| `MCP_MESH_PROPAGATE_HEADERS` | Comma-separated allowlist (exact `name` or `prefix*`) | _(none)_ |
 
 ## See Also
 

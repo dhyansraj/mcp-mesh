@@ -132,8 +132,8 @@ agent.addTool({
   name: "calculate",
   capability: "calculator",
   dependencies: [
-    // Prefer python provider, fallback to typescript
-    { capability: "math", tags: ["addition", ["python", "typescript"]] },
+    // Require addition AND (python OR typescript), preferring python
+    { capability: "math", tags: ["addition", ["+python", "typescript"]] },
   ],
   parameters: z.object({
     a: z.number(),
@@ -180,18 +180,18 @@ execute: async ({}, helper: McpMeshTool | null = null) => {
 For LLM agent injection in `mesh.llm()` decorated tools:
 
 ```typescript
-agent.addTool({
-  name: "smart_tool",
-  ...mesh.llm({
+server.addTool(
+  mesh.llm({
+    name: "smart_tool",
+    capability: "smart",
     provider: { capability: "llm", tags: ["+claude"] },
     systemPrompt: "You are a helpful assistant.",
+    parameters: z.object({ query: z.string() }),
+    execute: async ({ query }, { llm }) => {
+      return llm("Process this request: " + query);
+    },
   }),
-  capability: "smart",
-  parameters: z.object({ query: z.string() }),
-  execute: async ({ query }, { llm }) => {
-    return llm("Process this request: " + query);
-  },
-});
+);
 ```
 
 ## Graceful Degradation
@@ -306,7 +306,7 @@ The view slot expands **in place** (name-sorted), so its edges keep contiguous i
 
 - A `required` method joins the tool's pre-invoke guard: an unresolved required edge makes the tool refuse with a `UserError` carrying the structured `dependency_unavailable` payload before the handler runs (direct and claim paths). An unresolved **optional** method rejects with a `TypeError` (the null-proxy passthrough) on its own call only.
 - `minAvailable` adds a consumer-local floor: below it every facade call throws `MeshServiceUnavailableError` (settle-aware).
-- A view **forces inline execution** — per-tool worker isolation is disabled for a view-bearing tool, with a warning logged at registration when `MCP_MESH_TOOL_WORKERS>1`.
+- A view **forces inline execution** — per-tool worker isolation is disabled for a view-bearing tool, with a warning logged at registration when `MCP_MESH_TOOL_ISOLATION` is set to anything other than `false`.
 - Views are a **tool-parameter** surface only: a `mesh.serviceView(...)` in `mesh.route(...)` or `mesh.a2a.mount(...)` dependencies is rejected.
 
 ### Publishing the dotted capabilities a view binds
@@ -344,10 +344,8 @@ agent.addTool({
   dependencyKwargs: [
     {
       // Config for dependencies[0] (slow_service)
-      timeout: 60, // Request timeout in seconds (default 30)
+      timeout: 60, // Request timeout in seconds (default MCP_MESH_CALL_TIMEOUT, else 300)
       maxAttempts: 3, // Total attempts incl. the first try (default 1)
-      streaming: true, // Enable streaming (uses streamTimeout)
-      sessionRequired: true, // Require session affinity
     },
   ],
   parameters: z.object({ data: z.string() }),
@@ -360,14 +358,9 @@ agent.addTool({
 });
 ```
 
-## Proxy Types (Auto-Selected)
+## Proxy Types
 
-The mesh uses a unified proxy system:
-
-| Proxy Type                | Use Case                                        |
-| ------------------------- | ----------------------------------------------- |
-| `SelfDependencyProxy`     | Same agent (direct call, no network overhead)   |
-| `EnhancedUnifiedMCPProxy` | Cross-agent calls (auto-configured from kwargs) |
+Every injected dependency is an `McpMeshTool` proxy that calls its provider over HTTP, including a dependency on another tool of the same agent.
 
 ## Function vs Capability Names
 

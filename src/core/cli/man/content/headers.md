@@ -181,23 +181,51 @@ curl -H "Authorization: Bearer tok_abc123" \
 ```
 
 The `Authorization` header flows automatically through every agent call.
-Each agent can enforce auth using FastAPI dependencies:
+Each agent can check it in the tool body:
 
 ```python
-from fastapi import Depends, HTTPException
 from mesh import TraceContext
 
-def require_auth():
-    headers = TraceContext.get_propagated_headers()
-    token = headers.get("authorization", "")
+def require_auth() -> str:
+    token = TraceContext.get_propagated_headers().get("authorization", "")
     if not token.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing token")
+        raise PermissionError("Missing token")
     return token
 
 @mesh.tool(capability="secure_tool")
-async def secure_tool(data: str, auth: str = Depends(require_auth)) -> dict:
+async def secure_tool(data: str) -> dict:
+    require_auth()
     return {"result": "ok", "authenticated": True}
 ```
+
+## The Allowlist Is Not Access Control
+
+`MCP_MESH_PROPAGATE_HEADERS` is a capture-and-relay setting scoped to the agent it is set on:
+
+- It decides which inbound headers this agent captures and then sends on every outbound mesh call. It never looks at the destination, so a captured header goes to every dependency the agent calls.
+- A callee cannot refuse a header. Leaving `authorization` out of agent B's allowlist means B does not relay it to C; B still receives it on the wire and holds it for the whole call.
+- A credential that enters the chain therefore reaches every downstream agent, at every hop whose allowlist relays it.
+
+Trace headers (`X-Trace-ID`, `X-Parent-Span`) travel separately, so withholding business headers does not break tracing.
+
+### Withholding Headers from One Call
+
+There is no per-dependency setting, and per-call headers can only add. To keep a header away from one downstream, replace the propagated set around that call and restore it afterwards:
+
+```python
+from mesh import TraceContext
+
+saved = TraceContext.get_propagated_headers()
+TraceContext.set_propagated_headers(
+    {k: v for k, v in saved.items() if k != "authorization"}
+)
+try:
+    result = await untrusted_svc(query=query)
+finally:
+    TraceContext.set_propagated_headers(saved)
+```
+
+Remove only the names you mean to withhold. Keys are lowercase, and the set also carries mesh infrastructure headers such as `x-mesh-timeout`, which carries the inbound call budget downstream.
 
 ## Cross-Language Behavior
 

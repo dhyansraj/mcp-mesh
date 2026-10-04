@@ -4,948 +4,469 @@
 
 ## Overview
 
-MCP Mesh can be configured using environment variables, allowing you to customize behavior without changing code. Environment variables override `@mesh.agent` decorator parameters and provide flexibility for different deployment environments.
+MCP Mesh can be configured using environment variables. For agents they override decorator, `mesh()` and `@MeshAgent` parameters, which lets the same code run locally (using code defaults) and in Kubernetes (using Helm-injected env vars) without modification.
 
-## Essential Environment Variables
+Every variable below is listed with the components that read it:
 
-### Logging and Debug
+- **Py**, **TS**, **Java** - the agent runtimes (Python, TypeScript, Java). "All SDKs" means all three.
+- **registry** - the `mcp-mesh-registry` binary.
+- **meshui** - the dashboard server.
+- **meshctl** - the CLI itself (not the processes it starts).
+
+A variable not listed for a component has no effect on it.
+
+## Configuration Hierarchy
+
+Configuration sources in order of precedence (highest wins):
+
+1. Environment variables (system or `.env` files)
+2. meshctl `--env` flags
+3. Decorator / `mesh()` / annotation parameters (lowest priority)
+
+## Empty Values Mean Unset
+
+In all three SDKs an empty or whitespace-only value is treated as if the variable were not set, so the default applies. An unset Helm key that renders `NAME: ""` therefore behaves like an absent variable. The one exception is `MCP_MESH_ENABLED`, which fails closed: an empty value disables the runtime (see below).
+
+## A note on env var prefixing
+
+mcp-mesh's own env vars use the `MCP_MESH_*` prefix. Several env vars in this reference appear WITHOUT the prefix:
+
+- **Vendor SDK conventions** - `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, `VAULT_TOKEN`, `AWS_*` are consumed directly by the underlying SDKs. Renaming would break those wrappers.
+- **Registry-server boot vars** - `HOST`, `PORT`, `DATABASE_URL`, `DB_*` configure the registry binary's listener and storage.
+- **Observability stack** - `REDIS_URL`, `TEMPO_URL`, `TELEMETRY_*`, `TRACE_*` follow OpenTelemetry / observability-tooling conventions.
+
+## Agent Configuration
+
+### Identity and Networking
+
+| Variable                   | Read by         | Default         | Purpose |
+| -------------------------- | --------------- | --------------- | ------- |
+| `MCP_MESH_AGENT_NAME`      | All SDKs        | code value      | Agent name |
+| `MCP_MESH_AGENT_ID`        | Py              | `<name>-<8 hex>` | Pin the full agent id instead of generating one |
+| `MCP_MESH_NAMESPACE`       | All SDKs        | `default`       | Namespace for isolation |
+| `MCP_MESH_REGISTRY_URL`    | All SDKs, meshui, meshctl | `http://localhost:8000` | Registry URL |
+| `MCP_MESH_HTTP_PORT`       | All SDKs        | code value      | Port the agent serves on |
+| `MCP_MESH_HTTP_HOST`       | All SDKs        | auto-detected   | Hostname announced to the registry |
+| `HOST`                     | Py, TS, registry | `0.0.0.0` (agents) | Bind address |
+| `MCP_MESH_HEALTH_INTERVAL` | All SDKs        | `5`             | Heartbeat cadence to the registry (seconds) |
+| `MCP_MESH_HEALTH_CHECK_TTL` | All SDKs       | `15`            | How often the agent's health check re-runs (seconds) |
 
 ```bash
-# Set log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-export MCP_MESH_LOG_LEVEL=DEBUG
-
-# Enable debug mode (forces DEBUG level)
-export MCP_MESH_DEBUG_MODE=true
-```
-
-### Registry Configuration
-
-```bash
-# Complete registry URL
+export MCP_MESH_AGENT_NAME=my-service
+export MCP_MESH_NAMESPACE=production
 export MCP_MESH_REGISTRY_URL=http://localhost:8000
-
-# Or set host and port separately
-export MCP_MESH_REGISTRY_HOST=localhost
-export MCP_MESH_REGISTRY_PORT=8000
+export MCP_MESH_HTTP_PORT=8080
+export MCP_MESH_HTTP_HOST=my-service
 ```
 
-### Agent Configuration
+`MCP_MESH_HTTP_HOST` decides whether replicas share traffic: the registry hands back one winner's announced host, so announcing a Kubernetes Service name spreads calls across its pods, while an auto-detected pod IP pins every call to one process. TypeScript gateways built with `meshExpress` read the same identity variables as `mesh()` agents.
+
+### Python Runtime
+
+| Variable                          | Default | Purpose |
+| --------------------------------- | ------- | ------- |
+| `MCP_MESH_ENABLED`                | enabled | The off switch (see below) |
+| `MCP_MESH_AUTO_RUN`               | `true`  | Start the HTTP server and keep the process alive |
+| `MCP_MESH_HTTP_ENABLED`           | `true`  | Set `false` to skip the agent's HTTP server setup |
+| `MCP_MESH_API_NAME`               | -       | Name for a `@mesh.route` gateway (falls back to `MCP_MESH_AGENT_NAME`) |
+| `MCP_MESH_A2A_NAME`               | -       | Name for a `@mesh.a2a` gateway (falls back to `MCP_MESH_AGENT_NAME`) |
+| `MCP_MESH_STANDALONE`             | `false` | Run a `@mesh.route` / `@mesh.a2a` gateway without contacting the registry |
+| `MCP_MESH_DEBOUNCE_DELAY`         | `1.0`   | Seconds to wait after the last decorator before starting the runtime |
+| `MCP_MESH_SERVER_STARTUP_TIMEOUT` | `30`    | Seconds to wait for the HTTP server to prove it is serving before the first registration |
+| `MCP_MESH_SESSION_TTL`            | `3600`  | Lifetime of a session-affinity assignment (seconds) |
+
+### MCP_MESH_ENABLED - the off switch
+
+`MCP_MESH_ENABLED=false` makes the Python runtime inert: no startup pipeline, no registration, no heartbeat, no dependency injection. Decorators still import and still record their metadata, so your module loads normally - mesh simply never runs. This is the flag to use in unit tests and in any process that imports an agent module without wanting to join a mesh.
+
+It fails **closed**. Unset means enabled; `true`, `1`, `yes` and `on` enable it; anything else - including `false`, `0`, `off`, an empty value and a typo - disables it and logs why. An empty value is a routine outcome of an unset Helm key, and for the one flag whose job is to turn mesh off, "I could not parse this" must not mean "on".
+
+Do not use `MCP_MESH_AUTO_RUN=false` for this. It gates the HTTP server and the process lifetime only: an agent with auto-run disabled still registers and still heartbeats, by design. See [Python Decorators](python/decorators.md) for the full split.
+
+### Logging
+
+| Variable              | Read by                          | Default | Purpose |
+| --------------------- | -------------------------------- | ------- | ------- |
+| `MCP_MESH_LOG_LEVEL`  | Py, TS, registry, meshui, meshctl | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
+| `MCP_MESH_DEBUG_MODE` | Py, TS, registry, meshctl         | `false` | Force `DEBUG` level |
+
+Java agents log through Spring Boot: set `logging.level.io.mcpmesh` instead.
+
+### Tool Dispatch
+
+| Variable                  | Read by | Default | Purpose |
+| ------------------------- | ------- | ------- | ------- |
+| `MCP_MESH_TOOL_WORKERS`   | Py, TS  | Py `1`; TS `min(8, max(2, cpus))` | Worker loops (Python) / worker threads (TypeScript) for tool bodies |
+| `MCP_MESH_TOOL_ISOLATION` | Py, TS  | `true`  | Run tool bodies off the main event loop |
 
 ```bash
-# Override agent name
-export MCP_MESH_AGENT_NAME=my-custom-agent
-
-# Set agent namespace
-export MCP_MESH_NAMESPACE=development
-
-# Enable/disable auto-run
-export MCP_MESH_AUTO_RUN=true
-
-# Auto-run heartbeat interval (seconds)
-export MCP_MESH_AUTO_RUN_INTERVAL=30
-```
-
-### Agent Identity & Version
-
-```bash
-# Agent semantic version (default: "1.0.0")
-# Typically set in source code via @mesh.agent decorator, not env var
-export MCP_MESH_AGENT_VERSION=1.2.0
-
-# Runtime-assigned agent ID (set by registry, read-only)
-# MCP_MESH_AGENT_ID — assigned at registration
-
-# Override agent capabilities
-export MCP_MESH_AGENT_CAPABILITIES=greeting,translation
-
-# Heartbeat interval in seconds (Java runtime, default: 5)
-export MCP_MESH_HEARTBEAT_INTERVAL=5
-
-# Session time-to-live in seconds (default: 3600)
-export MCP_MESH_SESSION_TTL=3600
-```
-
-### Tool Dispatch (Python)
-
-```bash
-# Number of worker loops for @mesh.tool / @app.tool body dispatch
-# Default: 1 (since v2.2.4; previously min(8, max(2, cpu_count())))
-#
-# At 1 (default): FastAPI lifespan startup, all tool bodies, and lifespan
-# exit share one user loop. Loop-bound resources (asyncpg.Pool, redis.asyncio,
-# aiohttp.ClientSession) created in lifespan startup work in every tool body.
+# Python: N=1 (default) runs lifespan startup, every tool body and lifespan
+# exit on one user loop, so loop-bound resources created in lifespan
+# (asyncpg.Pool, redis.asyncio, aiohttp.ClientSession) work in every tool.
 # /health, /ready, /livez stay responsive on a separate framework loop.
+# N>1 is for tool bodies doing sync blocking work; resources created in
+# lifespan bind to worker-0 only. Prefer asyncio.to_thread(blocking_call).
 #
-# At N>1: N worker loops dispatched round-robin. Use this when tool bodies
-# do sync blocking work (time.sleep, sync HTTP client, CPU-bound) and need
-# concurrent calls absorbed across loops. Caveat: resources created in
-# lifespan bind to worker-0 only; use a per-loop dict cache for cross-worker
-# access. Prefer `await asyncio.to_thread(blocking_call)` when feasible.
+# TypeScript: the size of the worker_threads pool that isolated tool
+# bodies run on.
 export MCP_MESH_TOOL_WORKERS=1
-```
 
-### Tool Isolation (Python / TypeScript)
-
-```bash
-# Default: true. Runs each async tool body off the main event loop — Python
+# Default true. Runs each async tool body off the main event loop - Python
 # dispatches it to the mesh worker loop, TypeScript runs it on a worker
-# thread — so a blocking or long-running tool call cannot stall the main
-# loop that serves /health, /ready, the FastMCP/HTTP transport, and registry
-# heartbeats.
+# thread - so a blocking or long-running tool call cannot stall the main
+# loop that serves /health, /ready, the HTTP transport and the heartbeat.
+# Set to false to run tool bodies inline on the main loop.
 #
-# Set to false to revert to legacy inline execution on the main loop.
-#
-# Scope and carve-outs:
-# - Python: only async tools are wrapped (sync tools already run off-loop via
-#   FastMCP); streaming tools are always inline (progress notifications must
-#   run on the main loop).
-# - TypeScript: when the agent's entrypoint is a TypeScript source file
-#   (.ts/.mts/.cts/.tsx), the worker loads it through `tsx`, which must be in
-#   your dependencies; a precompiled .js entrypoint needs nothing extra.
-#   A2A-consumer tools and MeshJob/task tools force-disable isolation (their
-#   injected handles cannot cross the worker_threads boundary) regardless of
-#   this setting.
+# - Python: only async tools are wrapped (sync tools already run off-loop
+#   via FastMCP); streaming tools always run inline.
+# - TypeScript: a .ts/.mts/.cts/.tsx entrypoint is loaded in the worker
+#   through `tsx`, which must be in your dependencies. A2A-consumer tools,
+#   MeshJob/task tools and service-view tools always run inline.
 export MCP_MESH_TOOL_ISOLATION=true
 ```
 
-### Strict DI Diagnostics (Python, TypeScript, Java)
+### Strict DI Diagnostics (all SDKs)
 
 ```bash
 # Default: false. When truthy, ambiguous or skipped dependency-injection
 # configurations fail at decoration/startup instead of warning. Injection
-# semantics are unchanged — only the diagnostic severity is promoted.
+# semantics are unchanged - only the diagnostic severity is promoted.
 #
 # - Python: raises StrictDIError at decoration/startup.
 # - TypeScript: an addTool whose dependencies outnumber the execute
 #   parameters after args throws StrictDIError at registration.
 # - Java: promotes the boot-time dependency/parameter arity mismatch and
 #   the @MeshRoute / @MeshA2A legacy-order warning to a startup failure.
-#   A contradicting @MeshInject value is fatal either way — it asserts the
-#   dependency position already assigns, so a false assertion is never
-#   survivable.
+#   A contradicting @MeshInject value is fatal either way.
 # All three accept true / 1 / yes / on (any case).
 export MCP_MESH_STRICT_DI=true
 ```
 
-### Dependency Settling Window (all runtimes)
+### Dependency Settling Window (all SDKs)
 
 ```bash
 # Float seconds, default: 20. 0 disables the grace entirely.
 #
 # During agent startup, declared dependencies resolve asynchronously (first
 # full heartbeat cycle). A call that arrives while a declared dependency is
-# still unresolved waits — bounded by the remaining window — for that
+# still unresolved waits - bounded by the remaining window - for that
 # dependency's resolution event before proceeding. Event-driven: resolution
 # at 800ms unblocks at 800ms; the value is a ceiling, never a sleep.
-# The window starts when the agent's first dependency is declared during
-# startup (not at process start or module import).
+# The window starts when the agent's first dependency is declared.
 #
 # Once the agent settles (all declared dependencies resolved at least once,
-# OR the window expires), the latch is permanent: calls never wait again and
-# unresolved dependencies inject None/null exactly as before.
+# OR the window expires), calls never wait again and unresolved
+# dependencies inject None/null exactly as before.
 #
-# Scope: dependency-injection call paths (@mesh.tool, @mesh.route), A2A
-# producer handlers (@mesh.a2a / mesh.a2a.mount / @MeshA2A) and the LLM
-# provider slot (@mesh.llm / mesh.llm / @MeshLlm), on all three runtimes.
-# Startup-hook usage, module-scope captured deps, and LLM tool-filter
-# assembly are not covered.
-#
-# Tuning: lower it (e.g. 2–5) in integration tests that intentionally
-# exercise unresolved-dependency behavior, so degraded-path assertions
-# don't sit out the full default window.
+# Scope: dependency-injection call paths (tools and routes), A2A producer
+# handlers and the LLM provider slot, on all three runtimes.
 export MCP_MESH_SETTLE_TIMEOUT=20
 ```
 
-### HTTP Server Settings
+### Schema Verdict Policy (issue #547)
+
+| Variable                            | Read by  | Default  | Purpose |
+| ----------------------------------- | -------- | -------- | ------- |
+| `MCP_MESH_SCHEMA_STRICT`            | All SDKs | `false`  | Treat schema-normalizer WARN verdicts as BLOCK and refuse to start |
+| `MCP_MESH_SCHEMA_MAX_INLINED_NODES` | All SDKs | `500000` | Ceiling on JSON nodes materialized while inlining `$defs`; exceeding it is a BLOCK |
 
 ```bash
-# External hostname announced to registry (also used as bind hint)
-# In K8s/production, set to the externally reachable hostname (e.g., service name).
-# Agents bind to 0.0.0.0 internally regardless.
-export MCP_MESH_HTTP_HOST=0.0.0.0
+# Production hardening knob; per-tool output_schema_strict=false (Python) /
+# outputSchemaStrict: false (TS) / outputSchemaStrict = false (Java)
+# overrides it for that one tool.
+export MCP_MESH_SCHEMA_STRICT=true
 
-# Agent HTTP port
-export MCP_MESH_HTTP_PORT=8080
-
-# Enable/disable HTTP transport
-export MCP_MESH_HTTP_ENABLED=true
+# Raise it if a legitimately large model is refused - a consumer-side
+# expected_type BLOCK has NO per-tool override, so this is the only remedy.
+export MCP_MESH_SCHEMA_MAX_INLINED_NODES=2000000
 ```
 
-!!! tip "This is what decides whether replicas share traffic"
+See [Schema Matching](concepts/schema-matching.md) for the verdict tiers and per-tool overrides.
 
-    The registry resolves each dependency to exactly one winner and hands back
-    that agent's registered host — it never round-robins. So whether a second
-    replica sees any traffic depends entirely on what `MCP_MESH_HTTP_HOST`
-    announced. Set it to a **Kubernetes Service name** and kube-proxy spreads
-    calls across the Service's pods; leave it unset and the agent auto-detects
-    its own address (its pod IP in Kubernetes), so every call pins to that one
-    process. The `mcp-mesh-agent` Helm chart sets Service DNS for you — override
-    it with `agent.advertisedHost`. See [Tiebreaker](concepts/audit.md#tiebreaker).
+## Calls and Timeouts
 
-### Health and Monitoring
-
-```bash
-# Health check interval (seconds)
-export MCP_MESH_HEALTH_INTERVAL=30
-
-# Enable global mesh functionality
-export MCP_MESH_ENABLED=true
-```
-
-### MCP_MESH_ENABLED — the off switch
-
-`MCP_MESH_ENABLED=false` makes the runtime inert: no startup pipeline, no
-registration, no heartbeat, no dependency injection. Decorators still import and
-still record their metadata, so your module loads normally — mesh simply never
-runs. This is the flag to use in unit tests and in any process that imports an
-agent module without wanting to join a mesh.
-
-It fails **closed**. Unset means enabled; `true`, `1`, `yes` and `on` enable it;
-anything else — including `false`, `0`, `off`, an empty value and a typo —
-disables it and logs why. An empty value is a routine outcome of an unset Helm
-key, and for the one flag whose job is to turn mesh off, "I could not parse
-this" must not mean "on".
-
-Do not use `MCP_MESH_AUTO_RUN=false` for this. It gates the HTTP server and the
-process lifetime only: an agent with auto-run disabled still registers and still
-heartbeats, by design. See `meshctl man decorators` for the full split.
-
-## Registry Server Configuration
-
-> These variables configure the **Go registry server** (`mcp-mesh-registry`)
-
-### Core Server Settings
+| Variable                     | Read by  | Default | Purpose |
+| ---------------------------- | -------- | ------- | ------- |
+| `MCP_MESH_CALL_TIMEOUT`      | All SDKs | `300`   | Budget for an outgoing mesh call (seconds) |
+| `MCP_MESH_PROXY_TIMEOUT`     | registry | `60`    | Registry proxy timeout when no `X-Mesh-Timeout` header is sent (capped at 600) |
+| `MCP_MESH_SSE_DRAIN_TIMEOUT` | TS       | `300`   | Seconds `mesh.sseStream` waits for a backpressured consumer (`0` = forever) |
+| `MESH_PROVIDER_TIMEOUT_MS`   | TS       | `300000` | Timeout for a `mesh.llm` call to its LLM provider (milliseconds) |
+| `MESH_TOOL_TIMEOUT_MS`       | TS       | `30000` | Timeout for each tool call the LLM makes from a `mesh.llm` loop (milliseconds) |
+| `MCP_MESH_PROPAGATE_HEADERS` | All SDKs, registry | - | Header allowlist to capture and relay (see [Authorization](security/authorization.md#header-propagation)) |
 
 ```bash
-# Server binding host
-export HOST=localhost
-
-# Server port
-export PORT=8000
-
-# Database connection URL
-export DATABASE_URL=mcp_mesh_registry.db
-
-# Registry service name
-export REGISTRY_NAME=mcp-mesh-registry
-
-# Maximum accepted request body in bytes, on the main and admin
-# listeners. An over-limit request is refused with 413 and nothing is
-# forwarded: a declared Content-Length is checked before the body is
-# read, and an undeclared (chunked) body is read up to the limit first —
-# on /proxy/* it is buffered and forwarded only once it fits, with at most
-# 16 such bodies buffered at once (further ones wait up to their
-# X-Mesh-Timeout, then get 503).
-# Declared-length /proxy/* bodies stream to the agent. Default: 10485760
-# (10MB), roughly ten times the largest realistic heartbeat (~1MB for a
-# 100-tool agent carrying input and output schemas plus their canonical
-# forms). 0 disables it, and /proxy/* bodies then always stream.
-export MCP_MESH_MAX_REQUEST_BODY_BYTES=10485760
-
-# Opt the admin listener into the main listener's TLS certificate and
-# MCP_MESH_TLS_MODE client-certificate policy. Default false (plaintext,
-# unauthenticated). Enabling it changes the admin port to https.
-export MCP_MESH_ADMIN_TLS=false
-```
-
-### TLS and Security
-
-```bash
-# TLS mode: off, auto, or strict
-export MCP_MESH_TLS_MODE=auto
-
-# TLS certificate and key paths
-export MCP_MESH_TLS_CERT=/path/to/cert.pem
-export MCP_MESH_TLS_KEY=/path/to/key.pem
-export MCP_MESH_TLS_CA=/path/to/ca.pem
-
-# Trust backend: localca, filestore, k8s-secrets, spire
-export MCP_MESH_TRUST_BACKEND=filestore
-
-# Trust store directory (for filestore backend)
-export MCP_MESH_TRUST_DIR=/path/to/trust/dir
-
-# Serve /admin/* only on this port. Plaintext and unauthenticated by
-# default, whatever MCP_MESH_TLS_MODE is set to — restrict it at the
-# network layer. See MCP_MESH_ADMIN_TLS to opt it into the main port's
-# TLS certificate and client-certificate policy.
-export MCP_MESH_ADMIN_PORT=8001
-
-# Kubernetes secrets backend
-export MCP_MESH_K8S_NAMESPACE=mcp-mesh
-export MCP_MESH_K8S_LABEL_SELECTOR=mcp-mesh/trust-ca=true
-
-# SPIRE integration
-export MCP_MESH_SPIRE_SOCKET=/run/spire/sockets/agent.sock
-
-# Agent TLS provider: file, spire, vault
-export MCP_MESH_TLS_PROVIDER=file
-
-# Vault PKI integration
-export MCP_MESH_VAULT_ADDR=https://vault.example.com:8200
-export MCP_MESH_VAULT_PKI_PATH=pki/issue/mcp-mesh
-```
-
-### Per-Service TLS
-
-Configure TLS independently for each external service connection.
-Each service reads `{PREFIX}_CA`, `{PREFIX}_CERT`, `{PREFIX}_KEY`, `{PREFIX}_SKIP_VERIFY`.
-
-```bash
-# UI → Registry proxy
-export MCP_MESH_REGISTRY_TLS_CA=/path/to/ca.pem
-export MCP_MESH_REGISTRY_TLS_CERT=/path/to/cert.pem
-export MCP_MESH_REGISTRY_TLS_KEY=/path/to/key.pem
-export MCP_MESH_REGISTRY_TLS_SKIP_VERIFY=false
-
-# Redis
-export REDIS_TLS_CA=/path/to/redis-ca.pem
-export REDIS_TLS_CERT=/path/to/redis-cert.pem
-export REDIS_TLS_KEY=/path/to/redis-key.pem
-export REDIS_TLS_SKIP_VERIFY=false
-
-# Tempo (HTTP query)
-export TEMPO_TLS_CA=/path/to/tempo-ca.pem
-export TEMPO_TLS_CERT=/path/to/tempo-cert.pem
-export TEMPO_TLS_KEY=/path/to/tempo-key.pem
-
-# OTLP/Telemetry (gRPC or HTTP exporter)
-export TELEMETRY_TLS_CA=/path/to/otlp-ca.pem
-export TELEMETRY_TLS_CERT=/path/to/otlp-cert.pem
-export TELEMETRY_TLS_KEY=/path/to/otlp-key.pem
-```
-
-### Fast Heartbeat & Health Monitoring
-
-```bash
-# Agent heartbeat timeout - when to mark agents as unhealthy (seconds)
-# Optimized for 5-second HEAD heartbeats: 4 missed beats = 20s
-export DEFAULT_TIMEOUT_THRESHOLD=20
-
-# Health monitor scan interval - how often to check for unhealthy agents (seconds)
-export HEALTH_CHECK_INTERVAL=10
-
-# Agent eviction threshold - when to remove stale agents (seconds)
-export DEFAULT_EVICTION_THRESHOLD=60
-```
-
-### Registry Sweep / Retention
-
-```bash
-# How long unhealthy/unknown agents are kept in the registry before the
-# sweep job purges them. Go duration string (e.g. "30m", "2h", "48h").
-# Default: 1h. Set to "0" to disable the agent/schema sweep (forensic
-# mode — keeps all agent and schema rows). Affects `meshctl list` (purged
-# agents disappear from output) and orphan schema_entries (rows in the
-# content-addressed schema store that are no longer referenced by any
-# capability — purged when both orphan and older than this retention
-# window; #842). It does NOT govern the registry_events table: that has
-# its own row cap, MCP_MESH_EVENT_MAX_ROWS, which stays enforced even
-# with the sweep disabled.
-export MCP_MESH_RETENTION=1h
-
-# registry_events row cap — a table-size safety limit, not a retention
-# policy. When the table exceeds this many rows the oldest are deleted
-# until it is back under the cap. Enforced independently of
-# MCP_MESH_RETENTION, so disabling the sweep does not unbound this table.
-# Default: 100000. Set to "0" to disable the cap deliberately (logged as
-# a removed bound at startup).
-export MCP_MESH_EVENT_MAX_ROWS=100000
-
-# How often the periodic job/agent sweep runs (reaping, lease recovery,
-# retention purges). Go duration string (e.g. "30s", "5m", "1m30s").
-# Default: 5m. A shorter interval makes reaping and retention purges run
-# more promptly at the cost of extra sweep scans; production deployments
-# typically leave this unset.
-export MCP_MESH_SWEEP_INTERVAL=5m
-
-# MeshJob default total-runtime ceiling. Go duration string (e.g. "2h",
-# "30m"). Applies a DEFAULT total_deadline — measured from a job's
-# submission time — to jobs that did NOT set their own total_deadline; a
-# job that exceeds it is marked failed with a "stale: ..." reason and a
-# synthetic `stale` event. The effective ceiling for a job is
-# max(MCP_MESH_JOB_STALE_TIMEOUT, max_duration) — it never reaps a job
-# before its own declared per-attempt max_duration elapses. Jobs that
-# set their own total_deadline are fully exempt. Default: off (unset /
-# "0") — jobs without an explicit total_deadline run unbounded, subject
-# only to lease recovery.
-export MCP_MESH_JOB_STALE_TIMEOUT=2h
-```
-
-**Notes:**
-
-- The sweep runs every `MCP_MESH_SWEEP_INTERVAL` (default 5m), so actual
-  purge can lag retention by up to one sweep interval.
-- Setting `MCP_MESH_RETENTION` shorter than the sweep interval (e.g.
-  `1m` with the default 5m sweep) will not speed up the purge cadence —
-  it only affects when an agent becomes eligible for purge. Lower
-  `MCP_MESH_SWEEP_INTERVAL` to tighten the cadence.
-- `MCP_MESH_RETENTION=0` disables only the agent/schema/job phases. The
-  `registry_events` row cap keeps running on the same schedule; use
-  `MCP_MESH_EVENT_MAX_ROWS=0` to turn that off too.
-
-### Logging and Debug
-
-```bash
-# Registry log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-export MCP_MESH_LOG_LEVEL=INFO
-
-# Enable debug mode (true/false)
-export MCP_MESH_DEBUG_MODE=false
-```
-
-### CORS Configuration
-
-```bash
-# Enable CORS support
-export ENABLE_CORS=true
-
-# Allowed origins (comma-separated)
-export ALLOWED_ORIGINS="*"
-
-# Allowed HTTP methods
-export ALLOWED_METHODS="GET,POST,PUT,DELETE,OPTIONS"
-
-# Allowed headers
-export ALLOWED_HEADERS="*"
-
-# Override CORS for a specific origin
-export MCP_MESH_CORS_ORIGIN="http://localhost:3000"
-```
-
-### Feature Flags
-
-```bash
-# Enable metrics collection
-export ENABLE_METRICS=true
-
-# Enable Prometheus metrics
-export ENABLE_PROMETHEUS=true
-
-# Enable event system
-export ENABLE_EVENTS=true
-
-# Enable access logging
-export ACCESS_LOG=true
-```
-
-## Proxy & Timeout
-
-Agent-to-agent calls go through the registry proxy, which forwards the
-request to the target agent. The `X-Mesh-Timeout` header controls how
-long the proxy and SDK clients wait for a response. It propagates
-automatically through multi-hop chains (gateway → planner → specialist).
-
-```bash
-# Registry proxy: default timeout in seconds when no X-Mesh-Timeout
-# header is sent (default: 60s, capped at 600s)
-export MCP_MESH_PROXY_TIMEOUT=60
-
-# SDK: default timeout for outgoing mesh tool calls in seconds (default: 300s)
-# SDKs send this as X-Mesh-Timeout header on outgoing calls, and use it to
-# override the client-side HTTP timeout. Propagates down the call chain.
 export MCP_MESH_CALL_TIMEOUT=300
+export MCP_MESH_PROXY_TIMEOUT=60
+export MCP_MESH_PROPAGATE_HEADERS=authorization,x-request-id,x-tenant-*
 ```
 
-In every runtime, whichever value wins is used for BOTH the `X-Mesh-Timeout`
-advertised downstream and the local HTTP client timeout, so an agent never
-promises a provider a budget it will not itself wait out. An inbound
-`X-Mesh-Timeout` overrides the local value — that is what makes the
-propagation below work.
+In every runtime the winning value drives BOTH the advertised `X-Mesh-Timeout` and the local HTTP client timeout, so an agent never promises a provider a budget it will not itself wait out. An inbound `X-Mesh-Timeout` overrides the local value.
 
-Where the local value comes from differs by runtime, because only TypeScript
-has a per-dependency knob the runtime reads:
+Only TypeScript has a per-dependency override (`timeout`, or `streamTimeout` when `streaming` is set, in `dependencyKwargs`). Python and Java resolve the budget from `MCP_MESH_CALL_TIMEOUT`, else 300s.
 
-| Runtime | Per-dependency override | Otherwise |
-| --- | --- | --- |
-| TypeScript | `timeout` on the dependency's kwargs (`streamTimeout` when `streaming: true`) | `MCP_MESH_CALL_TIMEOUT`, else 300s |
-| Python | none today | `MCP_MESH_CALL_TIMEOUT`, else 300s |
-| Java | none | `MCP_MESH_CALL_TIMEOUT`, else 300s (client read timeout adds a 10s buffer over the advertised value) |
+Streamed responses (e.g., SSE) routed through the registry proxy are bounded by the same call timeout - the proxy ends the exchange when it elapses, even mid-stream. Send a larger `X-Mesh-Timeout` header (or raise `MCP_MESH_PROXY_TIMEOUT`) for long-lived streams.
 
-Python's `dependency_kwargs` documents a `timeout` entry, but no code path
-reads it yet; the proxy's kwargs are the *producer's* `@mesh.tool` kwargs, so
-a `timeout` there is provider metadata and deliberately does not cap callers.
+On the browser-facing side, `mesh.sseStream` (TypeScript) treats a slow consumer as slow, not gone: it waits for the response to drain before sending the next frame. A consumer that stalls without ever disconnecting is abandoned after `MCP_MESH_SSE_DRAIN_TIMEOUT`, which releases the upstream stream it was holding open.
 
-**How timeout propagation works:**
+In `MCP_MESH_PROPAGATE_HEADERS` a plain entry is an exact header name and an entry ending in `*` is a prefix.
 
-1. First hop: SDK sets `X-Mesh-Timeout: 300` (from `MCP_MESH_CALL_TIMEOUT`) on the outgoing request
-2. Registry proxy reads the header, uses it for its client timeout, and forwards it to the target agent
-3. Target agent's SDK captures the header and propagates it on its own outgoing calls
-4. The same timeout value flows through the entire chain without requiring per-hop configuration
+## LLM Provider Configuration
 
-If no `X-Mesh-Timeout` header is sent (e.g., a direct curl to an agent endpoint), the registry proxy falls back to `MCP_MESH_PROXY_TIMEOUT`.
+Required for LLM provider agents:
 
-```bash
-# Example: raise proxy floor for an environment with long-running LLM chains
-export MCP_MESH_PROXY_TIMEOUT=120
-export MCP_MESH_CALL_TIMEOUT=600
-```
+| Variable                       | Read by | Purpose |
+| ------------------------------ | ------- | ------- |
+| `ANTHROPIC_API_KEY`            | Py, TS  | Anthropic Claude |
+| `OPENAI_API_KEY`               | Py, TS  | OpenAI |
+| `GOOGLE_API_KEY`               | Py, TS  | Gemini via AI Studio |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | TS      | Gemini via AI Studio (the Vercel AI SDK's own name; either works) |
 
-**SSE consumer backpressure (TypeScript):**
-
-`mesh.sseStream` treats a consumer slower than the producer as slow, not
-disconnected — it waits for the response to drain before sending the next
-frame, so a browser on a slow link still receives every chunk and the
-`[DONE]` terminator. A consumer that stalls without disconnecting emits
-neither `close` nor `error`, so the wait is bounded; when the budget
-elapses the stream is ended and the upstream iterator released.
-
-```bash
-# Seconds mesh.sseStream waits for a backpressured SSE consumer to drain
-# before abandoning the stream (default: 300, 0 = wait forever)
-export MCP_MESH_SSE_DRAIN_TIMEOUT=300
-```
-
-## MeshJob event channel
-
-Tunables for the [MeshJob event injection + stream subscription
-surface](concepts/jobs.md#event-injection). Both variables are
-optional with sensible defaults — most deployments never need to
-override them.
-
-```bash
-# Max JobProxy instances held in the SDK's process-wide LRU cache
-# (default: 256). Used by the SDK helpers mesh.jobs.post_event /
-# mesh.jobs.subscribe_events (Python), mesh.jobs.postEvent /
-# mesh.jobs.subscribeEvents (TypeScript), and MeshJobs.postEvent /
-# MeshJobs.subscribeEvents (Java). Each JobProxy wraps a Rust
-# reqwest::Client connection pool, so caching keyed by
-# (registry_url, job_id) eliminates a TCP/TLS handshake on every
-# call. When the cache fills, the least-recently-used entry is
-# evicted (its native handle is closed). Invalid / non-positive
-# values fall back to the default — a typo'd env doesn't silently
-# disable the cache. Increase if you have many concurrent active
-# jobs from the same SDK process.
-export MCP_MESH_JOBPROXY_CACHE_MAX=256
-
-# How long the registry's CancelJob handler waits (in milliseconds)
-# after writing a synthetic "cancelled" event into a job's event log
-# before HTTP-forwarding the cancel to the owner replica (default:
-# 200, capped at 10000). Closes a race window where a producer
-# parked on recv_event(["cancelled", ...]) could otherwise see
-# CancelledError before observing the synthetic event. Set to 0 to
-# disable the grace and revert to pre-v2.2 immediate cancel-forward
-# behavior. Values above the cap are clamped with a logged warning
-# rather than rejected, so a bad env var can't take down
-# cancellation entirely.
-export MCP_MESH_CANCEL_EVENT_GRACE_MS=200
-```
-
-The SDK-side cache cap is read by the runtime that owns the
-`post_event` / `subscribe_events` call (Python / TypeScript / Java
-agents that act as producers of events). The cancel-event grace is
-read by the **registry** binary at startup and applies to every job
-running against that registry.
-
-## Tracing & Observability
-
-### Distributed Tracing
-
-```bash
-# Enable distributed tracing
-export MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
-
-# Redis URL for trace span streaming
-export REDIS_URL=redis://localhost:6379
-
-# Tempo HTTP query URL
-export TEMPO_URL=http://localhost:3200
-
-# OTLP endpoint (registry → Tempo)
-export TELEMETRY_ENDPOINT=localhost:4317
-export TELEMETRY_PROTOCOL=grpc          # grpc or http
-
-# Trace exporter type: otlp, console, json
-export TRACE_EXPORTER_TYPE=otlp
-
-# Trace batching
-export TRACE_BATCH_SIZE=100
-export TRACE_TIMEOUT=5m
-
-# Redis trace stream retention — the registry AND meshui both trim mesh:trace
-# entries older than this on connect and periodically, so trimming does not
-# depend on a single process being alive. Go duration string. Default: 24h.
-# Set to "0" to disable trimming entirely.
-export MCP_MESH_TRACE_RETENTION=24h
-
-# Producer-side ceiling on the mesh:trace stream. Every agent runtime publishes
-# with XADD MAXLEN ~ <n>, so the stream stays bounded even when no consumer is
-# running. This is a safety ceiling, not a retention policy — time-based
-# retention stays with MCP_MESH_TRACE_RETENTION. Default: 100000. "0" disables.
-export MCP_MESH_TRACE_STREAM_MAXLEN=100000
-
-# In-memory telemetry aggregates (dashboard per-agent, per-model and per-edge
-# stats). Keyed by name, so they grow with agent/model name cardinality rather
-# than trace volume. A key not written to within the retention window ages out;
-# the max-entries ceiling is a backstop for name churn, evicting the
-# least-recently-seen key first. "0" disables the respective bound. An edge key
-# costs ~2.1 KB, so the default ceiling admits ~20 MB of edge aggregates.
-export MCP_MESH_TELEMETRY_AGGREGATE_RETENTION=24h
-export MCP_MESH_TELEMETRY_AGGREGATE_MAX_ENTRIES=10000
-
-# Redis consumer group meshui reads mesh:trace with. Redis hands each stream
-# entry to exactly one consumer within a group, so a second meshui left on the
-# default would take roughly half of a running dashboard's traces and acknowledge
-# them away. Give an extra reader its own group and both see the whole stream.
-# Default: mcp-mesh-ui-dashboard.
-export MCP_MESH_UI_TRACE_CONSUMER_GROUP=mcp-mesh-ui-dashboard
-
-# The same knob for the registry, which reads the stream through its own group.
-# A second registry process pointed at a live mesh and left on the default
-# would take roughly half of the running registry's span events and acknowledge
-# them away. Give the extra reader its own group and both see the whole stream.
-# Default: mcp-mesh-registry-processors.
-export MCP_MESH_TRACE_CONSUMER_GROUP=mcp-mesh-registry-processors
-
-# Trace output options
-export TRACE_PRETTY_OUTPUT=false
-export TRACE_ENABLE_STATS=true
-export TRACE_JSON_OUTPUT_DIR=/tmp/traces
-
-# Alternative OTLP endpoint name
-export OTLP_ENDPOINT=localhost:4317
-
-# Redis trace publishing (agents)
-export MCP_MESH_REDIS_TRACE_PUBLISHING=true
-export MCP_MESH_TELEMETRY_ENABLED=true
-```
-
-### Header Propagation
-
-```bash
-# Comma-separated header prefixes to propagate across agent calls
-export MCP_MESH_PROPAGATE_HEADERS=x-request-id,x-trace,x-correlation
-```
-
-## UI Server
-
-```bash
-# UI server port
-export MCP_MESH_UI_PORT=3080
-
-# Registry URL for API proxy
-export MCP_MESH_REGISTRY_URL=http://localhost:8000
-
-# Base path for path-based ingress routing
-export MCP_MESH_UI_BASE_PATH=/ops/dashboard
-
-# Log level
-export MCP_MESH_LOG_LEVEL=INFO
-```
-
-## LLM Configuration
-
-### API Keys
-
-```bash
-# Anthropic Claude
-export ANTHROPIC_API_KEY=sk-ant-your-key
-
-# OpenAI
-export OPENAI_API_KEY=sk-your-key
-
-# Google Gemini AI Studio (API key — varies by runtime)
-export GOOGLE_API_KEY=your-key                     # Python (via LiteLLM)
-export GOOGLE_GENERATIVE_AI_API_KEY=your-key       # TypeScript (Vercel AI SDK)
-export GOOGLE_AI_GEMINI_API_KEY=your-key           # Java (Spring AI)
-```
-
-For Gemini via Vertex AI (IAM auth), see the
-[Vertex AI section below](#vertex-ai-gemini-via-iam) — env var conventions
-also vary by runtime, with `GOOGLE_APPLICATION_CREDENTIALS` shared across
-all three.
+Java reads provider keys through Spring AI properties: `spring.ai.anthropic.api-key`, `spring.ai.openai.api-key` and `spring.ai.google.genai.api-key`. Map them to the variables above in `application.yml` (for example `api-key: ${ANTHROPIC_API_KEY}`), or set the relaxed-binding names such as `SPRING_AI_ANTHROPIC_API_KEY` directly.
 
 ### Vertex AI (Gemini via IAM)
 
-For users who want to call Gemini through Google Cloud's Vertex AI instead
-of AI Studio (e.g., to use IAM service-account auth, GCP Provisioned
-Throughput, VPC-SC, or org-controlled billing). All three runtimes share
-mesh's `GeminiHandler` (same prompt-shaping, same HINT-mode behavior with
-tools); only the auth transport and env var names differ.
+Use the `vertex_ai/` model prefix (Python/TS) or `provider = "vertex_ai"` (Java) to call Gemini through Google Cloud's Vertex AI instead of AI Studio. Credentials come from Google Application Default Credentials in every runtime: `gcloud auth application-default login`, `GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json`, or Workload Identity.
 
-#### Quick env var matrix
-
-| Runtime    | SDK            | Project env var                              | Location env var                             |
-| ---------- | -------------- | -------------------------------------------- | -------------------------------------------- |
-| Python     | LiteLLM        | `VERTEXAI_PROJECT`                           | `VERTEXAI_LOCATION`                          |
-| TypeScript | Vercel AI SDK  | `GOOGLE_CLOUD_PROJECT`                       | `GOOGLE_CLOUD_LOCATION`                      |
-| Java       | Spring AI      | `SPRING_AI_VERTEX_AI_GEMINI_PROJECT_ID`<br/>(or set `spring.ai.vertex.ai.gemini.project-id`) | `SPRING_AI_VERTEX_AI_GEMINI_LOCATION`<br/>(or set `spring.ai.vertex.ai.gemini.location`) |
-
-`GOOGLE_APPLICATION_CREDENTIALS` (or `gcloud auth application-default login`)
-is the same across all three.
-
-#### Python — provider model prefix
-
-Run a `@mesh.llm_provider` agent with the `vertex_ai/*` model string:
+| Runtime    | Project                                   | Location |
+| ---------- | ----------------------------------------- | -------- |
+| Python     | `GOOGLE_CLOUD_PROJECT` (else the ADC quota project) | `GOOGLE_CLOUD_LOCATION` (default `us-central1`) |
+| TypeScript | `GOOGLE_CLOUD_PROJECT` or `GOOGLE_VERTEX_PROJECT` (required) | `GOOGLE_CLOUD_LOCATION` or `GOOGLE_VERTEX_LOCATION` (required) |
+| Java       | `spring.ai.google.genai.project-id` (env `SPRING_AI_GOOGLE_GENAI_PROJECT_ID`) | `spring.ai.google.genai.location` (env `SPRING_AI_GOOGLE_GENAI_LOCATION`) |
 
 ```python
 @mesh.llm_provider(
     capability="llm",
-    tags=["llm", "gemini", "vertex"],
-    model="vertex_ai/gemini-2.5-flash",
+    tags=["gemini", "vertex"],
+    model="vertex_ai/gemini-2.5-flash",  # vs "gemini/gemini-2.5-flash" for AI Studio
 )
-def gemini_provider(): pass
+def my_provider(): pass
 ```
 
-Consumers don't change — they keep their existing
-`provider={"capability": "llm", "tags": ["+gemini"]}` selector. The Python
-runtime routes `vertex_ai/*` through the same `GeminiHandler` as `gemini/*`,
-but LiteLLM picks the Vertex AI transport based on the prefix.
+The Python runtime calls Vertex through the bundled `google-genai` SDK; no extra install is needed. TypeScript bundles `@ai-sdk/google-vertex`, which fails with a `LoadSettingError` on the first call if the project or location is unset. In Java, setting the project id and location (and no API key) selects the Vertex backend of the `spring-ai-starter-model-google-genai` model; when both an API key and a project are set, `spring.ai.google.genai.vertex-ai=true` forces Vertex.
 
-Install the `vertex` extra (adds `google-auth`):
+### Python Provider Tuning
+
+| Variable                                  | Default | Purpose |
+| ----------------------------------------- | ------- | ------- |
+| `MCP_MESH_NATIVE_LLM`                     | on      | Set `0` to route provider calls through LiteLLM instead of the native vendor SDKs |
+| `MCP_MESH_HINT_FALLBACK_TIMEOUT`          | `90`    | Seconds for the bounded structured-output retry after a HINT-mode answer fails to parse |
+| `MCP_MESH_CLAUDE_FORCE_RESPONSE_FORMAT`   | `false` | LiteLLM path only: ask Claude for `response_format` first instead of HINT mode |
+| `MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS` | on      | Set `0` to turn off server-enforced structured output with tools on Gemini 3 |
+| `MCP_MESH_LLM_SYNTHETIC_RETRY_MAX`        | `1`     | Corrective retries when Claude returns malformed structured output (`0` disables) |
+
+## LLM Agent Configuration
+
+| Variable                  | Read by  | Purpose |
+| ------------------------- | -------- | ------- |
+| `MESH_LLM_MODEL`          | Py, TS   | Model override a consumer forwards to its provider |
+| `MESH_LLM_MAX_ITERATIONS` | All SDKs | Max agentic loop iterations (default 10) |
+| `MESH_LLM_FILTER_MODE`    | All SDKs | Tool filter mode: `all`, `best_match`, `*` |
 
 ```bash
-pip install 'mcp-mesh[vertex]'
-```
-
-Without it, the first Vertex call raises `ModuleNotFoundError: No module
-named 'google.auth'`. (Non-Vertex users — AI Studio, Claude, OpenAI — don't
-need this.)
-
-LiteLLM auth resolution order:
-
-1. Explicit `vertex_credentials` / `vertex_project` / `vertex_location`
-   passed in the call (mesh does not set these — your env wins).
-2. `VERTEXAI_CREDENTIALS` + `VERTEXAI_PROJECT` + `VERTEXAI_LOCATION`.
-3. `GOOGLE_APPLICATION_CREDENTIALS` (standard ADC), with project/location
-   derived from the SA JSON.
-4. Implicit ADC (e.g., `gcloud` user credentials, GCE metadata server).
-
-#### TypeScript — model prefix
-
-```typescript
-agent.addLlmProvider({
-  model: "vertex_ai/gemini-2.5-flash",
-  capability: "llm",
-  tags: ["gemini", "vertex"],
-});
-```
-
-`@ai-sdk/google-vertex` is bundled with `@mcpmesh/sdk` — no extra install.
-Auth uses Google ADC. Both `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`
-are required — the underlying SDK fails with a `LoadSettingError` on the first
-call if either is unset (no project auto-discovery from ADC, no default
-location).
-Common location values: `us-central1`, `global`.
-
-#### Java — `@MeshLlmProvider` with the Vertex AI starter
-
-Run a Java provider agent with `@MeshLlmProvider`. The Spring AI Vertex AI
-starter selects the IAM-backed `vertexAiGeminiChatModel` bean automatically
-when present:
-
-```java
-@MeshAgent(name = "gemini-provider", port = 9111)
-@MeshLlmProvider(
-    capability = "llm",
-    tags = {"llm", "gemini", "vertex"},
-    model = "vertex_ai/gemini-2.5-flash"
-)
-@SpringBootApplication
-public class GeminiProviderApplication { … }
-```
-
-Add the Vertex AI Spring AI starter to your `pom.xml` (mesh's
-`mcp-mesh-spring-ai` does not pull it in by default):
-
-```xml
-<dependency>
-  <groupId>org.springframework.ai</groupId>
-  <artifactId>spring-ai-starter-model-vertex-ai-gemini</artifactId>
-  <version>${spring-ai.version}</version>
-</dependency>
-```
-
-Spring AI's Vertex AI auto-config doesn't read any conventional `GOOGLE_*`
-env var on its own — it binds Spring Boot properties (which Spring relaxed
-binding can populate from env vars):
-
-| Spring property                                 | Env var (relaxed binding)                         |
-| ----------------------------------------------- | ------------------------------------------------- |
-| `spring.ai.vertex.ai.gemini.project-id`         | `SPRING_AI_VERTEX_AI_GEMINI_PROJECT_ID`           |
-| `spring.ai.vertex.ai.gemini.location`           | `SPRING_AI_VERTEX_AI_GEMINI_LOCATION`             |
-| `spring.ai.vertex.ai.gemini.chat.options.model` | `SPRING_AI_VERTEX_AI_GEMINI_CHAT_OPTIONS_MODEL`   |
-
-#### Same Code, Two Backends
-
-The provider agent's `model` string (and its auth config) is the only thing
-that changes between AI Studio and Vertex AI. Consumer agents keep the same
-`@mesh.llm` / `mesh.llm()` / `@MeshLlm` selector regardless of backend:
-
-|                | AI Studio                                  | Vertex AI                                                          |
-| -------------- | ------------------------------------------ | ------------------------------------------------------------------ |
-| Python provider | `model="gemini/gemini-2.5-flash"`          | `model="vertex_ai/gemini-2.5-flash"`                               |
-| TypeScript provider | `model: "gemini/gemini-2.5-flash"`     | `model: "vertex_ai/gemini-2.5-flash"`                              |
-| Java provider   | `model = "gemini/gemini-2.5-flash"`        | `model = "vertex_ai/gemini-2.5-flash"`                             |
-| Auth env       | `GOOGLE_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY` / `GOOGLE_AI_GEMINI_API_KEY` | `GOOGLE_APPLICATION_CREDENTIALS` (ADC)        |
-
-#### Provisioned Throughput
-
-GCP Provisioned Throughput is a Vertex AI account-side feature and requires
-no mesh configuration — once your project has a PT reservation for the
-target model, Vertex routes your calls through it automatically.
-
-### LLM Consumer Overrides
-
-```bash
-# Iteration cap and tool-filter mode for @mesh.llm consumers
+export MESH_LLM_MODEL=gpt-4o
 export MESH_LLM_MAX_ITERATIONS=5
-export MESH_LLM_FILTER_MODE=all          # all, best_match, *
+export MESH_LLM_FILTER_MODE=all
 ```
 
-LLM provider/model is selected by routing to a `@mesh.llm_provider` agent in the
-mesh — change the consumer's `provider={...}` selector or run a different
-provider agent. There is no consumer-side env var that bypasses mesh routing.
+Java has no `MESH_LLM_MODEL`: set the model on `@MeshLlm` or its fluent builder. Provider selection itself is governed by the provider selector and resolved through mesh DI - there is no environment override for it. To switch backends per environment, deploy a different LLM provider agent and let the selector resolve the right one.
 
-### LLM Timeouts
+**Use case**: Same agent code, different pinned model per environment:
 
 ```bash
-# Provider call timeout (TypeScript, default: 300000ms)
-export MESH_PROVIDER_TIMEOUT_MS=300000
+# Development - cheaper/faster model
+meshctl start agent.py --env MESH_LLM_MODEL=gpt-4o-mini
 
-# Individual tool timeout (TypeScript, default: 30000ms)
-export MESH_TOOL_TIMEOUT_MS=30000
-
-# LiteLLM proxy settings (Python provider agents)
-export LITELLM_URL=http://localhost:4000
-export LITELLM_TIMEOUT_MS=300000
+# Production - stronger model
+meshctl start agent.py --env MESH_LLM_MODEL=claude-sonnet-4-5
 ```
 
-### LLM Provider Behavior (Python)
+## Observability
+
+| Variable                                   | Read by | Default | Purpose |
+| ------------------------------------------ | ------- | ------- | ------- |
+| `MCP_MESH_DISTRIBUTED_TRACING_ENABLED`     | All SDKs, registry, meshui | `false` (`true` for meshui) | Publish and collect trace spans |
+| `REDIS_URL`                                | All SDKs, registry, meshui | `redis://localhost:6379` | Redis for the `mesh:trace` stream (and Python session affinity) |
+| `MCP_MESH_TRACE_STREAM_MAXLEN`             | All SDKs | `100000` | Producer-side `XADD MAXLEN ~` ceiling on `mesh:trace` (`0` = no cap) |
+| `MCP_MESH_TELEMETRY_ENABLED`               | Py | `true` | Set `false` to stop the Python proxy publishing spans for its outgoing calls |
+| `TEMPO_URL`                                | registry, meshui | `http://localhost:3200` | Tempo query API |
+| `TELEMETRY_ENDPOINT`                       | registry | `localhost:4317` | OTLP endpoint the registry exports to |
+| `TELEMETRY_PROTOCOL`                       | registry | `grpc` | `grpc` or `http` |
+| `TRACE_EXPORTER_TYPE`                      | registry | `otlp` | `otlp`, `console`, `json` |
+| `MCP_MESH_TRACE_RETENTION`                 | registry, meshui | `24h` | Trim `mesh:trace` entries older than this (`0` = no trimming) |
+| `MCP_MESH_TRACE_CONSUMER_GROUP`            | registry | `mcp-mesh-registry-processors` | Redis consumer group the registry reads with |
+| `MCP_MESH_UI_TRACE_CONSUMER_GROUP`         | meshui | `mcp-mesh-ui-dashboard` | Redis consumer group meshui reads with |
+| `MCP_MESH_TELEMETRY_AGGREGATE_RETENTION`   | meshui | `24h` | Age-out window for dashboard aggregates (`0` = no age pruning) |
+| `MCP_MESH_TELEMETRY_AGGREGATE_MAX_ENTRIES` | meshui | `10000` | Key ceiling per aggregate map (`0` = no ceiling) |
+| `MCP_MESH_UI_PORT`                         | meshui, meshctl | `3080` | Dashboard port |
+| `MCP_MESH_UI_BASE_PATH`                    | meshui | - | Base path for path-based ingress routing |
 
 ```bash
-# Cap on synthetic-tool corrective retries when Claude returns malformed
-# tool_use.input against the structured-output schema (issue #961).
-# Default: 1. Set to 0 to disable. Values must be int >= 0; invalid input
-# logs a WARN and falls back to the default. Anthropic native path only
-# in v1; OpenAI / Gemini follow in a future release.
-# Scope: applies ONLY to the buffered (non-streaming) provider agentic
-# loop. Streaming calls do not invoke this retry — streaming support is
-# pending. The env var currently controls the Anthropic buffered retry
-# loop tied to ResponseParser's defensive single-key envelope unwrap
-# (PR #960); the broader provider-side shape-agnostic retry loop here
-# mirrors the LiteLLM HINT->response_format fallback.
-export MCP_MESH_LLM_SYNTHETIC_RETRY_MAX=1
+export MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+export REDIS_URL=redis://localhost:6379
+export TEMPO_URL=http://localhost:3200
+export TELEMETRY_ENDPOINT=localhost:4317
 ```
 
-## CLI & Development
-
-```bash
-# Watch mode settings
-export MCP_MESH_RELOAD_DEBOUNCE=500       # File change debounce (ms)
-export MCP_MESH_RELOAD_PORT_DELAY=500     # Port release delay after stop (ms)
-export MCP_MESH_RELOAD_PRECHECK=true      # Syntax pre-check on reload
-
-# Process management
-export MCP_MESH_DB_PATH=mcp_mesh_registry.db
-export MCP_MESH_STARTUP_TIMEOUT=30s
-export MCP_MESH_SHUTDOWN_TIMEOUT=30s
-export MCP_MESH_ENABLE_BACKGROUND=false
-export MCP_MESH_PID_FILE=/path/to/pid
-
-# Scaffold templates
-export MESHCTL_TEMPLATE_DIR=/path/to/templates
-```
-
-## Database Tuning
-
-```bash
-# Connection pool
-export DB_MAX_OPEN_CONNECTIONS=25
-export DB_MAX_IDLE_CONNECTIONS=5
-export DB_CONN_MAX_LIFETIME=30m
-export DB_CONNECTION_TIMEOUT=30s
-
-# SQLite-specific
-export DB_BUSY_TIMEOUT=5000               # Busy timeout (ms)
-export DB_JOURNAL_MODE=WAL
-export DB_SYNCHRONOUS=NORMAL
-export DB_CACHE_SIZE=-2000                # Negative = KB
-export DB_ENABLE_FOREIGN_KEYS=true
-```
-
-## Internal
-
-These variables are typically set automatically and rarely need manual configuration:
-
-```bash
-# Runtime version (for trace metadata)
-export MCP_MESH_VERSION=1.1.0
-
-# Native library path (Java)
-export MESH_NATIVE_LIB_PATH=/usr/lib/mcp-mesh
-```
+A second meshui or registry pointed at a live mesh needs its own consumer group: Redis gives each stream entry to one consumer per group, so a second reader on the default group takes entries away from the running one. An edge aggregate key costs ~2.1 KB, so the default `MCP_MESH_TELEMETRY_AGGREGATE_MAX_ENTRIES` admits ~20 MB of edge aggregates. See [Observability](07-observability.md) for which store `meshctl trace` reads.
 
 ## Media Storage
 
-Configure the media storage backend for multimodal features.
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `MCP_MESH_MEDIA_STORAGE` | `local` | Storage backend: `local` or `s3` |
-| `MCP_MESH_MEDIA_STORAGE_PATH` | `/tmp/mcp-mesh-media` | Local filesystem base path |
-| `MCP_MESH_MEDIA_STORAGE_BUCKET` | `mcp-mesh-media` | S3 bucket name |
-| `MCP_MESH_MEDIA_STORAGE_ENDPOINT` | _(none)_ | S3-compatible endpoint URL (for MinIO etc.) |
-| `MCP_MESH_MEDIA_STORAGE_PREFIX` | `media/` | Key/directory prefix in storage |
-
-### Example: Local Development
-
-```bash
-# Default — no configuration needed
-export MCP_MESH_MEDIA_STORAGE=local
-```
-
-### Example: S3 with MinIO
+| Variable                          | Read by  | Default               | Purpose |
+| --------------------------------- | -------- | --------------------- | ------- |
+| `MCP_MESH_MEDIA_STORAGE`          | All SDKs | `local`               | Backend: `local` or `s3` |
+| `MCP_MESH_MEDIA_STORAGE_PATH`     | All SDKs | `/tmp/mcp-mesh-media` | Local filesystem base path |
+| `MCP_MESH_MEDIA_STORAGE_BUCKET`   | All SDKs | -                     | S3 bucket name |
+| `MCP_MESH_MEDIA_STORAGE_ENDPOINT` | All SDKs | -                     | S3-compatible endpoint URL (omit for AWS) |
+| `MCP_MESH_MEDIA_STORAGE_PREFIX`   | All SDKs | `media/`              | Key/directory prefix |
+| `MCP_MESH_MEDIA_STORAGE_VALIDATE` | Py       | `false`               | Probe the S3 bucket at startup instead of at first use |
+| `AWS_ACCESS_KEY_ID`               | S3 SDK   | -                     | S3 access key (or use IAM roles) |
+| `AWS_SECRET_ACCESS_KEY`           | S3 SDK   | -                     | S3 secret key (or use IAM roles) |
 
 ```bash
 export MCP_MESH_MEDIA_STORAGE=s3
 export MCP_MESH_MEDIA_STORAGE_BUCKET=mcp-mesh-media
-export MCP_MESH_MEDIA_STORAGE_ENDPOINT=http://localhost:9000
-export AWS_ACCESS_KEY_ID=minioadmin
-export AWS_SECRET_ACCESS_KEY=minioadmin
+export MCP_MESH_MEDIA_STORAGE_ENDPOINT=http://localhost:9000  # omit for AWS
 ```
 
-See [MediaStore Configuration](concepts/multimodal.md#storage-configuration) for full details.
+In distributed deployments (Docker, Kubernetes), all agents that read or write media must share the same storage config. Use S3 for multi-container setups - `file://` URIs don't work across pods. See [Multimodal](concepts/multimodal.md#storage-configuration).
 
-## Configuration Patterns
+## Security & TLS
 
-### Registry Server Configurations
+### Agent TLS
 
-#### Development Registry
+| Variable                  | Read by  | Default | Purpose |
+| ------------------------- | -------- | ------- | ------- |
+| `MCP_MESH_TLS_MODE`       | All SDKs, registry | `off` | `off`, `auto`, `strict` |
+| `MCP_MESH_TLS_CERT`       | All SDKs, registry | - | Certificate PEM path |
+| `MCP_MESH_TLS_KEY`        | All SDKs, registry | - | Private key PEM path |
+| `MCP_MESH_TLS_CA`         | All SDKs, registry | - | CA certificate PEM path |
+| `MCP_MESH_TLS_PROVIDER`   | All SDKs | `file` | `file`, `vault`, `spire` (`spire`: Python and TypeScript only) |
+| `MCP_MESH_TRUST_DOMAIN`   | All SDKs | `mcp-mesh.local` | Trust domain for Vault CNs and SPIRE |
+| `MCP_MESH_VAULT_ADDR`     | All SDKs | - | Vault server URL |
+| `MCP_MESH_VAULT_PKI_PATH` | All SDKs | - | Vault PKI issue path |
+| `VAULT_TOKEN`             | All SDKs | - | Vault token |
+| `MCP_MESH_VAULT_TTL`      | All SDKs | `24h` | Certificate TTL |
+| `MCP_MESH_SPIRE_SOCKET`   | Py, TS, registry | `/run/spire/agent/sockets/agent.sock` | SPIRE Workload API socket |
+
+The Java runtime refuses to start with `MCP_MESH_TLS_PROVIDER=spire`; see [Registration Trust](security/registration-trust.md).
+
+### Per-Service TLS
+
+Each of these prefixes reads `<PREFIX>_CA`, `<PREFIX>_CERT`, `<PREFIX>_KEY` and `<PREFIX>_SKIP_VERIFY`:
+
+| Prefix                  | Read by          | Connection |
+| ----------------------- | ---------------- | ---------- |
+| `MCP_MESH_REGISTRY_TLS` | meshui           | meshui to the registry |
+| `REDIS_TLS`             | registry, meshui | Redis |
+| `TEMPO_TLS`             | registry, meshui | Tempo query API |
+| `TELEMETRY_TLS`         | registry         | OTLP exporter |
+| `MCP_MESH_TLS`          | meshctl          | meshctl to the registry |
+
+### Registry Trust
+
+| Variable                      | Read by  | Purpose |
+| ----------------------------- | -------- | ------- |
+| `MCP_MESH_TRUST_BACKEND`      | registry | `localca`, `filestore`, `k8s-secrets`, `spire` (comma-separated chain) |
+| `MCP_MESH_TRUST_DIR`          | registry, meshctl | Directory for `filestore` / `localca` |
+| `MCP_MESH_K8S_NAMESPACE`      | registry | Namespace for `k8s-secrets` |
+| `MCP_MESH_K8S_LABEL_SELECTOR` | registry | Label selector for `k8s-secrets` |
+| `MCP_MESH_ADMIN_PORT`         | registry | Serve `/admin/*` only on this port |
+| `MCP_MESH_ADMIN_TLS`          | registry | Admin port uses the main port's TLS and client-certificate policy (default `false`) |
+
+The admin port is plain HTTP and unauthenticated unless `MCP_MESH_ADMIN_TLS=true`: restrict it at the network layer. The registry's only enforcement is client-certificate verification under `MCP_MESH_TLS_MODE`; there is no token alternative.
+
+## MeshJob event channel
 
 ```bash
-# .env.registry.development
-MCP_MESH_LOG_LEVEL=DEBUG
-MCP_MESH_DEBUG_MODE=true
-HOST=localhost
-PORT=8000
-DEFAULT_TIMEOUT_THRESHOLD=10  # Fast detection for development
-HEALTH_CHECK_INTERVAL=5       # Quick scans for development
+# All SDKs. Max JobProxy instances held in the SDK's process-wide LRU cache
+# (default: 256). Used by the post_event / subscribe_events helpers in every
+# runtime. Invalid / non-positive values fall back to the default.
+export MCP_MESH_JOBPROXY_CACHE_MAX=256
+
+# Registry. How long CancelJob waits (ms) after writing the synthetic
+# "cancelled" event before forwarding the cancel to the owner replica
+# (default: 200, capped at 10000). 0 disables the grace.
+export MCP_MESH_CANCEL_EVENT_GRACE_MS=200
 ```
 
-#### Production Registry
+## Registry Configuration
+
+All read by the registry:
 
 ```bash
-# .env.registry.production
-MCP_MESH_LOG_LEVEL=INFO
-MCP_MESH_DEBUG_MODE=false
-HOST=0.0.0.0
-PORT=8000
-DEFAULT_TIMEOUT_THRESHOLD=20  # Balanced for production
-HEALTH_CHECK_INTERVAL=10      # Regular monitoring
-DATABASE_URL=postgresql://user:pass@db:5432/mcp_mesh
+# Server binding
+export HOST=0.0.0.0
+export PORT=8000
+
+# Database (meshui reads DATABASE_URL too)
+export DATABASE_URL=mcp_mesh_registry.db  # SQLite
+export DATABASE_URL=postgresql://user:pass@host:5432/db  # PostgreSQL
+
+# Health monitoring
+export DEFAULT_TIMEOUT_THRESHOLD=20   # Mark unhealthy after this many seconds without a heartbeat
+export HEALTH_CHECK_INTERVAL=10       # Scan frequency (seconds)
+
+# Sweep retention - how long unhealthy/unknown agents and orphan
+# schema_entries are kept before the periodic sweep purges them. Go
+# duration string. Default: 1h. "0" disables the agent/schema sweep.
+export MCP_MESH_RETENTION=1h
+
+# registry_events row cap - a table-size safety limit, enforced
+# independently of MCP_MESH_RETENTION. Default: 100000. "0" disables it.
+export MCP_MESH_EVENT_MAX_ROWS=100000
+
+# How often the periodic job/agent sweep runs. Go duration. Default: 5m.
+export MCP_MESH_SWEEP_INTERVAL=5m
+
+# MeshJob default total-runtime ceiling for jobs that set no
+# total_deadline, measured from submission. The effective ceiling is
+# max(MCP_MESH_JOB_STALE_TIMEOUT, max_duration). Default: off. NOT the
+# lease window, which is derived per job from max_duration.
+export MCP_MESH_JOB_STALE_TIMEOUT=2h
+
+# Maximum request body, in bytes, on the main and admin listeners. An
+# over-limit request is refused with 413. Default: 10485760 (10MB).
+# 0 disables the limit.
+export MCP_MESH_MAX_REQUEST_BODY_BYTES=10485760
+
+# Public URL prefix stamped onto A2A surfaces (public_url, agent card URL)
+export MCP_MESH_PUBLIC_URL_PREFIX=https://agents.example.com
+
+# SQLite / connection-pool tuning (integers)
+export DB_BUSY_TIMEOUT=5000           # milliseconds
+export DB_JOURNAL_MODE=WAL
+export DB_SYNCHRONOUS=NORMAL
+export DB_CACHE_SIZE=10000
+export DB_MAX_OPEN_CONNECTIONS=25
+export DB_MAX_IDLE_CONNECTIONS=5
+export DB_CONN_MAX_LIFETIME=300       # seconds
 ```
 
-#### High-Performance Registry
+## meshctl
 
-```bash
-# .env.registry.high-perf
-MCP_MESH_LOG_LEVEL=WARNING
-DEFAULT_TIMEOUT_THRESHOLD=5   # Ultra-fast detection
-HEALTH_CHECK_INTERVAL=2       # Very frequent monitoring
-```
+| Variable                     | Default | Purpose |
+| ---------------------------- | ------- | ------- |
+| `MCP_MESH_REGISTRY_HOST`     | `localhost` | Host meshctl starts or reaches the registry on when no `--registry-*` flag is given |
+| `MCP_MESH_REGISTRY_PORT`     | `8000`  | Port meshctl starts or reaches the registry on |
+| `MCP_MESH_DB_PATH`           | `mcp_mesh_registry.db` | SQLite file for a registry meshctl starts |
+| `MCP_MESH_STARTUP_TIMEOUT`   | `30`    | Seconds to wait for a started registry or agent (integer) |
+| `MCP_MESH_SHUTDOWN_TIMEOUT`  | `30`    | Seconds to wait for a graceful stop (integer) |
+| `MCP_MESH_RELOAD_DEBOUNCE`   | `0.5`   | `--watch`: seconds of quiet before a restart |
+| `MCP_MESH_RELOAD_PORT_DELAY` | `0.5`   | `--watch`: seconds to wait for the port after stopping |
+| `MCP_MESH_RELOAD_PRECHECK`   | `true`  | `--watch`: syntax-check before restarting |
+| `MESHCTL_TEMPLATE_DIR`       | embedded | Scaffold template directory |
 
-### Agent Development Environment
+Agents do not read `MCP_MESH_REGISTRY_HOST` or `MCP_MESH_REGISTRY_PORT`; they read `MCP_MESH_REGISTRY_URL`.
+
+## Java Runtime
+
+| Variable               | Purpose |
+| ---------------------- | ------- |
+| `MESH_NATIVE_LIB_PATH` | Load the native core library from this path instead of the bundled one |
+
+## Environment Profiles
+
+### Development
 
 ```bash
 # .env.development
@@ -953,441 +474,102 @@ MCP_MESH_LOG_LEVEL=DEBUG
 MCP_MESH_DEBUG_MODE=true
 MCP_MESH_REGISTRY_URL=http://localhost:8000
 MCP_MESH_NAMESPACE=development
-MCP_MESH_AUTO_RUN_INTERVAL=10
-MCP_MESH_HEALTH_INTERVAL=15
+MCP_MESH_HEALTH_INTERVAL=5
 ```
 
-### Production Environment
+### Production
 
 ```bash
 # .env.production
 MCP_MESH_LOG_LEVEL=INFO
-MCP_MESH_DEBUG_MODE=false
-MCP_MESH_REGISTRY_URL=http://registry.company.com:8000
+MCP_MESH_REGISTRY_URL=https://registry.company.com
 MCP_MESH_NAMESPACE=production
-MCP_MESH_AUTO_RUN_INTERVAL=30
-MCP_MESH_HEALTH_INTERVAL=30
-MCP_MESH_HTTP_HOST=api-service.company.com
+
+# TLS (choose one provider)
+MCP_MESH_TLS_MODE=strict
+MCP_MESH_TLS_PROVIDER=vault
+MCP_MESH_VAULT_ADDR=https://vault.company.com:8200
+MCP_MESH_VAULT_PKI_PATH=pki_int/issue/mesh-agent
 ```
 
-### Testing Environment
+### Testing
 
 ```bash
-# .env.testing
+# .env.testing (Python)
 MCP_MESH_LOG_LEVEL=WARNING
-MCP_MESH_DEBUG_MODE=false
 MCP_MESH_ENABLED=false          # Inert: no pipeline, no registration, no heartbeat
-MCP_MESH_REGISTRY_URL=http://test-registry:8000
-MCP_MESH_NAMESPACE=testing
 ```
 
-## Using Environment Variables
-
-### With Registry Server
+## Using Environment Files
 
 ```bash
-# Start registry with environment file
-mcp-mesh-registry --host 0.0.0.0 --port 8000
-
-# Or with environment variables
-DEFAULT_TIMEOUT_THRESHOLD=10 HEALTH_CHECK_INTERVAL=5 mcp-mesh-registry
-
-# Load environment file manually
-source .env.registry.development
-mcp-mesh-registry
-
-# Check registry configuration
-mcp-mesh-registry --help
-```
-
-### With meshctl
-
-```bash
-# Load environment file
 meshctl start my_agent.py --env-file .env.development
 
-# Pass individual variables
-meshctl start my_agent.py --env MCP_MESH_LOG_LEVEL=DEBUG --env MCP_MESH_DEBUG_MODE=true
-
-# Use system environment
-export MCP_MESH_LOG_LEVEL=DEBUG
-meshctl start my_agent.py
+# Individual variables
+meshctl start my_agent.py --env MCP_MESH_LOG_LEVEL=DEBUG
 ```
 
-### With Python
-
-```bash
-# Load environment file manually
-source .env.development
-python my_agent.py
-
-# Or use python-dotenv in your agent
-pip install python-dotenv
-```
-
-```python
-import os
-from dotenv import load_dotenv
-
-# Load environment file
-load_dotenv('.env.development')
-
-# Your agent code here
-```
-
-### Override Agent Configuration
-
-Environment variables override `@mesh.agent` decorator parameters:
-
-```python
-@mesh.agent(
-    name="default-service",
-    http_port=8080,
-    auto_run=True,
-    namespace="default"
-)
-class MyAgent:
-    pass
-```
-
-```bash
-# Override decorator settings
-export MCP_MESH_AGENT_NAME=overridden-service
-export MCP_MESH_HTTP_PORT=9090
-export MCP_MESH_AUTO_RUN=false   # No server, no blocking — still registers
-export MCP_MESH_NAMESPACE=custom
-
-# Runs with overridden values
-python my_agent.py
-```
-
-## Advanced Configuration
-
-### Kubernetes Environment
-
-```bash
-# Service discovery variables (auto-detected in K8s)
-export SERVICE_NAME=my-service
-export NAMESPACE=production
-export POD_NAME=my-service-abc123
-export POD_IP=10.244.1.5
-export NODE_NAME=worker-node-1
-
-# Namespace for trust backend (K8s secrets)
-export MCP_MESH_K8S_NAMESPACE=mcp-mesh
-export MCP_MESH_K8S_LABEL_SELECTOR="mcp-mesh.io/trust=entity-ca"
-
-# Pod identity (injected by K8s downward API)
-export POD_NAMESPACE=mcp-mesh
-export HOSTNAME=my-agent-pod-abc123
-```
-
-### Docker Compose Environment
+## Docker Configuration
 
 ```yaml
 # docker-compose.yml
 services:
   my-agent:
     environment:
-      - MCP_MESH_HTTP_HOST=my-agent # Service name for inter-container communication
+      - HOST=0.0.0.0
+      - MCP_MESH_HTTP_HOST=my-agent
       - MCP_MESH_HTTP_PORT=8080
       - MCP_MESH_REGISTRY_URL=http://registry:8000
       - MCP_MESH_LOG_LEVEL=INFO
       - MCP_MESH_NAMESPACE=docker
 ```
 
-### Performance Tuning
+## Kubernetes Configuration
 
-```bash
-# Python runtime optimization
-export PYTHONUNBUFFERED=1
-export PYTHONPATH=/app/lib:/app/agents
-
-# Uvicorn server settings (for FastMCP)
-export UVICORN_WORKERS=1
-export UVICORN_LOOP=auto
-export UVICORN_LIFESPAN=on
+```yaml
+# deployment.yaml
+env:
+  - name: MCP_MESH_REGISTRY_URL
+    value: "https://registry.mcp-mesh:8000"
+  - name: MCP_MESH_NAMESPACE
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.namespace
+  # TLS (Vault provider example)
+  - name: MCP_MESH_TLS_MODE
+    value: "strict"
+  - name: MCP_MESH_TLS_PROVIDER
+    value: "vault"
+  - name: MCP_MESH_VAULT_ADDR
+    value: "https://vault.vault-system:8200"
+  - name: MCP_MESH_VAULT_PKI_PATH
+    value: "pki_int/issue/mesh-agent"
+  - name: VAULT_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: vault-agent-token
+        key: token
 ```
 
-### Fast Heartbeat Optimization
+## Common Issues
 
-Ultra-fast topology change detection:
-
-```bash
-# Ultra-aggressive (sub-5 second detection)
-export DEFAULT_TIMEOUT_THRESHOLD=5   # Mark unhealthy after 5s
-export HEALTH_CHECK_INTERVAL=2       # Scan every 2 seconds
-
-# Balanced (default - sub-20 second detection)
-export DEFAULT_TIMEOUT_THRESHOLD=20  # Mark unhealthy after 20s (4 missed 5s heartbeats)
-export HEALTH_CHECK_INTERVAL=10      # Scan every 10 seconds
-
-# Conservative (legacy behavior)
-export DEFAULT_TIMEOUT_THRESHOLD=60  # Mark unhealthy after 60s
-export HEALTH_CHECK_INTERVAL=30      # Scan every 30 seconds
-
-# Production recommended
-export DEFAULT_TIMEOUT_THRESHOLD=20
-export HEALTH_CHECK_INTERVAL=10
-```
-
-**How it works:**
-
-- Agents send lightweight HEAD requests every ~5 seconds
-- Registry responds with topology change status (200/202/410)
-- Background monitor detects unhealthy agents and creates events
-- Other agents get notified via 202 responses on their HEAD checks
-
-## Real-World Examples
-
-### Multi-Service Development
+### Port Already in Use
 
 ```bash
-# Terminal 1: Start registry with fast heartbeats
-export MCP_MESH_LOG_LEVEL=DEBUG
-export DEFAULT_TIMEOUT_THRESHOLD=10
-export HEALTH_CHECK_INTERVAL=5
-mcp-mesh-registry --host localhost --port 8000
-
-# Terminal 2: Start auth service
-export MCP_MESH_AGENT_NAME=auth-service
-export MCP_MESH_HTTP_PORT=8081
-export MCP_MESH_NAMESPACE=dev
-export MCP_MESH_LOG_LEVEL=DEBUG
-python services/auth.py
-
-# Terminal 3: Start API service
-export MCP_MESH_AGENT_NAME=api-service
-export MCP_MESH_HTTP_PORT=8082
-export MCP_MESH_NAMESPACE=dev
-export MCP_MESH_LOG_LEVEL=DEBUG
-python services/api.py
-```
-
-### Registry High Availability
-
-```bash
-# Primary registry (port 8000)
-export HOST=0.0.0.0
-export PORT=8000
-export DATABASE_URL=postgresql://user:pass@primary-db:5432/mcp_mesh
-export DEFAULT_TIMEOUT_THRESHOLD=20
-export HEALTH_CHECK_INTERVAL=10
-mcp-mesh-registry &
-
-# Backup registry (port 8001) - read-only mode for failover
-export HOST=0.0.0.0
-export PORT=8001
-export DATABASE_URL=postgresql://user:pass@replica-db:5432/mcp_mesh
-export DEFAULT_TIMEOUT_THRESHOLD=30
-export HEALTH_CHECK_INTERVAL=15
-mcp-mesh-registry &
-```
-
-### Remote Registry Connection
-
-```bash
-# Connect to shared development registry
-export MCP_MESH_REGISTRY_URL=http://dev-registry.team.local:8000
-export MCP_MESH_NAMESPACE=shared-dev
-export MCP_MESH_AGENT_NAME=my-feature-branch
-
-python my_agent.py
-```
-
-### CI/CD Pipeline
-
-```bash
-# Test environment variables
-export MCP_MESH_AUTO_RUN=false          # No server, no blocking (still registers)
-export MCP_MESH_LOG_LEVEL=ERROR         # Minimal logging
-export MCP_MESH_REGISTRY_URL=http://test-registry:8000
-export MCP_MESH_NAMESPACE=ci-${BUILD_ID}
-
-# Run tests
-python -m pytest tests/
-```
-
-### Load Testing Setup
-
-```bash
-# Start multiple instances with unique names
-for i in {1..5}; do
-  export MCP_MESH_AGENT_NAME=load-test-agent-$i
-  export MCP_MESH_HTTP_PORT=$((8080 + i))
-  python my_agent.py &
-done
-
-# Monitor all instances
-meshctl list --filter load-test
-```
-
-## Environment Variable Hierarchy
-
-Environment variables are applied in this order (last wins):
-
-1. **System environment variables**
-2. **Environment files** (`.env`)
-3. **meshctl `--env` flags**
-4. **`@mesh.agent` decorator parameters**
-
-```bash
-# Example: Final port will be 9999
-export MCP_MESH_HTTP_PORT=8080              # System (1)
-# .env file has: MCP_MESH_HTTP_PORT=8081    # File (2)
-meshctl start my_agent.py --env MCP_MESH_HTTP_PORT=9999  # Flag (3)
-```
-
-## Debugging Environment Issues
-
-### Check Current Environment
-
-```bash
-# Show all MCP Mesh environment variables
-env | grep MCP_MESH
-
-# Test specific variable
-echo $MCP_MESH_LOG_LEVEL
-
-# Verify environment file loading
-meshctl start my_agent.py --env-file .env.development --debug
-```
-
-### Common Issues
-
-#### 1. Port Already in Use
-
-```bash
-# Check what's using a port
 lsof -i :8080
-
-# Use different port
 export MCP_MESH_HTTP_PORT=8081
 ```
 
-#### 2. Registry Connection Failed
+### Registry Connection Failed
 
 ```bash
-# Test registry connectivity
 curl -s http://localhost:8000/health
-
-# Use different registry
 export MCP_MESH_REGISTRY_URL=http://backup-registry:8000
 ```
 
-#### 3. Agent Name Conflicts
+## See Also
 
-```bash
-# Use unique agent name
-export MCP_MESH_AGENT_NAME=my-unique-agent-$(date +%s)
-
-# Check existing agents
-meshctl list
-```
-
-#### 4. Environment File Not Loaded
-
-```bash
-# Verify file exists and is readable
-cat .env.development
-
-# Use absolute path
-meshctl start my_agent.py --env-file /full/path/to/.env.development
-```
-
-## Environment Templates
-
-### Development Template
-
-```bash
-# .env.development
-MCP_MESH_LOG_LEVEL=DEBUG
-MCP_MESH_DEBUG_MODE=true
-MCP_MESH_REGISTRY_URL=http://localhost:8000
-MCP_MESH_NAMESPACE=development
-MCP_MESH_AUTO_RUN_INTERVAL=10
-MCP_MESH_HEALTH_INTERVAL=15
-MCP_MESH_HTTP_HOST=0.0.0.0
-```
-
-### Production Template
-
-```bash
-# .env.production
-MCP_MESH_LOG_LEVEL=INFO
-MCP_MESH_DEBUG_MODE=false
-MCP_MESH_REGISTRY_URL=https://registry.company.com
-MCP_MESH_NAMESPACE=production
-MCP_MESH_AUTO_RUN_INTERVAL=30
-MCP_MESH_HEALTH_INTERVAL=30
-MCP_MESH_HTTP_HOST=0.0.0.0
-```
-
-### Docker Template
-
-```bash
-# .env.docker
-MCP_MESH_HTTP_HOST=my-service
-MCP_MESH_REGISTRY_URL=http://registry:8000
-MCP_MESH_NAMESPACE=docker
-MCP_MESH_LOG_LEVEL=INFO
-PYTHONUNBUFFERED=1
-```
-
-## Security Considerations
-
-### Sensitive Information
-
-```bash
-# ❌ Don't put secrets in environment files committed to git
-MCP_MESH_API_KEY=secret123
-
-# ✅ Use secure secret management
-export MCP_MESH_API_KEY=$(kubectl get secret mesh-api-key -o jsonpath='{.data.key}' | base64 -d)
-
-# ✅ Or use external secret providers
-export MCP_MESH_REGISTRY_URL=$(vault kv get -field=url secret/mesh/registry)
-```
-
-### Network Security
-
-```bash
-# Use secure URLs in production
-export MCP_MESH_REGISTRY_URL=https://registry.company.com  # ✅ HTTPS
-
-# Bind the registry server to specific interfaces when needed
-export HOST=127.0.0.1  # ✅ Localhost only
-export HOST=0.0.0.0    # ⚠️ All interfaces (use carefully)
-```
-
-## Next Steps
-
-Now that you understand environment configuration:
-
-1. **[Local Development](./02-local-development.md)** - Professional development workflows
-2. **[Production Deployment](./03-docker-deployment.md)** - Container orchestration
-3. **[Mesh Decorators](./python/decorators.md)** - @mesh.tool, @mesh.llm decorators
-
----
-
-## Summary
-
-### Agent Configuration (Python)
-
-Focus on `MCP_MESH_*` variables for agent behavior, heartbeat intervals, and service discovery.
-
-### Registry Configuration (Go)
-
-Focus on `DEFAULT_TIMEOUT_THRESHOLD` and `HEALTH_CHECK_INTERVAL` for fast topology detection.
-
----
-
-💡 **Pro Tip**: Use environment files for different deployment stages - keeps configuration organized and secure.
-
-🔧 **Development Tip**: Set `MCP_MESH_DEBUG_MODE=true` during development for detailed logging and faster feedback.
-
-🚀 **Production Tip**: Use `DEFAULT_TIMEOUT_THRESHOLD=20` and `HEALTH_CHECK_INTERVAL=10` for optimal fast heartbeat performance.
-
-⚡ **Performance Tip**: For ultra-fast systems, try `DEFAULT_TIMEOUT_THRESHOLD=5` and `HEALTH_CHECK_INTERVAL=2` for sub-5 second topology detection.
-
-🛡️ **Registry Tip**: Use `DATABASE_URL` with PostgreSQL in production for better performance and reliability.
+- [Deployment](deployment.md)
+- [Observability](07-observability.md)
+- [Registration Trust](security/registration-trust.md)
+- [Authorization and header propagation](security/authorization.md)

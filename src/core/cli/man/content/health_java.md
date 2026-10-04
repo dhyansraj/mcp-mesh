@@ -184,11 +184,11 @@ curl http://localhost:8080/health
 ### Agent Settings
 
 ```bash
-# Heartbeat interval (seconds)
-export MCP_MESH_AUTO_RUN_INTERVAL=30
+# Heartbeat cadence to registry (overrides @MeshAgent heartbeatInterval, default 5)
+export MCP_MESH_HEALTH_INTERVAL=5
 
-# Health check interval (seconds)
-export MCP_MESH_HEALTH_INTERVAL=30
+# How often the health check re-runs (overrides @MeshHealthCheck ttlSeconds, default 15)
+export MCP_MESH_HEALTH_CHECK_TTL=15
 ```
 
 ### Registry Settings
@@ -200,8 +200,8 @@ export DEFAULT_TIMEOUT_THRESHOLD=20
 # How often to scan for unhealthy agents (seconds)
 export HEALTH_CHECK_INTERVAL=10
 
-# When to evict stale agents (seconds)
-export DEFAULT_EVICTION_THRESHOLD=60
+# How long unhealthy agents are kept before the sweep purges them
+export MCP_MESH_RETENTION=1h
 ```
 
 ## Graceful Failure

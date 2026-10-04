@@ -77,6 +77,8 @@ Certificate CN: `{agent-name}.{trust-domain}` (e.g., `greeter-abc123.mcp-mesh.lo
 
 Fetches X.509-SVIDs from the SPIRE agent's Workload API via Unix domain socket. Certs use SPIFFE URI SANs for identity verification.
 
+The SPIRE provider works for Python and TypeScript agents, not Java: the Java runtime refuses to start with `MCP_MESH_TLS_PROVIDER=spire`. A Java agent in a SPIRE deployment uses the file provider with its SVID written to disk by a SPIRE helper (for example `spiffe-helper`), pointing `MCP_MESH_TLS_CERT`, `MCP_MESH_TLS_KEY` and `MCP_MESH_TLS_CA` at the exported certificate, key and trust bundle.
+
 ```bash
 export MCP_MESH_TLS_MODE=auto
 export MCP_MESH_TLS_PROVIDER=spire
@@ -156,6 +158,8 @@ The registry validates agent certificates against trust backends:
 | **spire**       | Validate against SPIFFE trust bundles from the SPIRE Workload API.                | Workload identity         |
 
 Backends can be chained: `MCP_MESH_TRUST_BACKEND=spire,k8s-secrets` (first match wins).
+
+The `spire` backend needs a registry built with `go build -tags spire`. The released registry binaries and container images are built without that tag, and refuse to start with `spire` in `MCP_MESH_TRUST_BACKEND`. On a released registry, trust SPIRE-issued agent certificates by exporting the SPIRE trust bundle to a PEM file and loading it with `filestore`.
 
 If a configured backend fails to initialize at startup, the registry refuses to start rather than silently dropping that backend (issue #989).
 
@@ -287,6 +291,8 @@ mesh:
 
 ### Helm Values for SPIRE
 
+For Python and TypeScript agents (Java does not support the SPIRE provider):
+
 ```yaml
 # Agent chart
 mesh:
@@ -336,16 +342,9 @@ registry:
 
 **Gotcha**: Don't jump to `strict` before all agents have certs — they'll be rejected and evicted on the next heartbeat.
 
-## Auth Token
+## No Token Alternative
 
-For environments where TLS is impractical, use a shared auth token as a lightweight alternative:
-
-```bash
-# Set same token on registry and all agents
-export MCP_MESH_AUTH_TOKEN=my-secret-token
-```
-
-The registry rejects registration from agents with a mismatched token. This is **not a replacement for TLS** — tokens are sent in plain text over HTTP. Use TLS in production.
+The registry's only enforcement is client-certificate verification, set by `MCP_MESH_TLS_MODE` and checked against the trust backends above. There is no shared-token or API-key alternative: with `MCP_MESH_TLS_MODE=off` the registry accepts any caller.
 
 ## Troubleshooting
 
@@ -369,7 +368,9 @@ openssl s_client -connect localhost:8000 -CAfile /path/to/ca.pem
 | `certificate signed by unknown authority` | Agent's CA doesn't match registry's | Use same CA — share via volume or secret |
 | `connection refused` on port 8000 | Registry not listening on TLS | Add `--tls-auto` or set `MCP_MESH_TLS_MODE` |
 | Agent evicted immediately | `strict` mode + invalid/expired cert | Check cert dates with `openssl x509 -dates` |
-| `SPIRE provider requires build with --features spire` | Binary built without SPIRE feature | Use official release binaries (include SPIRE) |
+| `SPIRE provider requires build with --features spire` | The agent's native core was built without SPIRE | The released Python and TypeScript packages include it; Java does not support SPIRE (use the file provider) |
+| `MCP_MESH_TLS_PROVIDER=spire is not supported by the Java runtime` | A Java agent configured for SPIRE | Use the file provider with the SVID exported to disk, or `vault` |
+| `SPIRE backend requires build with -tags spire` | The registry binary was built without SPIRE (released binaries are) | Load the exported SPIRE trust bundle with `filestore`, or build the registry with `-tags spire` |
 | 403 `entity_id mismatch` on register, heartbeat or shutdown | The `agent_id` is claimed by another trust entity, or the entity id of a running agent changed (backend order, CA O/OU edit, Secret annotation edit) | Use a distinct agent name, issue the cert from the owning entity, or revert the entity change |
 
 ### Debug TLS Handshake

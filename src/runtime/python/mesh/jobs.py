@@ -97,9 +97,11 @@ _proxy_cache: OrderedDict[tuple[str, str], Any] = OrderedDict()
 # A ``threading.Lock``, deliberately NOT an ``asyncio.Lock`` (issue
 # #1564). The public helpers below are called from tool bodies, and the
 # Python runtime runs tool bodies on more than one event loop by design:
-# plain ``@mesh.tool`` bodies run on the tool-executor worker loop, while
-# ``task=True`` handlers run on the heartbeat thread's loop that the
-# claim dispatchers are started on. An ``asyncio.Lock`` binds to the
+# with tool isolation on (the default) every async ``@mesh.tool`` body,
+# ``task=True`` handlers included, runs on the tool-executor worker loop,
+# while the claim dispatchers that invoke ``task=True`` handlers live on
+# the heartbeat thread's loop, and with isolation off a handler body runs
+# on that dispatcher loop itself. An ``asyncio.Lock`` binds to the
 # first loop that contends on it and is not thread-safe — a release on
 # loop A schedules the waiter's wakeup on loop B with a plain
 # ``call_soon``, which never wakes loop B out of ``select`` (permanent
@@ -115,8 +117,9 @@ async def _get_or_create_proxy(registry_url: str, job_id: str) -> Any:
 
     Lookup and construction both happen under a ``threading.Lock`` —
     NOT an ``asyncio.Lock`` — because callers run on more than one event
-    loop and OS thread (the tool-executor worker loop vs the heartbeat
-    thread's loop that runs ``task=True`` claim dispatchers), and an
+    loop and OS thread (the tool-executor worker loop that runs isolated
+    tool bodies vs the heartbeat thread's loop that runs the ``task=True``
+    claim dispatchers), and an
     ``asyncio.Lock`` shared across loops can hang one of them (issue
     #1564). The whole critical section is synchronous, so no asyncio
     primitive is needed; the coroutine signature is kept only so callers
