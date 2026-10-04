@@ -9,7 +9,7 @@ the overwhelming majority of stateful workloads in mesh:
 - **Externalized state via a state agent + MeshJob orchestrator** —
   durable, horizontally scalable, restart-tolerant.
 - **FastAPI `lifespan` for a loop-bound resource** (see
-  [Loop topology](../python/dependency-injection.md#loop-topology-v224))
+  [Loop topology](../python/dependency-injection.md#loop-topology))
   — create the pool / client in `lifespan` startup; the default single
   user loop hosts both `lifespan` and every tool body.
 
@@ -25,7 +25,7 @@ MeshJob.
 
 Before reaching for the in-process runtime pattern, can you answer **no** to all of these?
 
-1. **Is your work driven by tool calls (request-driven)?** → if yes, put your loop-bound resource in FastAPI `lifespan` startup (see [Loop topology](../python/dependency-injection.md#loop-topology-v224)).
+1. **Is your work driven by tool calls (request-driven)?** → if yes, put your loop-bound resource in FastAPI `lifespan` startup (see [Loop topology](../python/dependency-injection.md#loop-topology)).
 2. **Can your state mutations tolerate ~10ms HTTP round-trip overhead per mutation?** → if yes, use MeshJob with a state agent (see [stateful agents](stateful-agents.md)).
 3. **Is your stateful resource portable across processes (DB pool, Redis connection, message-broker client)?** → if yes, you don't need in-process binding.
 
@@ -229,8 +229,10 @@ To allow longer polls, raise the budget on the **consumer**:
       dependencies: ["wait_for_threshold"],
       dependencyKwargs: [{ timeout: 900 }], // this dependency only
       parameters: z.object({}),
-      execute: async ({}, waitForThreshold: McpMeshTool | null = null) =>
-        waitForThreshold ? waitForThreshold({ min_samples: 1000 }) : null,
+      execute: async ({}, waitForThreshold: McpMeshTool | null = null) => {
+        if (!waitForThreshold) return "engine unavailable";
+        return JSON.stringify(await waitForThreshold({ min_samples: 1000 }));
+      },
     });
     ```
 
@@ -322,7 +324,7 @@ immediately after.
 This pattern is an escape hatch, not a recommendation. If you're
 reading it because of a "where do I put my asyncpg pool" question, the
 answer is almost always the standard FastAPI `lifespan` pattern (see
-[Loop topology](../python/dependency-injection.md#loop-topology-v224))
+[Loop topology](../python/dependency-injection.md#loop-topology))
 or the [MeshJob state-agent decomposition](stateful-agents.md) — not
 this page. Use MeshJob unless you can answer the three gate questions
 with "no, no, and no."
@@ -331,7 +333,7 @@ with "no, no, and no."
 
 - [Stateful Agents](stateful-agents.md) — the canonical MeshJob +
   state-agent decomposition that covers the common case
-- [Loop Topology](../python/dependency-injection.md#loop-topology-v224)
+- [Loop Topology](../python/dependency-injection.md#loop-topology)
   — two-loop model, default `MCP_MESH_TOOL_WORKERS=1`, FastAPI
   `lifespan` for loop-bound resources
 - [Long-Running Jobs](jobs.md) — MeshJob substrate: lifecycle,

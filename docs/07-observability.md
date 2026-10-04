@@ -41,7 +41,7 @@ The Grafana Service is named `<release>-mcp-mesh-grafana`. For a core release na
 kubectl port-forward svc/mcp-core-mcp-mesh-grafana 3000:3000 -n mcp-mesh
 ```
 
-The user is `admin`. Unless you set `grafana.config.adminPassword` or `grafana.config.existingSecret` on the `mcp-mesh-grafana` subchart, the chart generates the password into a Secret:
+The user is `admin`. Unless you set `mcp-mesh-grafana.grafana.config.adminPassword` or `mcp-mesh-grafana.grafana.config.existingSecret` in the `mcp-mesh-core` values, the chart generates the password into a Secret:
 
 ```bash
 kubectl get secret mcp-core-mcp-mesh-grafana-secret -n mcp-mesh \

@@ -278,9 +278,11 @@ agent.addTool({
 | `maxResponseSize` | number | 10485760 | Largest accepted response body, in bytes. |
 
 Python and Java have no per-dependency proxy settings: every outgoing call runs
-on `MCP_MESH_CALL_TIMEOUT` (default 300 seconds). Python's `@mesh.tool` ignores
-a `dependency_kwargs` argument and logs a warning. See `meshctl man proxies
---typescript` for the TypeScript options in context.
+on `MCP_MESH_CALL_TIMEOUT` (default 300 seconds). Every Python decorator
+(`@mesh.tool`, `@mesh.route`, `@mesh.llm`, ...) drops a `dependency_kwargs`
+argument and logs a warning, so it never reaches advertised metadata or the
+model parameters sent to a vendor. See `meshctl man proxies --typescript` for
+the TypeScript options in context.
 
 ## See also
 

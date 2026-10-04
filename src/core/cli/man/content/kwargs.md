@@ -57,7 +57,7 @@ shape. See the full reference for typed examples per language.
 
 Per-dependency proxy options (timeout, attempts, stream timeout, custom headers) are TypeScript-only: `dependencyKwargs` on `agent.addTool` and `mesh.route`, indexed by dependency position. See `meshctl man proxies --typescript`.
 
-Python and Java have no per-dependency proxy settings; every outgoing call runs on `MCP_MESH_CALL_TIMEOUT` (default 300 seconds). Python's `@mesh.tool` ignores a `dependency_kwargs` argument and logs a warning.
+Python and Java have no per-dependency proxy settings; every outgoing call runs on `MCP_MESH_CALL_TIMEOUT` (default 300 seconds). Every Python decorator (`@mesh.tool`, `@mesh.route`, `@mesh.llm`, ...) drops a `dependency_kwargs` argument and logs a warning.
 
 ## See also
 

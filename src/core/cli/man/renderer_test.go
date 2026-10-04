@@ -707,8 +707,18 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // exchange is replaced by the real POST /heartbeat body and its
 // dependencies_resolved answer, whose prose names /heartbeat, the HEAD
 // variant and the response field. 1977 - 11 - 1 + 4 = 1969.
+//
+// Review of the sweep moves the inline constant to 1981 (+12), lists
+// unmoved. proxies.md +5: the session-affinity paragraph names POD_IP (the
+// address other replicas forward a pinned session to) and the
+// dependency_kwargs sentence now lists the decorators that drop it.
+// environment.md +3: the MCP_MESH_HTTP_HOST paragraph regains the
+// agent.advertisedHost and tiebreaker pointers; the restored TRACE_* /
+// OTLP_ENDPOINT / POD_* rows are table lines and the restored settle
+// caveats are fenced. kwargs.md +2 and dependency-injection.md +2: the same
+// all-decorators dependency_kwargs sentence. 1969 + 5 + 3 + 2 + 2 = 1981.
 const (
-	wantInlineCodeSpans = 1969
+	wantInlineCodeSpans = 1981
 	wantListCodeSpans   = 550
 	wantMarkupListLines = 459
 )

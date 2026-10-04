@@ -237,7 +237,11 @@ func stripLangHeader(content string) string {
 // dependency-injection_typescript.md -4: the "Changed in 3.4.0" history
 // note becomes one version-neutral sentence on positional slots.
 // 1809 + 4 + 3 - 4 = 1812.
-const wantVariantInlineCodeSpans = 1812
+//
+// Review follow-up: dependency-injection_typescript.md's LLM-injection
+// lead-in now says what `server` is (`mesh.llm()` registered on the FastMCP
+// `server` passed to `mesh(server, ...)`, +2). 1812 + 2 = 1814.
+const wantVariantInlineCodeSpans = 1814
 
 // TestVariantCorpusCodeSpans is TestStyleInlineCorpus plus
 // TestRenderStyledCorpusListItems, run over the pages neither of them sees.

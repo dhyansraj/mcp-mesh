@@ -2845,7 +2845,13 @@ def llm_provider(
             consumer is still checked at call time.
     """
 
+    from .decorators import _pop_dependency_kwargs, _warn_dependency_kwargs_ignored
+
+    ignored_dependency_kwargs = _pop_dependency_kwargs(litellm_kwargs)
+
     def decorator(func):
+        if ignored_dependency_kwargs:
+            _warn_dependency_kwargs_ignored(func, "@mesh.llm_provider")
         # Import here to avoid circular imports
         import sys
 

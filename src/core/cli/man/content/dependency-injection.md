@@ -326,7 +326,7 @@ A legacy *union* capability (a single `session_state` tool that multiplexes seve
 
 ## Proxy Configuration
 
-The Python runtime has no per-dependency proxy settings. Every outgoing call runs on one budget: `MCP_MESH_CALL_TIMEOUT` (default 300 seconds), replaced by an inbound `X-Mesh-Timeout` when the current call carries one. Per-dependency options are TypeScript-only (`dependencyKwargs`); `@mesh.tool` ignores a `dependency_kwargs` argument and logs a warning.
+The Python runtime has no per-dependency proxy settings. Every outgoing call runs on one budget: `MCP_MESH_CALL_TIMEOUT` (default 300 seconds), replaced by an inbound `X-Mesh-Timeout` when the current call carries one. Per-dependency options are TypeScript-only (`dependencyKwargs`); every Python decorator (`@mesh.tool`, `@mesh.route`, `@mesh.llm`, ...) drops a `dependency_kwargs` argument and logs a warning.
 
 See `meshctl man proxies` for streaming and session affinity.
 

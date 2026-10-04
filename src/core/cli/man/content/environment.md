@@ -59,7 +59,7 @@ export MCP_MESH_HTTP_PORT=8080
 export MCP_MESH_HTTP_HOST=my-service
 ```
 
-`MCP_MESH_HTTP_HOST` decides whether replicas share traffic: the registry hands back one winner's announced host, so announcing a Kubernetes Service name spreads calls across its pods, while an auto-detected pod IP pins every call to one process. TypeScript gateways built with `meshExpress` read the same identity variables as `mesh()` agents.
+`MCP_MESH_HTTP_HOST` decides whether replicas share traffic: the registry hands back one winner's announced host, so announcing a Kubernetes Service name spreads calls across its pods, while an auto-detected pod IP pins every call to one process. The `mcp-mesh-agent` Helm chart announces the Service DNS name for you; override it with `agent.advertisedHost`. How the registry picks the winner is the tiebreaker in `meshctl man audit`. TypeScript gateways built with `meshExpress` read the same identity variables as `mesh()` agents.
 
 ### Python Runtime
 
@@ -159,7 +159,14 @@ export MCP_MESH_STRICT_DI=true
 # dependencies inject None/null exactly as before.
 #
 # Scope: dependency-injection call paths (tools and routes), A2A producer
-# handlers and the LLM provider slot, on all three runtimes.
+# handlers and the LLM provider slot, on all three runtimes. Not covered:
+# dependencies used from startup hooks / lifespan, dependencies captured at
+# module scope, and the tool list an LLM consumer's filter assembles (only
+# its provider slot waits).
+#
+# Tuning: lower it (e.g. 2-5) in integration tests that intentionally
+# exercise unresolved-dependency behavior, so degraded-path assertions
+# don't sit out the full default window.
 export MCP_MESH_SETTLE_TIMEOUT=20
 ```
 
@@ -204,7 +211,7 @@ In every runtime the winning value drives BOTH the advertised `X-Mesh-Timeout` a
 
 Only TypeScript has a per-dependency override (`timeout`, or `streamTimeout` when `streaming` is set, in `dependencyKwargs`). Python and Java resolve the budget from `MCP_MESH_CALL_TIMEOUT`, else 300s.
 
-Streamed responses (e.g., SSE) routed through the registry proxy are bounded by the same call timeout - the proxy ends the exchange when it elapses, even mid-stream. Send a larger `X-Mesh-Timeout` header (or raise `MCP_MESH_PROXY_TIMEOUT`) for long-lived streams.
+Streamed responses (e.g., SSE) routed through the registry proxy are bounded by the same call timeout - the proxy ends the exchange when it elapses, even mid-stream. Send a larger `X-Mesh-Timeout` header (or raise `MCP_MESH_PROXY_TIMEOUT`) for long-lived streams; the registry proxy caps both at 600 seconds.
 
 On the browser-facing side, `mesh.sseStream` (TypeScript) treats a slow consumer as slow, not gone: it waits for the response to drain before sending the next frame. A consumer that stalls without ever disconnecting is abandoned after `MCP_MESH_SSE_DRAIN_TIMEOUT`, which releases the upstream stream it was holding open.
 
@@ -248,7 +255,7 @@ The Python runtime calls Vertex through the bundled `google-genai` SDK; no extra
 
 | Variable                                  | Default | Purpose |
 | ----------------------------------------- | ------- | ------- |
-| `MCP_MESH_NATIVE_LLM`                     | on      | Set `0` to route provider calls through LiteLLM instead of the native vendor SDKs |
+| `MCP_MESH_NATIVE_LLM`                     | on      | Set `0` to route provider calls through LiteLLM instead of the native vendor SDKs (needs `pip install 'mcp-mesh[litellm]'`) |
 | `MCP_MESH_HINT_FALLBACK_TIMEOUT`          | `90`    | Seconds for the bounded structured-output retry after a HINT-mode answer fails to parse |
 | `MCP_MESH_CLAUDE_FORCE_RESPONSE_FORMAT`   | `false` | LiteLLM path only: ask Claude for `response_format` first instead of HINT mode |
 | `MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS` | on      | Set `0` to turn off server-enforced structured output with tools on Gemini 3 |
@@ -292,6 +299,12 @@ meshctl start agent.py --env MESH_LLM_MODEL=claude-sonnet-4-5
 | `TELEMETRY_ENDPOINT`                       | registry | `localhost:4317` | OTLP endpoint the registry exports to |
 | `TELEMETRY_PROTOCOL`                       | registry | `grpc` | `grpc` or `http` |
 | `TRACE_EXPORTER_TYPE`                      | registry | `otlp` | `otlp`, `console`, `json` |
+| `OTLP_ENDPOINT`                            | registry | - | Alternative name for `TELEMETRY_ENDPOINT`, used when that is unset |
+| `TRACE_BATCH_SIZE`                         | registry | `100` | Stream entries the registry reads per batch |
+| `TRACE_TIMEOUT`                            | registry | `5m` | `console` / `json` exporters: how long an incomplete trace is held before it is emitted (Go duration) |
+| `TRACE_PRETTY_OUTPUT`                      | registry | `true` | `console` exporter: pretty-printed output (`false` for compact) |
+| `TRACE_JSON_OUTPUT_DIR`                    | registry | - | `json` exporter: directory the trace files are written to |
+| `TRACE_ENABLE_STATS`                       | registry | `true` | `console` / `json` exporters: also keep trace-processing statistics (`false` turns them off) |
 | `MCP_MESH_TRACE_RETENTION`                 | registry, meshui | `24h` | Trim `mesh:trace` entries older than this (`0` = no trimming) |
 | `MCP_MESH_TRACE_CONSUMER_GROUP`            | registry | `mcp-mesh-registry-processors` | Redis consumer group the registry reads with |
 | `MCP_MESH_UI_TRACE_CONSUMER_GROUP`         | meshui | `mcp-mesh-ui-dashboard` | Redis consumer group meshui reads with |
@@ -463,6 +476,13 @@ Agents do not read `MCP_MESH_REGISTRY_HOST` or `MCP_MESH_REGISTRY_PORT`; they re
 | Variable               | Purpose |
 | ---------------------- | ------- |
 | `MESH_NATIVE_LIB_PATH` | Load the native core library from this path instead of the bundled one |
+
+## Kubernetes Downward API
+
+| Variable        | Read by  | Purpose |
+| --------------- | -------- | ------- |
+| `POD_IP`        | Py, Java | Python: the address other replicas forward a pinned session's calls to (default `localhost`, so set it in multi-replica deployments); both: recorded on trace spans |
+| `POD_NAMESPACE` | Java     | Recorded on trace spans |
 
 ## Environment Profiles
 

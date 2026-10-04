@@ -206,7 +206,7 @@ execute: async ({}, helper: McpMeshTool | null = null) => {
 
 ### LLM Injection
 
-For LLM agent injection in `mesh.llm()` decorated tools:
+For LLM agent injection, define the tool with `mesh.llm()` and register it on the FastMCP `server` you passed to `mesh(server, ...)`:
 
 ```typescript
 server.addTool(

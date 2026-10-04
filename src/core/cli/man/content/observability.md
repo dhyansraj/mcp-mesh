@@ -88,7 +88,7 @@ The Kubernetes Service is named `<release>-mcp-mesh-grafana`, so the command abo
 Credentials:
 
 - **Docker Compose**: `admin` / `admin`. The generated compose file also enables anonymous access with the Admin role, so the login page can be skipped.
-- **Kubernetes**: user `admin`. Unless you set `grafana.config.adminPassword` or `grafana.config.existingSecret` on the `mcp-mesh-grafana` subchart, the password is generated into a Secret; read it with:
+- **Kubernetes**: user `admin`. Unless you set `mcp-mesh-grafana.grafana.config.adminPassword` or `mcp-mesh-grafana.grafana.config.existingSecret` in the `mcp-mesh-core` values, the password is generated into a Secret; read it with:
 
 ```bash
 kubectl get secret mcp-core-mcp-mesh-grafana-secret -n mcp-mesh \

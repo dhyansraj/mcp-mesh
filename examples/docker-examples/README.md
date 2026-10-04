@@ -595,8 +595,7 @@ ports:
 
 Key configuration in `docker-compose.yml`:
 
-- `MCP_MESH_AUTO_RUN_INTERVAL=5` - Heartbeat frequency (seconds)
-- `MCP_MESH_HEALTH_INTERVAL=5` - Health check frequency (seconds)
+- `MCP_MESH_HEALTH_INTERVAL=5` - Heartbeat frequency (seconds)
 - `MCP_MESH_LOG_LEVEL=DEBUG` - Logging verbosity
 - `DATABASE_URL` - PostgreSQL connection string
 

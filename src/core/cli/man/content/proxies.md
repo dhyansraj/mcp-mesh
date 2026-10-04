@@ -63,7 +63,7 @@ async def my_tool(helper: mesh.McpMeshTool = None):
 
 The Python runtime has no per-dependency proxy settings. Every outgoing call runs on one budget: `MCP_MESH_CALL_TIMEOUT` (default 300 seconds), replaced by an inbound `X-Mesh-Timeout` when the current call carries one. See `meshctl man environment`.
 
-Per-dependency options (`dependencyKwargs`) are TypeScript-only; see `meshctl man proxies --typescript`. A `dependency_kwargs` argument to `@mesh.tool` is ignored with a warning.
+Per-dependency options (`dependencyKwargs`) are TypeScript-only; see `meshctl man proxies --typescript`. A `dependency_kwargs` argument to any Python decorator (`@mesh.tool`, `@mesh.route`, `@mesh.llm`, ...) is dropped with a warning.
 
 ## Streaming
 
@@ -78,7 +78,7 @@ async def process_stream(stream_svc: mesh.McpMeshTool = None):
 
 ## Session Affinity
 
-A Python provider pins every call that carries a `session_id` argument to the replica that served that session's first call, and forwards later calls for the session there. Assignments live in Redis (`REDIS_URL`) so every replica sees them, and expire after `MCP_MESH_SESSION_TTL` seconds (default 3600). Without Redis each replica only knows its own assignments.
+A Python provider pins every call that carries a `session_id` argument to the replica that served that session's first call, and forwards later calls for the session there. Assignments live in Redis (`REDIS_URL`) so every replica sees them, and expire after `MCP_MESH_SESSION_TTL` seconds (default 3600). A replica records itself by its `POD_IP` (default `localhost`), so set `POD_IP` from the Kubernetes downward API when running more than one. Without Redis each replica only knows its own assignments.
 
 ```python
 @mesh.tool(dependencies=["stateful_service"])

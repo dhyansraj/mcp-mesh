@@ -265,7 +265,6 @@ export MCP_MESH_DEBUG_MODE=true
 
 # Agent behavior
 export MCP_MESH_AUTO_RUN=true
-export MCP_MESH_AUTO_RUN_INTERVAL=30
 ```
 
 ### Custom Registry
