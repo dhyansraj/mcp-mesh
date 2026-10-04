@@ -39,3 +39,32 @@ func TestJoinHostPortAndBaseURL(t *testing.T) {
 		})
 	}
 }
+
+func TestDialableHost(t *testing.T) {
+	tests := map[string]string{
+		"":                "localhost",
+		"0.0.0.0":         "localhost",
+		"::":              "localhost",
+		"[::]":            "localhost",
+		"0:0:0:0:0:0:0:0": "localhost",
+		"localhost":       "localhost",
+		"10.0.0.5":        "10.0.0.5",
+		"::1":             "::1",
+		"[::1]":           "[::1]",
+		"agent.ns":        "agent.ns",
+	}
+	for in, want := range tests {
+		if got := DialableHost(in); got != want {
+			t.Errorf("DialableHost(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestUnbracket(t *testing.T) {
+	tests := map[string]string{"[::1]": "::1", "::1": "::1", "host": "host", "[": "[", "": ""}
+	for in, want := range tests {
+		if got := Unbracket(in); got != want {
+			t.Errorf("Unbracket(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

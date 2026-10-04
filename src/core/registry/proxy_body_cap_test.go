@@ -229,8 +229,43 @@ func TestProxy_DeclaredLengthUnderCapStillStreams(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
 	}
-	if _, bodies, _ := agent.snapshot(); len(bodies) != 1 || len(bodies[0]) != total {
+	_, bodies, lens := agent.snapshot()
+	if len(bodies) != 1 || len(bodies[0]) != total {
 		t.Fatalf("agent did not receive the %d-byte body", total)
+	}
+	// Streamed, but still carrying the caller's declared length.
+	if lens[0] != int64(total) {
+		t.Errorf("agent saw Content-Length %d, want the declared %d (not chunked)", lens[0], total)
+	}
+}
+
+// TestProxy_DeclaredLengthIsForwarded pins that a declared-length proxied
+// POST reaches the agent with its Content-Length, as the caller sent it,
+// rather than re-encoded as chunked — with the cap on and with it off.
+func TestProxy_DeclaredLengthIsForwarded(t *testing.T) {
+	for _, limit := range []int64{1 << 20, 0} {
+		t.Run("limit="+strconv.FormatInt(limit, 10), func(t *testing.T) {
+			agent := &bodyRecordingAgent{}
+			base, path := newCappedProxy(t, limit, agent)
+
+			payload := oversizedJSON(900)
+			resp, err := http.Post(base+path, "application/json", strings.NewReader(payload))
+			if err != nil {
+				t.Fatalf("POST: %v", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(resp.Body)
+				t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+			}
+			_, bodies, lens := agent.snapshot()
+			if len(bodies) != 1 || string(bodies[0]) != payload {
+				t.Fatalf("agent did not receive the payload intact")
+			}
+			if lens[0] != int64(len(payload)) {
+				t.Errorf("agent saw Content-Length %d, want %d", lens[0], len(payload))
+			}
+		})
 	}
 }
 

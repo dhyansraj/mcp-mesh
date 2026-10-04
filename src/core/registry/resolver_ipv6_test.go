@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"mcp-mesh/src/core/ent"
 )
 
 // registerIPv6Pair registers a provider advertising providerHost:providerPort
@@ -119,4 +122,53 @@ func TestResolver_IPv6ProviderEndpointDials(t *testing.T) {
 	require.NoError(t, err, "consumer could not reach the resolved endpoint %q", endpoint)
 	resp.Body.Close()
 	require.Equal(t, http.StatusNoContent, resp.StatusCode)
+}
+
+// TestEndpoints_UnspecifiedBindHostMapsToLocalhost pins that every endpoint
+// builder handed to consumers maps an unspecified bind address — IPv4 or
+// IPv6, bracketed or not — to localhost. The LLM tool and provider paths
+// used to map only 0.0.0.0, and the dependency resolver mapped nothing, so
+// a provider advertising its bind address was handed out as
+// http://0.0.0.0:8080 (or an unparseable http://:::8080).
+func TestEndpoints_UnspecifiedBindHostMapsToLocalhost(t *testing.T) {
+	for _, host := range []string{"0.0.0.0", "::", "[::]"} {
+		t.Run(host, func(t *testing.T) {
+			service := setupTestService(t)
+			require.Equal(t, "http://localhost:8080", registerIPv6Pair(t, service, host, 8080),
+				"dependency resolver endpoint")
+
+			capRow := &ent.Capability{Edges: ent.CapabilityEdges{Agent: &ent.Agent{ID: "p", HTTPHost: host, HTTPPort: 8080}}}
+			require.Equal(t, "http://localhost:8080", buildEndpoint(capRow), "LLM tool endpoint")
+			require.Equal(t, "http://localhost:8080", buildProviderEndpoint(capRow), "LLM provider endpoint")
+		})
+	}
+
+	// A real address is left alone on every path.
+	capRow := &ent.Capability{Edges: ent.CapabilityEdges{Agent: &ent.Agent{ID: "p", HTTPHost: "fd00::5", HTTPPort: 8080}}}
+	require.Equal(t, "http://[fd00::5]:8080", buildEndpoint(capRow))
+	require.Equal(t, "http://[fd00::5]:8080", buildProviderEndpoint(capRow))
+}
+
+// TestProxyRegistrationCheck_BracketedAndBareIPv6Match pins that the proxy's
+// registered-agent check compares hosts unbracketed: an agent that
+// registered its IPv6 http_host as "[::1]" or "::1" is reachable through
+// /proxy/[::1]:<port>/..., and the dial target is bracketed exactly once.
+func TestProxyRegistrationCheck_BracketedAndBareIPv6Match(t *testing.T) {
+	for _, registered := range []string{"[::1]", "::1"} {
+		t.Run(registered, func(t *testing.T) {
+			service := setupTestService(t)
+			registerProxyTargetAgent(t, service, "v6-agent", registered, 8443)
+			h := NewEntBusinessLogicHandlers(service)
+
+			ok, scheme, dial, err := h.isRegisteredAgentEndpoint(context.Background(), "[::1]:8443")
+			require.NoError(t, err)
+			require.True(t, ok, "agent registered as %q not matched by /proxy/[::1]:8443", registered)
+			require.Equal(t, "http", scheme)
+			require.Equal(t, "[::1]:8443", dial)
+
+			ok, _, _, err = h.isRegisteredAgentEndpoint(context.Background(), "[::2]:8443")
+			require.NoError(t, err)
+			require.False(t, ok, "a different IPv6 host must not match")
+		})
+	}
 }

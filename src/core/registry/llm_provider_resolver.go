@@ -192,9 +192,6 @@ func buildProviderEndpoint(cap *ent.Capability) string {
 
 	// Handle HTTP endpoints
 	host := agent.HTTPHost
-	if host == "" || host == "0.0.0.0" {
-		host = "localhost"
-	}
 
 	// Clean up host (remove http:// if present)
 	if len(host) > 7 && host[:7] == "http://" {
@@ -203,6 +200,7 @@ func buildProviderEndpoint(cap *ent.Capability) string {
 	if len(host) > 8 && host[:8] == "https://" {
 		host = host[8:]
 	}
+	host = netutil.DialableHost(host) // "", 0.0.0.0, :: -> localhost
 
 	scheme := "http"
 	if agent.EntityID != nil && *agent.EntityID != "" {

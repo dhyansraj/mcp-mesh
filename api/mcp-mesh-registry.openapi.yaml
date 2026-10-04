@@ -144,6 +144,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: |
+            Request body exceeds the registry's MCP_MESH_MAX_REQUEST_BODY_BYTES
+            limit (10MB by default). Refused before the body is processed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /heartbeat/{agent_id}:
     head:
@@ -329,6 +337,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: |
+            Request body exceeds the registry's MCP_MESH_MAX_REQUEST_BODY_BYTES
+            limit (10MB by default). Refused before the body is processed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /jobs/batch:
     post:
@@ -365,6 +381,14 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "503":
           description: Registry backend unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: |
+            Request body exceeds the registry's MCP_MESH_MAX_REQUEST_BODY_BYTES
+            limit (10MB by default). Refused before the body is processed.
           content:
             application/json:
               schema:
@@ -408,6 +432,14 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "503":
           description: Registry backend unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: |
+            Request body exceeds the registry's MCP_MESH_MAX_REQUEST_BODY_BYTES
+            limit (10MB by default). Refused before the body is processed.
           content:
             application/json:
               schema:
@@ -545,6 +577,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: |
+            Request body exceeds the registry's MCP_MESH_MAX_REQUEST_BODY_BYTES
+            limit (10MB by default). Refused before the body is processed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /jobs/{job_id}/cancel:
     post:
@@ -595,6 +635,14 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "503":
           description: Registry backend unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: |
+            Request body exceeds the registry's MCP_MESH_MAX_REQUEST_BODY_BYTES
+            limit (10MB by default). Refused before the body is processed.
           content:
             application/json:
               schema:
@@ -718,6 +766,14 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "503":
           description: Registry backend unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: |
+            Request body exceeds the registry's MCP_MESH_MAX_REQUEST_BODY_BYTES
+            limit (10MB by default). Refused before the body is processed.
           content:
             application/json:
               schema:

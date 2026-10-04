@@ -501,7 +501,9 @@ func (s *EntService) findHealthyProviderWithTrace(dep Dependency, eval *availEva
 		if winner.EntityID != "" {
 			scheme = "https"
 		}
-		endpoint = netutil.BaseURL(scheme, winner.HttpHost, winner.HttpPort)
+		// An unspecified bind address (0.0.0.0, ::) is not dialable;
+		// map it the way the LLM tool/provider endpoints do.
+		endpoint = netutil.BaseURL(scheme, netutil.DialableHost(winner.HttpHost), winner.HttpPort)
 	}
 
 	resolution := &DependencyResolution{

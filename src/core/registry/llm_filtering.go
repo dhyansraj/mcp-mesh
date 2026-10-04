@@ -312,13 +312,11 @@ func buildEndpoint(cap *ent.Capability) string {
 
 	// Handle HTTP endpoints
 	host := agent.HTTPHost
-	if host == "" || host == "0.0.0.0" {
-		host = "localhost"
-	}
 
 	// Clean up host (remove http:// if present)
 	host = strings.TrimPrefix(host, "http://")
 	host = strings.TrimPrefix(host, "https://")
+	host = netutil.DialableHost(host) // "", 0.0.0.0, :: -> localhost
 
 	scheme := "http"
 	if agent.EntityID != nil && *agent.EntityID != "" {

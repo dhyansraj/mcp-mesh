@@ -21,6 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"mcp-mesh/src/core/ent"
 	"mcp-mesh/src/core/ent/agent"
+	"mcp-mesh/src/core/netutil"
 	"mcp-mesh/src/core/registry/generated"
 )
 
@@ -880,6 +881,12 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		})
 		return
 	}
+	// A streamed body is an opaque reader to NewRequest, which would send
+	// it chunked. Carry the caller's declared length so the agent gets the
+	// request it was sent. (A buffered body already has its length.)
+	if method == "POST" && proxyReq.ContentLength == 0 && c.Request.ContentLength > 0 {
+		proxyReq.ContentLength = c.Request.ContentLength
+	}
 
 	// Copy relevant headers
 	proxyReq.Header.Set("Content-Type", c.Request.Header.Get("Content-Type"))
@@ -1332,13 +1339,21 @@ func (h *EntBusinessLogicHandlers) isRegisteredAgentEndpoint(ctx context.Context
 	// Narrow query instead of loading ALL agents with four eager edges per
 	// proxy call: only agents on the requested port whose HTTP host, ID, or
 	// name matches the requested host can possibly satisfy the checks below.
+	//
+	// SplitHostPort has already unbracketed the requested host, but an
+	// agent may have registered an IPv6 http_host in either form ("::1" or
+	// "[::1]"), so both are matched and compared unbracketed below.
+	hostForms := []string{host}
+	if strings.Contains(host, ":") {
+		hostForms = append(hostForms, "["+host+"]")
+	}
 	candidates, err := h.entService.entDB.Client.Agent.
 		Query().
 		Where(
 			agent.HTTPPortEQ(portInt),
 			agent.HTTPHostNEQ(""),
 			agent.Or(
-				agent.HTTPHostEQ(host),
+				agent.HTTPHostIn(hostForms...),
 				agent.IDEQ(host),
 				agent.NameEQ(host),
 			),
@@ -1360,8 +1375,8 @@ func (h *EntBusinessLogicHandlers) isRegisteredAgentEndpoint(ctx context.Context
 		return "http"
 	}
 	for _, a := range candidates {
-		if a.HTTPHost == host {
-			return true, schemeFor(a), net.JoinHostPort(a.HTTPHost, strconv.Itoa(a.HTTPPort)), nil
+		if netutil.Unbracket(a.HTTPHost) == host {
+			return true, schemeFor(a), netutil.JoinHostPort(a.HTTPHost, a.HTTPPort), nil
 		}
 	}
 
@@ -1377,7 +1392,7 @@ func (h *EntBusinessLogicHandlers) isRegisteredAgentEndpoint(ctx context.Context
 	// directly.
 	for _, a := range candidates {
 		if a.ID == host || a.Name == host {
-			return true, schemeFor(a), net.JoinHostPort(a.HTTPHost, strconv.Itoa(a.HTTPPort)), nil
+			return true, schemeFor(a), netutil.JoinHostPort(a.HTTPHost, a.HTTPPort), nil
 		}
 	}
 
