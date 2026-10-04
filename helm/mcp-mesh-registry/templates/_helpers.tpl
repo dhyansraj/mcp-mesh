@@ -419,6 +419,22 @@ a broken topology. Invoked unconditionally from the deployment.
 {{- end }}
 
 {{/*
+Trust backend guard (issue #1600): the registry refuses to start when
+MCP_MESH_TLS_MODE is anything other than off and MCP_MESH_TRUST_BACKEND is
+empty, because a chain with no backends would reject every presented
+certificate while auto mode still admitted certless clients. Fail at
+template time instead of deploying a crash-looping pod. Invoked
+unconditionally from the configmap, which renders both variables.
+*/}}
+{{- define "mcp-mesh-registry.validateTrustBackend" -}}
+{{- $mode := toString (dig "security" "tls" "mode" "" .Values.registry) -}}
+{{- $backend := trim (toString (dig "security" "trust" "backend" "" .Values.registry)) -}}
+{{- if and $mode (ne $mode "off") (not $backend) -}}
+{{- fail (printf "registry.security.tls.mode=%s requires registry.security.trust.backend: the registry verifies client certificates in any TLS mode other than off and refuses to start without a trust backend. Set registry.security.trust.backend to one or more of localca, filestore, k8s-secrets, spire (comma-separated), or set registry.security.tls.mode=off" $mode) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Whether more than one registry replica is possible: replicaCount > 1, or the
 HPA owns the replica count and can scale beyond one. Gates the default
 topology spread constraints.

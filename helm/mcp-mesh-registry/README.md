@@ -131,6 +131,8 @@ here; an explicit value always wins.
 | --------------------------------------- | -------------------------------- | --------- |
 | `registry.security.tls.enabled`         | Enable TLS                       | `false`   |
 | `registry.security.tls.secretName`      | Existing TLS secret              | `""`      |
+| `registry.security.tls.mode`            | `off`, `auto` or `strict`; any mode other than `off` requires `registry.security.trust.backend` | `"off"` |
+| `registry.security.trust.backend`       | Trust backend(s), comma-separated: `localca`, `filestore`, `k8s-secrets`, `spire` | `""` |
 | `registry.security.auth.enabled`        | Enable authentication            | `false`   |
 | `registry.security.auth.type`           | Auth type (token, basic, oauth2) | `"token"` |
 
@@ -314,8 +316,15 @@ registry:
   security:
     tls:
       enabled: true
+      mode: "strict"
       secretName: my-tls-secret
+    trust:
+      backend: "k8s-secrets"
 ```
+
+The registry verifies client certificates in any TLS mode other than `off`
+and refuses to start without a trust backend, so the chart fails the render
+when `tls.mode` is set and `trust.backend` is empty.
 
 ### Production Configuration
 

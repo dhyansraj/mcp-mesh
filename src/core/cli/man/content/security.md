@@ -6,7 +6,7 @@
 
 MCP Mesh provides two layers of security:
 
-1. **Registration Trust** — Registry validates agent identity before accepting registration
+1. **Registration Trust** — Registry verifies an agent's trust entity before accepting registration
 2. **Agent-to-Agent mTLS** — Every inter-agent call is mutually authenticated
 
 Security is opt-in: local development works with no TLS by default. You can incrementally adopt stricter modes as you move toward production.
@@ -112,6 +112,8 @@ Self-dependency calls (within the same agent process) skip TLS since there is no
 
 Entities represent organizational CAs whose agents are trusted by the mesh. In multi-org deployments, each organization can have its own CA.
 
+The name given to `meshctl entity register` names the CA file. The entity id recorded on agents is that CA's O (else OU), and falls back to the registered name only when the CA has neither. `meshctl entity rotate <entity>` matches the entity id recorded on agents.
+
 ### Register an Entity
 
 ```bash
@@ -157,6 +159,28 @@ Backends can be chained: `MCP_MESH_TRUST_BACKEND=spire,k8s-secrets` (first match
 
 If a configured backend fails to initialize at startup, the registry refuses to start rather than silently dropping that backend (issue #989).
 
+With `MCP_MESH_TLS_MODE` set to anything other than `off`, the registry needs at least one trust backend. It refuses to start if `MCP_MESH_TRUST_BACKEND` is empty or if every listed backend is skipped for a missing prerequisite (`localca` and `filestore` need `MCP_MESH_TRUST_DIR`). `meshctl start --tls-auto` configures `localca,filestore` for you.
+
+## Trust Scope
+
+Registration trust is entity-scoped, not agent-scoped. A verified certificate tells the registry which trust entity the caller belongs to; the certificate's CN, SANs and SPIFFE ID are never compared with the `agent_id` being registered.
+
+| Backend         | The entity is                                                              |
+| --------------- | -------------------------------------------------------------------------- |
+| **filestore**   | The O (else OU, else file name) of the CA the certificate chains to        |
+| **k8s-secrets** | The entity annotation (else Secret name) of the CA Secret it chains to     |
+| **spire**       | The SPIFFE trust domain, not the SVID's SPIFFE ID                          |
+| **localca**     | The O of the agent certificate itself (see below)                          |
+
+The registry records the entity on an agent the first time it registers with a verified certificate. After that, only a caller from the same entity can re-register the agent, send its full heartbeats (`POST /heartbeat`), or deregister it (`DELETE /agents/{agent_id}`). A caller from another entity, or a certless caller in `auto` mode, gets 403 `entity_id mismatch`. The fast liveness check (`HEAD /heartbeat/{agent_id}`) is not ownership-checked. An agent that registered without a certificate has no recorded entity, and any caller can re-register or deregister it.
+
+- Agents sharing a trust entity can register under, or take over, each other's `agent_id`. Taking over an id replaces the agent's endpoint and capabilities in the registry.
+- With `filestore`, `k8s-secrets` and `spire`, takeover across entities is blocked.
+- To isolate workloads that must not trust each other, give them distinct entity ids, not just separate CA files: two `filestore` CAs with the same O are one entity, as are two CA Secrets with the same entity annotation. For `spire`, use separate trust domains.
+- With SPIRE, every workload in one trust domain is one entity, however finely its SPIFFE IDs are assigned.
+
+`localca` is a development backend. It takes the entity from the O field of the agent's own certificate, which whoever issues that certificate controls, so any holder of an entity-CA key under the local root can issue a certificate naming another entity. A certificate with no O names no entity, and the agent registers unclaimed.
+
 ## Environment Variables
 
 ### Agent TLS
@@ -189,7 +213,7 @@ If a configured backend fails to initialize at startup, the registry refuses to 
 
 | Variable                      | Description                                 | Default          |
 | ----------------------------- | ------------------------------------------- | ---------------- |
-| `MCP_MESH_TRUST_BACKEND`      | Trust backend(s), comma-separated           | (none; `localca` with `--tls-auto`) |
+| `MCP_MESH_TRUST_BACKEND`      | Trust backend(s), comma-separated; required unless TLS mode is `off` | (none; `localca,filestore` with `--tls-auto`) |
 | `MCP_MESH_TRUST_DIR`          | Directory for filestore/localca backends    | `~/.mcp-mesh/tls` (local), `/etc/mcp-mesh/trust` (Helm) |
 | `MCP_MESH_ADMIN_PORT`         | Separate admin API port                     | (disabled)       |
 | `MCP_MESH_ADMIN_TLS`          | Admin port inherits main-port TLS + trust   | `false`          |
@@ -346,7 +370,7 @@ openssl s_client -connect localhost:8000 -CAfile /path/to/ca.pem
 | `connection refused` on port 8000 | Registry not listening on TLS | Add `--tls-auto` or set `MCP_MESH_TLS_MODE` |
 | Agent evicted immediately | `strict` mode + invalid/expired cert | Check cert dates with `openssl x509 -dates` |
 | `SPIRE provider requires build with --features spire` | Binary built without SPIRE feature | Use official release binaries (include SPIRE) |
-| Agent registers then disappears | Cert CN doesn't match trust domain | Check `MCP_MESH_TRUST_DOMAIN` matches cert |
+| 403 `entity_id mismatch` on register, heartbeat or shutdown | The `agent_id` is claimed by another trust entity, or the entity id of a running agent changed (backend order, CA O/OU edit, Secret annotation edit) | Use a distinct agent name, issue the cert from the owning entity, or revert the entity change |
 
 ### Debug TLS Handshake
 

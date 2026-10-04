@@ -920,7 +920,7 @@ func TestUnregisterPreservesUpdatedAtSoSweepCanPurge(t *testing.T) {
 	lastHeartbeat := now.Add(-3 * time.Hour)
 	seedAgent(t, client, "graceful-1", agent.StatusHealthy, lastHeartbeat)
 
-	if err := service.UnregisterAgent(ctx, "graceful-1"); err != nil {
+	if err := service.UnregisterAgent(ctx, "graceful-1", ""); err != nil {
 		t.Fatalf("UnregisterAgent: %v", err)
 	}
 

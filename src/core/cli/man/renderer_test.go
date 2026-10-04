@@ -633,10 +633,23 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // stream, so the bound on that wait needs a documented knob. One new inline
 // span (`mesh.sseStream` in the prose) — the env var itself only appears
 // inside the fenced example. 1870 + 1 = 1871.
+//
+// Issues #1600, #1601 and #1603 added a "Trust Scope" section to
+// `security.md`: registration trust is entity-scoped (the entity per backend,
+// the SPIRE trust-domain caveat, the localca caveat, first-claim-wins covering
+// deregistration but not the HEAD liveness check), a paragraph stating that
+// any TLS mode other than off with no trust backend refuses to start, and a
+// note under Entity Trust that the registered name is not the entity id.
+// Twenty-three new inline spans: eight in the no-backend paragraph, six in
+// the Trust Scope prose, one in the localca paragraph, two in the entity-id
+// note, and six in the Trust Scope bullet list, whose three markup-carrying
+// bullets are list lines. The per-backend table, the troubleshooting row and
+// the env-table cell are table lines and count toward none of these.
+// 1871 + 23 = 1894; 531 + 6 = 537; 452 + 3 = 455.
 const (
-	wantInlineCodeSpans = 1871
-	wantListCodeSpans   = 531
-	wantMarkupListLines = 452
+	wantInlineCodeSpans = 1894
+	wantListCodeSpans   = 537
+	wantMarkupListLines = 455
 )
 
 // assertCorpusSize replaces the t.Logf these tests used to end on.

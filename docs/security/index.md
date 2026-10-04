@@ -11,7 +11,7 @@ MCP Mesh provides three layers of security for production agent deployments:
 flowchart TB
     L3["<b>Layer 3: Authorization</b><br/>WHO can do WHAT<br/>Header propagation + application-layer auth"]
     L2["<b>Layer 2: Agent-to-Agent mTLS</b><br/>Every inter-agent call is mutually authenticated"]
-    L1["<b>Layer 1: Registration Trust</b><br/>Identity verification before joining the mesh"]
+    L1["<b>Layer 1: Registration Trust</b><br/>Trust-entity verification before joining the mesh"]
 
     L3 --- L2 --- L1
 
@@ -46,7 +46,9 @@ Security is **opt-in** — local development works with no TLS by default. You c
     meshctl start --registry-only -d \
       --env MCP_MESH_TLS_MODE=strict \
       --env MCP_MESH_TLS_CERT=/etc/certs/registry.pem \
-      --env MCP_MESH_TLS_KEY=/etc/certs/registry-key.pem
+      --env MCP_MESH_TLS_KEY=/etc/certs/registry-key.pem \
+      --env MCP_MESH_TRUST_BACKEND=filestore \
+      --env MCP_MESH_TRUST_DIR=/etc/certs/trust
 
     meshctl start my_agent.py \
       --env MCP_MESH_TLS_MODE=strict \
@@ -55,6 +57,8 @@ Security is **opt-in** — local development works with no TLS by default. You c
       --env MCP_MESH_VAULT_PKI_PATH=pki_int/issue/mesh-agent \
       --env VAULT_TOKEN=s.xxxxx
     ```
+
+    Put the Vault CA that issues agent certificates in `/etc/certs/trust` on the registry, as a `.pem` file. The `filestore` backend trusts only the `.pem` CAs in that directory (and its `entities/` subdirectory), so without it every agent certificate is rejected.
 
 === "SPIRE (Workload Identity)"
 
@@ -73,7 +77,7 @@ Security is **opt-in** — local development works with no TLS by default. You c
 
   ***
 
-  Registry validates agent identity before accepting registration. Supports file-based certs, Vault PKI, and SPIRE workload identity.
+  Registry verifies an agent's trust entity before accepting registration. Supports file-based certs, Vault PKI, and SPIRE workload identity.
 
   [:octicons-arrow-right-24: Registration Trust](registration-trust.md)
 

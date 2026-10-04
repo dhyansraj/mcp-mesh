@@ -143,6 +143,12 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 	// "no backends configured", which is exactly the bug we're closing.
 	var trustChain *trust.TrustChain
 	if config.TlsMode != "" && config.TlsMode != "off" {
+		// Missing cert/key is the more fundamental misconfiguration, so it
+		// is reported before the trust backend (Run repeats this check).
+		if err := tlsFilesError(config); err != nil {
+			shutdownCancel()
+			return nil, err
+		}
 		var err error
 		trustChain, err = initTrustChain(config, logger)
 		if err != nil {
@@ -236,8 +242,8 @@ func (s *Server) Run(addr string) error {
 	// to fail here rather than after a plaintext admin port is already
 	// accepting connections.
 	tlsRequested := s.config.TlsMode != "" && s.config.TlsMode != "off"
-	if tlsRequested && (s.config.TlsCertFile == "" || s.config.TlsKeyFile == "") {
-		return fmt.Errorf("TLS mode %q requires MCP_MESH_TLS_CERT and MCP_MESH_TLS_KEY to be set; use MCP_MESH_TLS_MODE=off to run plaintext", s.config.TlsMode)
+	if err := tlsFilesError(s.config); err != nil {
+		return err
 	}
 
 	// Start admin server if configured
@@ -557,6 +563,16 @@ func (s *Server) handleProxyGetRequest(c *gin.Context) {
 	s.handlers.ProxyMcpGetRequest(c, target)
 }
 
+// tlsFilesError reports a TLS mode that was requested without the
+// certificate and key the listener needs.
+func tlsFilesError(config *RegistryConfig) error {
+	tlsRequested := config.TlsMode != "" && config.TlsMode != "off"
+	if tlsRequested && (config.TlsCertFile == "" || config.TlsKeyFile == "") {
+		return fmt.Errorf("TLS mode %q requires MCP_MESH_TLS_CERT and MCP_MESH_TLS_KEY to be set; use MCP_MESH_TLS_MODE=off to run plaintext", config.TlsMode)
+	}
+	return nil
+}
+
 // tlsEnabled reports whether the registry was configured to serve TLS.
 func (s *Server) tlsEnabled() bool {
 	return s.config.TlsMode != "" && s.config.TlsMode != "off" &&
@@ -619,15 +635,19 @@ func (s *Server) runWithTLS(addr string) error {
 //     fixing. Better to refuse to start so the operator sees the real cause.
 //   - An unknown backend name is fatal: that's a typo in operator config and
 //     limping along masks the bug.
+//   - Ending up with no backend at all (MCP_MESH_TRUST_BACKEND empty, or every
+//     listed backend skipped for a missing prerequisite) is fatal (#1600).
 func initTrustChain(config *RegistryConfig, l *logger.Logger) (*trust.TrustChain, error) {
 	names := trust.ParseBackendConfig(config.TrustBackend)
 	chain := trust.NewTrustChain()
+	var skipped []string
 
 	for _, name := range names {
 		switch name {
 		case "filestore":
 			if config.TrustDir == "" {
 				l.Warning("filestore backend requires MCP_MESH_TRUST_DIR")
+				skipped = append(skipped, name)
 				continue
 			}
 			fs, err := trust.NewFileStore(config.TrustDir, true)
@@ -640,6 +660,7 @@ func initTrustChain(config *RegistryConfig, l *logger.Logger) (*trust.TrustChain
 		case "localca":
 			if config.TrustDir == "" {
 				l.Warning("localca backend requires MCP_MESH_TRUST_DIR")
+				skipped = append(skipped, name)
 				continue
 			}
 			lca, err := trust.NewLocalCA(config.TrustDir)
@@ -676,6 +697,23 @@ func initTrustChain(config *RegistryConfig, l *logger.Logger) (*trust.TrustChain
 		default:
 			return nil, fmt.Errorf("unknown trust backend %q (configured via MCP_MESH_TRUST_BACKEND)", name)
 		}
+	}
+
+	// A chain with no backends rejects every presented certificate while
+	// "auto" still admits certless clients: valid certs locked out, absent
+	// certs let in (issue #1600). The TLS mode asked for enforcement that
+	// cannot be delivered, so refuse to start, as for a failed backend.
+	if chain.Len() == 0 {
+		if len(skipped) > 0 {
+			return nil, fmt.Errorf("MCP_MESH_TLS_MODE=%s verifies client certificates but no trust backend is available: "+
+				"%s configured via MCP_MESH_TRUST_BACKEND but skipped because MCP_MESH_TRUST_DIR is unset; "+
+				"set MCP_MESH_TRUST_DIR, or use MCP_MESH_TLS_MODE=off",
+				config.TlsMode, strings.Join(skipped, ", "))
+		}
+		return nil, fmt.Errorf("MCP_MESH_TLS_MODE=%s verifies client certificates but MCP_MESH_TRUST_BACKEND is empty; "+
+			"set it to one or more of localca, filestore, k8s-secrets, spire "+
+			"(localca and filestore also need MCP_MESH_TRUST_DIR), or use MCP_MESH_TLS_MODE=off",
+			config.TlsMode)
 	}
 
 	return chain, nil

@@ -37,6 +37,8 @@ test:
     handler: shell
     command: |
       MCP_MESH_TLS_MODE=auto \
+      MCP_MESH_TRUST_BACKEND=localca \
+      MCP_MESH_TRUST_DIR=$HOME/.mcp-mesh/tls \
       MCP_MESH_TLS_CERT=$HOME/.mcp-mesh/tls/local-dev/registry-cert.pem \
       MCP_MESH_TLS_KEY=$HOME/.mcp-mesh/tls/local-dev/registry-key.pem \
       MCP_MESH_ADMIN_PORT=8001 \

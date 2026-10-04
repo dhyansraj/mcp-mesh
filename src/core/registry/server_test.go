@@ -55,25 +55,25 @@ func TestInitTrustChain_UnknownBackendIsFatal(t *testing.T) {
 	}
 }
 
-// TestInitTrustChain_MissingPrerequisiteIsNonFatal pins the deliberate
-// asymmetry from issue #989: "user listed a backend but didn't supply its
-// prerequisite config" (filestore listed without MCP_MESH_TRUST_DIR) is treated
-// as "operator didn't actually want this backend" — warn and skip, not fatal.
-// Only an *attempted* init that *fails* is fatal.
-func TestInitTrustChain_MissingPrerequisiteIsNonFatal(t *testing.T) {
+// TestInitTrustChain_SkippingEveryBackendIsFatal pins where the issue #989
+// warn-and-skip for a missing prerequisite (filestore listed without
+// MCP_MESH_TRUST_DIR) stops: skipping one backend is non-fatal, but when it
+// leaves the chain empty the registry would reject every presented cert
+// while admitting certless clients in auto mode (issue #1600), so it is fatal.
+func TestInitTrustChain_SkippingEveryBackendIsFatal(t *testing.T) {
 	cfg := &RegistryConfig{
 		TlsMode:      "verify",
 		TrustBackend: "filestore",
-		TrustDir:     "", // prerequisite missing → skip, don't fail
+		TrustDir:     "", // prerequisite missing → skipped → nothing left
 	}
 	l := createTestLogger(nil)
 
 	chain, err := initTrustChain(cfg, l)
-	if err != nil {
-		t.Fatalf("missing prerequisite should warn-and-skip, got error: %v", err)
+	if err == nil {
+		t.Fatalf("expected an error when every backend is skipped, got a chain with %d backend(s)", chain.Len())
 	}
-	if chain == nil {
-		t.Fatal("expected non-nil (empty) chain when backend skipped")
+	if !strings.Contains(err.Error(), "skipped because MCP_MESH_TRUST_DIR is unset") {
+		t.Errorf("expected the no-backend error, got: %v", err)
 	}
 }
 
