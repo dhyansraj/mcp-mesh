@@ -101,6 +101,7 @@ public class MeshEnvironmentPostProcessor implements EnvironmentPostProcessor {
         String tlsMode = environment.getProperty("MCP_MESH_TLS_MODE", "off");
         if (!"off".equalsIgnoreCase(tlsMode) && !tlsMode.isEmpty()) {
             String provider = getenv.apply("MCP_MESH_TLS_PROVIDER");
+            MeshTlsConfig.requireSupportedProvider(tlsMode, provider);
             String certPath = environment.getProperty("MCP_MESH_TLS_CERT");
             String keyPath = environment.getProperty("MCP_MESH_TLS_KEY");
             String caPath = environment.getProperty("MCP_MESH_TLS_CA");
@@ -118,9 +119,12 @@ public class MeshEnvironmentPostProcessor implements EnvironmentPostProcessor {
                             caPath = config.getCaPath();
                         }
                     } catch (Exception e) {
+                        String advice = "vault".equalsIgnoreCase(provider.trim())
+                            ? ". Ensure Vault is reachable and VAULT_TOKEN is valid."
+                            : ".";
                         throw new IllegalStateException(
                             "MCP_MESH_TLS_PROVIDER=" + provider + " but TLS preparation failed: " + e.getMessage()
-                                + ". Ensure Vault is reachable and VAULT_TOKEN is valid.", e);
+                                + advice, e);
                     }
                 }
             }

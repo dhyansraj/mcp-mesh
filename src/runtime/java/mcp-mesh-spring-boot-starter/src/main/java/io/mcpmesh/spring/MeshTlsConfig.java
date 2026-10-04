@@ -33,6 +33,30 @@ public class MeshTlsConfig {
         this.caPath = caPath;
     }
 
+    /** Issue #1596: the refusal a Java agent configured for SPIRE starts with. */
+    static final String SPIRE_UNSUPPORTED_MESSAGE =
+        "MCP_MESH_TLS_PROVIDER=spire is not supported by the Java runtime; use file or vault.";
+
+    /**
+     * Refuse a credential provider the Java runtime cannot serve, before any
+     * native call is made (issue #1596).
+     *
+     * <p>The native library the Java runtime loads is built without the
+     * {@code spire} feature, and Spring's EnvironmentPostProcessor needs TLS
+     * material before an in-process Workload API fetch could run, so
+     * {@code spire} can never succeed here. Without this check the attempt
+     * reached the core and surfaced as a Vault-specific error.
+     * A disabled TLS mode ignores the provider, as the core does.
+     */
+    static void requireSupportedProvider(String tlsMode, String provider) {
+        if (tlsMode == null || tlsMode.isBlank() || "off".equalsIgnoreCase(tlsMode.trim())) {
+            return;
+        }
+        if (provider != null && "spire".equalsIgnoreCase(provider.trim())) {
+            throw new IllegalStateException(SPIRE_UNSUPPORTED_MESSAGE);
+        }
+    }
+
     /**
      * Prepare TLS credentials (fetch from Vault, write secure temp files).
      * Must be called before get() when using non-file providers.
@@ -40,6 +64,7 @@ public class MeshTlsConfig {
      */
     public static synchronized void prepareTls(String agentName) {
         if (cached != null) return; // Already resolved
+        requireSupportedProvider(System.getenv("MCP_MESH_TLS_MODE"), System.getenv("MCP_MESH_TLS_PROVIDER"));
 
         try {
             MeshCore core = NativeLoader.load();

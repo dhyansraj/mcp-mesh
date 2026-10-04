@@ -145,4 +145,53 @@ class MeshEnvironmentPostProcessorTest {
 
         assertNull(env.getProperty("server.ssl.certificate"));
     }
+
+    // Issue #1596: the Java runtime cannot serve the SPIRE provider. It used to
+    // reach the native core and fail with Vault-specific advice; it now refuses
+    // up front with a message that names the actual limitation.
+    @Test
+    void spireProviderIsRefusedBeforeTheCoreWithAnAccurateMessage() {
+        MockEnvironment env = new MockEnvironment();
+        env.setProperty("MCP_MESH_TLS_MODE", "strict");
+        Function<String, String> getenv = env(Map.of(
+            "MCP_MESH_TLS_PROVIDER", "spire",
+            "MCP_MESH_AGENT_NAME", "java-agent"));
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+            () -> process(env, AnnotatedMain.class, getenv));
+        assertEquals(
+            "MCP_MESH_TLS_PROVIDER=spire is not supported by the Java runtime; use file or vault.",
+            e.getMessage());
+        assertNull(e.getCause(), "the refusal must not come from a native TLS attempt");
+    }
+
+    @Test
+    void spireProviderIsRefusedEvenWithCertFilesPresent() {
+        MockEnvironment env = tlsEnvironment();
+        Function<String, String> getenv = env(Map.of("MCP_MESH_TLS_PROVIDER", " SPIRE "));
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+            () -> process(env, AnnotatedMain.class, getenv));
+        assertEquals(MeshTlsConfig.SPIRE_UNSUPPORTED_MESSAGE, e.getMessage());
+    }
+
+    @Test
+    void spireProviderIsIgnoredWhileTlsIsOff() {
+        MockEnvironment env = new MockEnvironment();
+        env.setProperty("MCP_MESH_TLS_MODE", "off");
+
+        assertDoesNotThrow(() -> process(env, AnnotatedMain.class,
+            env(Map.of("MCP_MESH_TLS_PROVIDER", "spire"))));
+        assertNull(env.getProperty("server.ssl.certificate"));
+    }
+
+    @Test
+    void requireSupportedProviderAcceptsFileAndVault() {
+        assertDoesNotThrow(() -> MeshTlsConfig.requireSupportedProvider("strict", "file"));
+        assertDoesNotThrow(() -> MeshTlsConfig.requireSupportedProvider("auto", "vault"));
+        assertDoesNotThrow(() -> MeshTlsConfig.requireSupportedProvider("auto", null));
+        assertDoesNotThrow(() -> MeshTlsConfig.requireSupportedProvider(null, "spire"));
+        assertThrows(IllegalStateException.class,
+            () -> MeshTlsConfig.requireSupportedProvider("auto", "spire"));
+    }
 }
