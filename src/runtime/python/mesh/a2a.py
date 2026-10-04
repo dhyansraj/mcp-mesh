@@ -1408,9 +1408,8 @@ def mount(
         )
 
     # Late-bind the decorator import to avoid circular import at module load.
-    from .decorators import a2a as a2a_decorator
-
     from .decorators import _pop_dependency_kwargs, _warn_dependency_kwargs_ignored
+    from .decorators import a2a as a2a_decorator
 
     ignored_dependency_kwargs = _pop_dependency_kwargs(kwargs)
 
