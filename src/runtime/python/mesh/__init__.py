@@ -98,7 +98,15 @@ def __getattr__(name):
     elif name == "route":
         return decorators.route
     elif name == "a2a":
-        return decorators.a2a
+        # Issue #1617: resolve to the callable ``mesh.a2a`` submodule (not the
+        # bare decorator function) so ``mesh.a2a`` is the same object before
+        # and after anything imports the submodule. Calling it applies the
+        # decorator; ``mesh.a2a.mount`` is the module's own ``mount``.
+        # ``import_module`` rather than ``from . import a2a``: the latter
+        # probes this ``__getattr__`` and would recurse.
+        import importlib
+
+        return importlib.import_module(f"{__name__}.a2a")
     elif name == "a2a_consumer":
         return decorators.a2a_consumer
     elif name == "A2AClient":

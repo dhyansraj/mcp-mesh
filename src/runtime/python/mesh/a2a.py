@@ -58,7 +58,9 @@ as a query parameter (yielding 422 on every POST).
 import asyncio
 import json as _json
 import logging
+import sys
 import time
+import types
 import uuid
 from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
@@ -1569,3 +1571,24 @@ def mount(
         return wrapped
 
     return decorator
+
+
+class _CallableA2AModule(types.ModuleType):
+    """Module type that makes ``mesh.a2a`` callable as the decorator.
+
+    ``mesh.a2a`` is both the ``@mesh.a2a(...)`` decorator and this module
+    (home of ``mesh.a2a.mount``). Importing a submodule binds the module
+    object as the package attribute, so a plain module here would make
+    ``mesh.a2a(...)`` raise ``TypeError: 'module' object is not callable``
+    as soon as anything imported ``mesh.a2a`` -- including ``mount`` itself
+    (issue #1617). Calling the module delegates to the decorator, so every
+    spelling works whatever the import order.
+    """
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        from .decorators import a2a as a2a_decorator
+
+        return a2a_decorator(*args, **kwargs)
+
+
+sys.modules[__name__].__class__ = _CallableA2AModule

@@ -2699,14 +2699,13 @@ def _resolve_pending_consumer_self_tags(agent_name: str) -> None:
 def _a2a_mount(*args: Any, **kwargs: Any):
     """Attribute alias for ``mesh.a2a.mount`` (see ``mesh.a2a.mount``).
 
+    ``mesh.a2a`` itself resolves to the callable ``mesh.a2a`` module (issue
+    #1617); this alias keeps ``mesh.decorators.a2a.mount`` working for code
+    that binds the decorator function directly.
+
     The implementation lives in ``mesh.a2a`` to keep the FastAPI import
     out of ``mesh.decorators`` (which is loaded eagerly by ``import mesh``
     and shouldn't pull FastAPI for users that only need ``@mesh.tool``).
-
-    Imports via ``importlib`` rather than ``from . import a2a`` because
-    the ``mesh`` package's ``__getattr__`` shadows ``a2a`` with the
-    decorator function — a plain ``from`` import would resolve
-    ``a2a`` to ``_a2a_mount`` itself and recurse.
     """
     import importlib
 

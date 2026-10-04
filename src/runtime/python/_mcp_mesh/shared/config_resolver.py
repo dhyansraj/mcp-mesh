@@ -97,7 +97,7 @@ def get_config_value(
         raw_value = _resolve_via_rust(rust_key, override, default, rule)
     else:
         # Non-mesh config or Rust core unavailable - use Python fallback
-        raw_value = _resolve_via_python(env_var, override, default)
+        raw_value = _resolve_via_python(env_var, override, default, rule)
 
     # Validate and convert the value
     try:
@@ -172,11 +172,36 @@ def _resolve_via_rust(
         return result if result else default
 
 
-def _resolve_via_python(env_var: str, override: Any, default: Any) -> Any:
-    """Resolve config value via Python os.environ (fallback for non-mesh config)."""
+def _resolve_via_python(
+    env_var: str,
+    override: Any,
+    default: Any,
+    rule: ValidationRule = ValidationRule.STRING_RULE,
+) -> Any:
+    """Resolve config value via Python os.environ (fallback for non-mesh config).
+
+    Issue #1619: for every rule except ``STRING_RULE``, an env var that is set
+    but empty or whitespace-only (``FOO=`` from an empty Helm value,
+    ``docker run -e FOO``, ``export FOO="$UNSET"``) is treated as unset, so
+    resolution falls through to the override and then the default -- matching
+    the Rust core's resolver for mesh keys. An empty string can never pass
+    those rules, so it would otherwise shadow the override and log a spurious
+    validation error. ``STRING_RULE`` keeps the raw value: an empty string is
+    a valid string there.
+
+    ``MCP_MESH_ENABLED`` deliberately does NOT go through this resolver: it is
+    fail-closed (empty disables mesh, see ``_mcp_mesh/__init__.py``) so the
+    master off-switch can never turn on through an empty render.
+    """
     import os
 
     env_value = os.environ.get(env_var)
+    if (
+        env_value is not None
+        and rule != ValidationRule.STRING_RULE
+        and not env_value.strip()
+    ):
+        env_value = None
     if env_value is not None:
         return env_value
     elif override is not None:
