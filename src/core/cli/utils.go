@@ -18,6 +18,7 @@ import (
 
 	"mcp-mesh/src/core/cli/lifecycle"
 	"mcp-mesh/src/core/tlsutil"
+	"mcp-mesh/src/core/netutil"
 )
 
 // RegistryAgent represents an agent in the registry
@@ -111,7 +112,7 @@ func newTLSClientWithOptionalCert() *http.Client {
 
 // IsPortAvailable checks if a port is available for use
 func IsPortAvailable(host string, port int) bool {
-	address := fmt.Sprintf("%s:%d", host, port)
+	address := netutil.JoinHostPort(host, port)
 	conn, err := net.DialTimeout("tcp", address, 1*time.Second)
 	if err != nil {
 		return true // Port is available

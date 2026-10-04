@@ -13,56 +13,10 @@ import (
 	"mcp-mesh/src/core/registry/generated"
 )
 
-// Connection limits applied to every HTTP listener the registry starts —
-// the TLS listener, the plaintext listener and the admin listener (issue
-// #1583). Before this, all three were built by ``gin.Engine.Run`` /
-// ``http.Server{}`` with zero-valued timeouts, so a client that opened a
-// socket and dribbled headers held a goroutine and a file descriptor for
-// as long as it liked.
-//
-// The two deadlines that are NOT set here are deliberate. ``ReadTimeout``
-// and ``WriteTimeout`` are absolute deadlines measured from the moment
-// the connection is accepted / the header is read, and the registry
-// serves two request shapes that legitimately outlive any value we could
-// pick:
-//
-//   - ``GET /jobs/{id}/events?wait=`` long-polls for up to 60s
-//     (``listJobEventsMaxWait``), and consumers re-poll continuously.
-//   - ``POST|GET /proxy/*`` relays SSE responses from agents
-//     (``isEventStream`` / the flushing copy loop in ent_handlers.go),
-//     which stay open for the life of the stream — unbounded by design.
-//
-// A ``WriteTimeout`` would sever both mid-stream, and a ``ReadTimeout``
-// would cap slow-but-legitimate uploads over a lossy link. The phases
-// with no legitimate long case — receiving the request header, and
-// sitting idle between keep-alive requests — are bounded instead, which
-// is what actually stops slowloris-style connection parking.
-const (
-	// defaultReadHeaderTimeout bounds the header phase only. Every mesh
-	// client sends its headers in one flight, so even a badly congested
-	// link is orders of magnitude inside 10s; anything slower is not a
-	// client we want holding a goroutine.
-	defaultReadHeaderTimeout = 10 * time.Second
-
-	// defaultIdleTimeout bounds a keep-alive connection between
-	// requests. It has to sit above the heartbeat interval
-	// (``HEALTH_CHECK_INTERVAL``, 10s by default, and agents heartbeat
-	// on a similar cadence) or every agent would pay a fresh TCP+TLS
-	// handshake per heartbeat; 120s leaves ~10x headroom for a slow
-	// heartbeat cadence while still reaping sockets from agents that
-	// vanished without a FIN.
-	defaultIdleTimeout = 120 * time.Second
-
-	// defaultMaxHeaderBytes caps the request header. Go's default is
-	// 1MB, which is far past anything the mesh sends: the largest real
-	// header set is a bearer token plus the propagated trace/mesh
-	// headers (``MCP_MESH_PROPAGATE_HEADERS``), a few KB at the top
-	// end. 64KB is still 8x nginx's total header budget
-	// (large_client_header_buffers 4 8k) so no realistic client trips
-	// it, while bounding per-connection memory 16x tighter than Go's
-	// default.
-	defaultMaxHeaderBytes = 64 << 10
-)
+// Connection limits (ReadHeaderTimeout, IdleTimeout, MaxHeaderBytes) for
+// every listener the registry starts live in src/core/httpserver, shared
+// with meshui so the two cannot drift (issues #1583, #1605). This file
+// keeps the registry-only request-body cap.
 
 // defaultMaxRequestBodyBytes caps a single request body.
 //
@@ -109,30 +63,28 @@ func maxRequestBodyBytesFromEnv() int64 {
 // a chunked or under-declared upload fails at the limit instead of
 // buffering forever.
 //
-// The status the caller sees depends on which layer trips and on the
-// handler:
+// The caller sees 413 in every case, and nothing is forwarded anywhere:
 //
-//   - Declared Content-Length over the limit: 413, always, before the
-//     handler runs and before anything is forwarded anywhere.
+//   - Declared Content-Length over the limit: refused before the handler
+//     runs.
 //   - Undeclared/chunked body over the limit on a JSON handler: the
 //     decoder returns ``*http.MaxBytesError`` and writeBindError turns
 //     it into 413.
-//   - Undeclared/chunked body over the limit on ``/proxy/*``: the body
-//     is streamed straight into the outbound request
-//     (ent_handlers.go, proxyRequest), so the reader trips inside
-//     ``client.Do`` and the caller gets 502, not 413 — and the first
-//     ``limit`` bytes have already reached the downstream agent, which
-//     sees a truncated MCP request. Declared-length proxy requests (what
-//     every SDK and curl sends) are caught by the pre-check above and
-//     never reach the agent at all.
+//   - Undeclared/chunked body on ``/proxy/*``: proxyRequestBody buffers
+//     it up to the limit before forwarding, and refuses an overrun
+//     before the agent sees a byte (issue #1608). A declared-length
+//     proxy body is already bounded by the pre-check, so it keeps
+//     streaming to the agent.
 //
-// A limit <= 0 disables the middleware entirely.
+// A limit <= 0 disables the middleware entirely, and proxy bodies then
+// stream unbounded.
 func MaxRequestBodyMiddleware(limit int64) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if limit <= 0 {
 			c.Next()
 			return
 		}
+		c.Set(requestBodyLimitKey, limit)
 		if c.Request.ContentLength > limit {
 			writeBodyTooLarge(c, limit)
 			c.Abort()
@@ -143,6 +95,22 @@ func MaxRequestBodyMiddleware(limit int64) gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+// requestBodyLimitKey is the gin context key MaxRequestBodyMiddleware
+// stores its limit under, for handlers that must enforce it themselves
+// before acting on the body (proxyRequestBody).
+const requestBodyLimitKey = "mcp_mesh.max_request_body_bytes"
+
+// requestBodyLimit returns the body cap in force for this request, or 0
+// when the cap is disabled or the middleware is not installed.
+func requestBodyLimit(c *gin.Context) int64 {
+	if v, ok := c.Get(requestBodyLimitKey); ok {
+		if n, ok := v.(int64); ok {
+			return n
+		}
+	}
+	return 0
 }
 
 // writeBodyTooLarge writes the 413 used by both the Content-Length
@@ -170,21 +138,4 @@ func writeBindError(c *gin.Context, err error) {
 		Error:     fmt.Sprintf("Invalid JSON payload: %v", err),
 		Timestamp: time.Now().UTC(),
 	})
-}
-
-// newHardenedServer builds an http.Server carrying the connection limits
-// above. Every listener the registry starts goes through here so a new
-// one cannot silently inherit gin's zero-valued timeouts.
-//
-// handler must be ``engine.Handler()`` rather than the engine itself:
-// that is what ``gin.Engine.Run`` passes to ``http.ListenAndServe``, and
-// it is where the h2c wrapper is applied when ``UseH2C`` is set.
-func newHardenedServer(addr string, handler http.Handler) *http.Server {
-	return &http.Server{
-		Addr:              addr,
-		Handler:           handler,
-		ReadHeaderTimeout: defaultReadHeaderTimeout,
-		IdleTimeout:       defaultIdleTimeout,
-		MaxHeaderBytes:    defaultMaxHeaderBytes,
-	}
 }

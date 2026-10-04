@@ -11,6 +11,7 @@ import (
 	"mcp-mesh/src/core/ent"
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
+	"mcp-mesh/src/core/netutil"
 )
 
 // LLMToolInfo represents a filtered tool for LLM consumption
@@ -323,5 +324,5 @@ func buildEndpoint(cap *ent.Capability) string {
 	if agent.EntityID != nil && *agent.EntityID != "" {
 		scheme = "https"
 	}
-	return fmt.Sprintf("%s://%s:%d", scheme, host, agent.HTTPPort)
+	return netutil.BaseURL(scheme, host, agent.HTTPPort)
 }

@@ -9,6 +9,7 @@ import (
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
 	"mcp-mesh/src/core/registry/generated"
+	"mcp-mesh/src/core/netutil"
 )
 
 // ResolveProvider finds a matching LLM provider agent based on provider specification
@@ -207,7 +208,7 @@ func buildProviderEndpoint(cap *ent.Capability) string {
 	if agent.EntityID != nil && *agent.EntityID != "" {
 		scheme = "https"
 	}
-	return fmt.Sprintf("%s://%s:%d", scheme, host, agent.HTTPPort)
+	return netutil.BaseURL(scheme, host, agent.HTTPPort)
 }
 
 // ResolveLLMProvidersFromMetadata resolves LLM providers from heartbeat metadata

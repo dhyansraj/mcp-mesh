@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -610,6 +611,18 @@ func (h *EntBusinessLogicHandlers) FastHeartbeatCheck(c *gin.Context, agentId st
 		return
 	}
 
+	// Issue #1626: the same first-claim-wins ownership rule as POST
+	// heartbeat, registration and DELETE. Without it a caller from another
+	// entity could keep a dead agent looking alive by pinging it. The owner
+	// comes from the row GetAgent already loaded, so this costs no extra
+	// query. An unclaimed agent (no stored entity) passes; checked before
+	// the unhealthy short-circuit so a non-owner learns nothing about the
+	// agent's state.
+	if err := h.entService.checkEntityOwnership("FastHeartbeatCheck", agentId, requestEntityID(c), agentEntity.EntityID); err != nil {
+		c.Status(http.StatusForbidden) // 403 — HEAD carries no body
+		return
+	}
+
 	// Issue #955: an agent marked unhealthy by startup cleanup or the
 	// health monitor must re-register via POST /heartbeat before it can
 	// transition back to healthy. Allowing a bare HEAD ping to revive it
@@ -661,17 +674,20 @@ func (h *EntBusinessLogicHandlers) FastHeartbeatCheck(c *gin.Context, agentId st
 	c.Status(http.StatusOK) // 200
 }
 
-// UnregisterAgent implements DELETE /agents/{agent_id}
-func (h *EntBusinessLogicHandlers) UnregisterAgent(c *gin.Context, agentId string) {
-	// Extract entity_id from TLS verification (set by TLSVerifyMiddleware)
-	entityID := ""
+// requestEntityID returns the caller's entity as verified by
+// TLSVerifyMiddleware, or "" for a certless caller (or TLS off).
+func requestEntityID(c *gin.Context) string {
 	if v, exists := c.Get("entity_id"); exists {
 		if eid, ok := v.(string); ok {
-			entityID = eid
+			return eid
 		}
 	}
+	return ""
+}
 
-	err := h.entService.UnregisterAgent(c.Request.Context(), agentId, entityID)
+// UnregisterAgent implements DELETE /agents/{agent_id}
+func (h *EntBusinessLogicHandlers) UnregisterAgent(c *gin.Context, agentId string) {
+	err := h.entService.UnregisterAgent(c.Request.Context(), agentId, requestEntityID(c))
 	if err != nil {
 		status := http.StatusInternalServerError
 		msg := err.Error()
@@ -826,10 +842,37 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 	// Create the proxied request
 	var reqBody io.Reader
 	if method == "POST" {
-		reqBody = c.Request.Body
+		body, ok := proxyRequestBody(c)
+		if !ok {
+			return // 413 already written; nothing reached the agent
+		}
+		reqBody = body
 	}
 
-	proxyReq, err := http.NewRequestWithContext(c.Request.Context(), method, targetURL, reqBody)
+	reqCtx := c.Request.Context()
+	if method == "GET" {
+		// A proxied GET is a stream subscription (the MCP SSE channel),
+		// not a tool call, so it carries no in-flight work: cut it when
+		// the registry starts shutting down instead of letting it hold the
+		// HTTP drain open until the deadline (issue #1606). The client
+		// reconnects as it would after any dropped stream. POSTs are left
+		// alone — a streamed POST response is a tool call still running
+		// on the agent, and severing the relay would not stop it.
+		var cancel context.CancelFunc
+		reqCtx, cancel = context.WithCancel(reqCtx)
+		defer cancel()
+		if stopping := h.entService.shutdownSignal(); stopping != nil {
+			go func() {
+				select {
+				case <-stopping:
+					cancel()
+				case <-reqCtx.Done():
+				}
+			}()
+		}
+	}
+
+	proxyReq, err := http.NewRequestWithContext(reqCtx, method, targetURL, reqBody)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
 			Error:     fmt.Sprintf("Failed to create proxy request: %v", err),
@@ -1019,6 +1062,42 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 	// held back by the response writer's buffer; gin's ResponseWriter
 	// implements http.Flusher.
 	relayProxyStream(c.Writer, resp.Body, isSSEContentType(resp.Header.Get("Content-Type")), targetURL, proxyTimeout, start)
+}
+
+// proxyRequestBody returns the body to forward for a proxied POST.
+//
+// With the body cap on (MCP_MESH_MAX_REQUEST_BODY_BYTES > 0) and no
+// declared Content-Length — a chunked upload — the body is buffered first,
+// up to the cap, and a body that overruns it is refused with 413 before a
+// single byte is forwarded (issue #1608). Streaming it would trip the cap
+// inside client.Do, after the first `limit` bytes had already reached the
+// agent as a truncated MCP request, and the caller would see 502.
+//
+// A declared Content-Length was already checked against the cap by
+// MaxRequestBodyMiddleware (and Go's server will not read past it), and a
+// disabled cap has nothing to enforce, so both keep streaming. Returns
+// false when the 413 has been written.
+func proxyRequestBody(c *gin.Context) (io.Reader, bool) {
+	limit := requestBodyLimit(c)
+	if limit <= 0 || c.Request.ContentLength >= 0 || c.Request.Body == nil {
+		return c.Request.Body, true
+	}
+	// The middleware has wrapped the body in http.MaxBytesReader at the
+	// same limit; the LimitReader is what bounds memory if it ever isn't.
+	buf, err := io.ReadAll(io.LimitReader(c.Request.Body, limit+1))
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) || int64(len(buf)) > limit {
+		writeBodyTooLarge(c, limit)
+		return nil, false
+	}
+	if err != nil {
+		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
+			Error:     fmt.Sprintf("Failed to read request body: %v", err),
+			Timestamp: time.Now().UTC(),
+		})
+		return nil, false
+	}
+	return bytes.NewReader(buf), true
 }
 
 // isSSEContentType reports whether a Content-Type header value denotes an SSE

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -663,11 +664,15 @@ func extractAgentNameFromEndpoint(endpoint string) string {
 	endpoint = strings.TrimPrefix(endpoint, "http://")
 	endpoint = strings.TrimPrefix(endpoint, "https://")
 
-	// Get host part (before port)
+	// Get host part (before port). SplitHostPort handles a bracketed
+	// IPv6 literal, which splitting on the first ":" would cut to "[".
 	host := strings.Split(endpoint, ":")[0]
+	if h, _, err := net.SplitHostPort(endpoint); err == nil {
+		host = h
+	}
 
 	// Check if it's an IP address (skip extraction)
-	if isIPAddress(host) {
+	if net.ParseIP(host) != nil {
 		return ""
 	}
 
@@ -678,25 +683,6 @@ func extractAgentNameFromEndpoint(endpoint string) string {
 	agentName := strings.TrimSuffix(serviceName, "-mcp-mesh-agent")
 
 	return agentName
-}
-
-// isIPAddress checks if the string looks like an IP address
-func isIPAddress(s string) bool {
-	parts := strings.Split(s, ".")
-	if len(parts) != 4 {
-		return false
-	}
-	for _, part := range parts {
-		if len(part) == 0 || len(part) > 3 {
-			return false
-		}
-		for _, c := range part {
-			if c < '0' || c > '9' {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 // sseProxyTimeoutMarker is the terminal SSE comment frame the registry proxy

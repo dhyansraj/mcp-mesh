@@ -76,6 +76,8 @@ func (s *Server) StreamDashboardEvents(c *gin.Context) {
 			flusher.Flush()
 		case <-c.Request.Context().Done():
 			return
+		case <-s.streamsDone: // server stopping
+			return
 		}
 	}
 }

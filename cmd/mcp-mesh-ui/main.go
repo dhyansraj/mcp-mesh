@@ -187,7 +187,11 @@ func main() {
 	// Create UI server
 	server := ui.NewServer(uiConfig, entService, tracingManager, metricsProc, EmbeddedSPA, logLevel, version)
 
-	// Graceful shutdown
+	// Graceful shutdown. Server.Stop now shuts the listener down, which
+	// makes Run return; main then waits for the rest of Stop (pollers,
+	// tracing) and closes the database itself, instead of the old
+	// os.Exit(0) here racing in-flight requests (issue #1605).
+	shutdownDone := make(chan struct{})
 	go func() {
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -198,12 +202,7 @@ func main() {
 		if err := server.Stop(); err != nil {
 			log.Printf("Error during shutdown: %v", err)
 		}
-		if err := db.Close(); err != nil {
-			log.Printf("Failed to close database: %v", err)
-		}
-
-		log.Println("UI server stopped")
-		os.Exit(0)
+		close(shutdownDone)
 	}()
 
 	// Start serving
@@ -211,7 +210,30 @@ func main() {
 	if err := server.Run(addr); err != nil {
 		log.Fatalf("Failed to start UI server: %v", err)
 	}
+
+	// Run returned without error, which only happens once Stop has shut
+	// the listener. Bound the wait for the rest of Stop: the tracing
+	// shutdown has no deadline of its own, and the signal is already
+	// consumed, so a wedged Redis must not leave a process that needs a
+	// SIGKILL.
+	select {
+	case <-shutdownDone:
+	case <-time.After(shutdownWaitTimeout):
+		// Stop is still running against the database; exit without
+		// closing it underneath the pollers.
+		log.Printf("Shutdown did not finish within %s; exiting anyway", shutdownWaitTimeout)
+		return
+	}
+	if err := db.Close(); err != nil {
+		log.Printf("Failed to close database: %v", err)
+	}
+	log.Println("UI server stopped")
 }
+
+// shutdownWaitTimeout bounds how long main waits for Server.Stop after the
+// listener has closed: Stop's HTTP drain is capped at 5s, so this leaves
+// room for the poller and tracing shutdown while guaranteeing exit.
+const shutdownWaitTimeout = 15 * time.Second
 
 func getEnvDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {

@@ -230,13 +230,14 @@ export DATABASE_URL=mcp_mesh_registry.db
 export REGISTRY_NAME=mcp-mesh-registry
 
 # Maximum accepted request body in bytes, on the main and admin
-# listeners. A declared Content-Length over the limit is refused with 413
-# before the body is read. An undeclared (chunked) body is cut off at the
-# limit: JSON endpoints answer 413, while /proxy/* — which streams the
-# body onward — answers 502 after a truncated request has already reached
-# the target agent. Default: 10485760 (10MB), roughly ten times the
-# largest realistic heartbeat (~1MB for a 100-tool agent carrying input
-# and output schemas plus their canonical forms). 0 disables it.
+# listeners. An over-limit request is refused with 413 and nothing is
+# forwarded: a declared Content-Length is checked before the body is
+# read, and an undeclared (chunked) body is read up to the limit first —
+# on /proxy/* it is buffered and forwarded only once it fits.
+# Declared-length /proxy/* bodies stream to the agent. Default: 10485760
+# (10MB), roughly ten times the largest realistic heartbeat (~1MB for a
+# 100-tool agent carrying input and output schemas plus their canonical
+# forms). 0 disables it, and /proxy/* bodies then always stream.
 export MCP_MESH_MAX_REQUEST_BODY_BYTES=10485760
 
 # Opt the admin listener into the main listener's TLS certificate and

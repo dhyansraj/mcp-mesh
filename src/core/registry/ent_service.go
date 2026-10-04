@@ -25,6 +25,7 @@ import (
 	"mcp-mesh/src/core/registry/generated"
 
 	"entgo.io/ent/dialect/sql"
+	"mcp-mesh/src/core/netutil"
 )
 
 // ErrEntityIDMismatch is returned when a heartbeat, registration update or
@@ -288,7 +289,31 @@ type EntService struct {
 	// unaffected, so running jobs keep renewing their leases and complete
 	// normally. Toggled via POST/DELETE /admin/drain; observed via GET.
 	draining atomic.Bool
+
+	// stopping is closed by BeginShutdown when the registry process starts
+	// a graceful stop (issue #1606). Unrelated to the admin drain flag
+	// above: that one pauses dispatch on a live registry, this one wakes
+	// parked job-event long-polls so the HTTP drain is not held open by
+	// requests that are only waiting. Never closed on a service that is
+	// not owned by a stopping registry (meshui, tests), and a nil channel
+	// blocks forever in a select, so readers need no special case.
+	stopping     chan struct{}
+	stoppingOnce sync.Once
 }
+
+// BeginShutdown wakes every parked job-event long-poll and makes new ones
+// return without parking (issue #1606). Called by Server.Shutdown before the
+// HTTP listeners are drained. Idempotent.
+func (s *EntService) BeginShutdown() {
+	s.stoppingOnce.Do(func() {
+		if s.stopping != nil {
+			close(s.stopping)
+		}
+	})
+}
+
+// shutdownSignal returns the channel BeginShutdown closes.
+func (s *EntService) shutdownSignal() <-chan struct{} { return s.stopping }
 
 // SetDraining toggles the registry-wide drain flag (issue #1267). While
 // draining, ClaimNextJob dispatches no new work. In-memory only — not
@@ -342,6 +367,7 @@ func NewEntService(entDB *database.EntDatabase, config *RegistryConfig, logger *
 		hookManager:     hookManager,
 		matcher:         matcher,
 		jobStaleTimeout: staleTimeout,
+		stopping:        make(chan struct{}),
 	}
 
 	// Register status change hooks with the database client
@@ -1773,7 +1799,7 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 			if a.EntityID != nil && *a.EntityID != "" {
 				scheme = "https"
 			}
-			endpoint = fmt.Sprintf("%s://%s:%d", scheme, a.HTTPHost, a.HTTPPort)
+			endpoint = netutil.BaseURL(scheme, a.HTTPHost, a.HTTPPort)
 		}
 
 		// Use stored status column instead of calculating

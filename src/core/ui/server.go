@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"context"
 	"embed"
+	"errors"
 	"io/fs"
 	"log"
 	"net/http"
@@ -9,12 +11,20 @@ import (
 	"sync"
 	"time"
 
+	"mcp-mesh/src/core/httpserver"
 	"mcp-mesh/src/core/registry"
 	"mcp-mesh/src/core/registry/tracing"
 	"mcp-mesh/src/core/tlsutil"
 
 	"github.com/gin-gonic/gin"
 )
+
+// shutdownHTTPTimeout caps how long Stop waits for in-flight requests
+// before force-closing the listener's remaining connections. Every meshui
+// route is a read (a registry proxy or a local query) that completes in
+// milliseconds, and the SSE streams are woken by streamsDone before the
+// wait starts, so the cap is only reached by a stuck upstream.
+const shutdownHTTPTimeout = 5 * time.Second
 
 // Server is the MCP Mesh UI HTTP server. It serves the embedded Vite
 // dashboard SPA and proxies /api/* requests to the registry.
@@ -34,6 +44,19 @@ type Server struct {
 
 	trafficCacheMu sync.Mutex
 	trafficCache   map[string]trafficCacheEntry
+
+	// httpServer is the listener Run started, so Stop can shut it down
+	// rather than leaving that to process exit (issue #1605).
+	// httpStopping closes the race where Stop runs before Run has
+	// registered the listener. streamsDone is closed at the start of Stop
+	// so the dashboard SSE streams end instead of holding Shutdown open
+	// until its deadline.
+	httpMu         sync.Mutex
+	httpServer     *http.Server
+	httpStopping   bool
+	streamsDone    chan struct{}
+	streamsOnce    sync.Once
+	backgroundOnce sync.Once
 }
 
 // NewServer creates a new UI server that serves the embedded SPA and proxies
@@ -70,6 +93,7 @@ func NewServer(config *UIConfig, entService *registry.EntService, tracingManager
 		tracingManager:   tracingManager,
 		metricsProcessor: metricsProcessor,
 		trafficCache:     make(map[string]trafficCacheEntry),
+		streamsDone:      make(chan struct{}),
 	}
 
 	// If tracing is enabled, create a trace poller for dashboard events
@@ -208,35 +232,81 @@ func (s *Server) Run(addr string) error {
 		handler = http.StripPrefix(s.config.BasePath, s.engine)
 	}
 
-	err := http.ListenAndServe(addr, handler)
+	// The same connection limits as the registry's listeners (issue
+	// #1605); a bare http.ListenAndServe has no header or idle timeout.
+	srv := httpserver.NewHardened(addr, handler)
+	s.httpMu.Lock()
+	if s.httpStopping {
+		s.httpMu.Unlock()
+		s.stopBackground()
+		return nil // Stop already ran; don't start listening.
+	}
+	s.httpServer = srv
+	s.httpMu.Unlock()
 
-	// ListenAndServe returned — clean up background components
-	if s.tracePoller != nil {
-		s.tracePoller.Stop()
+	err := srv.ListenAndServe()
+	if errors.Is(err, http.ErrServerClosed) {
+		// Stop shut the listener down and owns the rest of the cleanup.
+		return nil
 	}
-	if s.tracingManager != nil {
-		s.tracingManager.Stop()
-	}
-	s.eventPoller.Stop()
+
+	// The listener failed on its own — clean up background components.
+	s.stopBackground()
 	return err
 }
 
-// Stop performs a graceful shutdown of the UI server.
+// Stop performs a graceful shutdown of the UI server: it ends the SSE
+// streams, stops the listener and waits (bounded) for in-flight requests,
+// then stops the background pollers. Before issue #1605 it stopped only
+// the pollers and left the listener serving until process exit.
 func (s *Server) Stop() error {
-	if s.tracePoller != nil {
-		s.tracePoller.Stop()
+	if s.streamsDone != nil {
+		s.streamsOnce.Do(func() { close(s.streamsDone) })
 	}
-	if s.tracingManager != nil {
-		if err := s.tracingManager.Stop(); err != nil {
-			log.Printf("[ui] Warning: failed to stop tracing manager: %v", err)
+
+	s.httpMu.Lock()
+	s.httpStopping = true
+	srv := s.httpServer
+	s.httpMu.Unlock()
+
+	var shutdownErr error
+	if srv != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownHTTPTimeout)
+		err := srv.Shutdown(ctx)
+		cancel()
+		if errors.Is(err, context.DeadlineExceeded) {
+			log.Printf("[ui] requests still in flight after %s; closing their connections", shutdownHTTPTimeout)
+			_ = srv.Close()
+		} else if err != nil {
+			shutdownErr = err
 		}
 	}
-	if s.eventPoller != nil {
-		s.eventPoller.Stop()
-	}
+
+	s.stopBackground()
+
 	// Close the HTTP client transport to release idle connections
-	if transport, ok := s.httpClient.Transport.(*http.Transport); ok {
-		transport.CloseIdleConnections()
+	if s.httpClient != nil {
+		if transport, ok := s.httpClient.Transport.(*http.Transport); ok {
+			transport.CloseIdleConnections()
+		}
 	}
-	return nil
+	return shutdownErr
+}
+
+// stopBackground stops the pollers and the tracing manager exactly once,
+// whichever of Run (listener failure) or Stop gets there first.
+func (s *Server) stopBackground() {
+	s.backgroundOnce.Do(func() {
+		if s.tracePoller != nil {
+			s.tracePoller.Stop()
+		}
+		if s.tracingManager != nil {
+			if err := s.tracingManager.Stop(); err != nil {
+				log.Printf("[ui] Warning: failed to stop tracing manager: %v", err)
+			}
+		}
+		if s.eventPoller != nil {
+			s.eventPoller.Stop()
+		}
+	})
 }

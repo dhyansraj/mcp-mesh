@@ -25,6 +25,7 @@ import (
 
 	"mcp-mesh/src/core/ent"
 	"mcp-mesh/src/core/registry/generated"
+	"mcp-mesh/src/core/netutil"
 )
 
 // cancelForwardTimeout is the wall-clock cap on the registry → owner
@@ -796,7 +797,7 @@ func (h *EntBusinessLogicHandlers) forwardCancelToOwner(c *gin.Context, ownerIns
 		if agentRow.EntityID != nil && *agentRow.EntityID != "" {
 			scheme = "https"
 		}
-		url := fmt.Sprintf("%s://%s:%d/jobs/%s/cancel", scheme, agentRow.HTTPHost, agentRow.HTTPPort, jobID)
+		url := netutil.BaseURL(scheme, agentRow.HTTPHost, agentRow.HTTPPort) + "/jobs/" + jobID + "/cancel"
 
 		body := strings.NewReader("")
 		if reason != "" {

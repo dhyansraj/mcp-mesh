@@ -224,3 +224,197 @@ func TestUnregisterAgent_UnknownAgentStaysIdempotent(t *testing.T) {
 		t.Fatalf("DELETE unknown agent = %d, want 204; body=%s", w.Code, w.Body.String())
 	}
 }
+
+// TestNormalizeTLSMode pins issue #1626: MCP_MESH_TLS_MODE is canonicalized
+// (case, surrounding whitespace) and an unrecognized value is an error that
+// names the variable and the accepted values, instead of running as "auto".
+func TestNormalizeTLSMode(t *testing.T) {
+	valid := map[string]string{
+		"":          TLSModeOff,
+		"   ":       TLSModeOff,
+		"off":       TLSModeOff,
+		"OFF":       TLSModeOff,
+		"auto":      TLSModeAuto,
+		"Auto":      TLSModeAuto,
+		"strict":    TLSModeStrict,
+		"STRICT":    TLSModeStrict,
+		" Strict\n": TLSModeStrict,
+	}
+	for raw, want := range valid {
+		got, err := NormalizeTLSMode(raw)
+		if err != nil || got != want {
+			t.Errorf("NormalizeTLSMode(%q) = %q, %v; want %q, nil", raw, got, err, want)
+		}
+	}
+
+	for _, raw := range []string{"stirct", "verify", "on", "true", "required", "strict-ish", "auto strict"} {
+		got, err := NormalizeTLSMode(raw)
+		if err == nil {
+			t.Errorf("NormalizeTLSMode(%q) = %q, nil; want an error", raw, got)
+			continue
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "MCP_MESH_TLS_MODE") || !strings.Contains(msg, "off, auto, strict") {
+			t.Errorf("NormalizeTLSMode(%q) error should name the variable and the accepted values, got: %v", raw, err)
+		}
+	}
+}
+
+// TestNewServer_RejectsUnknownTLSMode pins that NewServer refuses to start
+// on an unrecognized mode before any listener or trust backend is set up.
+func TestNewServer_RejectsUnknownTLSMode(t *testing.T) {
+	cfg := &RegistryConfig{
+		TlsMode:      "stirct",
+		TrustBackend: "filestore",
+		TrustDir:     t.TempDir(),
+		TlsCertFile:  "registry-cert.pem",
+		TlsKeyFile:   "registry-key.pem",
+	}
+	s, err := NewServer(newTrustTestDB(t), cfg, createTestLogger(nil))
+	if err == nil {
+		s.shutdownCancel()
+		t.Fatal("NewServer(TlsMode=stirct) started; want a startup error")
+	}
+	if !strings.Contains(err.Error(), "MCP_MESH_TLS_MODE") {
+		t.Errorf("startup error should name MCP_MESH_TLS_MODE, got: %v", err)
+	}
+}
+
+// TestNewServer_UppercaseStrictEnforcesStrict is the regression the issue
+// describes: "STRICT" used to run as "auto" and admit a certless client.
+// Driven through the engine NewServer builds, so it covers the normalized
+// value reaching TLSVerifyMiddleware.
+func TestNewServer_UppercaseStrictEnforcesStrict(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &RegistryConfig{
+		TlsMode:      "  STRICT ",
+		TrustBackend: "filestore",
+		TrustDir:     t.TempDir(),
+		TlsCertFile:  "registry-cert.pem",
+		TlsKeyFile:   "registry-key.pem",
+	}
+	s, err := NewServer(newTrustTestDB(t), cfg, createTestLogger(nil))
+	if err != nil {
+		t.Fatalf("NewServer(TlsMode=%q): %v", "  STRICT ", err)
+	}
+	defer s.shutdownCancel()
+
+	if s.config.TlsMode != TLSModeStrict {
+		t.Errorf("config.TlsMode = %q after NewServer, want %q", s.config.TlsMode, TLSModeStrict)
+	}
+	if !s.tlsEnabled() {
+		t.Error("tlsEnabled() = false for a normalized strict mode with cert and key set")
+	}
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/health", nil)
+	s.engine.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("certless GET /health under TlsMode=STRICT = %d, want 403 (strict, not auto)", w.Code)
+	}
+}
+
+// TestTLSVerifyMiddleware_UnnormalizedModeFailsClosed pins the middleware's
+// own fallback: a mode that skipped NormalizeTLSMode is enforced as strict.
+func TestTLSVerifyMiddleware_UnnormalizedModeFailsClosed(t *testing.T) {
+	for _, mode := range []string{"STRICT", "stirct", ""} {
+		r := setupRouter(trust.NewTrustChain(cnEntityBackend{}), mode)
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/test", nil)
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusForbidden {
+			t.Errorf("mode %q: certless request = %d, want 403", mode, w.Code)
+		}
+	}
+}
+
+// headHeartbeatTestEngine serves HEAD /heartbeat/:agent_id behind the real
+// TLSVerifyMiddleware in the given mode.
+func headHeartbeatTestEngine(service *EntService, mode string) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	h := NewEntBusinessLogicHandlers(service)
+	r := gin.New()
+	r.Use(TLSVerifyMiddleware(trust.NewTrustChain(cnEntityBackend{}), mode))
+	r.HEAD("/heartbeat/:agent_id", func(c *gin.Context) { h.FastHeartbeatCheck(c, c.Param("agent_id")) })
+	return r
+}
+
+func headHeartbeatAs(r *gin.Engine, agentID, entityCN string) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("HEAD", "/heartbeat/"+agentID, nil)
+	if entityCN != "" {
+		req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{
+			{Subject: pkix.Name{CommonName: entityCN}},
+		}}
+	}
+	r.ServeHTTP(w, req)
+	return w
+}
+
+// TestFastHeartbeatCheck_EnforcesEntityOwnership pins issue #1626: HEAD
+// /heartbeat/{id} applies the same first-claim-wins rule as POST heartbeat,
+// registration and DELETE, so another entity cannot keep a dead agent
+// looking alive. A rejected ping must not refresh the agent's timestamp.
+func TestFastHeartbeatCheck_EnforcesEntityOwnership(t *testing.T) {
+	tests := []struct {
+		name       string
+		mode       string
+		owner      string // entity_id stored on the agent row ("" = unclaimed)
+		caller     string // entity of the presented cert ("" = certless)
+		wantStatus int
+	}{
+		{"other entity is refused (strict)", "strict", "entity-a", "entity-b", http.StatusForbidden},
+		{"other entity is refused (auto)", "auto", "entity-a", "entity-b", http.StatusForbidden},
+		{"certless caller is refused on a claimed agent (auto)", "auto", "entity-a", "", http.StatusForbidden},
+		{"owner pings its own agent (strict)", "strict", "entity-a", "entity-a", http.StatusOK},
+		{"owner pings its own agent (auto)", "auto", "entity-a", "entity-a", http.StatusOK},
+		{"certless caller pings an unclaimed agent (auto)", "auto", "", "", http.StatusOK},
+		{"any entity pings an unclaimed agent (auto)", "auto", "", "entity-b", http.StatusOK},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			service := setupTestService(t)
+			seedAgentOwnedBy(t, service, "victim", tc.owner)
+			// Backdate the last heartbeat so a refresh is unambiguous
+			// whatever the store's timestamp precision.
+			stale := time.Now().UTC().Add(-time.Hour)
+			if err := service.entDB.Client.Agent.UpdateOneID("victim").SetUpdatedAt(stale).Exec(context.Background()); err != nil {
+				t.Fatalf("backdate agent: %v", err)
+			}
+			before, err := service.entDB.Client.Agent.Get(context.Background(), "victim")
+			if err != nil {
+				t.Fatalf("load seeded agent: %v", err)
+			}
+			r := headHeartbeatTestEngine(service, tc.mode)
+
+			w := headHeartbeatAs(r, "victim", tc.caller)
+			if w.Code != tc.wantStatus {
+				t.Fatalf("HEAD /heartbeat/victim as %q on agent owned by %q = %d, want %d",
+					tc.caller, tc.owner, w.Code, tc.wantStatus)
+			}
+
+			after, err := service.entDB.Client.Agent.Get(context.Background(), "victim")
+			if err != nil {
+				t.Fatalf("reload agent: %v", err)
+			}
+			refreshed := after.UpdatedAt.After(before.UpdatedAt)
+			if tc.wantStatus == http.StatusForbidden && refreshed {
+				t.Errorf("a refused HEAD heartbeat refreshed the agent's timestamp (%v -> %v)", before.UpdatedAt, after.UpdatedAt)
+			}
+			if tc.wantStatus == http.StatusOK && !refreshed {
+				t.Errorf("an accepted HEAD heartbeat did not refresh the agent's timestamp")
+			}
+		})
+	}
+}
+
+// TestFastHeartbeatCheck_UnknownAgentKeepsGone pins that the ownership check
+// does not change the unknown-agent answer: 410 tells the client to POST a
+// full registration, whatever entity it is.
+func TestFastHeartbeatCheck_UnknownAgentKeepsGone(t *testing.T) {
+	service := setupTestService(t)
+	r := headHeartbeatTestEngine(service, "auto")
+	if w := headHeartbeatAs(r, "never-registered", "entity-b"); w.Code != http.StatusGone {
+		t.Fatalf("HEAD unknown agent = %d, want 410", w.Code)
+	}
+}

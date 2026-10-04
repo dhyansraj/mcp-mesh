@@ -10,6 +10,7 @@ import (
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
 	"mcp-mesh/src/core/ent/schemaentry"
+	"mcp-mesh/src/core/netutil"
 )
 
 // ResolveAllDependenciesIndexed resolves all dependencies and returns full IndexedResolution data.
@@ -500,7 +501,7 @@ func (s *EntService) findHealthyProviderWithTrace(dep Dependency, eval *availEva
 		if winner.EntityID != "" {
 			scheme = "https"
 		}
-		endpoint = fmt.Sprintf("%s://%s:%d", scheme, winner.HttpHost, winner.HttpPort)
+		endpoint = netutil.BaseURL(scheme, winner.HttpHost, winner.HttpPort)
 	}
 
 	resolution := &DependencyResolution{

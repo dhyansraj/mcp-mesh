@@ -654,8 +654,17 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // postgres.enabled=false needs an external database. Two new inline spans
 // (`postgres.enabled=false`, `global.postgres.*`); the removed recipe was
 // fenced, so it held none. 1894 + 2 = 1896.
+//
+// Issue #1626 closed the HEAD liveness gap above and made an unrecognized
+// MCP_MESH_TLS_MODE fatal, both on `security.md`. The Trust Scope sentence
+// now lists HEAD /heartbeat/{agent_id} among the owner-only calls and
+// notes HEAD's 403 has no body (+1: the dropped limitation sentence's span
+// moved into the list, and a bare `HEAD` was added). The no-backend
+// paragraph gained a sentence naming the three accepted modes (+3). The
+// `environment.md` body-cap rewording for #1608 sits inside a fenced
+// block and is span-neutral. 1896 + 4 = 1900.
 const (
-	wantInlineCodeSpans = 1896
+	wantInlineCodeSpans = 1900
 	wantListCodeSpans   = 537
 	wantMarkupListLines = 455
 )

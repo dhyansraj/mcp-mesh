@@ -324,6 +324,8 @@ func (s *Server) handleStreamLiveTraces(c *gin.Context) {
 			flusher.Flush()
 		case <-ctx.Done():
 			return
+		case <-s.streamsDone: // server stopping
+			return
 		}
 	}
 }

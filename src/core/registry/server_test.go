@@ -14,7 +14,7 @@ import (
 // heartbeat with "no backends configured".
 func TestInitTrustChain_FailsFastOnBackendInitError(t *testing.T) {
 	cfg := &RegistryConfig{
-		TlsMode:      "verify",
+		TlsMode:      "strict",
 		TrustBackend: "filestore",
 		TrustDir:     filepath.Join(t.TempDir(), "definitely-not-here"),
 	}
@@ -37,7 +37,7 @@ func TestInitTrustChain_FailsFastOnBackendInitError(t *testing.T) {
 // along with no backends would mask the operator's config bug (issue #989).
 func TestInitTrustChain_UnknownBackendIsFatal(t *testing.T) {
 	cfg := &RegistryConfig{
-		TlsMode:      "verify",
+		TlsMode:      "strict",
 		TrustBackend: "filestoer", // typo
 		TrustDir:     t.TempDir(),
 	}
@@ -62,7 +62,7 @@ func TestInitTrustChain_UnknownBackendIsFatal(t *testing.T) {
 // while admitting certless clients in auto mode (issue #1600), so it is fatal.
 func TestInitTrustChain_SkippingEveryBackendIsFatal(t *testing.T) {
 	cfg := &RegistryConfig{
-		TlsMode:      "verify",
+		TlsMode:      "strict",
 		TrustBackend: "filestore",
 		TrustDir:     "", // prerequisite missing → skipped → nothing left
 	}
@@ -82,7 +82,7 @@ func TestInitTrustChain_SkippingEveryBackendIsFatal(t *testing.T) {
 // because initTrustChain always fails.
 func TestInitTrustChain_HappyPath(t *testing.T) {
 	cfg := &RegistryConfig{
-		TlsMode:      "verify",
+		TlsMode:      "strict",
 		TrustBackend: "filestore",
 		TrustDir:     t.TempDir(), // exists, just empty
 	}
