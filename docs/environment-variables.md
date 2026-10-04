@@ -233,7 +233,9 @@ export REGISTRY_NAME=mcp-mesh-registry
 # listeners. An over-limit request is refused with 413 and nothing is
 # forwarded: a declared Content-Length is checked before the body is
 # read, and an undeclared (chunked) body is read up to the limit first —
-# on /proxy/* it is buffered and forwarded only once it fits.
+# on /proxy/* it is buffered and forwarded only once it fits, with at most
+# 16 such bodies buffered at once (further ones wait up to their
+# X-Mesh-Timeout, then get 503).
 # Declared-length /proxy/* bodies stream to the agent. Default: 10485760
 # (10MB), roughly ten times the largest realistic heartbeat (~1MB for a
 # 100-tool agent carrying input and output schemas plus their canonical

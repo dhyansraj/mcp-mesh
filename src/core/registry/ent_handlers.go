@@ -616,10 +616,12 @@ func (h *EntBusinessLogicHandlers) FastHeartbeatCheck(c *gin.Context, agentId st
 	// heartbeat, registration and DELETE. Without it a caller from another
 	// entity could keep a dead agent looking alive by pinging it. The owner
 	// comes from the row GetAgent already loaded, so this costs no extra
-	// query. An unclaimed agent (no stored entity) passes; checked before
+	// query, and the warning is rate-limited because a misconfigured agent
+	// repeats this every few seconds. An unclaimed agent (no stored
+	// entity) passes; checked before
 	// the unhealthy short-circuit so a non-owner learns nothing about the
 	// agent's state.
-	if err := h.entService.checkEntityOwnership("FastHeartbeatCheck", agentId, requestEntityID(c), agentEntity.EntityID); err != nil {
+	if err := h.entService.checkEntityOwnershipHot("FastHeartbeatCheck", agentId, requestEntityID(c), agentEntity.EntityID); err != nil {
 		c.Status(http.StatusForbidden) // 403 — HEAD carries no body
 		return
 	}
@@ -842,11 +844,23 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 
 	// Create the proxied request
 	var reqBody io.Reader
-	if method == "POST" {
-		body, ok := proxyRequestBody(c)
-		if !ok {
-			return // 413 already written; nothing reached the agent
+	// Respect client timeout if provided via X-Mesh-Timeout header (#656)
+	proxyTimeout := proxyDefaultTimeout
+	if timeoutHeader := c.Request.Header.Get("X-Mesh-Timeout"); timeoutHeader != "" {
+		if secs, err := strconv.Atoi(timeoutHeader); err == nil && secs > 0 {
+			if secs > 600 {
+				secs = 600 // Cap at 10 minutes
+			}
+			proxyTimeout = time.Duration(secs) * time.Second
 		}
+	}
+
+	if method == "POST" {
+		body, release, ok := proxyRequestBody(c, proxyTimeout, h.entService.shutdownSignal())
+		if !ok {
+			return // response already written (or client gone); nothing reached the agent
+		}
+		defer release()
 		reqBody = body
 	}
 
@@ -995,16 +1009,6 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		}
 	}
 
-	// Respect client timeout if provided via X-Mesh-Timeout header (#656)
-	proxyTimeout := proxyDefaultTimeout
-	if timeoutHeader := c.Request.Header.Get("X-Mesh-Timeout"); timeoutHeader != "" {
-		if secs, err := strconv.Atoi(timeoutHeader); err == nil && secs > 0 {
-			if secs > 600 {
-				secs = 600 // Cap at 10 minutes
-			}
-			proxyTimeout = time.Duration(secs) * time.Second
-		}
-	}
 	// http.Client is cheap to build per request; the expensive part (the
 	// Transport with its connection pool + TLS material) is shared. Plain
 	// HTTP rides http.DefaultTransport's pool; HTTPS uses the cached mTLS
@@ -1082,30 +1086,89 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 //
 // A declared Content-Length was already checked against the cap by
 // MaxRequestBodyMiddleware (and Go's server will not read past it), and a
-// disabled cap has nothing to enforce, so both keep streaming. Returns
-// false when the 413 has been written.
-func proxyRequestBody(c *gin.Context) (io.Reader, bool) {
+// disabled cap has nothing to enforce, so both keep streaming.
+//
+// Each buffered body is bounded by the cap; proxyBufferSlots bounds how
+// many are held at once, so the worst case is proxyBufferConcurrency × cap
+// (160MB at the 10MB default) rather than unbounded. A slot is taken
+// before reading and held until the proxied exchange ends — the returned
+// release, which the caller defers — because the buffer stays referenced
+// by the outbound request for that long. A request that finds every slot
+// taken waits for one rather than being refused, for at most the caller's
+// own proxy budget (wait: X-Mesh-Timeout, 60s by default) and never past a
+// registry shutdown; then it gets 503. The budget is what bounds the wait
+// in practice: on HTTP/1.1 Go does not cancel the request context for a
+// client that disconnects while its body is still unread, so a caller
+// that gives up while waiting is only noticed when the budget expires —
+// and, like any proxied call whose caller disconnects mid-flight, can
+// still be forwarded if a slot frees first. Declared-length bodies never
+// take a slot.
+//
+// Returns false when the request must not be forwarded: a 413, 400 or 503
+// has been written, or the caller's context ended while waiting.
+func proxyRequestBody(c *gin.Context, wait time.Duration, stopping <-chan struct{}) (io.Reader, func(), bool) {
+	noop := func() {}
 	limit := requestBodyLimit(c)
 	if limit <= 0 || c.Request.ContentLength >= 0 || c.Request.Body == nil {
-		return c.Request.Body, true
+		return c.Request.Body, noop, true
 	}
+
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case proxyBufferSlots <- struct{}{}:
+	case <-c.Request.Context().Done():
+		return nil, noop, false
+	case <-timer.C:
+		writeProxyBusy(c)
+		return nil, noop, false
+	case <-stopping:
+		writeProxyBusy(c)
+		return nil, noop, false
+	}
+	var once sync.Once
+	release := func() { once.Do(func() { <-proxyBufferSlots }) }
+
 	// The middleware has wrapped the body in http.MaxBytesReader at the
 	// same limit; the LimitReader is what bounds memory if it ever isn't.
 	buf, err := io.ReadAll(io.LimitReader(c.Request.Body, limit+1))
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) || int64(len(buf)) > limit {
+		release()
 		writeBodyTooLarge(c, limit)
-		return nil, false
+		return nil, noop, false
 	}
 	if err != nil {
+		release()
 		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
 			Error:     fmt.Sprintf("Failed to read request body: %v", err),
 			Timestamp: time.Now().UTC(),
 		})
-		return nil, false
+		return nil, noop, false
 	}
-	return bytes.NewReader(buf), true
+	return bytes.NewReader(buf), release, true
 }
+
+// writeProxyBusy answers a chunked proxy request that could not get a
+// buffer slot within its budget. Nothing has been read or forwarded, so
+// the caller can retry as-is.
+func writeProxyBusy(c *gin.Context) {
+	c.Header("Retry-After", "1")
+	c.JSON(http.StatusServiceUnavailable, generated.ErrorResponse{
+		Error:     fmt.Sprintf("Too many chunked request bodies in flight on /proxy/* (limit %d); retry, or send a Content-Length so the body can be streamed", cap(proxyBufferSlots)),
+		Timestamp: time.Now().UTC(),
+	})
+}
+
+// proxyBufferConcurrency caps how many chunked /proxy/* bodies are buffered
+// in memory at once (see proxyRequestBody). Chunked proxy uploads are the
+// exception — every SDK and curl declare a Content-Length — so 16 is ample
+// headroom for real traffic while bounding the registry's worst case.
+const proxyBufferConcurrency = 16
+
+// proxyBufferSlots is the semaphore behind proxyBufferConcurrency. A
+// package variable so tests can shrink it.
+var proxyBufferSlots = make(chan struct{}, proxyBufferConcurrency)
 
 // isSSEContentType reports whether a Content-Type header value denotes an SSE
 // response. Parsed with mime.ParseMediaType (case-insensitive, parameters

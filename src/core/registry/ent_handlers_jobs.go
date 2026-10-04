@@ -24,8 +24,8 @@ import (
 	"github.com/google/uuid"
 
 	"mcp-mesh/src/core/ent"
-	"mcp-mesh/src/core/registry/generated"
 	"mcp-mesh/src/core/netutil"
+	"mcp-mesh/src/core/registry/generated"
 )
 
 // cancelForwardTimeout is the wall-clock cap on the registry → owner

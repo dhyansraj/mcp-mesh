@@ -402,6 +402,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	s.httpMu.Unlock()
 
 	var firstErr error
+	// Sequential on purpose: all listeners share ctx's one deadline, so a stuck main listener only shortens the admin listener's drain, never extends the total.
 	for _, srv := range servers {
 		err := srv.Shutdown(ctx)
 		if err == nil {

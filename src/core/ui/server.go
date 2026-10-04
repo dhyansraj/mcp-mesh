@@ -217,16 +217,6 @@ func (s *Server) handleUIHealth(c *gin.Context) {
 
 // Run starts the Gin HTTP server on the given address (e.g. ":3080").
 func (s *Server) Run(addr string) error {
-	s.eventPoller.Start()
-	if s.tracingManager != nil {
-		if err := s.tracingManager.Start(); err != nil {
-			log.Printf("[ui] Warning: failed to start tracing manager: %v", err)
-		}
-	}
-	if s.tracePoller != nil {
-		s.tracePoller.Start()
-	}
-
 	var handler http.Handler = s.engine
 	if s.config.BasePath != "" {
 		handler = http.StripPrefix(s.config.BasePath, s.engine)
@@ -235,12 +225,18 @@ func (s *Server) Run(addr string) error {
 	// The same connection limits as the registry's listeners (issue
 	// #1605); a bare http.ListenAndServe has no header or idle timeout.
 	srv := httpserver.NewHardened(addr, handler)
+
+	// Background start and listener registration happen under httpMu,
+	// the lock Stop takes to set httpStopping, so start and stop are
+	// mutually exclusive: either Stop has already run and nothing is
+	// started, or everything started here is running before Stop can
+	// reach stopBackground.
 	s.httpMu.Lock()
 	if s.httpStopping {
 		s.httpMu.Unlock()
-		s.stopBackground()
-		return nil // Stop already ran; don't start listening.
+		return nil // Stop already ran; start nothing, don't listen.
 	}
+	s.startBackground()
 	s.httpServer = srv
 	s.httpMu.Unlock()
 
@@ -291,6 +287,22 @@ func (s *Server) Stop() error {
 		}
 	}
 	return shutdownErr
+}
+
+// startBackground starts the pollers and the tracing manager. Called by
+// Run with httpMu held; see the comment there.
+func (s *Server) startBackground() {
+	if s.eventPoller != nil {
+		s.eventPoller.Start()
+	}
+	if s.tracingManager != nil {
+		if err := s.tracingManager.Start(); err != nil {
+			log.Printf("[ui] Warning: failed to start tracing manager: %v", err)
+		}
+	}
+	if s.tracePoller != nil {
+		s.tracePoller.Start()
+	}
 }
 
 // stopBackground stops the pollers and the tracing manager exactly once,

@@ -1835,6 +1835,8 @@ func (s *EntService) listJobEventsCore(
 	// error instead would surface as a 503 the SDKs count against their
 	// registry-unreachable budget.
 	stopping := s.shutdownSignal()
+	s.parkedLongPolls.Add(1)
+	defer s.parkedLongPolls.Add(-1)
 	deadline := time.Now().Add(wait)
 	for time.Now().Before(deadline) {
 		remaining := time.Until(deadline)

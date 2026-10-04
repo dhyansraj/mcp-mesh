@@ -72,9 +72,12 @@ func maxRequestBodyBytesFromEnv() int64 {
 //     it into 413.
 //   - Undeclared/chunked body on ``/proxy/*``: proxyRequestBody buffers
 //     it up to the limit before forwarding, and refuses an overrun
-//     before the agent sees a byte (issue #1608). A declared-length
-//     proxy body is already bounded by the pre-check, so it keeps
-//     streaming to the agent.
+//     before the agent sees a byte (issue #1608). At most
+//     proxyBufferConcurrency (16) such bodies are buffered at once;
+//     further ones wait for a slot, up to their X-Mesh-Timeout budget,
+//     then get 503.
+//     A declared-length proxy body is already bounded by the pre-check,
+//     so it keeps streaming to the agent.
 //
 // A limit <= 0 disables the middleware entirely, and proxy bodies then
 // stream unbounded.

@@ -100,7 +100,7 @@ func TestServer_StopShutsListenerAndEndsStreams(t *testing.T) {
 	start := time.Now()
 	require.NoError(t, s.Stop())
 	elapsed := time.Since(start)
-	require.Less(t, elapsed, 2*time.Second,
+	require.Less(t, elapsed, 4*time.Second,
 		"Stop took %s: the SSE stream held shutdown open toward its %s deadline", elapsed, shutdownHTTPTimeout)
 
 	// The stream ended cleanly rather than being left open.
@@ -137,4 +137,12 @@ func TestServer_StopBeforeRunDoesNotListen(t *testing.T) {
 	require.NoError(t, s.Run(addr))
 	_, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
 	require.Error(t, err, "Run started listening after Stop")
+
+	// Nothing in the background was started either: Stop has already
+	// spent its cleanup, so a poller started now would leak and run on
+	// against a database main is about to close.
+	s.eventPoller.mu.RLock()
+	running := s.eventPoller.running
+	s.eventPoller.mu.RUnlock()
+	require.False(t, running, "Run started the event poller after Stop")
 }

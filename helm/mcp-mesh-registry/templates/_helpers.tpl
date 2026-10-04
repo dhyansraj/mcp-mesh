@@ -473,7 +473,7 @@ pins both.
        no httpGet can pass there: such a probe becomes a tcpSocket check of
        the same port. A scheme set explicitly is left alone. */ -}}
 {{- $tls := .root.Values.registry.security.tls | default dict -}}
-{{- $mode := toString ($tls.mode | default "") -}}
+{{- $mode := include "mcp-mesh-registry.tlsMode" .root -}}
 {{- $httpGet := get $probe "httpGet" -}}
 {{- if and $tls.enabled $mode (ne $mode "off") (kindIs "map" $httpGet) (not (hasKey $httpGet "scheme")) -}}
 {{- if eq $mode "strict" -}}
@@ -561,7 +561,7 @@ too. Invoked unconditionally from the configmap.
 {{- if not .Values.registry.security.tls.enabled -}}
 {{- fail "registry.security.adminTLS serves the admin port with the registry's own certificate, so it requires registry.security.tls.enabled=true (with tls.secretName, tls.mode and trust.backend). Without it the admin port stays plain http://" -}}
 {{- end -}}
-{{- $mode := toString (dig "security" "tls" "mode" "" .Values.registry) -}}
+{{- $mode := include "mcp-mesh-registry.tlsMode" . -}}
 {{- if or (not $mode) (eq $mode "off") -}}
 {{- fail (printf "registry.security.adminTLS needs registry.security.tls.mode auto or strict (got %q): the registry serves TLS only when the mode is not off, so the admin port would stay plain http://" $mode) -}}
 {{- end -}}
@@ -659,7 +659,7 @@ template time instead of deploying a crash-looping pod. Invoked
 unconditionally from the configmap, which renders both variables.
 */}}
 {{- define "mcp-mesh-registry.validateTrustBackend" -}}
-{{- $mode := toString (dig "security" "tls" "mode" "" .Values.registry) -}}
+{{- $mode := include "mcp-mesh-registry.tlsMode" . -}}
 {{- $backend := trim (toString (dig "security" "trust" "backend" "" .Values.registry)) -}}
 {{- if and $mode (ne $mode "off") (not $backend) -}}
 {{- fail (printf "registry.security.tls.mode=%s requires registry.security.trust.backend: the registry verifies client certificates in any TLS mode other than off and refuses to start without a trust backend. Set registry.security.trust.backend to one or more of localca, filestore, k8s-secrets, spire (comma-separated), or set registry.security.tls.mode=off" $mode) -}}
@@ -723,4 +723,22 @@ invalid-Deployment failure.
 */}}
 {{- define "mcp-mesh-registry.dataVolumeName" -}}
 {{- if .Values.persistence.enabled -}}data{{- else -}}data-ephemeral{{- end -}}
+{{- end }}
+
+{{/*
+registry.security.tls.mode, normalized the way the registry binary reads
+MCP_MESH_TLS_MODE (issue #1626): surrounding whitespace and case are
+ignored, so every comparison in this chart (probe scheme, trust-backend and
+adminTLS guards, the rendered env var) agrees with what the registry will
+do. Empty stays empty (the variable is then not rendered and the binary
+defaults to off). Anything other than off, auto or strict fails the render:
+the registry refuses to start on it, so the pod would only crash-loop.
+*/}}
+{{- define "mcp-mesh-registry.tlsMode" -}}
+{{- $raw := toString (dig "security" "tls" "mode" "" .Values.registry) -}}
+{{- $mode := lower (trim $raw) -}}
+{{- if and $mode (not (has $mode (list "off" "auto" "strict"))) -}}
+{{- fail (printf "registry.security.tls.mode=%q is not a TLS mode: use off, auto or strict. The registry refuses to start on any other value" $raw) -}}
+{{- end -}}
+{{- $mode -}}
 {{- end }}

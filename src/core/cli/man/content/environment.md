@@ -659,7 +659,9 @@ export MCP_MESH_JOB_STALE_TIMEOUT=2h
 # and nothing is forwarded: a declared Content-Length is checked before
 # the body is read, and a body with no declared length is read up to the
 # limit first (on /proxy/* it is buffered and only forwarded once it is
-# known to fit). Declared-length /proxy/* bodies stream to the agent.
+# known to fit; at most 16 such bodies are buffered at once, and further
+# ones wait up to their X-Mesh-Timeout, then get 503). Declared-length
+# /proxy/* bodies stream to the agent.
 # Default: 10485760 (10MB) — about ten times the
 # largest realistic heartbeat (a 100-tool agent carrying input and
 # output schemas plus their canonical forms measures ~1MB). Set to 0 to

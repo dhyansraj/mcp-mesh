@@ -108,6 +108,14 @@ func main() {
 	// Show startup banner with log level info
 	appLogger.Info("🚀 Starting MCP Mesh Registry Service | %s", appLogger.GetStartupBanner())
 
+	// Reject an unrecognized MCP_MESH_TLS_MODE before the database or anything else starts: a
+	// typo used to run as "auto" and admit certless clients (issue #1626).
+	tlsMode, err := registry.NormalizeTLSMode(os.Getenv("MCP_MESH_TLS_MODE"))
+	if err != nil {
+		appLogger.Error("❌ %v", err)
+		os.Exit(1)
+	}
+
 	// Initialize database with Ent
 	appLogger.Info("🗄️  Initializing database: %s", cfg.GetDatabaseURL())
 	db, err := database.InitializeEnt(cfg.Database, cfg.IsTraceMode())
@@ -120,14 +128,6 @@ func main() {
 			appLogger.Warning("Failed to close database: %v", err)
 		}
 	}()
-
-	// Reject an unrecognized MCP_MESH_TLS_MODE before anything starts: a
-	// typo used to run as "auto" and admit certless clients (issue #1626).
-	tlsMode, err := registry.NormalizeTLSMode(os.Getenv("MCP_MESH_TLS_MODE"))
-	if err != nil {
-		appLogger.Error("❌ %v", err)
-		os.Exit(1)
-	}
 
 	// Create registry service
 	registryConfig := &registry.RegistryConfig{

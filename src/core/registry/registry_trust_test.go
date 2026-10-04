@@ -418,3 +418,23 @@ func TestFastHeartbeatCheck_UnknownAgentKeepsGone(t *testing.T) {
 		t.Fatalf("HEAD unknown agent = %d, want 410", w.Code)
 	}
 }
+
+// TestWarnLimiter pins the HEAD-heartbeat ownership warning's rate limit:
+// one warning per (agent, caller entity) pair per interval, independent
+// across pairs, and again once the interval has passed.
+func TestWarnLimiter(t *testing.T) {
+	var l warnLimiter
+	t0 := time.Now()
+	if !l.allow("victim\x00entity-b", t0) {
+		t.Fatal("first mismatch for a pair must warn")
+	}
+	if l.allow("victim\x00entity-b", t0.Add(5*time.Second)) {
+		t.Fatal("a repeat within the interval must not warn (HEAD repeats every ~5s)")
+	}
+	if !l.allow("victim\x00entity-c", t0.Add(5*time.Second)) {
+		t.Fatal("a different caller entity is a different pair and must warn")
+	}
+	if !l.allow("victim\x00entity-b", t0.Add(ownershipWarnInterval)) {
+		t.Fatal("the same pair must warn again once the interval has passed")
+	}
+}

@@ -63,8 +63,9 @@ data:
   TRACE_EXPORTER_TYPE: {{ .Values.registry.observability.exporterType | default "otlp" | quote }}
 
   # TLS and trust configuration
-  {{- if .Values.registry.security.tls.mode }}
-  MCP_MESH_TLS_MODE: {{ .Values.registry.security.tls.mode | quote }}
+  {{- $tlsMode := include "mcp-mesh-registry.tlsMode" . }}
+  {{- if $tlsMode }}
+  MCP_MESH_TLS_MODE: {{ $tlsMode | quote }}
   {{- end }}
   {{- if .Values.registry.security.trust.backend }}
   MCP_MESH_TRUST_BACKEND: {{ .Values.registry.security.trust.backend | quote }}

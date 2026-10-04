@@ -299,6 +299,14 @@ type EntService struct {
 	// blocks forever in a select, so readers need no special case.
 	stopping     chan struct{}
 	stoppingOnce sync.Once
+
+	// ownershipWarns rate-limits the HEAD-heartbeat ownership warning
+	// (checkEntityOwnershipHot).
+	ownershipWarns warnLimiter
+
+	// parkedLongPolls counts job-event long-polls currently waiting in
+	// listJobEventsCore, so a shutdown can be observed waking them.
+	parkedLongPolls atomic.Int64
 }
 
 // BeginShutdown wakes every parked job-event long-poll and makes new ones
@@ -712,16 +720,63 @@ func (s *EntService) syncCapabilities(ctx context.Context, tx *ent.Tx, agentID s
 // agent's owner. Returns ErrEntityIDMismatch (wrapped) if claimed != stored
 // and stored is non-empty. op is a short caller name for log context.
 func (s *EntService) checkEntityOwnership(op, agentID, reqEntityID string, storedEntityID *string) error {
+	return s.entityOwnershipCheck(op, agentID, reqEntityID, storedEntityID, nil)
+}
+
+// checkEntityOwnershipHot is checkEntityOwnership for the HEAD heartbeat
+// path, which a misconfigured agent hits every few seconds: the warning is
+// logged once per (agent, caller entity) pair per ownershipWarnInterval,
+// and repeats in between go to Debug, so the rejection stays visible
+// without flooding the log.
+func (s *EntService) checkEntityOwnershipHot(op, agentID, reqEntityID string, storedEntityID *string) error {
+	return s.entityOwnershipCheck(op, agentID, reqEntityID, storedEntityID, &s.ownershipWarns)
+}
+
+func (s *EntService) entityOwnershipCheck(op, agentID, reqEntityID string, storedEntityID *string, limiter *warnLimiter) error {
 	if storedEntityID == nil || *storedEntityID == "" {
 		return nil
 	}
 	if *storedEntityID == reqEntityID {
 		return nil
 	}
-	s.logger.Warning("entity_id mismatch in %s: agent %q owned by %q, rejected request from %q",
-		op, agentID, *storedEntityID, reqEntityID)
+	if limiter == nil || limiter.allow(agentID+"\x00"+reqEntityID, time.Now()) {
+		s.logger.Warning("entity_id mismatch in %s: agent %q owned by %q, rejected request from %q",
+			op, agentID, *storedEntityID, reqEntityID)
+	} else {
+		s.logger.Debug("entity_id mismatch in %s: agent %q owned by %q, rejected request from %q (repeat; warning rate-limited)",
+			op, agentID, *storedEntityID, reqEntityID)
+	}
 	return fmt.Errorf("%w: agent %q owned by another entity",
 		ErrEntityIDMismatch, agentID)
+}
+
+// ownershipWarnInterval is how often checkEntityOwnershipHot re-warns
+// about the same (agent, caller entity) mismatch.
+const ownershipWarnInterval = 5 * time.Minute
+
+// warnLimiterMaxKeys bounds warnLimiter's memory. Keys are (agent, entity)
+// pairs where the agent exists and the entity holds a trusted certificate,
+// so this is generous; on overflow the table is simply reset.
+const warnLimiterMaxKeys = 4096
+
+// warnLimiter answers "should this key be logged now?" at most once per
+// ownershipWarnInterval per key.
+type warnLimiter struct {
+	mu   sync.Mutex
+	last map[string]time.Time
+}
+
+func (l *warnLimiter) allow(key string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if prev, ok := l.last[key]; ok && now.Sub(prev) < ownershipWarnInterval {
+		return false
+	}
+	if l.last == nil || len(l.last) >= warnLimiterMaxKeys {
+		l.last = make(map[string]time.Time)
+	}
+	l.last[key] = now
+	return true
 }
 
 // RegisterAgent handles agent registration using Ent queries

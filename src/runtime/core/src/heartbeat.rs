@@ -201,13 +201,24 @@ impl HeartbeatStateMachine {
                 self.transition(HeartbeatState::Unregistered);
                 HeartbeatAction::SendFull
             }
-            FastHeartbeatStatus::RegistryError | FastHeartbeatStatus::NetworkError => {
+            FastHeartbeatStatus::RegistryError
+            | FastHeartbeatStatus::NetworkError
+            | FastHeartbeatStatus::EntityMismatch => {
                 // Error, but don't panic - just wait and retry
                 self.consecutive_failures += 1;
-                warn!(
-                    "Fast heartbeat error ({:?}), failure count: {}",
-                    status, self.consecutive_failures
-                );
+                if status == FastHeartbeatStatus::EntityMismatch {
+                    warn!(
+                        "Fast heartbeat refused (403): the registry records this agent as owned by \
+                         another TLS entity than the one this process presents; check its client \
+                         certificate (MCP_MESH_TLS_CERT). Failure count: {}",
+                        self.consecutive_failures
+                    );
+                } else {
+                    warn!(
+                        "Fast heartbeat error ({:?}), failure count: {}",
+                        status, self.consecutive_failures
+                    );
+                }
 
                 if self.consecutive_failures >= self.config.missed_threshold {
                     self.transition(HeartbeatState::Reconnecting);
@@ -408,6 +419,27 @@ mod tests {
         assert_eq!(sm.state(), HeartbeatState::Healthy);
 
         sm.on_fast_heartbeat_result(fhb(FastHeartbeatStatus::NetworkError));
+        assert_eq!(sm.state(), HeartbeatState::Reconnecting);
+    }
+
+    #[test]
+    fn test_entity_mismatch_retries_like_registry_error() {
+        // A 403 (agent owned by another entity) keeps the error-path retry
+        // behaviour: no re-registration, counted toward the reconnect
+        // threshold, wait one interval.
+        let config = HeartbeatConfig {
+            missed_threshold: 2,
+            ..Default::default()
+        };
+        let interval = config.interval;
+        let mut sm = HeartbeatStateMachine::new(config);
+        sm.on_full_heartbeat_success();
+
+        let action = sm.on_fast_heartbeat_result(fhb(FastHeartbeatStatus::EntityMismatch));
+        assert!(matches!(action, HeartbeatAction::Wait(d) if d == interval));
+        assert_eq!(sm.state(), HeartbeatState::Healthy);
+
+        sm.on_fast_heartbeat_result(fhb(FastHeartbeatStatus::EntityMismatch));
         assert_eq!(sm.state(), HeartbeatState::Reconnecting);
     }
 

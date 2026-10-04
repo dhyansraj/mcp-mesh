@@ -8,6 +8,7 @@ package registry
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -285,5 +286,155 @@ func TestProxy_CapDisabledChunkedStreamsUnbounded(t *testing.T) {
 	}
 	if _, bodies, _ := agent.snapshot(); len(bodies) != 1 || len(bodies[0]) != total {
 		t.Fatalf("agent did not receive the %d-byte body", total)
+	}
+}
+
+// gatedAgent holds every request open until gate is closed and records how
+// many were in flight at once, and which bodies arrived.
+type gatedAgent struct {
+	gate     chan struct{}
+	mu       sync.Mutex
+	inFlight int
+	maxSeen  int
+	received []string
+}
+
+func (a *gatedAgent) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	a.mu.Lock()
+	a.inFlight++
+	if a.inFlight > a.maxSeen {
+		a.maxSeen = a.inFlight
+	}
+	a.received = append(a.received, string(body))
+	a.mu.Unlock()
+	<-a.gate
+	a.mu.Lock()
+	a.inFlight--
+	a.mu.Unlock()
+	_, _ = io.WriteString(w, `{"ok":true}`)
+}
+
+func (a *gatedAgent) state() (inFlight, maxSeen int, received []string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.inFlight, a.maxSeen, append([]string(nil), a.received...)
+}
+
+// TestProxy_ChunkedBufferingIsBounded pins the aggregate bound on buffered
+// chunked proxy bodies: with N slots, at most N are held at once; the rest
+// wait (not fail) and complete once a slot frees; a caller whose budget
+// expires while waiting gets 503 and never reaches the agent; and
+// declared-length bodies, which are streamed, never take a slot.
+func TestProxy_ChunkedBufferingIsBounded(t *testing.T) {
+	const slots = 2
+	saved := proxyBufferSlots
+	proxyBufferSlots = make(chan struct{}, slots)
+	t.Cleanup(func() { proxyBufferSlots = saved })
+
+	agent := &gatedAgent{gate: make(chan struct{})}
+	base, path := newCappedProxy(t, 1<<20, agent)
+	released := false
+	defer func() {
+		if !released {
+			close(agent.gate)
+		}
+	}()
+
+	const callers = 5
+	codes := make(chan int, callers)
+	for i := 0; i < callers; i++ {
+		go func(i int) {
+			req, _ := http.NewRequest("POST", base+path, unknownLengthBody{strings.NewReader(fmt.Sprintf(`{"caller":%d}`, i))})
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				codes <- -1
+				return
+			}
+			resp.Body.Close()
+			codes <- resp.StatusCode
+		}(i)
+	}
+
+	waitFor := func(what string, cond func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for !cond() {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s", what)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	waitFor("the first slots to fill", func() bool { n, _, _ := agent.state(); return n == slots })
+	// Give the waiting callers every chance to overrun the bound.
+	time.Sleep(200 * time.Millisecond)
+	if n, max, _ := agent.state(); n != slots || max != slots {
+		t.Fatalf("with %d slots, %d chunked bodies reached the agent at once (max %d)", slots, n, max)
+	}
+
+	// A declared-length body is streamed and takes no slot.
+	declared := make(chan int, 1)
+	go func() {
+		resp, err := http.Post(base+path, "application/json", strings.NewReader(`{"declared":true}`))
+		if err != nil {
+			declared <- -1
+			return
+		}
+		resp.Body.Close()
+		declared <- resp.StatusCode
+	}()
+	waitFor("the declared-length body to bypass the full slots", func() bool { n, _, _ := agent.state(); return n == slots+1 })
+
+	// A chunked caller whose budget (X-Mesh-Timeout) runs out while
+	// waiting gets 503 and never reaches the agent.
+	req, _ := http.NewRequest("POST", base+path, unknownLengthBody{strings.NewReader(`{"gave_up":true}`)})
+	req.Header.Set("X-Mesh-Timeout", "1")
+	start := time.Now()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("budget-limited waiter: %v", err)
+	}
+	busy, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") == "" {
+		t.Fatalf("waiter past its budget = %d (Retry-After %q), want 503 with Retry-After; body=%s",
+			resp.StatusCode, resp.Header.Get("Retry-After"), busy)
+	}
+	if took := time.Since(start); took < 900*time.Millisecond || took > 4*time.Second {
+		t.Errorf("waiter answered after %s, want about its 1s budget", took)
+	}
+
+	close(agent.gate)
+	released = true
+	for i := 0; i < callers; i++ {
+		select {
+		case code := <-codes:
+			if code != http.StatusOK {
+				t.Fatalf("a waiting chunked caller ended with %d, want 200 once a slot freed", code)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("waiting chunked callers never completed")
+		}
+	}
+	if code := <-declared; code != http.StatusOK {
+		t.Fatalf("declared-length caller ended with %d", code)
+	}
+
+	time.Sleep(500 * time.Millisecond) // a late forward would land here
+	_, max, received := agent.state()
+	if max != slots+1 { // the slot-free declared body on top of the full slots
+		t.Errorf("max in flight = %d, want %d", max, slots+1)
+	}
+	for _, b := range received {
+		if strings.Contains(b, "gave_up") {
+			t.Fatal("the caller whose budget expired while waiting reached the agent")
+		}
+	}
+	if len(received) != callers+1 {
+		t.Errorf("agent received %d requests, want %d", len(received), callers+1)
+	}
+	if len(proxyBufferSlots) != 0 {
+		t.Errorf("%d buffer slot(s) leaked after every request finished", len(proxyBufferSlots))
 	}
 }

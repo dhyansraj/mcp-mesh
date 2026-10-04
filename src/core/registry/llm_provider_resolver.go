@@ -8,8 +8,8 @@ import (
 	"mcp-mesh/src/core/ent"
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
-	"mcp-mesh/src/core/registry/generated"
 	"mcp-mesh/src/core/netutil"
+	"mcp-mesh/src/core/registry/generated"
 )
 
 // ResolveProvider finds a matching LLM provider agent based on provider specification

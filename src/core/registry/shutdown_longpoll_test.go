@@ -102,7 +102,8 @@ func TestStop_WakesParkedJobEventLongPolls(t *testing.T) {
 	executor := longPoll(fmt.Sprintf("%s/jobs/%s/events?after=1&wait=60&instance_id=replica-a&claim_epoch=%d",
 		base, seed.ID, claimed.ClaimEpoch))
 	observer := longPoll(fmt.Sprintf("%s/jobs/%s/events?after=1&wait=60", base, seed.ID))
-	time.Sleep(300 * time.Millisecond) // let both park
+	require.Eventually(t, func() bool { return s.service.parkedLongPolls.Load() == 2 },
+		5*time.Second, 10*time.Millisecond, "both long-polls should be parked before Stop")
 
 	stopStart := time.Now()
 	require.NoError(t, s.Stop())
@@ -128,6 +129,7 @@ func TestStop_WakesParkedJobEventLongPolls(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return after Stop")
 	}
+	require.Zero(t, s.service.parkedLongPolls.Load(), "a long-poll is still parked after Stop")
 
 	// The wake is not a lease event: owner, claim epoch, status and
 	// attempt count are untouched, so the claim is not treated as

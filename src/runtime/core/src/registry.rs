@@ -62,6 +62,12 @@ pub enum FastHeartbeatStatus {
     AgentUnknown,
     /// 503 Service Unavailable - Registry error
     RegistryError,
+    /// 403 Forbidden - the agent is owned by another entity: the registry
+    /// recorded a different TLS entity at its first verified registration
+    /// than the one this process presents (or it presents none). Retried
+    /// like a registry error, but reported as what it is — a credential
+    /// mismatch no retry will fix on its own.
+    EntityMismatch,
     /// Network/connection error
     NetworkError,
 }
@@ -131,6 +137,7 @@ impl FastHeartbeatStatus {
         match code {
             200 => Self::NoChanges,
             202 => Self::TopologyChanged,
+            403 => Self::EntityMismatch,
             410 => Self::AgentUnknown,
             503 => Self::RegistryError,
             _ => Self::NetworkError,
@@ -144,7 +151,10 @@ impl FastHeartbeatStatus {
 
     /// Check if we should skip for resilience (error states).
     pub fn should_skip_for_resilience(&self) -> bool {
-        matches!(self, Self::RegistryError | Self::NetworkError)
+        matches!(
+            self,
+            Self::RegistryError | Self::NetworkError | Self::EntityMismatch
+        )
     }
 
     /// Check if we can skip (optimization - no changes).
@@ -727,6 +737,10 @@ mod tests {
             FastHeartbeatStatus::RegistryError
         );
         assert_eq!(
+            FastHeartbeatStatus::from_status_code(403),
+            FastHeartbeatStatus::EntityMismatch
+        );
+        assert_eq!(
             FastHeartbeatStatus::from_status_code(500),
             FastHeartbeatStatus::NetworkError
         );
@@ -742,6 +756,8 @@ mod tests {
 
         assert!(FastHeartbeatStatus::NetworkError.should_skip_for_resilience());
         assert!(FastHeartbeatStatus::RegistryError.should_skip_for_resilience());
+        assert!(FastHeartbeatStatus::EntityMismatch.should_skip_for_resilience());
+        assert!(!FastHeartbeatStatus::EntityMismatch.requires_full_heartbeat());
     }
 
     #[test]

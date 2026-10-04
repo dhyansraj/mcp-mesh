@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"mcp-mesh/src/core/cli/lifecycle"
-	"mcp-mesh/src/core/tlsutil"
 	"mcp-mesh/src/core/netutil"
+	"mcp-mesh/src/core/tlsutil"
 )
 
 // RegistryAgent represents an agent in the registry
