@@ -8,6 +8,7 @@ import (
 	"mcp-mesh/src/core/ent"
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
+	"mcp-mesh/src/core/netutil"
 	"mcp-mesh/src/core/registry/generated"
 )
 
@@ -191,9 +192,6 @@ func buildProviderEndpoint(cap *ent.Capability) string {
 
 	// Handle HTTP endpoints
 	host := agent.HTTPHost
-	if host == "" || host == "0.0.0.0" {
-		host = "localhost"
-	}
 
 	// Clean up host (remove http:// if present)
 	if len(host) > 7 && host[:7] == "http://" {
@@ -202,12 +200,13 @@ func buildProviderEndpoint(cap *ent.Capability) string {
 	if len(host) > 8 && host[:8] == "https://" {
 		host = host[8:]
 	}
+	host = netutil.DialableHost(host) // "", 0.0.0.0, :: -> localhost
 
 	scheme := "http"
 	if agent.EntityID != nil && *agent.EntityID != "" {
 		scheme = "https"
 	}
-	return fmt.Sprintf("%s://%s:%d", scheme, host, agent.HTTPPort)
+	return netutil.BaseURL(scheme, host, agent.HTTPPort)
 }
 
 // ResolveLLMProvidersFromMetadata resolves LLM providers from heartbeat metadata

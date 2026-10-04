@@ -15,6 +15,7 @@ import (
 	"mcp-mesh/src/core/config"
 	"mcp-mesh/src/core/database"
 	"mcp-mesh/src/core/logger"
+	"mcp-mesh/src/core/netutil"
 	"mcp-mesh/src/core/registry"
 )
 
@@ -107,6 +108,14 @@ func main() {
 	// Show startup banner with log level info
 	appLogger.Info("🚀 Starting MCP Mesh Registry Service | %s", appLogger.GetStartupBanner())
 
+	// Reject an unrecognized MCP_MESH_TLS_MODE before the database or anything else starts: a
+	// typo used to run as "auto" and admit certless clients (issue #1626).
+	tlsMode, err := registry.NormalizeTLSMode(os.Getenv("MCP_MESH_TLS_MODE"))
+	if err != nil {
+		appLogger.Error("❌ %v", err)
+		os.Exit(1)
+	}
+
 	// Initialize database with Ent
 	appLogger.Info("🗄️  Initializing database: %s", cfg.GetDatabaseURL())
 	db, err := database.InitializeEnt(cfg.Database, cfg.IsTraceMode())
@@ -126,7 +135,7 @@ func main() {
 		DefaultEvictionThreshold: cfg.DefaultEvictionThreshold,
 		HealthCheckInterval:      cfg.HealthCheckInterval,
 		TracingEnabled:           strings.ToLower(os.Getenv("MCP_MESH_DISTRIBUTED_TRACING_ENABLED")) == "true",
-		TlsMode:                 getEnvDefault("MCP_MESH_TLS_MODE", "off"),
+		TlsMode:                 tlsMode,
 		TrustBackend:             os.Getenv("MCP_MESH_TRUST_BACKEND"),
 		TlsCertFile:             os.Getenv("MCP_MESH_TLS_CERT"),
 		TlsKeyFile:              os.Getenv("MCP_MESH_TLS_KEY"),
@@ -135,7 +144,7 @@ func main() {
 		AdminTLS:                getEnvBoolDefault("MCP_MESH_ADMIN_TLS", false),
 	}
 
-	if registryConfig.TlsMode != "off" {
+	if registryConfig.TlsMode != registry.TLSModeOff {
 		appLogger.Info("🔒 TLS configuration: mode=%s, backend=%s", registryConfig.TlsMode, registryConfig.TrustBackend)
 		if registryConfig.AdminPort > 0 {
 			appLogger.Info("🔒 Admin API port: %d (TLS: %t)", registryConfig.AdminPort, registryConfig.AdminTLS)
@@ -176,7 +185,7 @@ func main() {
 	}()
 
 	// Start server
-	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
+	addr := netutil.JoinHostPort(cfg.Host, cfg.Port)
 	appLogger.Info("🌟 MCP Mesh Registry Service listening on %s", addr)
 	if err := server.Run(addr); err != nil {
 		appLogger.Error("❌ Failed to start server: %v", err)
@@ -199,13 +208,6 @@ func main() {
 		appLogger.Warning("Shutdown did not finish within %s; exiting anyway", shutdownWaitTimeout)
 		os.Exit(0)
 	}
-}
-
-func getEnvDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
 }
 
 // getEnvBoolDefault parses a boolean env var, accepting the same spellings

@@ -135,6 +135,23 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: |
+            The agent is owned by another entity. With registry TLS enabled, the
+            first verified registration records the agent's entity; heartbeats from
+            any other entity (or a certless caller in auto mode) are refused.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: |
+            Request body exceeds the registry's MCP_MESH_MAX_REQUEST_BODY_BYTES
+            limit (10MB by default). Refused before the body is processed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /heartbeat/{agent_id}:
     head:
@@ -148,6 +165,7 @@ paths:
         - Returns HTTP status code only (no response body)
         - 200 OK: No topology changes, keep sending HEAD requests
         - 202 Accepted: Topology changed, please send full POST heartbeat
+        - 403 Forbidden: Agent owned by another entity (registry TLS only)
         - 410 Gone: Unknown agent, please register with POST heartbeat
         - 503 Service Unavailable: Registry error, back off and retry
       operationId: fastHeartbeatCheck
@@ -185,6 +203,11 @@ paths:
                 type: integer
                 minimum: 0
                 maximum: 100
+        "403":
+          description: |
+            The agent is owned by another entity (registry TLS only). The caller's
+            verified entity does not match the one recorded at the agent's first
+            verified registration; the agent's timestamp is not refreshed.
         "410":
           description: Unknown agent, please register
         "503":
@@ -314,6 +337,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: |
+            Request body exceeds the registry's MCP_MESH_MAX_REQUEST_BODY_BYTES
+            limit (10MB by default). Refused before the body is processed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /jobs/batch:
     post:
@@ -350,6 +381,14 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "503":
           description: Registry backend unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: |
+            Request body exceeds the registry's MCP_MESH_MAX_REQUEST_BODY_BYTES
+            limit (10MB by default). Refused before the body is processed.
           content:
             application/json:
               schema:
@@ -393,6 +432,14 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "503":
           description: Registry backend unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: |
+            Request body exceeds the registry's MCP_MESH_MAX_REQUEST_BODY_BYTES
+            limit (10MB by default). Refused before the body is processed.
           content:
             application/json:
               schema:
@@ -530,6 +577,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: |
+            Request body exceeds the registry's MCP_MESH_MAX_REQUEST_BODY_BYTES
+            limit (10MB by default). Refused before the body is processed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /jobs/{job_id}/cancel:
     post:
@@ -580,6 +635,14 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "503":
           description: Registry backend unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: |
+            Request body exceeds the registry's MCP_MESH_MAX_REQUEST_BODY_BYTES
+            limit (10MB by default). Refused before the body is processed.
           content:
             application/json:
               schema:
@@ -703,6 +766,14 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "503":
           description: Registry backend unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: |
+            Request body exceeds the registry's MCP_MESH_MAX_REQUEST_BODY_BYTES
+            limit (10MB by default). Refused before the body is processed.
           content:
             application/json:
               schema:
@@ -878,6 +949,15 @@ paths:
       responses:
         "204":
           description: Agent unregistered successfully
+        "403":
+          description: |
+            The agent is owned by another entity (registry TLS only). Only a caller
+            from the entity recorded at the agent's first verified registration
+            can unregister it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Agent not found
           content:

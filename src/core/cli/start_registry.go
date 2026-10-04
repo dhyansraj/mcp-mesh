@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"mcp-mesh/src/core/cli/lifecycle"
+	"mcp-mesh/src/core/netutil"
 )
 
 // isLocalhostRegistry checks if the registry host is localhost/local.
@@ -496,7 +497,7 @@ func determineStartRegistryURL(cmd *cobra.Command, config *CLIConfig) string {
 	if config.TLSAuto {
 		scheme = "https"
 	}
-	return fmt.Sprintf("%s://%s:%d", scheme, host, port)
+	return netutil.BaseURL(scheme, host, port)
 }
 
 // getRegistryHostFromURL extracts the host from a registry URL, fallback to config host

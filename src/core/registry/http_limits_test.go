@@ -1,8 +1,9 @@
 package registry
 
-// Coverage for the listener hardening in issue #1583: the connection
-// limits every registry listener now carries, and the request-body cap
-// that fronts every JSON handler.
+// Coverage for the request-body cap in issue #1583 that fronts every
+// handler. The connection limits themselves are tested in
+// src/core/httpserver; server_listener_test.go checks each listener uses
+// them.
 
 import (
 	"encoding/json"
@@ -16,30 +17,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
-
-func TestNewHardenedServer_SetsConnectionLimits(t *testing.T) {
-	srv := newHardenedServer(":8000", gin.New())
-
-	if srv.ReadHeaderTimeout != defaultReadHeaderTimeout {
-		t.Errorf("ReadHeaderTimeout = %v, want %v", srv.ReadHeaderTimeout, defaultReadHeaderTimeout)
-	}
-	if srv.IdleTimeout != defaultIdleTimeout {
-		t.Errorf("IdleTimeout = %v, want %v", srv.IdleTimeout, defaultIdleTimeout)
-	}
-	if srv.MaxHeaderBytes != defaultMaxHeaderBytes {
-		t.Errorf("MaxHeaderBytes = %d, want %d", srv.MaxHeaderBytes, defaultMaxHeaderBytes)
-	}
-
-	// ReadTimeout and WriteTimeout are deliberately unset: both would cut
-	// the 60s job-event long-poll and the unbounded SSE relay through
-	// /proxy/*. If someone sets them, that is the regression to catch.
-	if srv.ReadTimeout != 0 {
-		t.Errorf("ReadTimeout = %v, want 0 (would cap slow uploads and long-polls)", srv.ReadTimeout)
-	}
-	if srv.WriteTimeout != 0 {
-		t.Errorf("WriteTimeout = %v, want 0 (would sever proxied SSE streams)", srv.WriteTimeout)
-	}
-}
 
 func TestMaxRequestBodyBytesFromEnv(t *testing.T) {
 	tests := []struct {

@@ -1268,6 +1268,56 @@ CASES: list[Case] = [
             }
         },
     ),
+    # --- #1626: tls.mode is read the way the registry binary reads it -------
+    # The binary trims and lowercases MCP_MESH_TLS_MODE and refuses anything
+    # but off/auto/strict, so the chart must agree: a case-variant mode used to
+    # skip the strict/auto probe rewrite and crash-loop on 403 or plaintext.
+    Case(
+        "mcp-mesh-registry",
+        "TLS mode STRICT in any case is strict: socket probes",
+        {
+            "registry": {
+                "security": {
+                    "tls": {"enabled": True, "mode": " STRICT ", "secretName": "reg-tls"},
+                    "trust": {"backend": "k8s-secrets"},
+                }
+            }
+        },
+        config_data={"MCP_MESH_TLS_MODE": "strict"},
+        probe_specs={
+            name: {
+                **{k: v for k, v in spec.items() if k != "httpGet"},
+                "tcpSocket": {"port": "http"},
+            }
+            for name, spec in REGISTRY_PROBES_BEFORE_1574.items()
+        },
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "TLS mode OFF with tls.enabled serves plaintext: no HTTPS probes",
+        {
+            "registry": {
+                "security": {
+                    "tls": {"enabled": True, "mode": "OFF", "secretName": "reg-tls"},
+                }
+            }
+        },
+        config_data={"MCP_MESH_TLS_MODE": "off"},
+        probe_specs=dict(REGISTRY_PROBES_BEFORE_1574),
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "an unknown TLS mode fails the render",
+        {
+            "registry": {
+                "security": {
+                    "tls": {"enabled": True, "mode": "verify", "secretName": "reg-tls"},
+                    "trust": {"backend": "k8s-secrets"},
+                }
+            }
+        },
+        expect_fail='registry.security.tls.mode="verify" is not a TLS mode',
+    ),
     Case(
         "mcp-mesh-registry",
         "a moved sqlite volume with envFrom renders no DATABASE_URL over it",

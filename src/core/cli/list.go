@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"mcp-mesh/src/core/netutil"
 )
 
 // Color constants for beautiful output
@@ -1735,16 +1736,16 @@ func determineRegistryURL(config *CLIConfig, registryURL, registryHost string, r
 
 	// If user explicitly set a scheme, use it
 	if registryScheme != "" && registryScheme != "http" {
-		return fmt.Sprintf("%s://%s:%d", registryScheme, host, port)
+		return netutil.BaseURL(registryScheme, host, port)
 	}
 
 	// Auto-detect: try HTTPS first, fall back to HTTP
 	// This avoids stale state from leftover TLS files
-	httpsURL := fmt.Sprintf("https://%s:%d", host, port)
+	httpsURL := netutil.BaseURL("https", host, port)
 	if IsRegistryRunning(httpsURL) {
 		return httpsURL
 	}
-	return fmt.Sprintf("http://%s:%d", host, port)
+	return netutil.BaseURL("http", host, port)
 }
 
 // Global HTTP client for registry connections — uses shared CLI client

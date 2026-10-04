@@ -1823,6 +1823,20 @@ func (s *EntService) listJobEventsCore(
 	// Long-poll: re-query every listJobEventsPollResolution until a match
 	// shows up or the deadline expires. Honors ctx cancellation so a
 	// client hangup unwinds promptly.
+	//
+	// A registry shutdown (BeginShutdown) ends the wait early with the
+	// empty result already read — exactly the response an expired wait
+	// gives (issue #1606). That is deliberate: it carries no event, the
+	// handler echoes the caller's `after` back as next_after so the
+	// cursor is unchanged, and it touches no lease state (an executor
+	// read's lease credit was granted by AuthorizeExecutorRead before the
+	// wait began; nothing here writes the job row or its claim epoch).
+	// The consumer re-polls as it would after any timeout. Returning an
+	// error instead would surface as a 503 the SDKs count against their
+	// registry-unreachable budget.
+	stopping := s.shutdownSignal()
+	s.parkedLongPolls.Add(1)
+	defer s.parkedLongPolls.Add(-1)
 	deadline := time.Now().Add(wait)
 	for time.Now().Before(deadline) {
 		remaining := time.Until(deadline)
@@ -1833,6 +1847,8 @@ func (s *EntService) listJobEventsCore(
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
+		case <-stopping:
+			return rows, nil
 		case <-time.After(step):
 		}
 		rows, err = queryEvents()

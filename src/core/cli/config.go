@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"mcp-mesh/src/core/netutil"
 )
 
 // CLIConfig represents the CLI configuration structure.
@@ -346,7 +347,7 @@ func (c *CLIConfig) GetConfigurationSummary() map[string]interface{} {
 		"registry": map[string]interface{}{
 			"host": c.RegistryHost,
 			"port": c.RegistryPort,
-			"url":  fmt.Sprintf("http://%s:%d", c.RegistryHost, c.RegistryPort),
+			"url":  netutil.BaseURL("http", c.RegistryHost, c.RegistryPort),
 		},
 		"database": map[string]interface{}{
 			"path": c.DBPath,
@@ -555,7 +556,7 @@ func (c *CLIConfig) GetRegistryURL() string {
 	if c.TLSAuto {
 		scheme = "https"
 	}
-	return fmt.Sprintf("%s://%s:%d", scheme, c.RegistryHost, c.RegistryPort)
+	return netutil.BaseURL(scheme, c.RegistryHost, c.RegistryPort)
 }
 
 // GetEnvironmentVariables returns environment variables for agent processes

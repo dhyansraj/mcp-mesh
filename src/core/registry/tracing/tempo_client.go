@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"mcp-mesh/src/core/netutil"
 	"mcp-mesh/src/core/tlsutil"
 )
 
@@ -113,9 +115,14 @@ func GetTempoURLFromEnv() string {
 	// Fallback: construct from TELEMETRY_ENDPOINT (replace gRPC port with HTTP port)
 	telemetryEndpoint := os.Getenv("TELEMETRY_ENDPOINT")
 	if telemetryEndpoint != "" {
-		// Convert tempo:4317 (gRPC) to http://tempo:3200 (HTTP API)
+		// Convert tempo:4317 (gRPC) to http://tempo:3200 (HTTP API).
+		// SplitHostPort handles a bracketed IPv6 literal, which splitting
+		// on the first ":" would cut to "[".
 		host := strings.Split(telemetryEndpoint, ":")[0]
-		return fmt.Sprintf("http://%s:3200", host)
+		if h, _, err := net.SplitHostPort(telemetryEndpoint); err == nil {
+			host = h
+		}
+		return netutil.BaseURL("http", host, 3200)
 	}
 
 	// Default to localhost when no explicit endpoint configured

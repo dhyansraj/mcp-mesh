@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"mcp-mesh/src/core/database"
+	"mcp-mesh/src/core/httpserver"
 	"mcp-mesh/src/core/logger"
 	"mcp-mesh/src/core/registry/generated"
 	"mcp-mesh/src/core/registry/tracing"
@@ -35,14 +36,17 @@ const shutdownDrainTimeout = 10 * time.Second
 // HTTP requests to finish before their listeners are closed out from
 // under them.
 //
-// It is deliberately short. The value cannot be sized to "let everything
-// finish": a job-event long-poll runs up to 60s
-// (``listJobEventsMaxWait``) and a proxied SSE stream is unbounded, so
-// any registry with an idle jobs consumer attached would sit out the
-// whole window on every stop. What the window IS sized for is ordinary
-// control-plane traffic — heartbeats, registrations, job deltas — which
-// completes in milliseconds, so 5s is several orders of magnitude of
-// headroom for the requests that can actually be waited out.
+// Requests that are only waiting do not count against it: ``Shutdown``
+// first wakes parked job-event long-polls (they return the empty page an
+// expired wait would) and cuts proxied GET streams, which carry no
+// in-flight work (issue #1606). Before that, any registry with a jobs
+// consumer attached sat out the whole window on every stop. The window
+// is sized for what is left — control-plane traffic (heartbeats,
+// registrations, job deltas) that completes in milliseconds, so 5s is
+// several orders of magnitude of headroom. The one in-flight shape it
+// cannot cover is a proxied POST tool call, bounded only by its
+// X-Mesh-Timeout (60s default); those are cut by process exit, since
+// waiting them out would push a stop past every SIGKILL escalation below.
 //
 // On the ceilings: Kubernetes' default terminationGracePeriodSeconds is
 // 30s, and Stop's two bounded phases (5s here, then
@@ -50,7 +54,7 @@ const shutdownDrainTimeout = 10 * time.Second
 // tracing flush. They do NOT both fit inside ``meshctl stop``'s default
 // 10s SIGKILL escalation (stop.go --timeout) — 5+10 is 15s. That is
 // accepted rather than papered over: both phases only reach their caps
-// when something is genuinely stuck (a long-poll parked on the socket, a
+// when something is genuinely stuck (a long proxied tool call, a
 // cancel-forward wedged on an unresponsive owner), and in that case a
 // dev-loop SIGKILL is the right outcome. The common path returns in
 // milliseconds.
@@ -102,6 +106,15 @@ type Server struct {
 // every agent heartbeat with "no backends configured" (issue #989), rather
 // than booting healthy and only failing at the heartbeat path.
 func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logger.Logger) (*Server, error) {
+	// Canonicalize MCP_MESH_TLS_MODE once, before anything reads it, and
+	// refuse an unrecognized value rather than letting it run as "auto"
+	// (issue #1626).
+	tlsMode, err := NormalizeTLSMode(config.TlsMode)
+	if err != nil {
+		return nil, err
+	}
+	config.TlsMode = tlsMode
+
 	// Create Ent-based service
 	entService := NewEntService(entDB, config, logger)
 
@@ -142,7 +155,7 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 	// would leave the registry running but rejecting every heartbeat with
 	// "no backends configured", which is exactly the bug we're closing.
 	var trustChain *trust.TrustChain
-	if config.TlsMode != "" && config.TlsMode != "off" {
+	if tlsModeRequested(config.TlsMode) {
 		// Missing cert/key is the more fundamental misconfiguration, so it
 		// is reported before the trust backend (Run repeats this check).
 		if err := tlsFilesError(config); err != nil {
@@ -241,7 +254,7 @@ func (s *Server) Run(addr string) error {
 	// listener mirrors the main one's TLS settings, so a missing cert has
 	// to fail here rather than after a plaintext admin port is already
 	// accepting connections.
-	tlsRequested := s.config.TlsMode != "" && s.config.TlsMode != "off"
+	tlsRequested := tlsModeRequested(s.config.TlsMode)
 	if err := tlsFilesError(s.config); err != nil {
 		return err
 	}
@@ -271,7 +284,7 @@ func (s *Server) Start() error {
 // plaintext path carry the same limits as the TLS path and be drained by
 // ``Shutdown`` (issue #1583).
 func (s *Server) runPlaintext(addr string) error {
-	server := newHardenedServer(addr, s.engine.Handler())
+	server := httpserver.NewHardened(addr, s.engine.Handler())
 	if !s.registerServer(server) {
 		return nil // Stop() already ran; don't start listening.
 	}
@@ -366,16 +379,22 @@ func (s *Server) Stop() error {
 // done. Callers that want a bound should pass a context with a deadline;
 // ``Stop`` uses shutdownHTTPTimeout.
 //
-// An SSE response being relayed through ``/proxy/*`` and a job-event
-// long-poll both count as in-flight requests, so hitting the deadline
-// with one of them parked is the EXPECTED outcome, not a failure. Note
-// what ``http.Server.Shutdown`` does at the deadline: it has already
+// Before draining, it wakes the requests that are only waiting (issue
+// #1606): parked job-event long-polls return the empty page an expired
+// wait would, and proxied GET streams are cut. Proxied POSTs are tool
+// calls still running on the agent and are left to finish, so one that
+// outlives the deadline is the EXPECTED way to hit it, not a failure.
+// Note what ``http.Server.Shutdown`` does at the deadline: it has already
 // closed the listeners and idle connections, but it does not terminate
 // the still-active ones — it just returns ``ctx.Err()`` and leaves them
 // running until the process exits. Shutdown therefore logs that case at
 // info and does not report it as an error; only a genuine listener
 // failure is returned.
 func (s *Server) Shutdown(ctx context.Context) error {
+	if s.service != nil {
+		s.service.BeginShutdown()
+	}
+
 	s.httpMu.Lock()
 	s.httpStopping = true
 	servers := s.httpServers
@@ -383,17 +402,17 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	s.httpMu.Unlock()
 
 	var firstErr error
+	// Sequential on purpose: all listeners share ctx's one deadline, so a stuck main listener only shortens the admin listener's drain, never extends the total.
 	for _, srv := range servers {
 		err := srv.Shutdown(ctx)
 		if err == nil {
 			continue
 		}
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			// Routine: something long-lived was still attached. Say so
-			// plainly instead of surfacing it to the operator as a
-			// shutdown error on every restart of a registry that has a
-			// jobs consumer long-polling it.
-			s.logShutdown("Registry shutdown: listener %s still had long-lived requests attached after the grace period (long-polls / SSE streams); exiting anyway", srv.Addr)
+			// Something long-lived (a proxied tool call) was still
+			// attached. Say so plainly rather than surfacing it to the
+			// operator as a shutdown error.
+			s.logShutdown("Registry shutdown: listener %s still had requests in flight after the grace period (proxied tool calls); exiting anyway", srv.Addr)
 			continue
 		}
 		if firstErr == nil {
@@ -566,8 +585,7 @@ func (s *Server) handleProxyGetRequest(c *gin.Context) {
 // tlsFilesError reports a TLS mode that was requested without the
 // certificate and key the listener needs.
 func tlsFilesError(config *RegistryConfig) error {
-	tlsRequested := config.TlsMode != "" && config.TlsMode != "off"
-	if tlsRequested && (config.TlsCertFile == "" || config.TlsKeyFile == "") {
+	if tlsModeRequested(config.TlsMode) && (config.TlsCertFile == "" || config.TlsKeyFile == "") {
 		return fmt.Errorf("TLS mode %q requires MCP_MESH_TLS_CERT and MCP_MESH_TLS_KEY to be set; use MCP_MESH_TLS_MODE=off to run plaintext", config.TlsMode)
 	}
 	return nil
@@ -575,7 +593,7 @@ func tlsFilesError(config *RegistryConfig) error {
 
 // tlsEnabled reports whether the registry was configured to serve TLS.
 func (s *Server) tlsEnabled() bool {
-	return s.config.TlsMode != "" && s.config.TlsMode != "off" &&
+	return tlsModeRequested(s.config.TlsMode) &&
 		s.config.TlsCertFile != "" && s.config.TlsKeyFile != ""
 }
 
@@ -611,7 +629,7 @@ func (s *Server) runWithTLS(addr string) error {
 		return err
 	}
 
-	server := newHardenedServer(addr, s.engine.Handler())
+	server := httpserver.NewHardened(addr, s.engine.Handler())
 	server.TLSConfig = tlsConfig
 
 	if !s.registerServer(server) {
@@ -781,7 +799,7 @@ func (s *Server) adminTLSEnabled() bool {
 // admin-only endpoints. Runs in its own goroutine.
 //
 // The listener always carries the connection limits and body cap of the
-// main one (newHardenedServer, MaxRequestBodyMiddleware) — those break no
+// main one (httpserver.NewHardened, MaxRequestBodyMiddleware) — those break no
 // client. Transport and trust are opt-in through MCP_MESH_ADMIN_TLS: with
 // it unset the admin port is plaintext and unauthenticated, exactly as it
 // has always been, and must be restricted at the network layer. With it
@@ -792,7 +810,7 @@ func (s *Server) startAdminServer(port int) {
 	adminEngine := s.newAdminEngine()
 
 	addr := fmt.Sprintf(":%d", port)
-	server := newHardenedServer(addr, adminEngine.Handler())
+	server := httpserver.NewHardened(addr, adminEngine.Handler())
 
 	if s.config.AdminTLS && !s.tlsEnabled() {
 		log.Printf("[admin] MCP_MESH_ADMIN_TLS is set but the registry has no TLS configured (MCP_MESH_TLS_MODE/MCP_MESH_TLS_CERT/MCP_MESH_TLS_KEY); admin port stays plaintext")

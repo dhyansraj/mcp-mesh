@@ -149,7 +149,7 @@ The registry validates agent certificates against one or more trust backends:
 
 Backends can be chained: `MCP_MESH_TRUST_BACKEND=spire,k8s-secrets` — first match wins.
 
-When the registry's `MCP_MESH_TLS_MODE` is anything other than `off`, at least one trust backend is required. The registry refuses to start if `MCP_MESH_TRUST_BACKEND` is empty, if every listed backend is skipped for a missing prerequisite (`localca` and `filestore` need `MCP_MESH_TRUST_DIR`), or if a configured backend fails to initialize. `meshctl start --tls-auto` configures `localca,filestore` for you.
+The registry accepts `off`, `auto` and `strict` for `MCP_MESH_TLS_MODE`, in any case, and refuses to start on any other value. When it is anything other than `off`, at least one trust backend is required. The registry refuses to start if `MCP_MESH_TRUST_BACKEND` is empty, if every listed backend is skipped for a missing prerequisite (`localca` and `filestore` need `MCP_MESH_TRUST_DIR`), or if a configured backend fails to initialize. `meshctl start --tls-auto` configures `localca,filestore` for you.
 
 ## Trust Scope
 
@@ -162,7 +162,7 @@ A verified certificate tells the registry which **trust entity** the caller belo
 | **spire** | The SPIFFE trust domain, not the SVID's SPIFFE ID |
 | **localca** | The O of the agent certificate itself (see below) |
 
-The registry records the entity on an agent the first time that agent registers with a verified certificate. After that, only a caller from the same entity can re-register the agent, send its full heartbeats (`POST /heartbeat`), or deregister it (`DELETE /agents/{agent_id}`). A caller from another entity, or a certless caller in `auto` mode, gets `403` with `entity_id mismatch`. The fast liveness check (`HEAD /heartbeat/{agent_id}`) is not ownership-checked. An agent that registered without a certificate has no recorded entity, and any caller can re-register or deregister it.
+The registry records the entity on an agent the first time that agent registers with a verified certificate. After that, only a caller from the same entity can re-register the agent, send its heartbeats (`POST /heartbeat` and the fast `HEAD /heartbeat/{agent_id}` check), or deregister it (`DELETE /agents/{agent_id}`). A caller from another entity, or a certless caller in `auto` mode, gets `403` (with `entity_id mismatch` in the body, except on `HEAD`, which has none). An agent that registered without a certificate has no recorded entity, and any caller can re-register or deregister it.
 
 What this means in practice:
 

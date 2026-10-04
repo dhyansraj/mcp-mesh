@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"mcp-mesh/src/core/httpserver"
 	"mcp-mesh/src/core/registry/trust"
 )
 
@@ -141,8 +142,8 @@ func TestRunPlaintext_ShutdownStopsTheListener(t *testing.T) {
 	}
 	srv := s.httpServers[0]
 	s.httpMu.Unlock()
-	if srv.ReadHeaderTimeout != defaultReadHeaderTimeout || srv.IdleTimeout != defaultIdleTimeout ||
-		srv.MaxHeaderBytes != defaultMaxHeaderBytes {
+	if srv.ReadHeaderTimeout != httpserver.ReadHeaderTimeout || srv.IdleTimeout != httpserver.IdleTimeout ||
+		srv.MaxHeaderBytes != httpserver.MaxHeaderBytes {
 		t.Errorf("plaintext listener not hardened: readHeader=%v idle=%v maxHeader=%d",
 			srv.ReadHeaderTimeout, srv.IdleTimeout, srv.MaxHeaderBytes)
 	}
@@ -251,8 +252,8 @@ func TestStartAdminServer_HardenedAndShutdownAware(t *testing.T) {
 	srv := s.httpServers[0]
 	s.httpMu.Unlock()
 
-	if srv.ReadHeaderTimeout != defaultReadHeaderTimeout || srv.IdleTimeout != defaultIdleTimeout ||
-		srv.MaxHeaderBytes != defaultMaxHeaderBytes {
+	if srv.ReadHeaderTimeout != httpserver.ReadHeaderTimeout || srv.IdleTimeout != httpserver.IdleTimeout ||
+		srv.MaxHeaderBytes != httpserver.MaxHeaderBytes {
 		t.Errorf("admin listener not hardened: readHeader=%v idle=%v maxHeader=%d",
 			srv.ReadHeaderTimeout, srv.IdleTimeout, srv.MaxHeaderBytes)
 	}

@@ -655,15 +655,17 @@ export MCP_MESH_SWEEP_INTERVAL=5m
 export MCP_MESH_JOB_STALE_TIMEOUT=2h
 
 # Maximum request body the registry will accept, in bytes, on both the
-# main and admin listeners. A request whose Content-Length exceeds it is
-# refused with 413 before any of the body is read. A request that does
-# not declare a length is cut off at the limit instead: JSON endpoints
-# answer 413, but /proxy/* streams the body onward as it arrives, so
-# there the caller gets 502 and the target agent has already received a
-# truncated request. Default: 10485760 (10MB) — about ten times the
+# main and admin listeners. An over-limit request is refused with 413
+# and nothing is forwarded: a declared Content-Length is checked before
+# the body is read, and a body with no declared length is read up to the
+# limit first (on /proxy/* it is buffered and only forwarded once it is
+# known to fit; at most 16 such bodies are buffered at once, and further
+# ones wait up to their X-Mesh-Timeout, then get 503). Declared-length
+# /proxy/* bodies stream to the agent.
+# Default: 10485760 (10MB) — about ten times the
 # largest realistic heartbeat (a 100-tool agent carrying input and
 # output schemas plus their canonical forms measures ~1MB). Set to 0 to
-# disable the limit.
+# disable the limit; /proxy/* bodies then always stream.
 export MCP_MESH_MAX_REQUEST_BODY_BYTES=10485760
 
 # Opt the admin listener (MCP_MESH_ADMIN_PORT) into the main listener's

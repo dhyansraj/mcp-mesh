@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 
 	"mcp-mesh/src/core/ent"
+	"mcp-mesh/src/core/netutil"
 	"mcp-mesh/src/core/registry/generated"
 )
 
@@ -796,7 +797,7 @@ func (h *EntBusinessLogicHandlers) forwardCancelToOwner(c *gin.Context, ownerIns
 		if agentRow.EntityID != nil && *agentRow.EntityID != "" {
 			scheme = "https"
 		}
-		url := fmt.Sprintf("%s://%s:%d/jobs/%s/cancel", scheme, agentRow.HTTPHost, agentRow.HTTPPort, jobID)
+		url := netutil.BaseURL(scheme, agentRow.HTTPHost, agentRow.HTTPPort) + "/jobs/" + jobID + "/cancel"
 
 		body := strings.NewReader("")
 		if reason != "" {
