@@ -277,6 +277,24 @@ DIVERGING value — user intent that would silently no-op — fails.
   trust backend. The shipped defaults (enabled: false, type: token,
   tokens: [], existingSecret: "", secretKey: tokens) are tolerated; any
   other value fails.
+- workloadType, service.targetPort, registry.logging.format,
+  registry.healthCheck.*, registry.performance.{maxConnections,
+  connectionTimeout,requestTimeout}, podMonitor.*: declared in values.yaml
+  from v1.0.0 to v3.7.x with the same defaults, never read by any template.
+  Each looked like it configured something (a StatefulSet, the container
+  port, the log format, health checking, connection limits, a PodMonitor),
+  so a changed value fails naming the key that does that job, if any. The
+  shipped defaults are tolerated, via removedKeyGuard.
+- registry.database.path: shipped as "/data/registry.db" and documented as
+  the sqlite file, but never rendered — every sqlite install ran on the
+  image's own DATABASE_URL, /data/mcp_mesh_registry.db. Honouring it now
+  would point an existing install at a new, empty database (losing jobs and
+  events without an error), so a changed value fails instead, naming where
+  the data actually is. "" and the shipped value pass.
+- registry.database.existingSecretUsernameKey: removed in #1190 as a plain
+  drop. The username always came from registry.database.username, never
+  from the secret, so a carried non-default key would quietly connect as
+  the wrong user. The shipped "username" is tolerated.
 */}}
 {{- define "mcp-mesh-registry.validateNoRemovedKeys" -}}
 {{/* Old shipped defaults, verbatim from the v2.4.0 umbrella values.yaml. */}}
@@ -348,8 +366,205 @@ DIVERGING value — user intent that would silently no-op — fails.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- $removed := list
+      (dict "path" "workloadType" "value" .Values.workloadType "shipped" "Deployment"
+            "hint" "The registry always renders a Deployment; it is stateless when backed by postgres")
+      (dict "path" "service.targetPort" "value" (dig "targetPort" nil (.Values.service | default dict)) "shipped" 8000
+            "hint" "The Service always targets the container's named port \"http\"; change registry.port to move the listener")
+      (dict "path" "registry.logging.format" "value" (dig "logging" "format" nil .Values.registry) "shipped" "json"
+            "hint" "The registry has no log-format setting")
+      (dict "path" "registry.healthCheck" "value" (dig "healthCheck" nil .Values.registry) "shipped" (dict "enabled" true "interval" 30 "timeout" 10)
+            "hint" "Probe timing for the registry pod is livenessProbe / readinessProbe / startupProbe; agent heartbeat tracking is registry.performance.timeoutThreshold and healthCheckInterval")
+      (dict "path" "registry.performance.maxConnections" "value" (dig "performance" "maxConnections" nil .Values.registry) "shipped" 1000
+            "hint" "Database pool sizes are the DB_MAX_OPEN_CONNECTIONS / DB_MAX_IDLE_CONNECTIONS env vars, settable via the top-level env list")
+      (dict "path" "registry.performance.connectionTimeout" "value" (dig "performance" "connectionTimeout" nil .Values.registry) "shipped" 30
+            "hint" "The database connection timeout is the DB_CONNECTION_TIMEOUT env var, settable via the top-level env list")
+      (dict "path" "registry.performance.requestTimeout" "value" (dig "performance" "requestTimeout" nil .Values.registry) "shipped" 60
+            "hint" "The registry has no request-timeout setting")
+      (dict "path" "podMonitor" "value" .Values.podMonitor "shipped" (dict "enabled" false "namespace" "" "interval" "30s" "scrapeTimeout" "10s" "labels" (dict) "honorLabels" true "metricRelabelings" (list) "relabelings" (list))
+            "hint" "This chart renders no PodMonitor; use serviceMonitor.enabled")
+      (dict "path" "registry.database.path" "value" (dig "database" "path" nil .Values.registry | default nil) "shipped" "/data/registry.db"
+            "what" "was never applied and has been removed"
+            "hint" (printf "Every sqlite install has run on the registry image's own DATABASE_URL, so the data lives at %s. To use a different file, set DATABASE_URL in the top-level env list (env: [{name: DATABASE_URL, value: <path on a writable volume>}])" (include "mcp-mesh-registry.sqliteDefaultPath" .)))
+      (dict "path" "registry.database.existingSecretUsernameKey" "value" (dig "database" "existingSecretUsernameKey" nil .Values.registry) "shipped" "username"
+            "hint" "The username always comes from registry.database.username (or global.postgres.username), never from the secret; set it there, or use existingSecretUrlKey with a full DSN that carries the username") -}}
+{{- range $removed -}}
+{{- include "mcp-mesh-registry.removedKeyGuard" . -}}
+{{- end -}}
 {{- if .Values.createNamespace -}}
 {{- fail "createNamespace has been removed; it rendered a release-owned Namespace, which makes `helm uninstall` delete the namespace and cascade to every resource in it. Create the namespace out of band instead: `helm install --create-namespace` or Argo CD's `syncOptions: CreateNamespace=true` — neither ties the namespace to the release" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Fail on a removed values key whose value diverges from what the chart used to
+ship. Call with (dict "path" <dotted key> "value" <user value> "shipped" <old
+default> "hint" <where the job lives now>), plus an optional "what" replacing
+"was never read by any template and has been removed". nil and the old default carry no
+intent and pass; a map recurses key by key, so a copied block passes while one
+changed field fails naming itself. Scalars compare as strings (30 and "30" are
+the same carried value); lists compare as JSON.
+*/}}
+{{- define "mcp-mesh-registry.removedKeyGuard" -}}
+{{- $v := .value -}}
+{{- if kindIs "invalid" $v -}}
+{{- else if and (kindIs "map" $v) (kindIs "map" .shipped) -}}
+{{- range $k, $sub := $v -}}
+{{- include "mcp-mesh-registry.removedKeyGuard" (dict "path" (printf "%s.%s" $.path $k) "value" $sub "shipped" (get $.shipped $k) "hint" $.hint "what" $.what) -}}
+{{- end -}}
+{{- else -}}
+{{- $got := ternary (toJson $v) (toString $v) (or (kindIs "slice" $v) (kindIs "map" $v)) -}}
+{{- $want := ternary (toJson .shipped) (toString .shipped) (or (kindIs "slice" .shipped) (kindIs "map" .shipped)) -}}
+{{- if ne $got $want -}}
+{{- fail (printf "%s %s (set to %s, so it would silently do nothing). %s. Remove %s from your values" .path (.what | default "was never read by any template and has been removed") $got .hint .path) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+A registry probe spec. Call with (dict "name" "livenessProbe" "root" $).
+Renders the value of .Values.<name>, except in the two cases where that value
+is not something the user chose:
+
+- Absent (or null): `helm upgrade --reuse-values` from chart <= 3.7 reuses the
+  OLD chart's values, which have no startupProbe — before #1574 the probes
+  were hard-coded in deployment.yaml and values.yaml declared only liveness
+  and readiness, which nothing read. The built-in default renders instead,
+  so the probe does not silently disappear on upgrade.
+- The old shipped livenessProbe: it said initialDelaySeconds 10 while the
+  hard-coded probe was 30. A copied or reused copy of it is treated as unset,
+  so it does not cut the liveness delay on upgrade.
+
+A partial value is deep-merged over the default (see below).
+
+A probe cannot be removed: Helm merges values maps over the defaults, so the
+only way to drop a key is null, and null is indistinguishable from the
+absent key above. (Before #1574 they could not be changed at all.) The
+defaults below must match values.yaml; scripts/check_helm_render_matrix.py
+pins both.
+*/}}
+{{- define "mcp-mesh-registry.probe" -}}
+{{- $health := dict "path" "/health" "port" "http" -}}
+{{- $defaults := dict
+      "startupProbe" (dict "httpGet" $health "initialDelaySeconds" 5 "periodSeconds" 10 "timeoutSeconds" 5 "failureThreshold" 30)
+      "livenessProbe" (dict "httpGet" $health "initialDelaySeconds" 30 "periodSeconds" 10 "timeoutSeconds" 5 "failureThreshold" 3)
+      "readinessProbe" (dict "httpGet" $health "initialDelaySeconds" 10 "periodSeconds" 5 "timeoutSeconds" 3 "failureThreshold" 3) -}}
+{{- $oldShippedLiveness := dict "httpGet" $health "initialDelaySeconds" 10 "periodSeconds" 10 "timeoutSeconds" 5 "failureThreshold" 3 -}}
+{{- $default := get $defaults .name -}}
+{{- $v := index .root.Values .name -}}
+{{- if or (kindIs "invalid" $v) (and (eq .name "livenessProbe") (eq (toJson $v) (toJson $oldShippedLiveness))) -}}
+{{- $v = $default -}}
+{{- end -}}
+{{- /* Deep-merge over the default so a partial value keeps the rest — with
+       --reuse-values from 3.7 the startupProbe has no defaults to merge
+       with, and `--set startupProbe.failureThreshold=60` alone would render
+       a probe with no handler. A value bringing its own handler (exec,
+       tcpSocket, grpc) replaces the default httpGet rather than joining it. */}}
+{{- $base := deepCopy $default -}}
+{{- range $h := list "exec" "tcpSocket" "grpc" -}}
+{{- if hasKey $v $h -}}{{- $base = omit $base "httpGet" -}}{{- end -}}
+{{- end -}}
+{{- $probe := mergeOverwrite $base (deepCopy $v) -}}
+{{- /* With TLS on, the main port speaks only HTTPS (runWithTLS), so a plain
+       httpGet is answered 400 and the probe fails: an httpGet that names no
+       scheme gets HTTPS (the kubelet does not verify the certificate). In
+       strict mode TLSVerifyMiddleware answers every certless request 403,
+       /health included, and the kubelet presents no client certificate, so
+       no httpGet can pass there: such a probe becomes a tcpSocket check of
+       the same port. A scheme set explicitly is left alone. */ -}}
+{{- $tls := .root.Values.registry.security.tls | default dict -}}
+{{- $mode := toString ($tls.mode | default "") -}}
+{{- $httpGet := get $probe "httpGet" -}}
+{{- if and $tls.enabled $mode (ne $mode "off") (kindIs "map" $httpGet) (not (hasKey $httpGet "scheme")) -}}
+{{- if eq $mode "strict" -}}
+{{- $probe = set (omit $probe "httpGet") "tcpSocket" (dict "port" ($httpGet.port | default "http")) -}}
+{{- else -}}
+{{- $_ := set $httpGet "scheme" "HTTPS" -}}
+{{- end -}}
+{{- end -}}
+{{- toYaml $probe -}}
+{{- end }}
+
+{{/*
+Database type guard. The registry binary has two drivers and picks one from
+DATABASE_URL itself: a postgres:// (or postgresql://) DSN, or anything else as
+a sqlite file path. There is no MySQL driver, so type: mysql used to render
+no DATABASE_URL at all and the registry silently ran on the image's sqlite
+file instead. Invoked unconditionally from the configmap.
+*/}}
+{{- define "mcp-mesh-registry.validateDatabaseType" -}}
+{{- $type := toString .Values.registry.database.type -}}
+{{- if not (has $type (list "postgres" "sqlite")) -}}
+{{- fail (printf "registry.database.type=%q is not supported: the registry has two database drivers, postgres and sqlite. For an external database use registry.database.type=postgres with registry.database.host/name/username and credentials" $type) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+The sqlite file the registry uses: <persistence.mountPath>/mcp_mesh_registry.db.
+The registry image sets DATABASE_URL=/data/mcp_mesh_registry.db, so with the
+default mountPath (/data) that is simply the image's own file.
+*/}}
+{{- define "mcp-mesh-registry.sqliteDefaultPath" -}}
+{{- printf "%s/mcp_mesh_registry.db" (.Values.persistence.mountPath | default "/data" | trimSuffix "/") -}}
+{{- end }}
+
+{{/*
+DATABASE_URL to render for sqlite, or nothing. The binary takes a plain file
+path for sqlite, not a sqlite:// URL.
+
+With mountPath /data (the default) nothing is rendered: the image's own
+DATABASE_URL already names the file on the data volume, which is how every
+sqlite install has run, and a DATABASE_URL the user supplies through env or
+envFrom stays in charge. Only a different mountPath needs one — the image's
+/data path is then on the read-only root filesystem, so those installs
+crash-looped and hold no data to lose. Skipped when the env list already
+sets DATABASE_URL, so the container never declares the name twice, and
+whenever envFrom is set: the chart cannot see inside a referenced
+ConfigMap/Secret, and an env entry would silently override a DATABASE_URL it
+supplies. With envFrom and a moved volume, set DATABASE_URL yourself.
+*/}}
+{{- define "mcp-mesh-registry.sqliteDatabaseURL" -}}
+{{- if ne (.Values.persistence.mountPath | default "/data" | trimSuffix "/") "/data" -}}
+{{- $userSet := false -}}
+{{- range .Values.env | default list -}}
+{{- if and (kindIs "map" .) (eq (toString (get . "name")) "DATABASE_URL") -}}{{- $userSet = true -}}{{- end -}}
+{{- end -}}
+{{- if and (not $userSet) (not .Values.envFrom) -}}{{- include "mcp-mesh-registry.sqliteDefaultPath" . -}}{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Whether registry.security.adminTLS is on. Off unless explicitly true (or the
+string "true"), so the quoted "false" — truthy in an `if` — stays off.
+*/}}
+{{- define "mcp-mesh-registry.adminTLS" -}}
+{{- $v := dig "security" "adminTLS" nil .Values.registry -}}
+{{- if and (not (kindIs "invalid" $v)) (eq (lower (toString $v)) "true") -}}true{{- end -}}
+{{- end }}
+
+{{/*
+adminTLS guard: the switch only affects a separate admin listener, and only
+does anything when the registry itself serves TLS. Without adminPort the
+admin endpoints are on the main port, which already uses the registry's
+TLS; without tls.enabled the registry logs that the admin port stays
+plaintext. Both would leave a user who set adminTLS with an unhardened
+admin API, so fail instead. The registry serves TLS only with a tls.mode
+other than off as well as a certificate (tlsEnabled() in
+src/core/registry/server.go), and mode defaults to off, so that is checked
+too. Invoked unconditionally from the configmap.
+*/}}
+{{- define "mcp-mesh-registry.validateAdminTLS" -}}
+{{- if include "mcp-mesh-registry.adminTLS" . -}}
+{{- if le (int .Values.registry.security.adminPort) 0 -}}
+{{- fail "registry.security.adminTLS applies only to a separate admin listener: set registry.security.adminPort too. Without it the admin endpoints are served on the main port, which already uses the registry's TLS settings" -}}
+{{- end -}}
+{{- if not .Values.registry.security.tls.enabled -}}
+{{- fail "registry.security.adminTLS serves the admin port with the registry's own certificate, so it requires registry.security.tls.enabled=true (with tls.secretName, tls.mode and trust.backend). Without it the admin port stays plain http://" -}}
+{{- end -}}
+{{- $mode := toString (dig "security" "tls" "mode" "" .Values.registry) -}}
+{{- if or (not $mode) (eq $mode "off") -}}
+{{- fail (printf "registry.security.adminTLS needs registry.security.tls.mode auto or strict (got %q): the registry serves TLS only when the mode is not off, so the admin port would stay plain http://" $mode) -}}
+{{- end -}}
 {{- end -}}
 {{- end }}
 

@@ -74,36 +74,28 @@ Get the secret name
 {{- end }}
 
 {{/*
-Get agent name
+Whether the agent serves HTTP (agent.http.enabled). Unset or null means on.
+Compared as a lowercased string so the quoted "false" — truthy in a plain
+`if` — turns it off too; every consumer (configmap, deployment, service,
+servicemonitor, ingress) goes through this one helper so they cannot
+disagree. Renders "true" or nothing.
 */}}
-{{- define "mcp-mesh-agent.agentName" -}}
-{{- if .Values.agent.name }}
-{{- .Values.agent.name }}
-{{- else }}
-{{- include "mcp-mesh-agent.fullname" . }}
-{{- end }}
+{{- define "mcp-mesh-agent.httpEnabled" -}}
+{{- $http := dig "http" (dict) (.Values.agent | default dict) | default dict -}}
+{{- $v := get $http "enabled" -}}
+{{- if or (not (hasKey $http "enabled")) (kindIs "invalid" $v) (ne (lower (toString $v)) "false") -}}true{{- end -}}
 {{- end }}
 
 {{/*
-Build capabilities JSON
+Whether a probe targets the container's named "http" port, which only exists
+while agent.http.enabled. A non-HTTP agent serves none of /startupz, /livez
+or /ready, and a probe naming a port the container does not declare makes
+the Deployment invalid, so the deployment drops such probes when HTTP is off.
+Probes on a numeric port or using exec/grpc are left alone.
 */}}
-{{- define "mcp-mesh-agent.capabilities" -}}
-{{- if .Values.agent.capabilities }}
-{{- .Values.agent.capabilities | toJson }}
-{{- else }}
-[]
-{{- end }}
-{{- end }}
-
-{{/*
-Build dependencies JSON
-*/}}
-{{- define "mcp-mesh-agent.dependencies" -}}
-{{- if .Values.agent.dependencies }}
-{{- .Values.agent.dependencies | toJson }}
-{{- else }}
-[]
-{{- end }}
+{{- define "mcp-mesh-agent.probeUsesHttpPort" -}}
+{{- $p := . | default dict -}}
+{{- if or (eq (toString (dig "httpGet" "port" "" $p)) "http") (eq (toString (dig "tcpSocket" "port" "" $p)) "http") -}}true{{- end -}}
 {{- end }}
 
 {{/*
@@ -149,6 +141,17 @@ value is someone trying to turn something off and fails:
   agent.observability.distributedTracing.enabled;
 - the metrics switches never had a feature behind them; scraping is opted
   into with serviceMonitor.enabled.
+
+The keys guarded through removedKeyGuard were declared in values.yaml with
+the same defaults from v1.0.0 to v3.7.x and never read by any template:
+service.targetPort, agent.{version,description,capabilities,dependencies,
+healthCheck,retry,performance}, agent.http.{host,cors} and podMonitor. Each
+looks like it configures something (agent.http.cors.origins most of all,
+which a user narrows expecting protection), so a value that differs from
+the old default fails naming where that job is actually done. The shipped
+defaults pass. podSecurityPolicy.enabled was removed in #1188 when it gated
+podSecurityContext (now always applied); its shipped false passes, true
+fails.
 */}}
 {{- define "mcp-mesh-agent.validateNoRemovedKeys" -}}
 {{/* Old shipped defaults, verbatim from the v2.4.0 chart values.yaml. */}}
@@ -189,6 +192,59 @@ value is someone trying to turn something off and fails:
 {{- else if and (not (kindIs "invalid" $block)) (ne (toString $block) "true") -}}
 {{- /* A scalar in place of the block (e.g. `tracing: false`). */ -}}
 {{- fail (printf (printf "agent.observability.%s %s" $switch $msg) (toString $block)) -}}
+{{- end -}}
+{{- end -}}
+{{- $agent := .Values.agent | default dict -}}
+{{- $declared := "Set it in the agent's code instead: @mesh.agent / @mesh.tool (and their TypeScript/Java equivalents) declare the version, description, capabilities and dependencies, and the agent registers them itself" -}}
+{{- $removed := list
+      (dict "path" "service.targetPort" "value" (dig "targetPort" nil (.Values.service | default dict)) "shipped" 8080
+            "hint" "The Service always targets the container's named port \"http\"; set agent.http.port to move the listener")
+      (dict "path" "agent.version" "value" (get $agent "version" | default nil) "shipped" "1.0.0" "hint" $declared)
+      (dict "path" "agent.description" "value" (get $agent "description" | default nil) "shipped" "" "hint" $declared)
+      (dict "path" "agent.capabilities" "value" (get $agent "capabilities" | default nil) "shipped" (list) "hint" $declared)
+      (dict "path" "agent.dependencies" "value" (get $agent "dependencies" | default nil) "shipped" (list) "hint" $declared)
+      (dict "path" "agent.healthCheck" "value" (get $agent "healthCheck" | default nil) "shipped" (dict "enabled" true "interval" 30 "timeout" 10)
+            "hint" "Declare the health check in the agent's code; tune Kubernetes probe timing with startupProbe / livenessProbe / readinessProbe, and the heartbeat interval with the MCP_MESH_HEALTH_INTERVAL env var in the env list")
+      (dict "path" "agent.retry" "value" (get $agent "retry" | default nil) "shipped" (dict "attempts" 3 "delay" 5 "maxDelay" 30)
+            "hint" "The chart has no retry settings")
+      (dict "path" "agent.performance" "value" (get $agent "performance" | default nil) "shipped" (dict "timeout" 30 "maxConcurrent" 10 "cacheEnabled" true "cacheTTL" 300)
+            "hint" "The chart has no timeout, concurrency or cache settings; configure them in the agent's code")
+      (dict "path" "agent.http.host" "value" (dig "http" "host" nil $agent) "shipped" "0.0.0.0"
+            "hint" "The agent always binds 0.0.0.0 in the pod; to change the address consumers dial, set agent.advertisedHost")
+      (dict "path" "agent.http.cors" "value" (dig "http" "cors" nil $agent) "shipped" (dict "enabled" true "origins" (list "*"))
+            "hint" "The chart has no CORS setting, so origins were never restricted; restrict access with networkPolicy.enabled or at your ingress")
+      (dict "path" "podMonitor" "value" .Values.podMonitor "shipped" (dict "enabled" false "namespace" "" "interval" "30s" "scrapeTimeout" "10s" "labels" (dict) "honorLabels" true "metricRelabelings" (list) "relabelings" (list))
+            "hint" "This chart renders no PodMonitor; use serviceMonitor.enabled")
+      (dict "path" "podSecurityPolicy" "value" .Values.podSecurityPolicy "shipped" (dict "enabled" false)
+            "what" "has been removed"
+            "hint" "PodSecurityPolicy left Kubernetes in 1.25; this flag only switched on podSecurityContext, which is now always applied, so true is already the behaviour. Adjust podSecurityContext / securityContext if the pod needs different settings") -}}
+{{- range $removed -}}
+{{- include "mcp-mesh-agent.removedKeyGuard" . -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Fail on a removed values key whose value diverges from what the chart used to
+ship. Call with (dict "path" <dotted key> "value" <user value> "shipped" <old
+default> "hint" <where the job lives now>), plus an optional "what" replacing
+"was never read by any template and has been removed". nil and the old default carry no
+intent and pass; a map recurses key by key, so a copied block passes while one
+changed field fails naming itself. Scalars compare as strings (30 and "30" are
+the same carried value); lists compare as JSON. Same helper as the registry
+chart's removedKeyGuard.
+*/}}
+{{- define "mcp-mesh-agent.removedKeyGuard" -}}
+{{- $v := .value -}}
+{{- if kindIs "invalid" $v -}}
+{{- else if and (kindIs "map" $v) (kindIs "map" .shipped) -}}
+{{- range $k, $sub := $v -}}
+{{- include "mcp-mesh-agent.removedKeyGuard" (dict "path" (printf "%s.%s" $.path $k) "value" $sub "shipped" (get $.shipped $k) "hint" $.hint "what" $.what) -}}
+{{- end -}}
+{{- else -}}
+{{- $got := ternary (toJson $v) (toString $v) (or (kindIs "slice" $v) (kindIs "map" $v)) -}}
+{{- $want := ternary (toJson .shipped) (toString .shipped) (or (kindIs "slice" .shipped) (kindIs "map" .shipped)) -}}
+{{- if ne $got $want -}}
+{{- fail (printf "%s %s (set to %s, so it would silently do nothing). %s. Remove %s from your values" .path (.what | default "was never read by any template and has been removed") $got .hint .path) -}}
 {{- end -}}
 {{- end -}}
 {{- end }}

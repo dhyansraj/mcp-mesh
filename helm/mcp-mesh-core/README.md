@@ -12,7 +12,7 @@ This umbrella chart deploys the core MCP Mesh infrastructure components:
 
 ### Prerequisites
 
-- Kubernetes 1.19+
+- Kubernetes 1.21+
 - Helm 3.2.0+ (the install recipe below needs `--create-namespace`; installing
   from an OCI registry needs 3.8+, and the `--take-ownership` adoption path in
   [Namespace handling](#namespace-handling) needs 3.17+)
@@ -51,12 +51,19 @@ curl http://localhost:8000/health
 
 ### Deploy Agents
 
-After core infrastructure is running, deploy agents:
+After core infrastructure is running, deploy agents. Each agent runs from an
+image with its code baked in (`meshctl scaffold` generates the Dockerfile and a
+`helm-values.yaml`):
 
 ```bash
 # Deploy an agent
-helm install my-agent ../mcp-mesh-agent --set agent.script=my_script.py
+helm install my-agent ../mcp-mesh-agent -n mcp-mesh \
+  --set image.repository=myregistry/my-agent \
+  --set image.tag=v1.0.0
 ```
+
+With a core release name other than `mcp-core`, add
+`--set global.coreReleaseName=<release>` so the agent finds the registry.
 
 ## Namespace handling
 
@@ -466,10 +473,10 @@ the bundled subchart is what makes the external endpoint authoritative;
 chart (provisioning consumes the same secret — see Database Configuration
 above). When disabling the bundled PostgreSQL, also set
 `global.postgres.generatedSecret: false`: nothing creates the auto-generated
-Secret anymore, and a configuration without an explicit credential (e.g. an
-external database using `trust` auth) would otherwise leave every consumer
-referencing a Secret that never exists (pods fail with
-`CreateContainerConfigError`).
+Secret anymore. The render fails when the bundled PostgreSQL is off and a
+consumer would still reach for it — its host is still the bundled default, or
+it has no password or `existingSecret` while `generatedSecret` is on. There is
+no database-less mode: the registry always needs a database.
 
 ```yaml
 # values.yaml
@@ -519,8 +526,7 @@ point its trace publishing at the managed Redis.
 mcp-mesh-registry:
   registry:
     logging:
-      level: "DEBUG"
-      format: "json"
+      level: "INFO"
 
   ingress:
     enabled: true
@@ -628,7 +634,7 @@ The core infrastructure follows this deployment pattern:
    see [Namespace handling](#namespace-handling)
 2. **PostgreSQL** - StatefulSet with persistent storage
 3. **Redis** - Deployment with emptyDir (cache-only)
-4. **Registry** - StatefulSet connected to PostgreSQL
+4. **Registry** - Deployment connected to PostgreSQL
 
 Only step 1 uses `global.namespace`. Every workload deploys into the release
 namespace (`-n`).
@@ -843,7 +849,7 @@ the namespace. See
 | `global.postgres.generatedSecret` | bool | `true` | Auto-generate the password into `<release>-mcp-mesh-postgres-credentials` when no `password`/`existingSecret` is set (provisioning and all consumers share it) |
 | `global.postgres.generatedSecretName` | string | `""` | Override the generated Secret's name (needed only with name/fullname overrides on the postgres subchart) |
 | `global.redis.*`   | object | bundled redis | Redis endpoint/credentials inherited by all consumers (`host`, `port`, `password`, `existingSecret`, `existingSecretUrlKey`, `existingSecretPasswordKey`, `tls.enabled`) |
-| `postgres.enabled` | bool   | `true`       | Enable PostgreSQL deployment         |
+| `postgres.enabled` | bool   | `true`       | Deploy the bundled PostgreSQL. Off requires an external database in `global.postgres.*` (see "External managed datastores") |
 | `redis.enabled`    | bool   | `true`       | Enable Redis deployment              |
 | `registry.enabled` | bool   | `true`       | Enable Registry deployment           |
 | `grafana.enabled`  | bool   | `true`       | Enable Grafana deployment            |

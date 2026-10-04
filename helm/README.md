@@ -52,13 +52,17 @@ cp observability/grafana/dashboards/*.json helm/mcp-mesh-grafana/files/dashboard
 helm dependency update helm/mcp-mesh-core
 helm install mcp-core helm/mcp-mesh-core -n mcp-mesh --create-namespace
 
-# 2. Install agents (repeat for each agent)
+# 2. Install agents (repeat for each agent). Each agent ships as an image
+#    with its code baked in — `meshctl scaffold` generates the Dockerfile and
+#    a helm-values.yaml for it. See "Agent Images" below.
 helm install hello-world helm/mcp-mesh-agent -n mcp-mesh \
-  --set agent.name=hello-world \
-  --set agent.command='["/app/agent.py"]'
+  --set image.repository=myregistry/hello-world \
+  --set image.tag=v1.0.0
 
-# 3. (Optional) Install ingress for external access
-helm install mcp-ingress helm/mcp-mesh-ingress -n mcp-mesh
+# 3. (Optional) Install ingress for external access — in the same namespace,
+#    naming each agent release to expose
+helm install mcp-ingress helm/mcp-mesh-ingress -n mcp-mesh \
+  --set agents[0].name=hello-world
 ```
 
 ## Charts
@@ -78,22 +82,31 @@ helm install mcp-ingress helm/mcp-mesh-ingress -n mcp-mesh
 helm install mcp-core helm/mcp-mesh-core -n mcp-mesh --create-namespace \
   --set grafana.enabled=false \
   --set tempo.enabled=false
-
-# Core without PostgreSQL (in-memory registry)
-helm install mcp-core helm/mcp-mesh-core -n mcp-mesh --create-namespace \
-  --set postgres.enabled=false
 ```
 
-### Custom Agent Images
+The registry always needs a database. Turning off the bundled PostgreSQL
+(`postgres.enabled=false`) is for pointing it at an external one — see
+"External managed datastores" in the
+[mcp-mesh-core README](./mcp-mesh-core/README.md); the render fails if none is
+configured.
+
+### Agent Images
+
+The agent chart runs an image with the agent's code in it, using the image's
+own entrypoint. Build it from the Dockerfile `meshctl scaffold` generates (it
+starts from `mcpmesh/python-runtime`, `mcpmesh/typescript-runtime` or
+`mcpmesh/java-runtime`), then point the chart at it:
 
 ```bash
-# Multi-file agent with custom Docker image
 helm install my-agent helm/mcp-mesh-agent -n mcp-mesh \
   --set image.repository=myregistry/my-agent \
-  --set image.tag=v1.0.0 \
-  --set agent.name=my-agent \
-  --set agent.script=""
+  --set image.tag=v1.0.0
 ```
+
+The agent's name comes from its code; `agent.name` overrides it. For a
+single-file Python agent there is also a ConfigMap route on the stock runtime
+image — see `agentCode` in the
+[mcp-mesh-agent README](./mcp-mesh-agent/README.md#agent-code-configuration).
 
 ## Generated Credentials
 

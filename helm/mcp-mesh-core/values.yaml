@@ -95,6 +95,9 @@ global:
 #   --set mcp-mesh-registry.registry.redis.host=mcp-core-mcp-mesh-redis.other-ns.svc.cluster.local
 
 # Component enablement
+# The registry needs a database. Turning the bundled PostgreSQL off requires
+# an external one configured in global.postgres above (host plus password or
+# existingSecret); the render fails otherwise.
 postgres:
   enabled: true
 
@@ -163,10 +166,9 @@ mcp-mesh-registry:
       type: "postgres"
       waitForDatabase: true # Wait for database to be ready before starting registry
 
-    # Logging configuration (matches K8s examples)
+    # Logging configuration
     logging:
       level: "DEBUG"
-      format: "json"
       debug: "true"
 
     # Redis configuration — single source of truth for the registry's Redis
@@ -191,18 +193,9 @@ mcp-mesh-registry:
         retention: "24h"
       telemetryEndpoint: "mcp-core-mcp-mesh-tempo:4317"
 
-    # Health check configuration
-    healthCheck:
-      enabled: true
-      interval: 30
-      timeout: 10
-
-  # Use Deployment for stateless registry
-  workloadType: "Deployment"
-
-  # Persistence disabled for stateless registry
+  # No registry volume: with postgres the registry writes nothing to disk
   persistence:
-    enabled: false # Registry is stateless
+    enabled: false
 
   resources:
     limits:
@@ -216,7 +209,6 @@ mcp-mesh-registry:
   service:
     type: ClusterIP
     port: 8000
-    targetPort: 8000
 
   # Ingress configuration (disabled by default)
   ingress:
@@ -266,7 +258,8 @@ mcp-mesh-grafana:
     datasources:
       tempo:
         enabled: true
-        url: "http://mcp-core-mcp-mesh-tempo:3200"
+        # url defaults to http://<release>-mcp-mesh-tempo:3200, the bundled
+        # Tempo of this release; set it only for another Tempo.
       prometheus:
         enabled: true
         url: "http://prometheus:9090"
@@ -399,7 +392,7 @@ commonAnnotations: {}
 # been removed):
 # - mcp-mesh-registry.networkPolicy.enabled (and networkPolicy.enabled on
 #   each agent release)
-# - mcp-mesh-registry.serviceMonitor.enabled / podMonitor.enabled
+# - mcp-mesh-registry.serviceMonitor.enabled
 # - mcp-mesh-registry.podDisruptionBudget — defaults on and engages
 #   automatically at mcp-mesh-registry.replicaCount > 1. HA scheduling
 #   lives there too (topologySpreadConstraints / defaultTopologySpread /

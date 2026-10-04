@@ -31,5 +31,4 @@ registry:
 service:
   type: NodePort
   port: 8080
-  targetPort: 8080
 # --8<-- [end:full_file]

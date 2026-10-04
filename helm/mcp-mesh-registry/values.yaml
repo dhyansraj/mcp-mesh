@@ -2,9 +2,9 @@
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
-# Use Deployment for stateless registry
+# The registry always runs as a Deployment: it is stateless when backed by
+# postgres (the default).
 replicaCount: 1
-workloadType: "Deployment" # Registry is stateless
 
 image:
   # Registry prefix for the image. Resolution: this value >
@@ -78,8 +78,9 @@ securityContext:
 
 service:
   type: ClusterIP
-  port: 8000 # Registry uses port 8000 (matches working examples)
-  targetPort: 8000
+  # Service port. It always targets the container's named port "http",
+  # which listens on registry.port.
+  port: 8000
   annotations:
     prometheus.io/scrape: "true"
     prometheus.io/port: "9090"
@@ -157,10 +158,14 @@ registry:
   # one global.postgres block with every datastore consumer); explicit values
   # here always win. Chart defaults apply when neither layer sets a field.
   database:
-    # Database path (for SQLite)
-    path: "/data/registry.db"
-    # Database type (sqlite, postgres, mysql)
-    type: "postgres" # Default to postgres like working examples
+    # Database type: postgres or sqlite. The registry has no other database
+    # driver. sqlite is a single-writer local file, so it is limited to one
+    # replica. Its file is <persistence.mountPath>/mcp_mesh_registry.db on the
+    # data volume (see persistence below: an emptyDir lost on pod replacement
+    # unless persistence.enabled). To use another file, set DATABASE_URL in
+    # the env list; keep it on a writable volume, the root filesystem is
+    # read-only.
+    type: "postgres"
     # Block registry startup on a wait-for-db init container until the
     # database host:port accepts connections (non-sqlite only).
     waitForDatabase: true
@@ -203,25 +208,17 @@ registry:
     # Key holding the password in the secret (mode 2)
     existingSecretPasswordKey: "" # default: password
 
-  # Logging configuration (matches K8s examples)
+  # Logging configuration
   logging:
     level: "DEBUG" # DEBUG, INFO, WARNING, ERROR, CRITICAL
-    format: "json" # json or text
     debug: "true" # Enable debug mode
 
-  # Health check configuration
-  healthCheck:
-    enabled: true
-    interval: 30
-    timeout: 10
-
-  # Performance tuning (matches K8s examples)
+  # Agent health tracking. Probe timing for the registry pod itself is set by
+  # livenessProbe / readinessProbe / startupProbe below.
   performance:
-    maxConnections: 1000
-    connectionTimeout: 30
-    requestTimeout: 60
-    # Fast heartbeat optimization
+    # Seconds without a heartbeat before an agent is marked unhealthy
     timeoutThreshold: 20
+    # Seconds between the registry's agent health sweeps
     healthCheckInterval: 10
     evictionThreshold: 60
 
@@ -259,6 +256,19 @@ registry:
 
     # Admin API port (0 = admin endpoints on main port)
     adminPort: 0
+    # Serve the admin port (adminPort above, which must be set) with the main
+    # port's TLS certificate and its tls.mode client-certificate policy.
+    # Requires tls.enabled and a tls.mode other than off. Off, the admin port
+    # is plain http:// with no client-certificate check, whatever tls.mode
+    # says — restrict it with a NetworkPolicy.
+    #
+    # Enabling it flips the admin port from http:// to https://, so every
+    # existing caller must change scheme. With tls.mode=strict the admin API
+    # is then reachable only by a client that presents a certificate:
+    # meshctl has no client-certificate support, so `meshctl registry drain`
+    # (and resume/status, `meshctl entity rotate`) get 403. Leave this off if
+    # meshctl is your drain path before upgrades.
+    adminTLS: false
 
   # Observability configuration - matches Docker setup
   observability:
@@ -271,7 +281,7 @@ registry:
       # Tempo. Go duration string; "0" disables trimming entirely.
       retention: "24h"
     telemetryEndpoint: "mcp-core-mcp-mesh-tempo:4317"
-    # Exporter type: console (default), otlp (for Tempo/Jaeger), json
+    # Exporter type: otlp (default; Tempo/Jaeger), console, json
     exporterType: "otlp"
 
   # Redis configuration — single source of truth for the registry's Redis
@@ -329,9 +339,12 @@ serviceTLS:
     keyKey: "tls.key"
     skipVerify: false
 
-# Persistence configuration (disabled for stateless registry)
+# Persistence for the sqlite database file. Leave disabled with postgres (the
+# default): nothing is written to /data then. With sqlite and persistence
+# disabled, /data is an emptyDir and the database is lost when the pod is
+# replaced.
 persistence:
-  enabled: false # Registry is stateless and uses external database
+  enabled: false
   # Storage class name
   storageClass: ""
   # Access mode
@@ -359,19 +372,39 @@ envFrom: []
   # - secretRef:
   #     name: special-secret
 
-# Liveness and readiness probes.
+# Startup, liveness and readiness probes. Each is rendered as given and can be
+# tuned or replaced (e.g. an exec handler instead of httpGet, with httpGet set
+# to null); null restores the default rather than removing the probe.
 #
-# Unlike the agent chart (issue #1467), both may share /health here: the
+# Unlike the agent chart (issue #1467), all three may share /health here: the
 # registry's GET /health (src/core/registry/ent_handlers.go) returns a
 # static 200 with uptime and never consults the database, a dependency,
 # or a user-supplied check. It is already a pure liveness signal, so it
 # cannot turn an outage elsewhere into a registry restart. Should it ever
 # grow a dependency check, split the probes as the agent chart does.
+#
+# The startup probe allows up to five minutes (30 x 10s) for the first
+# successful check; liveness and readiness only start once it has passed.
+#
+# With registry.security.tls on (tls.enabled and tls.mode auto or strict) the
+# main port serves only HTTPS, so an httpGet without an explicit scheme is
+# rendered with scheme: HTTPS. In strict mode every request without a client
+# certificate is refused, /health included, and the kubelet sends none, so
+# such a probe is rendered as a tcpSocket check of the same port instead.
+startupProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 30
+
 livenessProbe:
   httpGet:
     path: /health
     port: http
-  initialDelaySeconds: 10
+  initialDelaySeconds: 30
   periodSeconds: 10
   timeoutSeconds: 5
   failureThreshold: 3
@@ -416,17 +449,6 @@ networkPolicy:
 
 # Service Monitor for Prometheus
 serviceMonitor:
-  enabled: false
-  namespace: ""
-  interval: 30s
-  scrapeTimeout: 10s
-  labels: {}
-  honorLabels: true
-  metricRelabelings: []
-  relabelings: []
-
-# Pod Monitor for Prometheus
-podMonitor:
   enabled: false
   namespace: ""
   interval: 30s

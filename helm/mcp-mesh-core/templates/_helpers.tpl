@@ -61,20 +61,98 @@ Removed-key guards. These umbrella-level keys were dead config — no template
 ever consumed them — so a values file still carrying one would silently
 no-op while the user expects effect (a no-op network policy in particular).
 Fail loudly with migration guidance instead. Invoked unconditionally from
-namespace.yaml. global.coreReleaseName only fails on a non-default value:
-the default "mcp-core" was shipped in values.yaml and is carried harmlessly
-by copied values files.
+namespace.yaml. global.coreReleaseName only fails on a value that is neither
+the shipped default "mcp-core" (carried harmlessly by copied values files)
+nor this release's own name (what a parent umbrella holding core plus the
+ingress or agent charts sets, since those charts read it and globals reach
+every subchart). Likewise the three `*.enabled` flags only fail when
+true: false was their shipped default.
 */}}
 {{- define "mcp-mesh-core.validateNoRemovedKeys" -}}
 {{- if dig "enabled" false (.Values.networkPolicies | default dict) -}}
 {{- fail "networkPolicies.enabled was never consumed and has been removed; enable the per-chart policy instead: mcp-mesh-registry.networkPolicy.enabled (and networkPolicy.enabled on each agent release)" -}}
 {{- end -}}
 {{- if dig "enabled" false (.Values.serviceMonitors | default dict) -}}
-{{- fail "serviceMonitors.enabled was never consumed and has been removed; enable the per-chart monitor instead: mcp-mesh-registry.serviceMonitor.enabled (or podMonitor.enabled)" -}}
+{{- fail "serviceMonitors.enabled was never consumed and has been removed; enable the per-chart monitor instead: mcp-mesh-registry.serviceMonitor.enabled (and serviceMonitor.enabled on each agent release)" -}}
+{{- end -}}
+{{- if dig "enabled" false (.Values.podDisruptionBudgets | default dict) -}}
+{{- fail "podDisruptionBudgets.enabled was never consumed and has been removed; the registry's PodDisruptionBudget is mcp-mesh-registry.podDisruptionBudget, on by default, and engages once mcp-mesh-registry.replicaCount > 1 (or autoscaling.minReplicas > 1)" -}}
 {{- end -}}
 {{- $coreReleaseName := dig "coreReleaseName" "" (.Values.global | default dict) -}}
-{{- if and $coreReleaseName (ne $coreReleaseName "mcp-core") -}}
-{{- fail "global.coreReleaseName was documentation-only here and has been removed; with a non-default release name, set global.postgres.host, global.redis.host, and the *-mcp-mesh-tempo endpoints to \"<release>-mcp-mesh-<component>\" explicitly (agent releases still use global.coreReleaseName on the mcp-mesh-agent chart)" -}}
+{{- /* Equal to this release's name it describes this release, which is the
+       umbrella case: a parent chart holding core alongside the ingress or
+       agent charts, which read global.coreReleaseName, passes the same
+       global down to core. */ -}}
+{{- if and $coreReleaseName (ne $coreReleaseName "mcp-core") (ne $coreReleaseName .Release.Name) -}}
+{{- fail (printf "global.coreReleaseName=%q names a different release than this one (%q), and this chart does not read it: with a non-default release name, set global.postgres.host, global.redis.host, and the *-mcp-mesh-tempo endpoints to \"<release>-mcp-mesh-<component>\" explicitly. global.coreReleaseName belongs on mcp-mesh-agent and mcp-mesh-ingress releases; inside your own umbrella that holds core, set it to the umbrella's release name" $coreReleaseName .Release.Name) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+External-database guard. postgres.enabled=false removes the bundled
+PostgreSQL, but every consumer still defaults to it: the host is
+global.postgres.host ("mcp-core-mcp-mesh-postgres") and, with no password or
+existingSecret, the credential is the bundled chart's generated Secret, which
+no longer renders. The result used to be a registry stuck forever in its
+wait-for-db init container, referencing a Secret that does not exist.
+
+There is no in-memory registry to fall back to: the registry needs a
+database, so with the bundled one off an external one must be configured.
+Checked for each consumer that is on — the registry (unless it runs sqlite)
+and the UI (unless ui.database.url overrides the global block) — against the
+same precedence the consumer applies. Invoked unconditionally from
+namespace.yaml.
+*/}}
+{{- define "mcp-mesh-core.validateExternalDatabase" -}}
+{{- if not .Values.postgres.enabled -}}
+{{- $g := dig "postgres" (dict) (.Values.global | default dict) | default dict -}}
+{{- /* The bundled Service follows the postgres chart's fullname rule (a
+       release name already containing the chart name is used as-is), plus
+       the shipped global default and the consumers' own fallback when no
+       host is set at any layer. */ -}}
+{{- $pgService := ternary .Release.Name (printf "%s-mcp-mesh-postgres" .Release.Name) (contains "mcp-mesh-postgres" .Release.Name) | trunc 63 | trimSuffix "-" -}}
+{{- $bundled := list $pgService "mcp-core-mcp-mesh-postgres" "mcp-mesh-postgres" -}}
+{{- $consumers := list -}}
+{{- $reg := index .Values "mcp-mesh-registry" | default dict -}}
+{{- $regDb := dig "registry" "database" (dict) $reg | default dict -}}
+{{- if and .Values.registry.enabled (ne (toString ($regDb.type | default "postgres")) "sqlite") -}}
+{{- /* Full-DSN mode (existingSecret + existingSecretUrlKey, either layer):
+       the DSN carries its own host, and registry.database.host only feeds
+       the wait-for-db init container. */ -}}
+{{- $regDsn := and (or $regDb.existingSecret $g.existingSecret) (or $regDb.existingSecretUrlKey $g.existingSecretUrlKey) -}}
+{{- $wait := get $regDb "waitForDatabase" -}}
+{{- $waitOn := or (kindIs "invalid" $wait) (ne (lower (toString $wait)) "false") -}}
+{{- $consumers = append $consumers (dict
+      "name" "the registry"
+      "host" (coalesce $regDb.host $g.host "mcp-mesh-postgres")
+      "credential" (or $regDb.password $g.password $regDb.existingSecret $g.existingSecret)
+      "dsn" $regDsn
+      "waitOn" $waitOn) -}}
+{{- end -}}
+{{- $ui := index .Values "mcp-mesh-ui" | default dict -}}
+{{- if and .Values.ui.enabled (not (dig "ui" "database" "url" "" $ui)) -}}
+{{- $consumers = append $consumers (dict
+      "name" "the UI"
+      "host" (coalesce $g.host "mcp-mesh-postgres")
+      "credential" (or $g.password $g.existingSecret)
+      "dsn" (and $g.existingSecret $g.existingSecretUrlKey)
+      "waitOn" false) -}}
+{{- end -}}
+{{- $fix := "An external PostgreSQL database is required: set global.postgres.host (plus port/name/username) and global.postgres.password or global.postgres.existingSecret — see \"External managed datastores\" in the chart README — or leave postgres.enabled on" -}}
+{{- range $consumers -}}
+{{- if and .dsn (has .host $bundled) -}}
+{{- /* The connection is fine; only the wait-for-db probe would aim at the
+       bundled host and never succeed. */ -}}
+{{- if .waitOn -}}
+{{- fail (printf "postgres.enabled=false turns off the bundled PostgreSQL. Using the full DSN from its existing secret, %s connects fine, but its wait-for-db init container still waits on %s, which no longer exists, so the pod would never start. Set global.postgres.host (or mcp-mesh-registry.registry.database.host) and port to the DSN's host, or set mcp-mesh-registry.registry.database.waitForDatabase=false" .name .host) -}}
+{{- end -}}
+{{- else if has .host $bundled -}}
+{{- fail (printf "postgres.enabled=false turns off the bundled PostgreSQL, but %s still connects to it (%s). %s" .name .host $fix) -}}
+{{- end -}}
+{{- if and (not .credential) $g.generatedSecret -}}
+{{- fail (printf "postgres.enabled=false turns off the bundled PostgreSQL, but %s still takes its password from the bundled chart's generated Secret, which is no longer rendered. %s" .name $fix) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- end }}
 

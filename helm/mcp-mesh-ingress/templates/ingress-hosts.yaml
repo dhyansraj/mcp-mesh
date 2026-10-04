@@ -31,7 +31,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "mcp-mesh-ingress.serviceName" (dict "service" .Values.core.registry.service "serviceNamespace" .Values.global.serviceNamespace "root" $) }}
+                name: {{ include "mcp-mesh-ingress.coreService" (dict "component" "registry" "root" $) }}
                 port:
                   number: {{ .Values.core.registry.port }}
     {{- end }}
@@ -44,7 +44,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "mcp-mesh-ingress.serviceName" (dict "service" .Values.core.redis.service "serviceNamespace" .Values.global.serviceNamespace "root" $) }}
+                name: {{ include "mcp-mesh-ingress.coreService" (dict "component" "redis" "root" $) }}
                 port:
                   number: {{ .Values.core.redis.port }}
     {{- end }}
@@ -57,7 +57,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "mcp-mesh-ingress.serviceName" (dict "service" .Values.core.ui.service "serviceNamespace" .Values.global.serviceNamespace "root" $) }}
+                name: {{ include "mcp-mesh-ingress.coreService" (dict "component" "ui" "root" $) }}
                 port:
                   number: {{ .Values.core.ui.port }}
     {{- end }}
@@ -70,14 +70,13 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "mcp-mesh-ingress.serviceName" (dict "service" .Values.core.grafana.service "serviceNamespace" .Values.global.serviceNamespace "root" $) }}
+                name: {{ include "mcp-mesh-ingress.coreService" (dict "component" "grafana" "root" $) }}
                 port:
                   number: {{ .Values.core.grafana.port }}
     {{- end }}
 
     {{- /* Agent services */ -}}
-    {{- range .Values.agents }}
-    {{- if .enabled }}
+    {{- range include "mcp-mesh-ingress.agents" . | fromJsonArray }}
     - host: {{ include "mcp-mesh-ingress.hostname" (dict "host" .host "domain" $.Values.global.domain) }}
       http:
         paths:
@@ -85,9 +84,8 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "mcp-mesh-ingress.serviceName" (dict "service" .service "serviceNamespace" $.Values.global.serviceNamespace "root" $) }}
+                name: {{ .service }}
                 port:
-                  number: {{ .port }}
-    {{- end }}
+                  number: {{ .port | int }}
     {{- end }}
 {{- end }}

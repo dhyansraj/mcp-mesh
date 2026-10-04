@@ -1,5 +1,7 @@
 {{- include "mcp-mesh-registry.validateNoRemovedKeys" . -}}
 {{- include "mcp-mesh-registry.validateTrustBackend" . -}}
+{{- include "mcp-mesh-registry.validateDatabaseType" . -}}
+{{- include "mcp-mesh-registry.validateAdminTLS" . -}}
 {{- $db := include "mcp-mesh-registry.databaseSettings" . | fromJson -}}
 {{- $redis := include "mcp-mesh-registry.redisSettings" . | fromJson -}}
 apiVersion: v1
@@ -18,11 +20,10 @@ metadata:
 data:
   {{- /* The registry reads only DATABASE_URL, so no decomposed DATABASE_*
          variables are rendered. The deployment sets DATABASE_URL for
-         postgres only (chart Secret, existing-secret DSN, or composed via
-         $(DATABASE_PASSWORD)); sqlite and mysql get none, and the binary
-         falls back to a relative mcp_mesh_registry.db. Silent invocation so
-         an invalid sslmode fails in every non-sqlite mode, including
-         database.existingSecret with a full DSN. */}}
+         postgres (chart Secret, existing-secret DSN, or composed via
+         $(DATABASE_PASSWORD)); sqlite runs on the image's own DATABASE_URL
+         unless persistence.mountPath moves the data volume. Silent invocation so an invalid sslmode fails in every
+         postgres mode, including database.existingSecret with a full DSN. */}}
   {{- if ne .Values.registry.database.type "sqlite" }}
   {{- $_ := include "mcp-mesh-registry.databaseSSLMode" . }}
   {{- end }}
@@ -58,7 +59,7 @@ data:
   MCP_MESH_DISTRIBUTED_TRACING_ENABLED: {{ hasKey $dt "enabled" | ternary $dt.enabled true | toString | quote }}
   MCP_MESH_TRACE_RETENTION: {{ hasKey $dt "retention" | ternary $dt.retention "24h" | toString | quote }}
   TELEMETRY_ENDPOINT: {{ .Values.registry.observability.telemetryEndpoint | default "tempo:4317" | quote }}
-  # Exporter type: console (default), otlp (for Tempo/Jaeger), json
+  # Exporter type: otlp (default; Tempo/Jaeger), console, json
   TRACE_EXPORTER_TYPE: {{ .Values.registry.observability.exporterType | default "otlp" | quote }}
 
   # TLS and trust configuration
@@ -89,6 +90,9 @@ data:
   {{- end }}
   {{- if gt (int .Values.registry.security.adminPort) 0 }}
   MCP_MESH_ADMIN_PORT: {{ .Values.registry.security.adminPort | quote }}
+  {{- if include "mcp-mesh-registry.adminTLS" . }}
+  MCP_MESH_ADMIN_TLS: "true"
+  {{- end }}
   {{- end }}
 
   # Redis configuration for session/trace storage

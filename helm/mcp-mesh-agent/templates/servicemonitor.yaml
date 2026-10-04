@@ -1,4 +1,4 @@
-{{- if and .Values.serviceMonitor.enabled .Values.agent.http.enabled }}
+{{- if and .Values.serviceMonitor.enabled (include "mcp-mesh-agent.httpEnabled" .) }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:

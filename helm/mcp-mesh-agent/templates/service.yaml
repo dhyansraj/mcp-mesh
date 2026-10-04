@@ -1,4 +1,4 @@
-{{- if .Values.agent.http.enabled }}
+{{- if include "mcp-mesh-agent.httpEnabled" . }}
 apiVersion: v1
 kind: Service
 metadata:

@@ -17,5 +17,5 @@ dependencies:
 - name: mcp-mesh-ui
   repository: file://../mcp-mesh-ui
   version: 3.7.1
-digest: sha256:c6f1d7c4f6c45142e298d219a79825ffe99c0664e8f08a9f8ebdae86fbe9364f
-generated: "2026-08-07T09:54:06.327272-04:00"
+digest: sha256:6c03f64b59a661ed59f931d2e43ffe595f2c6e06b603d564bc0c9573d3fcfcd4
+generated: "2026-10-04T13:00:35.345147-04:00"

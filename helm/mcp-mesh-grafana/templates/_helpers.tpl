@@ -137,6 +137,30 @@ Invoked unconditionally from the deployment.
 {{- end }}
 
 {{/*
+Tempo datasource URL. Empty derives http://<release>-mcp-mesh-tempo:3200 —
+the mcp-mesh-tempo Service of the same mcp-mesh-core release (sibling
+subcharts share .Release.Name). A value containing "{{" is rendered with tpl.
+
+Carve-out: the chart shipped 'http://{{ include "mcp-mesh-core.fullname" . }}-tempo:3200',
+which was never rendered (so Grafana got that literal string as its URL) and
+cannot be: the helper it names does not exist in this chart. A carried copy
+of it is treated as unset.
+*/}}
+{{- define "mcp-mesh-grafana.tempoURL" -}}
+{{- $url := toString (.Values.grafana.datasources.tempo.url | default "") -}}
+{{- if or (not $url) (contains "mcp-mesh-core.fullname" $url) -}}
+{{- /* The tempo chart's fullname rule for a release name that already
+       contains the chart name. Its nameOverride / fullnameOverride are not
+       visible from here (sibling subchart values); set this URL then. */ -}}
+{{- printf "http://%s:3200" (ternary .Release.Name (printf "%s-mcp-mesh-tempo" .Release.Name) (contains "mcp-mesh-tempo" .Release.Name) | trunc 63 | trimSuffix "-") -}}
+{{- else if contains "{{" $url -}}
+{{- tpl $url . -}}
+{{- else -}}
+{{- $url -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Render the image reference as [registry/]repository:tag. The registry prefix
 resolves as grafana.image.registry > global.imageRegistry > "" (implicit Docker Hub).
 The repository path is preserved — mirror images to the same paths in a

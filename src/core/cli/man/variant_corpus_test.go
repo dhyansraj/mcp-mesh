@@ -216,7 +216,9 @@ func stripLangHeader(content string) string {
 // Review follow-up: `deployment_java.md`'s Helm port sentence gains the
 // precedence rule for apps without `@MeshAgent` on the main class
 // (`@MeshAgent`, `server.port`, `server.ssl.*`; +3). 1764 + 3 = 1767.
-const wantVariantInlineCodeSpans = 1767
+// Issue #1574: `deployment_typescript.md`'s Helm note no longer contrasts with
+// Python's `agent.script`, which was never a chart key (-1). 1767 - 1 = 1766.
+const wantVariantInlineCodeSpans = 1766
 
 // TestVariantCorpusCodeSpans is TestStyleInlineCorpus plus
 // TestRenderStyledCorpusListItems, run over the pages neither of them sees.

@@ -55,6 +55,27 @@ each boolean, both set to false and left unset, is what catches a `| default
 true` creeping back. The forbidden names are env vars the charts used to
 inject that no runtime reads.
 
+Issue #1574 adds four more:
+
+  env_values={"DATABASE_URL": "/data/mcp_mesh_registry.db"}
+      some workload container must set each env var to exactly this value
+  config_contains={"datasources.yaml": "http://x-mcp-mesh-tempo:3200"}
+      some rendered ConfigMap key must contain this substring
+  probe_specs={"livenessProbe": {...}, "startupProbe": None}
+      every workload container's probe must equal the dict exactly (None:
+      must be absent). Unlike probe_paths this pins the whole spec, for the
+      registry whose probes deliberately share /health.
+  forbids_kinds=("Service", "Ingress")
+      the render must contain none of these kinds
+  env_unique=("DATABASE_URL",)
+      no workload container may declare one of these env names twice
+  routes_to=(("mcp-mesh-core", "mcp-core", ()), ...)
+      every Ingress backend must name a Service (and port) that the listed
+      charts actually render under those release names. This is what proves
+      a documented install sequence routes: the Ingress, core and agent
+      charts each render fine on their own while pointing at each other's
+      wrong names.
+
 Usage: python3 scripts/check_helm_render_matrix.py  (run from anywhere)
 Exit code 0 = every case behaved as declared.
 """
@@ -96,6 +117,15 @@ class Case:
     forbids_env: tuple[str, ...] = field(default_factory=tuple)
     requires_init_container: str | None = None
     forbids_init_container: str | None = None
+    env_values: dict[str, str] | None = None
+    config_contains: dict[str, str] | None = None
+    probe_specs: dict[str, dict | None] | None = None
+    forbids_kinds: tuple[str, ...] = field(default_factory=tuple)
+    env_unique: tuple[str, ...] = field(default_factory=tuple)
+    release: str = "render-matrix"
+    routes_to: tuple[tuple[str, str, tuple[str, ...]], ...] = field(
+        default_factory=tuple
+    )
 
 
 # Env vars the charts once injected that no runtime reads (issue #1573).
@@ -125,6 +155,126 @@ SHIPPED_REGISTRY_AUTH = {
     "secretKey": "tokens",
 }
 REGISTRY_AUTH_REMOVED = "has been removed: the registry has no token authentication"
+
+# The registry probes as deployment.yaml hard-coded them before #1574 wired the
+# values: the default render must keep exactly these.
+REGISTRY_PROBES_BEFORE_1574 = {
+    "livenessProbe": {
+        "httpGet": {"path": "/health", "port": "http"},
+        "initialDelaySeconds": 30,
+        "periodSeconds": 10,
+        "timeoutSeconds": 5,
+        "failureThreshold": 3,
+    },
+    "readinessProbe": {
+        "httpGet": {"path": "/health", "port": "http"},
+        "initialDelaySeconds": 10,
+        "periodSeconds": 5,
+        "timeoutSeconds": 3,
+        "failureThreshold": 3,
+    },
+    "startupProbe": {
+        "httpGet": {"path": "/health", "port": "http"},
+        "initialDelaySeconds": 5,
+        "periodSeconds": 10,
+        "timeoutSeconds": 5,
+        "failureThreshold": 30,
+    },
+}
+NO_PROBES = {"startupProbe": None, "livenessProbe": None, "readinessProbe": None}
+
+# Removed values keys, each set to a value diverging from what the chart
+# shipped (#1574). Every one must fail naming itself.
+REMOVED_REGISTRY_KEYS = [
+    ("workloadType", {"workloadType": "StatefulSet"}),
+    ("service.targetPort", {"service": {"targetPort": 9000}}),
+    ("registry.logging.format", {"registry": {"logging": {"format": "text"}}}),
+    ("registry.healthCheck.interval", {"registry": {"healthCheck": {"interval": 15}}}),
+    (
+        "registry.performance.maxConnections",
+        {"registry": {"performance": {"maxConnections": 50}}},
+    ),
+    (
+        "registry.performance.connectionTimeout",
+        {"registry": {"performance": {"connectionTimeout": 5}}},
+    ),
+    (
+        "registry.performance.requestTimeout",
+        {"registry": {"performance": {"requestTimeout": 5}}},
+    ),
+    ("podMonitor.enabled", {"podMonitor": {"enabled": True}}),
+    (
+        "registry.database.existingSecretUsernameKey",
+        {"registry": {"database": {"existingSecretUsernameKey": "user"}}},
+    ),
+]
+# The same keys at the values every release from v1.0.0 to v3.7.x shipped.
+SHIPPED_REMOVED_REGISTRY_KEYS = {
+    "workloadType": "Deployment",
+    "service": {"targetPort": 8000},
+    "registry": {
+        "logging": {"format": "json"},
+        "healthCheck": {"enabled": True, "interval": 30, "timeout": 10},
+        "performance": {
+            "maxConnections": 1000,
+            "connectionTimeout": 30,
+            "requestTimeout": 60,
+        },
+        "database": {"existingSecretUsernameKey": "username"},
+    },
+    "podMonitor": {
+        "enabled": False,
+        "namespace": "",
+        "interval": "30s",
+        "scrapeTimeout": "10s",
+        "labels": {},
+        "honorLabels": True,
+        "metricRelabelings": [],
+        "relabelings": [],
+    },
+}
+REMOVED_AGENT_KEYS = [
+    ("service.targetPort", {"service": {"targetPort": 9000}}),
+    ("agent.version", {"agent": {"version": "2.0.0"}}),
+    ("agent.description", {"agent": {"description": "greets people"}}),
+    ("agent.capabilities", {"agent": {"capabilities": [{"name": "greeting"}]}}),
+    ("agent.dependencies", {"agent": {"dependencies": [{"name": "translator"}]}}),
+    ("agent.healthCheck.interval", {"agent": {"healthCheck": {"interval": 15}}}),
+    ("agent.retry.attempts", {"agent": {"retry": {"attempts": 5}}}),
+    ("agent.performance.timeout", {"agent": {"performance": {"timeout": 60}}}),
+    ("agent.http.host", {"agent": {"http": {"host": "127.0.0.1"}}}),
+    (
+        "agent.http.cors.origins",
+        {"agent": {"http": {"cors": {"origins": ["https://app.example.com"]}}}},
+    ),
+    ("podMonitor.enabled", {"podMonitor": {"enabled": True}}),
+    ("podSecurityPolicy.enabled", {"podSecurityPolicy": {"enabled": True}}),
+]
+SHIPPED_REMOVED_AGENT_KEYS = {
+    "service": {"targetPort": 8080},
+    "agent": {
+        "version": "1.0.0",
+        "description": "",
+        "capabilities": [],
+        "dependencies": [],
+        "healthCheck": {"enabled": True, "interval": 30, "timeout": 10},
+        "retry": {"attempts": 3, "delay": 5, "maxDelay": 30},
+        "performance": {
+            "timeout": 30,
+            "maxConcurrent": 10,
+            "cacheEnabled": True,
+            "cacheTTL": 300,
+        },
+        "http": {"host": "0.0.0.0", "cors": {"enabled": True, "origins": ["*"]}},
+    },
+    "podMonitor": dict(SHIPPED_REMOVED_REGISTRY_KEYS["podMonitor"]),
+    "podSecurityPolicy": {"enabled": False},
+}
+# What a mcp-mesh-core install per its README and an agent installed as
+# `helm install hello-world mcp-mesh-agent` render, for the ingress routing
+# cases.
+CORE_AT_MCP_CORE = ("mcp-mesh-core", "mcp-core", ("--set", "ui.enabled=true"))
+AGENT_HELLO_WORLD = ("mcp-mesh-agent", "hello-world", ())
 
 
 CASES: list[Case] = [
@@ -196,7 +346,7 @@ CASES: list[Case] = [
         "mcp-mesh-core",
         "global.coreReleaseName was removed",
         {"global": {"coreReleaseName": "platform"}},
-        expect_fail="global.coreReleaseName was documentation-only",
+        expect_fail="names a different release than this one",
     ),
     Case(
         "mcp-mesh-core",
@@ -723,6 +873,591 @@ CASES: list[Case] = [
             }
         },
     ),
+    # --- #1574: registry probes are values, defaults unchanged -----------
+    Case(
+        "mcp-mesh-registry",
+        "the default probes are the ones deployment.yaml used to hard-code",
+        {},
+        probe_specs=REGISTRY_PROBES_BEFORE_1574,
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "a probe value is honoured",
+        {"livenessProbe": {"initialDelaySeconds": 60}},
+        probe_specs={
+            "livenessProbe": {
+                **REGISTRY_PROBES_BEFORE_1574["livenessProbe"],
+                "initialDelaySeconds": 60,
+            }
+        },
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "an exec handler replaces httpGet",
+        {"readinessProbe": {"httpGet": None, "exec": {"command": ["true"]}}},
+        probe_specs={
+            "readinessProbe": {
+                **{
+                    k: v
+                    for k, v in REGISTRY_PROBES_BEFORE_1574["readinessProbe"].items()
+                    if k != "httpGet"
+                },
+                "exec": {"command": ["true"]},
+            }
+        },
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "a partial probe with no handler keeps the default handler",
+        # What `--reuse-values` from 3.7 plus `--set
+        # startupProbe.failureThreshold=60` hands the template: no default
+        # startupProbe to merge with, so no httpGet (null drops it here).
+        {"startupProbe": {"failureThreshold": 60, "httpGet": None}},
+        probe_specs={
+            "startupProbe": {
+                **REGISTRY_PROBES_BEFORE_1574["startupProbe"],
+                "failureThreshold": 60,
+            }
+        },
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "--reuse-values from 3.7 (no startupProbe, the never-read liveness) keeps the probes",
+        # `helm upgrade --reuse-values` renders with the OLD chart's values:
+        # no startupProbe key (null here is the same thing after Helm's
+        # merge) and the livenessProbe values.yaml declared but nothing read.
+        {
+            "startupProbe": None,
+            "livenessProbe": {
+                "httpGet": {"path": "/health", "port": "http"},
+                "initialDelaySeconds": 10,
+                "periodSeconds": 10,
+                "timeoutSeconds": 5,
+                "failureThreshold": 3,
+            },
+        },
+        probe_specs=REGISTRY_PROBES_BEFORE_1574,
+    ),
+    Case(
+        "mcp-mesh-core",
+        "the umbrella renders the same registry probes",
+        # Every other workload off (postgres via an external database), so
+        # the registry is the only container the probe check sees.
+        {
+            "postgres": {"enabled": False},
+            "redis": {"enabled": False},
+            "grafana": {"enabled": False},
+            "tempo": {"enabled": False},
+            "global": {"postgres": {"host": "db.example.com", "existingSecret": "pg"}},
+        },
+        probe_specs=REGISTRY_PROBES_BEFORE_1574,
+    ),
+    # --- #1574: registry database type and sqlite DATABASE_URL -----------
+    Case(
+        "mcp-mesh-registry",
+        "sqlite at /data renders no DATABASE_URL, so the image's own file applies",
+        {"registry": {"database": {"type": "sqlite"}}},
+        forbids_env=("DATABASE_URL",),
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "sqlite at /data leaves a user-supplied DATABASE_URL alone",
+        {
+            "registry": {"database": {"type": "sqlite"}},
+            "env": [{"name": "DATABASE_URL", "value": "/data/custom.db"}],
+        },
+        env_values={"DATABASE_URL": "/data/custom.db"},
+        env_unique=("DATABASE_URL",),
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "registry.database.path was never applied",
+        {"registry": {"database": {"type": "sqlite", "path": "/data/mesh.db"}}},
+        expect_fail="registry.database.path was never applied and has been removed",
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "the shipped registry.database.path is grandfathered and changes nothing",
+        {"registry": {"database": {"type": "sqlite", "path": "/data/registry.db"}}},
+        forbids_env=("DATABASE_URL",),
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "a moved sqlite volume gets DATABASE_URL on it",
+        {
+            "registry": {"database": {"type": "sqlite"}},
+            "persistence": {"mountPath": "/var/lib/registry"},
+        },
+        env_values={"DATABASE_URL": "/var/lib/registry/mcp_mesh_registry.db"},
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "a moved sqlite volume keeps a user-supplied DATABASE_URL, declared once",
+        {
+            "registry": {"database": {"type": "sqlite"}},
+            "persistence": {"mountPath": "/var/lib/registry"},
+            "env": [{"name": "DATABASE_URL", "value": "/var/lib/registry/mine.db"}],
+        },
+        env_values={"DATABASE_URL": "/var/lib/registry/mine.db"},
+        env_unique=("DATABASE_URL",),
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "mysql has no driver in the registry",
+        {"registry": {"database": {"type": "mysql"}}},
+        expect_fail='registry.database.type="mysql" is not supported',
+    ),
+    # --- #1574: registry adminTLS ------------------------------------------
+    Case(
+        "mcp-mesh-registry",
+        "adminTLS without adminPort",
+        {"registry": {"security": {"adminTLS": True}}},
+        expect_fail="adminTLS applies only to a separate admin listener",
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "adminTLS without registry TLS",
+        {"registry": {"security": {"adminTLS": True, "adminPort": 9443}}},
+        expect_fail="requires registry.security.tls.enabled=true",
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "adminTLS with tls.mode off (the default)",
+        {
+            "registry": {
+                "security": {
+                    "adminTLS": True,
+                    "adminPort": 9443,
+                    "tls": {"enabled": True, "secretName": "reg-tls"},
+                }
+            }
+        },
+        expect_fail="adminTLS needs registry.security.tls.mode auto or strict",
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "adminTLS renders MCP_MESH_ADMIN_TLS",
+        {
+            "registry": {
+                "security": {
+                    "adminTLS": True,
+                    "adminPort": 9443,
+                    "tls": {"enabled": True, "mode": "strict", "secretName": "reg-tls"},
+                    "trust": {"backend": "k8s-secrets"},
+                }
+            }
+        },
+        config_data={"MCP_MESH_ADMIN_TLS": "true", "MCP_MESH_ADMIN_PORT": "9443"},
+    ),
+    Case(
+        "mcp-mesh-registry",
+        'adminTLS "false" leaves the admin port as it was',
+        {"registry": {"security": {"adminTLS": "false", "adminPort": 9443}}},
+        config_data={"MCP_MESH_ADMIN_PORT": "9443"},
+        forbids_env=("MCP_MESH_ADMIN_TLS",),
+    ),
+    # --- #1574: removed registry keys --------------------------------------
+    *[
+        Case(
+            "mcp-mesh-registry",
+            f"{key} was never read",
+            values,
+            expect_fail=f"{key} was never read by any template and has been removed",
+        )
+        for key, values in REMOVED_REGISTRY_KEYS
+    ],
+    Case(
+        "mcp-mesh-registry",
+        "the removed keys at their shipped defaults are grandfathered",
+        SHIPPED_REMOVED_REGISTRY_KEYS,
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "null on a removed key renders (Helm drops it before the guard sees it)",
+        {"workloadType": None, "registry": {"healthCheck": {"interval": None}}},
+    ),
+    Case(
+        "mcp-mesh-core",
+        "a removed registry key through the umbrella still fails",
+        {"mcp-mesh-registry": {"workloadType": "StatefulSet"}},
+        expect_fail="workloadType was never read by any template",
+    ),
+    # --- #1574: umbrella removed keys and the external-database guard -------
+    Case(
+        "mcp-mesh-core",
+        "podDisruptionBudgets.enabled was removed",
+        {"podDisruptionBudgets": {"enabled": True}},
+        expect_fail="podDisruptionBudgets.enabled was never consumed",
+    ),
+    Case(
+        "mcp-mesh-core",
+        "podDisruptionBudgets.enabled: false (the old default) is tolerated",
+        {"podDisruptionBudgets": {"enabled": False}},
+    ),
+    Case(
+        "mcp-mesh-core",
+        "postgres off still pointing at this release's bundled host",
+        {
+            "postgres": {"enabled": False},
+            "global": {"postgres": {"host": "render-matrix-mcp-mesh-postgres"}},
+        },
+        expect_fail="the registry still connects to it (render-matrix-mcp-mesh-postgres)",
+    ),
+    Case(
+        "mcp-mesh-core",
+        "postgres off with nothing configured has no database",
+        {"postgres": {"enabled": False}},
+        expect_fail="the registry still connects to it (mcp-core-mcp-mesh-postgres)",
+    ),
+    Case(
+        "mcp-mesh-core",
+        "postgres off with an external host but the generated credential",
+        {"postgres": {"enabled": False}, "global": {"postgres": {"host": "db.example.com"}}},
+        expect_fail="takes its password from the bundled chart's generated Secret",
+    ),
+    Case(
+        "mcp-mesh-core",
+        "postgres off with an external database renders",
+        {
+            "postgres": {"enabled": False},
+            "global": {"postgres": {"host": "db.example.com", "existingSecret": "pg"}},
+        },
+        requires_init_container="wait-for-db",
+    ),
+    Case(
+        "mcp-mesh-core",
+        "postgres off checks the UI too",
+        {
+            "postgres": {"enabled": False},
+            "ui": {"enabled": True},
+            "mcp-mesh-registry": {
+                "registry": {"database": {"host": "db.example.com", "password": "x"}}
+            },
+        },
+        expect_fail="but the UI still connects to it",
+    ),
+    Case(
+        "mcp-mesh-core",
+        "postgres off with a sqlite registry needs no external database",
+        {
+            "postgres": {"enabled": False},
+            "mcp-mesh-registry": {"registry": {"database": {"type": "sqlite"}}},
+        },
+        forbids_env=("DATABASE_URL",),
+        forbids_init_container="wait-for-db",
+    ),
+    Case(
+        "mcp-mesh-core",
+        "grafana's tempo datasource follows the release name",
+        {},
+        config_contains={"datasources.yaml": "url: http://render-matrix-mcp-mesh-tempo:3200"},
+    ),
+    Case(
+        "mcp-mesh-core",
+        "postgres off with a full DSN secret and wait-for-db off renders",
+        {
+            "postgres": {"enabled": False},
+            "ui": {"enabled": True},
+            "global": {"postgres": {"existingSecret": "pg", "existingSecretUrlKey": "dsn"}},
+            "mcp-mesh-registry": {"registry": {"database": {"waitForDatabase": False}}},
+        },
+        forbids_init_container="wait-for-db",
+    ),
+    Case(
+        "mcp-mesh-core",
+        "postgres off with a full DSN secret but wait-for-db aimed at the bundled host",
+        {
+            "postgres": {"enabled": False},
+            "global": {"postgres": {"existingSecret": "pg", "existingSecretUrlKey": "dsn"}},
+        },
+        expect_fail="its wait-for-db init container still waits on mcp-core-mcp-mesh-postgres",
+    ),
+    Case(
+        "mcp-mesh-core",
+        "postgres off with a full DSN secret and wait-for-db on the real host renders",
+        {
+            "postgres": {"enabled": False},
+            "global": {
+                "postgres": {
+                    "host": "db.example.com",
+                    "existingSecret": "pg",
+                    "existingSecretUrlKey": "dsn",
+                }
+            },
+        },
+        requires_init_container="wait-for-db",
+    ),
+    Case(
+        "mcp-mesh-core",
+        "global.coreReleaseName naming this release (a user's own umbrella) renders",
+        {"global": {"coreReleaseName": "render-matrix"}},
+    ),
+    Case(
+        "mcp-mesh-ingress",
+        "an umbrella-style install routes once coreReleaseName names the release",
+        {"global": {"coreReleaseName": "render-matrix"}, "core": {"ui": {"enabled": True}}},
+        routes_to=(
+            (
+                "mcp-mesh-core",
+                "render-matrix",
+                ("--set", "ui.enabled=true", "--set", "global.coreReleaseName=render-matrix"),
+            ),
+        ),
+    ),
+    Case(
+        "mcp-mesh-core",
+        "postgres off with no host at any layer falls back to a bundled name",
+        {
+            "postgres": {"enabled": False},
+            "global": {"postgres": {"host": "", "password": "x"}},
+        },
+        expect_fail="the registry still connects to it (mcp-mesh-postgres)",
+    ),
+    # --- #1633 review: registry probes under TLS ---------------------------
+    Case(
+        "mcp-mesh-registry",
+        "TLS auto: probes speak HTTPS to the HTTPS-only port",
+        {
+            "registry": {
+                "security": {
+                    "tls": {"enabled": True, "mode": "auto", "secretName": "reg-tls"},
+                    "trust": {"backend": "k8s-secrets"},
+                }
+            }
+        },
+        probe_specs={
+            name: {**spec, "httpGet": {**spec["httpGet"], "scheme": "HTTPS"}}
+            for name, spec in REGISTRY_PROBES_BEFORE_1574.items()
+        },
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "TLS strict: certless probes would get 403, so they check the socket",
+        {
+            "registry": {
+                "security": {
+                    "tls": {"enabled": True, "mode": "strict", "secretName": "reg-tls"},
+                    "trust": {"backend": "k8s-secrets"},
+                }
+            }
+        },
+        probe_specs={
+            name: {
+                **{k: v for k, v in spec.items() if k != "httpGet"},
+                "tcpSocket": {"port": "http"},
+            }
+            for name, spec in REGISTRY_PROBES_BEFORE_1574.items()
+        },
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "TLS strict leaves a probe with an explicit scheme alone",
+        {
+            "registry": {
+                "security": {
+                    "tls": {"enabled": True, "mode": "strict", "secretName": "reg-tls"},
+                    "trust": {"backend": "k8s-secrets"},
+                }
+            },
+            "livenessProbe": {"httpGet": {"scheme": "HTTP"}},
+        },
+        probe_specs={
+            "livenessProbe": {
+                **REGISTRY_PROBES_BEFORE_1574["livenessProbe"],
+                "httpGet": {"path": "/health", "port": "http", "scheme": "HTTP"},
+            }
+        },
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "a moved sqlite volume with envFrom renders no DATABASE_URL over it",
+        {
+            "registry": {"database": {"type": "sqlite"}},
+            "persistence": {"mountPath": "/var/lib/registry"},
+            "envFrom": [{"secretRef": {"name": "registry-db"}}],
+        },
+        forbids_env=("DATABASE_URL",),
+    ),
+    # --- #1633 review: derived names follow the component fullname rule ----
+    Case(
+        "mcp-mesh-ingress",
+        "a core release named after a component chart routes to its Service",
+        {"global": {"coreReleaseName": "mcp-mesh-registry"}},
+        routes_to=(("mcp-mesh-core", "mcp-mesh-registry", ()),),
+    ),
+    Case(
+        "mcp-mesh-ingress",
+        "a templated agent service is rendered with tpl",
+        {
+            "agents": [
+                {"name": "hello", "service": "{{ .Release.Name }}-mcp-mesh-agent"}
+            ]
+        },
+        routes_to=(CORE_AT_MCP_CORE, ("mcp-mesh-agent", "render-matrix", ())),
+    ),
+    Case(
+        "mcp-mesh-grafana",
+        "a release named after the tempo chart uses the tempo chart's fullname",
+        {"grafana": {"config": {"adminPassword": "x"}}},
+        release="mcp-mesh-tempo",
+        config_contains={"datasources.yaml": "url: http://mcp-mesh-tempo:3200"},
+    ),
+    # --- #1574: agent.http.enabled off makes a valid non-HTTP agent --------
+    Case(
+        "mcp-mesh-agent",
+        "http off drops the Service, port and probes",
+        {
+            "agent": {"http": {"enabled": False}},
+            "ingress": {"enabled": True},
+            "serviceMonitor": {"enabled": True},
+        },
+        config_data={"MCP_MESH_HTTP_ENABLED": "false"},
+        probe_specs=NO_PROBES,
+        forbids_kinds=("Service", "Ingress", "ServiceMonitor"),
+    ),
+    Case(
+        "mcp-mesh-agent",
+        'http "false" (quoted) is off everywhere, not just in the env',
+        {
+            "agent": {"http": {"enabled": "false"}},
+            "ingress": {"enabled": True},
+            "serviceMonitor": {"enabled": True},
+        },
+        config_data={"MCP_MESH_HTTP_ENABLED": "false"},
+        probe_specs=NO_PROBES,
+        forbids_kinds=("Service", "Ingress", "ServiceMonitor"),
+    ),
+    Case(
+        "mcp-mesh-agent",
+        "http off keeps a probe that does not use the http port",
+        {
+            "agent": {"http": {"enabled": False}},
+            "livenessProbe": {"httpGet": None, "exec": {"command": ["cat", "/tmp/alive"]}},
+        },
+        probe_specs={
+            "startupProbe": None,
+            "readinessProbe": None,
+            "livenessProbe": {
+                "exec": {"command": ["cat", "/tmp/alive"]},
+                "initialDelaySeconds": 15,
+                "periodSeconds": 10,
+                "timeoutSeconds": 5,
+                "failureThreshold": 3,
+            },
+        },
+    ),
+    Case(
+        "mcp-mesh-agent",
+        "http null means on, everywhere",
+        {"agent": {"http": {"enabled": None}}, "ingress": {"enabled": True}},
+        config_data={"MCP_MESH_HTTP_ENABLED": "true"},
+        requires_kind="Ingress",
+        probe_paths={
+            "startupProbe": "/startupz",
+            "livenessProbe": "/livez",
+            "readinessProbe": "/ready",
+        },
+    ),
+    # --- #1574: removed agent keys -----------------------------------------
+    *[
+        Case(
+            "mcp-mesh-agent",
+            f"{key} was never read",
+            values,
+            expect_fail=(
+                f"{key} has been removed"
+                if key == "podSecurityPolicy.enabled"
+                else f"{key} was never read by any template and has been removed"
+            ),
+        )
+        for key, values in REMOVED_AGENT_KEYS
+    ],
+    Case(
+        "mcp-mesh-agent",
+        "the removed agent keys at their shipped defaults are grandfathered",
+        SHIPPED_REMOVED_AGENT_KEYS,
+    ),
+    # --- #1574: ingress routes to what core and the agents actually render --
+    Case(
+        "mcp-mesh-ingress",
+        "the default ingress routes to the registry of a core installed as mcp-core",
+        {},
+        routes_to=(CORE_AT_MCP_CORE,),
+    ),
+    Case(
+        "mcp-mesh-ingress",
+        "README Pattern 1 (core + hello-world agent + ingress) routes",
+        {
+            "agents": [{"name": "hello-world"}],
+            "core": {"ui": {"enabled": True}, "grafana": {"enabled": True}},
+            "patterns": {"pathBased": {"enabled": True}},
+        },
+        routes_to=(CORE_AT_MCP_CORE, AGENT_HELLO_WORLD),
+    ),
+    Case(
+        "mcp-mesh-ingress",
+        "the old shipped {{ .Release.Name }} service names route to core",
+        {
+            "core": {
+                "registry": {"service": "{{ .Release.Name }}-mcp-mesh-registry"},
+                "ui": {"enabled": True, "service": "{{ .Release.Name }}-mcp-mesh-ui"},
+            }
+        },
+        routes_to=(CORE_AT_MCP_CORE,),
+    ),
+    Case(
+        "mcp-mesh-ingress",
+        "global.serviceNamespace never produced a valid backend",
+        {"global": {"serviceNamespace": "mcp-mesh"}},
+        expect_fail="global.serviceNamespace has been removed",
+    ),
+    Case(
+        "mcp-mesh-ingress",
+        "the ingress chart has no pods to schedule",
+        {"nodeSelector": {"role": "edge"}},
+        expect_fail="nodeSelector was never read by any template",
+    ),
+    Case(
+        "mcp-mesh-ingress",
+        "an agent entry needs a name",
+        {"agents": [{"port": 8080}]},
+        expect_fail="agents[0] needs a name",
+    ),
+    # --- #1574: standalone grafana tempo datasource -----------------------
+    Case(
+        "mcp-mesh-grafana",
+        "the tempo datasource is a real service name, not a template literal",
+        {"grafana": {"config": {"adminPassword": "x"}}},
+        config_contains={"datasources.yaml": "url: http://render-matrix-mcp-mesh-tempo:3200"},
+    ),
+    Case(
+        "mcp-mesh-grafana",
+        "the old shipped include literal is treated as unset",
+        {
+            "grafana": {
+                "config": {"adminPassword": "x"},
+                "datasources": {
+                    "tempo": {"url": 'http://{{ include "mcp-mesh-core.fullname" . }}-tempo:3200'}
+                },
+            }
+        },
+        config_contains={"datasources.yaml": "url: http://render-matrix-mcp-mesh-tempo:3200"},
+    ),
+    Case(
+        "mcp-mesh-grafana",
+        "a templated tempo URL is rendered",
+        {
+            "grafana": {
+                "config": {"adminPassword": "x"},
+                "datasources": {
+                    "tempo": {"url": "http://{{ .Release.Name }}-tempo.observability:3200"}
+                },
+            }
+        },
+        config_contains={
+            "datasources.yaml": "url: http://render-matrix-tempo.observability:3200"
+        },
+    ),
 ]
 
 
@@ -733,7 +1468,7 @@ def run_case(case: Case, values_file: Path) -> str | None:
         [
             "helm",
             "template",
-            "render-matrix",
+            case.release,
             str(HELM_DIR / case.chart),
             "--values",
             str(values_file),
@@ -752,13 +1487,22 @@ def run_case(case: Case, values_file: Path) -> str | None:
         kinds = _rendered_kinds(result.stdout)
         if case.requires_kind and case.requires_kind not in kinds:
             return f"the render contains no {case.requires_kind} object"
-        if case.forbids_kind and case.forbids_kind in kinds:
-            return (
-                f"the render contains a {case.forbids_kind} object, which "
-                "these values must not produce"
-            )
+        for kind in (case.forbids_kind, *case.forbids_kinds):
+            if kind and kind in kinds:
+                return (
+                    f"the render contains a {kind} object, which these values "
+                    "must not produce"
+                )
         if case.probe_paths:
             reason = _check_probe_paths(result.stdout, case.probe_paths)
+            if reason:
+                return reason
+        if case.probe_specs:
+            reason = _check_probe_specs(result.stdout, case.probe_specs)
+            if reason:
+                return reason
+        if case.routes_to:
+            reason = _check_routes(result.stdout, case.routes_to)
             if reason:
                 return reason
         return _check_config(result.stdout, case)
@@ -830,6 +1574,66 @@ def _check_probe_paths(manifests: str, expected: dict[str, str]) -> str | None:
     return None
 
 
+def _workload_containers(manifests: str) -> list[dict]:
+    return [
+        container
+        for doc in yaml.safe_load_all(manifests)
+        if isinstance(doc, dict)
+        and doc.get("kind") in {"Deployment", "StatefulSet", "DaemonSet"}
+        for container in doc["spec"]["template"]["spec"].get("containers", [])
+    ]
+
+
+def _check_probe_specs(manifests: str, expected: dict[str, dict | None]) -> str | None:
+    """Assert each workload container's probes equal the declared specs."""
+    containers = _workload_containers(manifests)
+    if not containers:
+        return "the render contains no workload containers to probe"
+    for container in containers:
+        for probe, want in expected.items():
+            got = container.get(probe)
+            if got != want:
+                return f"container {container['name']!r} {probe} is {got!r}, expected {want!r}"
+    return None
+
+
+def _check_routes(
+    manifests: str, targets: tuple[tuple[str, str, tuple[str, ...]], ...]
+) -> str | None:
+    """Assert every Ingress backend is a Service the target charts render."""
+    services: set[tuple[str, int]] = set()
+    for chart, release, args in targets:
+        build_dependencies(chart)
+        result = subprocess.run(
+            ["helm", "template", release, str(HELM_DIR / chart), *args],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            return f"routing target {chart} ({release}) failed to render:\n{_indent(result.stderr)}"
+        for doc in yaml.safe_load_all(result.stdout):
+            if isinstance(doc, dict) and doc.get("kind") == "Service":
+                for port in doc["spec"].get("ports", []):
+                    services.add((doc["metadata"]["name"], int(port["port"])))
+    backends = [
+        (path["backend"]["service"]["name"], int(path["backend"]["service"]["port"]["number"]))
+        for doc in yaml.safe_load_all(manifests)
+        if isinstance(doc, dict) and doc.get("kind") == "Ingress"
+        for rule in doc["spec"].get("rules", [])
+        for path in rule["http"]["paths"]
+    ]
+    if not backends:
+        return "the render contains no Ingress backends"
+    for name, port in backends:
+        if (name, port) not in services:
+            return (
+                f"an Ingress routes to Service {name}:{port}, which "
+                f"{', '.join(f'{c} ({r})' for c, r, _ in targets)} do not render "
+                f"(they render {sorted(services)})"
+            )
+    return None
+
+
 def _check_config(manifests: str, case: Case) -> str | None:
     """Assert the ConfigMap values, forbidden env names and init containers."""
     docs = [d for d in yaml.safe_load_all(manifests) if isinstance(d, dict)]
@@ -860,6 +1664,30 @@ def _check_config(manifests: str, case: Case) -> str | None:
             return f"no rendered ConfigMap carries {key}"
         if want not in got:
             return f"{key} renders {got}, expected {want!r}"
+    for key, want in (case.config_contains or {}).items():
+        got = config.get(key)
+        if not got:
+            return f"no rendered ConfigMap carries {key}"
+        if not any(want in value for value in got):
+            return f"{key} does not contain {want!r}:\n{_indent(got[0])}"
+    env_values: dict[str, list[str]] = {}
+    for spec in pod_specs:
+        for container in spec.get("containers") or []:
+            for entry in container.get("env") or []:
+                if "value" in entry:
+                    env_values.setdefault(entry["name"], []).append(str(entry["value"]))
+    for spec in pod_specs:
+        for container in spec.get("containers") or []:
+            names = [e.get("name") for e in container.get("env") or []]
+            for name in case.env_unique:
+                if names.count(name) > 1:
+                    return f"container {container['name']!r} declares {name} {names.count(name)} times"
+    for name, want in (case.env_values or {}).items():
+        got = env_values.get(name)
+        if not got:
+            return f"no workload container sets {name}"
+        if want not in got:
+            return f"{name} renders {got}, expected {want!r}"
     for name in case.forbids_env:
         if name in config:
             return f"a ConfigMap still injects {name}, which no runtime reads"

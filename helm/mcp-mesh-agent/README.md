@@ -4,8 +4,8 @@ This Helm chart deploys MCP Mesh agents on Kubernetes. It supports Python, TypeS
 
 ## Prerequisites
 
-- Kubernetes 1.19+
-- Helm 3.2.0+
+- Kubernetes 1.21+
+- Helm 3.8+
 - MCP Mesh Registry deployed and accessible
 - An MCP agent packaged as a Docker image
 
@@ -59,7 +59,7 @@ helm uninstall my-agent -n mcp-mesh
 | Parameter          | Description                                         | Default                        |
 | ------------------ | --------------------------------------------------- | ------------------------------ |
 | `image.repository` | Container image repository                          | `"mcpmesh/python-runtime"`     |
-| `image.tag`        | Image tag (overrides chart appVersion)              | `"0.9"`                        |
+| `image.tag`        | Image tag (overrides chart appVersion)              | `"3.7"`                        |
 | `agent.name`       | Agent name for registry                             | `""`                           |
 | `agent.command`    | Container command override (empty = use Docker CMD) | `[]`                           |
 | `registry.host`    | MCP Mesh Registry host                              | `"mcp-core-mcp-mesh-registry"` |
@@ -67,17 +67,16 @@ helm uninstall my-agent -n mcp-mesh
 
 ### Agent Configuration
 
-| Parameter                   | Description                                       | Default   |
-| --------------------------- | ------------------------------------------------- | --------- |
-| `agent.name`                | Agent name override (empty = use from decorator)  | `""`      |
-| `agent.runtime`             | Runtime override (empty = auto-detect from image) | `""`      |
-| `agent.version`             | Agent version                                     | `"1.0.0"` |
-| `agent.description`         | Agent description                                 | `""`      |
-| `agent.capabilities`        | List of capabilities provided                     | `[]`      |
-| `agent.dependencies`        | List of required dependencies                     | `[]`      |
-| `agent.healthCheck.enabled` | Enable health checks                              | `true`    |
-| `agent.command`             | Container command override                        | `[]`      |
-| `agent.advertisedHost`      | Hostname advertised to registry                   | `""`      |
+| Parameter              | Description                                       | Default |
+| ---------------------- | ------------------------------------------------- | ------- |
+| `agent.name`           | Agent name override (empty = use from decorator)  | `""`    |
+| `agent.runtime`        | Runtime override (empty = auto-detect from image) | `""`    |
+| `agent.command`        | Container command override                        | `[]`    |
+| `agent.advertisedHost` | Hostname advertised to registry                   | `""`    |
+
+The agent's version, description, capabilities, dependencies and health check
+are declared in its code (`@mesh.agent` / `@mesh.tool` and their TypeScript and
+Java equivalents), not in chart values.
 
 `agent.advertisedHost` sets `MCP_MESH_HTTP_HOST`, the address consumers actually
 dial. Empty means Service DNS (`<release>-mcp-mesh-agent.<namespace>`), which is
@@ -89,21 +88,21 @@ pins every call to that one pod.
 
 ### HTTP Configuration
 
-| Parameter                 | Description          | Default     |
-| ------------------------- | -------------------- | ----------- |
-| `agent.http.enabled`      | Enable HTTP wrapper  | `true`      |
-| `agent.http.host`         | HTTP host            | `"0.0.0.0"` |
-| `agent.http.port`         | HTTP port            | `8080`      |
-| `agent.http.cors.enabled` | Enable CORS          | `true`      |
-| `agent.http.cors.origins` | CORS allowed origins | `["*"]`     |
+| Parameter            | Description                                                         | Default |
+| -------------------- | ------------------------------------------------------------------- | ------- |
+| `agent.http.enabled` | Serve HTTP (`MCP_MESH_HTTP_ENABLED`). Off: no Service, ServiceMonitor, Ingress or container port, and no probes on the `http` port | `true` |
+| `agent.http.port`    | HTTP port the agent listens on in the pod                           | `8080`  |
+
+The agent binds `0.0.0.0` in the pod; the address it advertises to consumers is
+`agent.advertisedHost`.
 
 ### Mesh Configuration
 
-| Parameter       | Description          | Default  |
-| --------------- | -------------------- | -------- |
-| `mesh.enabled`  | Enable mesh features | `true`   |
-| `mesh.debug`    | Debug mode           | `false`  |
-| `mesh.logLevel` | Log level            | `"INFO"` |
+| Parameter       | Description          | Default   |
+| --------------- | -------------------- | --------- |
+| `mesh.enabled`  | Enable mesh features | `true`    |
+| `mesh.debug`    | Debug mode           | `true`    |
+| `mesh.logLevel` | Log level            | `"DEBUG"` |
 
 ### Deployment Configuration
 
@@ -113,7 +112,7 @@ pins every call to that one pod.
 | `strategy`                  | Deployment update strategy (unset = Kubernetes default `RollingUpdate`; pin `rollingUpdate.maxSurge: 0` for ReadWriteOnce `persistence`) | `{}` |
 | `image.repository`          | Container image repository             | `"mcpmesh/python-runtime"` |
 | `image.pullPolicy`          | Image pull policy                      | `IfNotPresent`             |
-| `image.tag`                 | Image tag (overrides chart appVersion) | `"0.9"`                    |
+| `image.tag`                 | Image tag (overrides chart appVersion) | `"3.7"`                    |
 | `resources.limits.cpu`      | CPU limit                              | `1`                        |
 | `resources.limits.memory`   | Memory limit                           | `1Gi`                      |
 | `resources.requests.cpu`    | CPU request                            | `100m`                     |
@@ -137,12 +136,31 @@ pins every call to that one pod.
 
 ### Agent Code Configuration
 
-| Parameter                 | Description                               | Default        |
-| ------------------------- | ----------------------------------------- | -------------- |
-| `agentCode.enabled`       | Enable mounting agent code from ConfigMap | `false`        |
-| `agentCode.configMapName` | External ConfigMap name                   | `""`           |
-| `agentCode.scriptPath`    | Script path for auto-generated ConfigMap  | `""`           |
-| `agentCode.mountPath`     | Mount path for agent code                 | `"/app/agent"` |
+Agent code normally ships in the image (see
+[Building Custom Agent Images](#building-custom-agent-images)) and runs through
+the image's own entrypoint. For a single-file Python agent on the stock
+`mcpmesh/python-runtime` image, the script can come from a ConfigMap instead,
+mounted at `agentCode.mountPath` under the key `agent.py` and started with
+`agent.command`:
+
+```bash
+kubectl create configmap my-agent-code -n mcp-mesh --from-file=agent.py=./my_agent.py
+
+helm install my-agent ./helm/mcp-mesh-agent -n mcp-mesh \
+  --set agentCode.enabled=true \
+  --set agentCode.configMapName=my-agent-code \
+  --set 'agent.command={python,/app/agent/agent.py}'
+```
+
+See [docs/agent-code-methods.md](./docs/agent-code-methods.md) for the
+trade-offs.
+
+| Parameter                 | Description                                                    | Default        |
+| ------------------------- | -------------------------------------------------------------- | -------------- |
+| `agentCode.enabled`       | Mount agent code from a ConfigMap                              | `false`        |
+| `agentCode.configMapName` | Existing ConfigMap to mount (empty = `<fullname>-code`, rendered from `scriptPath`) | `""` |
+| `agentCode.scriptPath`    | File inside the chart directory rendered into `<fullname>-code` (local chart copies only) | `""` |
+| `agentCode.mountPath`     | Directory the ConfigMap is mounted at                          | `"/app/agent"` |
 
 ## Runtime Detection
 
@@ -211,11 +229,6 @@ image:
 
 agent:
   name: production-agent
-  healthCheck:
-    interval: 15
-  performance:
-    timeout: 60
-    maxConcurrent: 20
 
 resources:
   limits:

@@ -29,6 +29,7 @@ import argparse
 import difflib
 import os
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -1047,6 +1048,59 @@ def bump_helm_charts(old: str, new: str, dry_run: bool) -> list[str]:
     return changed
 
 
+CORE_CHART = Path("helm") / "mcp-mesh-core"
+
+
+def regenerate_chart_lock(
+    dry_run: bool, which=shutil.which, run=subprocess.run
+) -> str | None:
+    """Recompute helm/mcp-mesh-core/Chart.lock after the version rewrite.
+
+    bump_helm_charts rewrites the dependency versions in Chart.yaml and
+    Chart.lock textually, but Chart.lock also carries a digest over the
+    dependency list, and only helm can recompute it. Left stale, every
+    `helm dependency build` fails with "the lock file (Chart.lock) is out of
+    sync" — which is how v3.7.0 and v3.7.1 shipped, while this step was only a
+    printed reminder (#1574).
+
+    `helm dependency update` is safe to run here: every dependency of the
+    umbrella is a file:// sibling chart, so nothing is resolved from a remote
+    index (--skip-refresh also skips refreshing any configured repo caches)
+    and the only change is the digest and the generated timestamp. The
+    follow-up `helm dependency build` proves the result is consistent.
+
+    Returns None on success, else an error message naming the exact commands
+    to run.
+    """
+    chart_dir = PROJECT_ROOT / CORE_CHART
+    if not (chart_dir / "Chart.lock").exists():
+        return None
+    commands = [
+        ["helm", "dependency", "update", "--skip-refresh", str(CORE_CHART)],
+        ["helm", "dependency", "build", str(CORE_CHART)],
+    ]
+    manual = " && ".join(" ".join(c) for c in commands)
+    if dry_run:
+        print(f"[DRY RUN] Would regenerate Chart.lock: {manual}")
+        return None
+    if which("helm") is None:
+        return (
+            "helm is not on PATH, so helm/mcp-mesh-core/Chart.lock still has "
+            "the OLD digest and `helm dependency build` will fail. Install "
+            f"helm, then run from the repository root:\n  {manual}"
+        )
+    for cmd in commands:
+        result = run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True)
+        if result.returncode != 0:
+            return (
+                f"`{' '.join(cmd)}` failed, so helm/mcp-mesh-core/Chart.lock "
+                f"may be out of sync:\n{(result.stderr or result.stdout).strip()}"
+                f"\nFix the cause, then run from the repository root:\n  {manual}"
+            )
+    print("Regenerated helm/mcp-mesh-core/Chart.lock (helm dependency update; build verified)")
+    return None
+
+
 def bump_test_config(old: str, new: str, dry_run: bool) -> list[str]:
     """tests/lib-tests/config.yaml — multiple keys, mixed formats."""
     changed: list[str] = []
@@ -1568,13 +1622,11 @@ def main() -> int:
             f"Summary: {total_files} files updated across {total_categories} categories"
         )
 
-    chart_lock = PROJECT_ROOT / "helm" / "mcp-mesh-core" / "Chart.lock"
-    if chart_lock.exists():
-        print()
-        print(
-            "Reminder: run 'helm dependency update helm/mcp-mesh-core' "
-            "to regenerate Chart.lock digest"
-        )
+    chart_lock = PROJECT_ROOT / CORE_CHART / "Chart.lock"
+    print()
+    chart_lock_error = regenerate_chart_lock(dry_run)
+    if chart_lock_error:
+        print(f"❌ Chart.lock: {chart_lock_error}")
 
     cargo_lock = PROJECT_ROOT / "src" / "runtime" / "core" / "Cargo.lock"
     if cargo_lock.exists():
@@ -1627,7 +1679,7 @@ def main() -> int:
             "  python3 scripts/check_release_lockfiles.py"
         )
 
-    failed = False
+    failed = chart_lock_error is not None
 
     # Over-match guard: every line we rewrote must be provably mesh-owned.
     # Runs under --dry-run too — the change log is populated either way, so

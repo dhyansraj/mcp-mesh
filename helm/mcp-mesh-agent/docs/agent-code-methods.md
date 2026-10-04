@@ -1,191 +1,105 @@
 # Agent Code Deployment Methods
 
-The mcp-mesh-agent chart supports three different methods for deploying Python agent scripts. Each method has different use cases and trade-offs.
+The mcp-mesh-agent chart runs a container image. There are two ways to get an
+agent's code into it: bake it into an image of your own, or mount a single
+Python script from a ConfigMap into the stock `mcpmesh/python-runtime` image.
 
 ## Method Comparison
 
-| Method       | Script Source    | ConfigMap | Complexity  | Flexibility | Best For    |
-| ------------ | ---------------- | --------- | ----------- | ----------- | ----------- |
-| **Built-in** | Container Image  | ❌ None   | ⭐ Simple   | ⭐ Static   | Production  |
-| **External** | Manual ConfigMap | ✋ Manual | ⭐⭐ Medium | ⭐⭐⭐ High | Advanced    |
-| **Auto-Gen** | Chart Template   | ✅ Auto   | ⭐ Simple   | ⭐⭐ Medium | Development |
+| Method                  | Code Source     | Runs With                        | Best For                         |
+| ----------------------- | --------------- | -------------------------------- | -------------------------------- |
+| **Agent image**         | Container image | The image's own entrypoint/CMD   | Production, any language         |
+| **External ConfigMap**  | ConfigMap       | `agent.command` on the stock image | Single-file Python, GitOps     |
+| **Chart-rendered ConfigMap** | File in the chart directory | `agent.command` on the stock image | Local development with a chart copy |
 
-## Method 1: Built-in Script (Container Image)
+## Method 1: Agent Image (recommended)
 
-### Configuration
-
-```yaml
-agent:
-  script: "/app/agents/hello_world.py"
-```
-
-### Deployment
+`meshctl scaffold` generates a Dockerfile (built on `mcpmesh/python-runtime`,
+`mcpmesh/typescript-runtime` or `mcpmesh/java-runtime`) and a
+`helm-values.yaml` for the agent. Build and push the image, then install the
+chart with it:
 
 ```bash
-helm install my-agent ./helm/mcp-mesh-agent \
-  --set agent.script=/app/agents/hello_world.py \
-  --set registry.host=mcp-mesh-registry \
-  --set registry.port="8080"
+meshctl scaffold basic --name my-agent
+cd my-agent
+docker buildx build --platform linux/amd64 -t myregistry/my-agent:v1.0.0 --push .
+
+helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent -n mcp-mesh \
+  -f helm-values.yaml \
+  --set image.repository=myregistry/my-agent \
+  --set image.tag=v1.0.0
 ```
+
+The image's CMD starts the agent, so `agent.command` stays empty. The registry
+is found at `<global.coreReleaseName>-mcp-mesh-registry:8000`
+(`mcp-core-mcp-mesh-registry` by default); set `global.coreReleaseName` or
+`registry.host` if core was installed under another release name.
 
 ### Pros
 
-- ✅ **Simplest configuration** - single parameter
-- ✅ **Immutable deployments** - script is part of container
-- ✅ **No external dependencies** - self-contained
-- ✅ **Production ready** - follows container best practices
+- Immutable deployments: the code is part of the image
+- Works for every runtime, multi-file agents, and agents with extra packages
+- Follows container best practices
 
 ### Cons
 
-- ❌ **Requires image rebuild** for script changes
-- ❌ **Less flexible** - script is baked into image
-- ❌ **Slower iteration** - build → push → deploy cycle
-
-### Use Cases
-
-- Production deployments
-- Immutable infrastructure
-- CI/CD pipelines
-- Pre-packaged agents
+- Requires an image rebuild for code changes
 
 ## Method 2: External ConfigMap
 
-### Configuration
-
-```yaml
-agentCode:
-  enabled: true
-  configMapName: "my-agent-code"
-  mountPath: "/app"
-```
-
-### Deployment
+For a single-file Python agent, mount the script into the stock runtime image.
+The ConfigMap must hold the script under the key `agent.py`; it is mounted at
+`agentCode.mountPath` (`/app/agent`), and `agent.command` runs it (the image's
+entrypoint is `python` with no script, so the command is required).
 
 ```bash
-# Create ConfigMap manually
-kubectl create configmap my-agent-code --from-file=agent.py=./my-agent.py
+kubectl create configmap my-agent-code -n mcp-mesh \
+  --from-file=agent.py=./my_agent.py
 
-# Deploy with external ConfigMap
-helm install my-agent ./helm/mcp-mesh-agent \
+helm install my-agent ./helm/mcp-mesh-agent -n mcp-mesh \
   --set agentCode.enabled=true \
   --set agentCode.configMapName=my-agent-code \
-  --set registry.host=mcp-mesh-registry \
-  --set registry.port="8080"
+  --set 'agent.command={python,/app/agent/agent.py}'
 ```
 
 ### Pros
 
-- ✅ **Maximum flexibility** - complete control over ConfigMap
-- ✅ **Independent updates** - ConfigMap managed separately
-- ✅ **Multiple sources** - can be created from various tools
-- ✅ **Advanced scenarios** - custom labels, annotations, etc.
+- No image build for a one-file agent
+- The ConfigMap can be managed independently (GitOps, Kustomize)
 
 ### Cons
 
-- ❌ **Manual management** - requires separate ConfigMap creation
-- ❌ **More complex** - two-step deployment process
-- ❌ **Coordination needed** - ensure ConfigMap exists before deployment
+- Python only, single file, and only packages the runtime image already has
+- Two-step deployment: the ConfigMap must exist before the pod starts
 
-### Use Cases
+## Method 3: Chart-Rendered ConfigMap
 
-- GitOps workflows
-- External configuration management
-- Advanced ConfigMap requirements
-- Multi-environment deployments
-
-## Method 3: Auto-Generated ConfigMap (Recommended)
-
-### Configuration
-
-```yaml
-agentCode:
-  enabled: true
-  scriptPath: "scripts/my-agent.py"
-  mountPath: "/app"
-```
-
-### Deployment
+With a local copy of the chart, the chart can render the ConfigMap itself from
+a file inside the chart directory (`agentCode.scriptPath` is read with Helm's
+`.Files.Get`, so it cannot point outside the chart, and it does not work with
+the published OCI chart):
 
 ```bash
-# Single command - ConfigMap generated automatically, agent name from script
-helm install my-agent ./helm/mcp-mesh-agent \
+helm install my-agent ./helm/mcp-mesh-agent -n mcp-mesh \
   --set agentCode.enabled=true \
-  --set agentCode.scriptPath=scripts/my-agent.py \
-  --set registry.host=mcp-mesh-registry \
-  --set registry.port="8080"
+  --set agentCode.scriptPath=scripts/demo-agent.py \
+  --set 'agent.command={python,/app/agent/agent.py}'
 ```
+
+The rendered ConfigMap is named `<fullname>-code` and holds the script under
+`agent.py`. See [examples/auto-configmap-values.yaml](../examples/auto-configmap-values.yaml).
 
 ### Pros
 
-- ✅ **Simple deployment** - single command
-- ✅ **Version controlled** - script is part of chart
-- ✅ **Automatic ConfigMap** - no manual creation needed
-- ✅ **Fast iteration** - easy to update scripts
-- ✅ **Consistent naming** - auto-generated ConfigMap names
-- ✅ **Script-driven naming** - agent name from @mesh.agent decorator
+- Single command; the script is versioned with your chart copy
 
 ### Cons
 
-- ❌ **Chart dependency** - script must be in chart directory
-- ❌ **Limited customization** - uses standard ConfigMap template
-- ❌ **Chart size** - scripts increase chart size
+- Requires a forked or vendored chart
+- Same limits as Method 2
 
-### Use Cases
+## Choosing a Method
 
-- Development environments
-- Quick prototyping
-- Example deployments
-- Tutorial scenarios
-
-## Implementation Details
-
-### Auto-Generated ConfigMap Template
-
-```yaml
-{{- if .Values.agentCode.enabled }}
-{{- if .Values.agentCode.scriptPath }}
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ include "mcp-mesh-agent.fullname" . }}-code
-data:
-  agent.py: |
-{{ .Files.Get .Values.agentCode.scriptPath | indent 4 }}
-{{- end }}
-{{- end }}
-```
-
-### Volume Mount Logic
-
-```yaml
-volumes:
-  - name: agent-code
-    configMap:
-      name:
-        {
-          {
-            .Values.agentCode.configMapName | default (printf "%s-code" (include "mcp-mesh-agent.fullname" .)),
-          },
-        }
-      defaultMode: 0755
-```
-
-## Choosing the Right Method
-
-### For Development
-
-**Use Method 3 (Auto-Generated)** - fastest iteration, version controlled, simple deployment
-
-### For Production
-
-**Use Method 1 (Built-in)** - immutable, secure, follows container best practices
-
-### For Advanced Use Cases
-
-**Use Method 2 (External)** - maximum flexibility, external management, complex scenarios
-
-## Migration Path
-
-1. **Start with Method 3** for development and prototyping
-2. **Move to Method 1** for production deployments
-3. **Use Method 2** for advanced scenarios or GitOps workflows
+- **Production, or any non-Python agent:** Method 1.
+- **A quick single-file Python agent:** Method 2.
+- **Iterating on a script inside a local chart checkout:** Method 3.

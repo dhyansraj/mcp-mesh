@@ -128,8 +128,15 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
-            {{- if and (ne .Values.registry.database.type "sqlite") $db.existingSecret }}
-            {{- if and (eq .Values.registry.database.type "postgres") $db.existingSecretUrlKey }}
+            {{- /* database.type is postgres or sqlite (validateDatabaseType). */}}
+            {{- if eq .Values.registry.database.type "sqlite" }}
+            {{- /* Usually nothing: the image's DATABASE_URL applies (see the
+                   helper). A plain file path when it renders. */}}
+            {{- with include "mcp-mesh-registry.sqliteDatabaseURL" . }}
+            - name: DATABASE_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- else if and $db.existingSecret $db.existingSecretUrlKey }}
             {{- /* Full DSN from the existing secret, consumed directly — no
                    composition, so the credentials need no URL-safety. The DSN
                    must carry its own sslmode/sslrootcert params. */}}
@@ -138,33 +145,28 @@ spec:
                 secretKeyRef:
                   name: {{ $db.existingSecret }}
                   key: {{ $db.existingSecretUrlKey }}
-            {{- else }}
+            {{- else if $db.existingSecret }}
             - name: DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ $db.existingSecret }}
                   key: {{ $db.existingSecretPasswordKey }}
-            {{- if eq .Values.registry.database.type "postgres" }}
             {{- /* Composed via $(DATABASE_PASSWORD) expansion — DATABASE_PASSWORD
                    must be rendered above this entry. The password from the
                    existing secret is not URL-encoded and must be URL-safe. */}}
             - name: DATABASE_URL
               value: {{ include "mcp-mesh-registry.composedDatabaseURL" . | quote }}
-            {{- end }}
-            {{- end }}
-            {{- else if ne .Values.registry.database.type "sqlite" }}
+            {{- else }}
             - name: DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ include "mcp-mesh-registry.fullname" . }}-secret
                   key: database-password
-            {{- if eq .Values.registry.database.type "postgres" }}
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
                   name: {{ include "mcp-mesh-registry.fullname" . }}-secret
                   key: database-url
-            {{- end }}
             {{- end }}
             {{- if .Values.registry.redis.enabled }}
             {{- if $redis.existingSecret }}
@@ -253,30 +255,12 @@ spec:
             {{- with .Values.envFrom }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: 30
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 3
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: 10
-            periodSeconds: 5
-            timeoutSeconds: 3
-            failureThreshold: 3
-          startupProbe:
-            httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: 5
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 30
+          {{- range $probe := list "livenessProbe" "readinessProbe" "startupProbe" }}
+          {{- with include "mcp-mesh-registry.probe" (dict "name" $probe "root" $) }}
+          {{ $probe }}:
+            {{- . | nindent 12 }}
+          {{- end }}
+          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
