@@ -545,9 +545,16 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let server = tokio::spawn(async move {
             let (mut sock, _) = listener.accept().await.unwrap();
-            let mut buf = vec![0u8; 16384];
-            let n = sock.read(&mut buf).await.unwrap();
-            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            // Read until the end of the header block: one read() may return
+            // a partial request.
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = sock.read(&mut chunk).await.unwrap();
+                assert!(n > 0, "connection closed before the header block ended");
+                buf.extend_from_slice(&chunk[..n]);
+            }
+            let req = String::from_utf8_lossy(&buf).to_string();
             let mut hdrs = Vec::new();
             for line in req.lines().skip(1) {
                 if line.is_empty() {

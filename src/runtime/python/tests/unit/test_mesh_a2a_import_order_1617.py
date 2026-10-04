@@ -96,6 +96,15 @@ SCENARIOS = {
 
         assert any(r.path == "/mounted" for r in app.routes)
     """,
+    "signature_reflects_decorator": """
+        import inspect
+        import mesh.decorators
+
+        assert inspect.signature(mesh.a2a) == inspect.signature(mesh.decorators.a2a)
+        assert "path" in inspect.signature(mesh.a2a).parameters
+        assert mesh.a2a.__call__.__doc__ == mesh.decorators.a2a.__doc__
+        assert callable(mesh.a2a.mount)
+    """,
     "decorator_attribute_stable_across_import": """
         before = mesh.a2a
         import mesh.a2a

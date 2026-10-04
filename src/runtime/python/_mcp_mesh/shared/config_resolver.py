@@ -142,7 +142,7 @@ def _resolve_via_rust(
             if isinstance(override, bool):
                 param_bool = override
             elif isinstance(override, str):
-                lower_val = override.lower()
+                lower_val = override.strip().lower()
                 if lower_val in ("true", "1", "yes", "on"):
                     param_bool = True
                 elif lower_val in ("false", "0", "no", "off"):
@@ -253,7 +253,10 @@ def _validate_value(value: Any, rule: ValidationRule, env_var: str) -> Any:
         if isinstance(value, bool):
             return value
         if isinstance(value, str):
-            lower_val = value.lower()
+            # Strip like the Rust core and TS resolvers: " true " is true.
+            # (int()/float() already ignore surrounding whitespace for the
+            # numeric rules.)
+            lower_val = value.strip().lower()
             if lower_val in ("true", "1", "yes", "on"):
                 return True
             elif lower_val in ("false", "0", "no", "off"):

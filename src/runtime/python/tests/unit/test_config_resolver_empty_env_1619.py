@@ -118,3 +118,63 @@ class TestStringRuleMatchesRustCore:
             rust = get_config_value("MCP_MESH_NAMESPACE", override="o", default="d")
             python = get_config_value(ENV, override="o", default="d")
             assert rust == python, f"value={value!r}: rust={rust!r} python={python!r}"
+
+
+class TestSurroundingWhitespaceIsIgnored:
+    """Rust core and TS strip set values before parsing; Python matches."""
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [(" true ", True), ("\tON\n", True), (" 0 ", False), ("  off", False)],
+    )
+    def test_truthy(self, monkeypatch, caplog, value, expected):
+        monkeypatch.setenv(ENV, value)
+        with caplog.at_level(logging.ERROR, logger=config_resolver.__name__):
+            result = get_config_value(
+                ENV, default=not expected, rule=ValidationRule.TRUTHY_RULE
+            )
+        assert result is expected
+        assert not caplog.records
+
+    def test_truthy_override_string(self, monkeypatch):
+        monkeypatch.delenv(ENV, raising=False)
+        assert (
+            get_config_value(
+                ENV, override=" yes ", default=False, rule=ValidationRule.TRUTHY_RULE
+            )
+            is True
+        )
+
+    @pytest.mark.parametrize(
+        "rule,value,expected",
+        [
+            (ValidationRule.NONZERO_RULE, " 7 ", 7),
+            (ValidationRule.PORT_RULE, "\t9090\n", 9090),
+            (ValidationRule.FLOAT_RULE, " 2.5 ", 2.5),
+        ],
+        ids=["nonzero", "port", "float"],
+    )
+    def test_numeric(self, monkeypatch, rule, value, expected):
+        monkeypatch.setenv(ENV, value)
+        assert get_config_value(ENV, default=1, rule=rule) == expected
+
+
+class TestMeshLlmModel:
+    """MESH_LLM_MODEL: whitespace-only means unset, as in the TS SDK."""
+
+    @pytest.mark.parametrize("value", ["", "   ", None], ids=["empty", "ws", "absent"])
+    def test_blank_falls_through_to_model_kwarg(self, monkeypatch, value):
+        from mesh.decorators import _resolve_llm_model
+
+        if value is None:
+            monkeypatch.delenv("MESH_LLM_MODEL", raising=False)
+        else:
+            monkeypatch.setenv("MESH_LLM_MODEL", value)
+        assert _resolve_llm_model("anthropic/claude") == "anthropic/claude"
+        assert _resolve_llm_model(None) is None
+
+    def test_set_value_wins_and_is_trimmed(self, monkeypatch):
+        from mesh.decorators import _resolve_llm_model
+
+        monkeypatch.setenv("MESH_LLM_MODEL", " openai/gpt-4o ")
+        assert _resolve_llm_model("anthropic/claude") == "openai/gpt-4o"

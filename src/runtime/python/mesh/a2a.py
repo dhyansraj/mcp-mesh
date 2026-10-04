@@ -1591,4 +1591,23 @@ class _CallableA2AModule(types.ModuleType):
         return a2a_decorator(*args, **kwargs)
 
 
+def _expose_decorator_introspection() -> None:
+    """Let ``inspect.signature(mesh.a2a)`` / ``help`` describe the decorator.
+
+    ``inspect.signature`` reads ``__signature__`` off the callable, so a
+    module-level ``__signature__`` makes the module report the decorator's
+    parameters. ``__wrapped__`` is deliberately not set: on a module it would
+    make ``inspect.unwrap`` (doctest, pytest collection) treat the module as
+    a wrapper around a function.
+    """
+    import inspect
+
+    from .decorators import a2a as a2a_decorator
+
+    module = sys.modules[__name__]
+    module.__signature__ = inspect.signature(a2a_decorator)  # type: ignore[attr-defined]
+    _CallableA2AModule.__call__.__doc__ = a2a_decorator.__doc__
+
+
 sys.modules[__name__].__class__ = _CallableA2AModule
+_expose_decorator_introspection()
