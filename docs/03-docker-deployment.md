@@ -9,8 +9,11 @@ MCP Mesh provides pre-built Docker images and a scaffold tool to generate Docker
 ## Quick Start (30 seconds)
 
 ```bash
-# Generate a new agent with Dockerfile and compose file
-meshctl scaffold --name my-agent --compose
+# Generate a new agent (includes a Dockerfile)
+meshctl scaffold basic --name my-agent
+
+# Generate docker-compose.yml for every agent in this directory
+meshctl scaffold --compose --observability
 
 # Start everything (docker-compose.yml is in current directory)
 docker-compose up
@@ -34,14 +37,14 @@ MCP Mesh publishes official images to Docker Hub:
 The `meshctl scaffold` command generates everything you need:
 
 ```bash
-# Generate compose for existing agents directory
-meshctl scaffold --compose -d ./agents
+# Generate ./agents/docker-compose.yml for the agents under ./agents
+meshctl scaffold --compose -o ./agents
 
 # Include observability stack (Grafana, Tempo, Redis)
-meshctl scaffold --compose --observability -d ./agents
+meshctl scaffold --compose --observability -o ./agents
 
-# Preview without creating files
-meshctl scaffold --compose --dry-run -d ./agents
+# Preview without creating files (prints the YAML to stdout)
+meshctl scaffold --compose --dry-run -o ./agents
 ```
 
 ### Generated docker-compose.yml
@@ -325,7 +328,7 @@ networks:
 Use `--observability` flag to include Grafana, Tempo, and Redis:
 
 ```bash
-meshctl scaffold --compose --observability -d ./agents
+meshctl scaffold --compose --observability -o ./agents
 ```
 
 Or add manually:

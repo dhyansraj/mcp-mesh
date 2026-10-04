@@ -175,7 +175,7 @@ are populated from the context model at call time.
 Scaffold the agent, then replace `main.py`:
 
 ```shell
-$ meshctl scaffold --name planner-agent --agent-type llm-agent --port 9107
+$ meshctl scaffold llm --name planner-agent --port 9107
 ```
 
 ```python

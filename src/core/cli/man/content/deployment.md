@@ -119,8 +119,8 @@ Use `--compose` to auto-generate docker-compose.yml for all agents in a director
 
 ```bash
 # Create multiple agents
-meshctl scaffold --name agent1 --port 8080
-meshctl scaffold --name agent2 --port 9001
+meshctl scaffold basic --name agent1 --port 8080
+meshctl scaffold basic --name agent2 --port 9001
 
 # Generate docker-compose.yml for all agents
 meshctl scaffold --compose

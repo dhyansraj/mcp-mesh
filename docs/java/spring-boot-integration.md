@@ -14,7 +14,7 @@
 
 MCP Mesh provides the `@MeshRoute` annotation for Spring Boot REST controllers that need to consume mesh capabilities. This enables traditional REST APIs to leverage the mesh service layer without being full MCP agents themselves.
 
-**Important**: This is for integrating MCP Mesh into your EXISTING Spring Boot app. To create a new MCP agent, use `meshctl scaffold --lang java` instead.
+**Important**: This is for integrating MCP Mesh into your EXISTING Spring Boot app. To create a new MCP agent, use `meshctl scaffold basic --lang java` instead.
 
 ## Installation
 

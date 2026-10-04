@@ -49,9 +49,9 @@ Tutorial:
 
 Code Generation:
   To generate agent code from templates, use:
-    meshctl scaffold              # Interactive wizard
-    meshctl scaffold --dry-run    # Preview generated code
-    meshctl scaffold --help       # All scaffold options`,
+    meshctl scaffold                                  # Interactive wizard
+    meshctl scaffold basic --name my-agent --dry-run  # Preview generated code
+    meshctl scaffold --help                           # All scaffold options`,
 		RunE:              runManCommand,
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: completeManTopics,

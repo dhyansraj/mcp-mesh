@@ -38,7 +38,7 @@ Scaffold creates a Dockerfile and helm-values.yaml:
 
 ```bash
 # Create agent with deployment files
-meshctl scaffold --name my-agent --agent-type tool
+meshctl scaffold basic --name my-agent
 
 cd my-agent
 # Edit main.py to implement your tool logic

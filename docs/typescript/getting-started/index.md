@@ -31,7 +31,7 @@ meshctl start --registry-only --debug
 
 ```bash
 # Terminal 2: Scaffold a TypeScript agent
-meshctl scaffold --name greeter --agent-type tool --lang typescript
+meshctl scaffold basic --name greeter --lang typescript
 ```
 
 This creates `greeter/src/index.ts`:
@@ -79,7 +79,7 @@ meshctl list
 Create a second agent that depends on the greeter:
 
 ```bash
-meshctl scaffold --name assistant --agent-type tool --lang typescript --port 9001
+meshctl scaffold basic --name assistant --lang typescript --port 9001
 ```
 
 Edit `assistant/src/index.ts`:

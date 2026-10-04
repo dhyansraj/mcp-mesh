@@ -55,7 +55,7 @@ import java.util.List;
  * meshctl start --registry-only
  *
  * # Step 1: Generate an OpenAI provider agent (one-per-vendor, holds the API key)
- * meshctl scaffold llm-provider --vendor openai --runtime python --name openai-provider
+ * meshctl scaffold llm-provider --vendor openai --lang python --name openai-provider
  *
  * # Step 2: Start the provider
  * meshctl start -d ./openai-provider/main.py

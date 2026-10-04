@@ -132,12 +132,9 @@ graph LR
 === "Java"
 
     ```bash
-    # Scaffold a Java agent (generates Maven project)
-    meshctl scaffold --name my-agent --agent-type basic --lang java
-
-    # Or create manually with Maven
-    mvn archetype:generate -DgroupId=com.example -DartifactId=my-agent
-    # Then add mcp-mesh-spring-boot-starter to pom.xml
+    # Create project directory (the scaffold in step 3 generates the Maven project)
+    mkdir my-agent-project
+    cd my-agent-project
     ```
 
 === "TypeScript"
@@ -158,7 +155,7 @@ graph LR
 === "Python"
 
     ```bash
-    meshctl scaffold --name my-agent --capability my_service
+    meshctl scaffold basic --name my-agent
     ```
 
     This creates:
@@ -173,7 +170,7 @@ graph LR
 === "Java"
 
     ```bash
-    meshctl scaffold --name my-agent --capability my_service --lang java
+    meshctl scaffold basic --name my-agent --lang java
     ```
 
     This creates:
@@ -181,13 +178,13 @@ graph LR
     ```
     my-agent/
     ├── pom.xml                        # Maven build
-    └── src/main/java/.../MyAgent.java # Agent code
+    └── src/main/java/.../MyAgentApplication.java # Agent code
     ```
 
 === "TypeScript"
 
     ```bash
-    meshctl scaffold --name my-agent --capability my_service --lang typescript
+    meshctl scaffold basic --name my-agent --lang typescript
     ```
 
     This creates:
@@ -224,7 +221,7 @@ graph LR
 
 === "Java"
 
-    Edit `MyAgent.java`:
+    Edit `MyAgentApplication.java`:
 
     ```java
     @MeshAgent(name = "my-agent", version = "1.0.0")

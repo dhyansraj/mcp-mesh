@@ -33,24 +33,25 @@ For scripting or when you know what you want:
 
 ```bash
 # Basic tool agent
-meshctl scaffold --name hello --agent-type basic --lang java
+meshctl scaffold basic --name hello --lang java
 
 # LLM-powered agent
-meshctl scaffold --name analyzer --agent-type llm-agent --lang java \
+meshctl scaffold llm --name analyzer --lang java \
   --vendor openai --response-format json
 
 # LLM provider (zero-code)
-meshctl scaffold --name claude-provider --agent-type llm-provider --lang java \
-  --model anthropic/claude-sonnet-4-5
+meshctl scaffold llm-provider --name claude-provider --lang java \
+  --vendor claude --model anthropic/claude-sonnet-4-5
 ```
 
 ## Agent Types
 
-| Type           | Annotation         | Use Case                              |
+| Subcommand     | Annotation         | Use Case                              |
 | -------------- | ------------------ | ------------------------------------- |
 | `basic`        | `@MeshTool`        | Services, utilities, data processing  |
-| `llm-agent`    | `@MeshLlm`         | AI assistants, text analysis          |
+| `llm`          | `@MeshLlm`         | AI assistants, text analysis          |
 | `llm-provider` | `@MeshLlmProvider` | Expose LLM as mesh capability         |
+| `api`          | `@MeshRoute`       | Spring Boot HTTP gateway              |
 
 ## Generated Files
 
@@ -59,9 +60,9 @@ hello/
 ├── src/
 │   └── main/
 │       ├── java/com/example/hello/
-│       │   └── HelloAgentApplication.java   # Agent code - edit @MeshTool methods
+│       │   └── HelloApplication.java   # Agent code - edit @MeshTool methods
 │       └── resources/
-│           └── application.properties
+│           └── application.yml
 ├── pom.xml             # Maven build with mcp-mesh-spring-boot-starter
 ├── Dockerfile          # Container build (ready to use)
 ├── helm-values.yaml    # Kubernetes config
@@ -87,7 +88,7 @@ Use `--compose --observability` even if you run agents locally. Start the infras
 
 ```bash
 # Dry run - see what would be generated
-meshctl scaffold --name hello --agent-type basic --lang java --dry-run
+meshctl scaffold basic --name hello --lang java --dry-run
 ```
 
 ## More Options

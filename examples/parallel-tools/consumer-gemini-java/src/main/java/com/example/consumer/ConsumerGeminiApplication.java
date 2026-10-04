@@ -55,7 +55,7 @@ import java.util.List;
  * meshctl start --registry-only
  *
  * # Step 1: Generate a Gemini provider agent (one-per-vendor, holds the API key)
- * meshctl scaffold llm-provider --vendor gemini --runtime python --name gemini-provider
+ * meshctl scaffold llm-provider --vendor gemini --lang python --name gemini-provider
  *
  * # Step 2: Start the provider
  * meshctl start -d ./gemini-provider/main.py

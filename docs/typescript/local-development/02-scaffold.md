@@ -15,12 +15,13 @@
 The easiest way to create an agent:
 
 ```bash
-meshctl scaffold --lang typescript
+meshctl scaffold
 ```
 
 This launches an interactive wizard that guides you through:
 
 - Agent name and type
+- Language (choose TypeScript)
 - Capabilities and tools
 - Output directory
 
@@ -32,24 +33,25 @@ For scripting or when you know what you want:
 
 ```bash
 # Basic tool agent
-meshctl scaffold --name my-agent --agent-type tool --lang typescript
+meshctl scaffold basic --name my-agent --lang typescript
 
 # LLM-powered agent
-meshctl scaffold --name emotion-analyzer --agent-type llm-agent \
+meshctl scaffold llm --name emotion-analyzer \
   --vendor openai --lang typescript
 
 # LLM provider (zero-code)
-meshctl scaffold --name claude-provider --agent-type llm-provider \
-  --model anthropic/claude-sonnet-4-5 --lang typescript
+meshctl scaffold llm-provider --name claude-provider \
+  --vendor claude --model anthropic/claude-sonnet-4-5 --lang typescript
 ```
 
 ## Agent Types
 
-| Type           | Description                  | Use Case                             |
-| -------------- | ---------------------------- | ------------------------------------ |
-| `tool`         | Basic agent with `addTool()` | Services, utilities, data processing |
-| `llm-agent`    | LLM-powered agent            | AI assistants, text analysis         |
-| `llm-provider` | Zero-code LLM wrapper        | Expose LLM as mesh capability        |
+| Subcommand     | Description                        | Use Case                             |
+| -------------- | ---------------------------------- | ------------------------------------ |
+| `basic`        | Basic agent with `addTool()`       | Services, utilities, data processing |
+| `llm`          | LLM-powered agent                  | AI assistants, text analysis         |
+| `llm-provider` | Zero-code LLM wrapper              | Expose LLM as mesh capability        |
+| `api`          | Express gateway (`mesh.route()`)   | HTTP APIs that call mesh tools       |
 
 ## Generated Files
 
@@ -86,7 +88,7 @@ Use `--compose --observability` even if you run agents locally. Start the infras
 
 ```bash
 # Dry run - see what would be generated
-meshctl scaffold --name my-agent --agent-type tool --lang typescript --dry-run
+meshctl scaffold basic --name my-agent --lang typescript --dry-run
 ```
 
 ## More Options

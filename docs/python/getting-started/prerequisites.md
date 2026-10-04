@@ -74,8 +74,8 @@ pip install mcp-mesh
 deactivate                   # Can deactivate after pip install
 
 # 2. Scaffold agents - meshctl auto-detects .venv (no activation needed)
-meshctl scaffold --name hello --agent-type tool
-meshctl scaffold --name assistant --agent-type llm-agent
+meshctl scaffold basic --name hello
+meshctl scaffold llm --name assistant
 
 # 3. Run agent - meshctl uses .venv/bin/python automatically
 meshctl start hello/main.py --debug

@@ -4,7 +4,7 @@
 
 ## Overview
 
-MCP Mesh supports multiple deployment patterns for TypeScript agents. Use `meshctl scaffold --lang typescript` to generate deployment-ready files automatically.
+MCP Mesh supports multiple deployment patterns for TypeScript agents. Use `meshctl scaffold <subcommand> --lang typescript` to generate deployment-ready files automatically.
 
 ## Official Docker Images
 
@@ -71,7 +71,7 @@ meshctl stop               # Stop all
 
 ### Generated Dockerfile
 
-`meshctl scaffold --lang typescript` generates a Dockerfile:
+`meshctl scaffold basic --lang typescript` generates a Dockerfile:
 
 ```dockerfile
 # Dockerfile for my-agent MCP Mesh agent
@@ -110,8 +110,8 @@ CMD ["npx", "tsx", "src/index.ts"]
 
 ```bash
 # Create multiple TypeScript agents
-meshctl scaffold --name agent1 --port 8080 --lang typescript
-meshctl scaffold --name agent2 --port 9001 --lang typescript
+meshctl scaffold basic --name agent1 --port 8080 --lang typescript
+meshctl scaffold basic --name agent2 --port 9001 --lang typescript
 
 # Generate docker-compose.yml for all agents
 meshctl scaffold --compose

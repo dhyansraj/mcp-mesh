@@ -23,9 +23,12 @@ meshctl scaffold a2a-consumer \
 | `--auth-env`     | no       | `A2A_BEARER_TOKEN`       | Env var name for bearer token (used when card advertises bearer) |
 | `--package`      | no       | `com.example.<agent-name>` | Java package name                             |
 | `--offline`      | no       | `false`                  | Skip card fetch; emit a single TODO skill skeleton |
+| `--allow-private-network` | no | `false`               | Allow the card fetch to reach a loopback / private / link-local address |
 | `--dry-run`      | no       | `false`                  | Preview generated files without writing       |
 
 \* `--url` is required unless `--offline` is set.
+
+The card fetch refuses loopback and private addresses by default (SSRF guard). For a producer on `localhost` or an RFC 1918 LAN, pass `--allow-private-network`.
 
 Source: `src/core/cli/scaffold/a2a_consumer_subcommand.go`.
 

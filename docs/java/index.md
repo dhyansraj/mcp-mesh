@@ -43,7 +43,7 @@ npm install -g @mcpmesh/cli
 meshctl man quickstart --java
 
 # Or scaffold a new agent
-meshctl scaffold --name my-agent --lang java
+meshctl scaffold basic --name my-agent --lang java
 ```
 
 ## Documentation

@@ -25,11 +25,11 @@ Day 1 mesh.
 ## Step 1: Scaffold the agent
 
 `meshctl scaffold` generates a ready-to-run agent from a built-in template. For
-a basic Python tool agent, the flags you need are `--name`, `--agent-type tool`,
-and `--lang python` (which is the default, so you can omit it).
+a basic Python tool agent, you use the `basic` subcommand with `--name` and
+optionally `--lang python` (which is the default, so you can omit it).
 
 ```shell
-$ meshctl scaffold --name flight-agent --agent-type tool --port 9101
+$ meshctl scaffold basic --name flight-agent --port 9101
 
 Created agent 'flight-agent' in flight-agent/
 

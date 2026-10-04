@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -128,6 +129,18 @@ Infrastructure:
 		provider.RegisterFlags(cmd)
 	}
 
+	// Pre-subcommand flags kept for back-compat only: hidden from --help and
+	// warned about when used (see warnDeprecatedParentFlags).
+	for _, d := range deprecatedParentFlags {
+		if !d.visible {
+			_ = cmd.Flags().MarkHidden(d.flag)
+		}
+	}
+	// --template stays visible: with --template-dir it is the only way to pick
+	// a template from the user's own tree. Its built-in use is what warns.
+	cmd.Flags().Lookup("template").Usage = "Template name under --template-dir: basic, llm-agent, llm-provider, api"
+	cmd.Flags().Lookup("template-dir").Usage = "Custom template directory, laid out as <dir>/<lang>/<template> (pick the template with --template)"
+
 	// Attach `basic` subcommand (#957). Explicit replacement for the legacy
 	// `--agent-type tool` form. Generates a plain @mesh.agent skeleton.
 	scaffold.AttachBasicSubcommand(cmd)
@@ -159,6 +172,8 @@ func runScaffoldCommand(cmd *cobra.Command, args []string) error {
 	if agentType, _ := cmd.Flags().GetString("agent-type"); agentType != "" {
 		return routeDeprecatedAgentType(cmd, agentType, args)
 	}
+
+	warnDeprecatedParentFlags(cmd)
 
 	// Check if generating docker-compose
 	compose, _ := cmd.Flags().GetBool("compose")
@@ -216,6 +231,88 @@ func runScaffoldCommand(cmd *cobra.Command, args []string) error {
 	return provider.Execute(ctx)
 }
 
+// deprecatedParentFlags are flags on the parent `meshctl scaffold` command
+// that predate the per-agent-type subcommands. Each one only feeds the legacy
+// generate-without-a-subcommand path (or the --agent-type shim), so they warn
+// when used; `use` names the canonical form. All are hidden from --help except
+// those marked visible (see --template).
+var deprecatedParentFlags = []struct {
+	flag    string
+	use     string
+	visible bool
+}{
+	{"llm-selector", "'meshctl scaffold llm --vendor'", false},
+	{"provider", "'meshctl scaffold llm --vendor' or 'meshctl scaffold llm-provider --vendor'", false},
+	{"template", "'meshctl scaffold <basic|llm|llm-provider|api>'", true},
+	{"tool-name", "'meshctl scaffold basic' and rename the generated tool", false},
+	{"tool-description", "'meshctl scaffold basic' and edit the generated tool's description", false},
+	{"max-iterations", "'meshctl scaffold llm --max-iterations'", false},
+	{"system-prompt", "'meshctl scaffold llm --system-prompt'", false},
+	{"response-format", "'meshctl scaffold llm --response-format'", false},
+	{"context-param", "'meshctl scaffold llm --context-param' or 'meshctl scaffold llm-provider --context-param'", false},
+	{"filter", "'meshctl scaffold llm --filter' or 'meshctl scaffold llm-provider --filter'", false},
+	{"filter-mode", "'meshctl scaffold llm --filter-mode' or 'meshctl scaffold llm-provider --filter-mode'", false},
+	{"model", "'meshctl scaffold llm-provider --model'", false},
+	{"tags", "'meshctl scaffold <llm|llm-provider|api> --tags'", false},
+}
+
+// warnDeprecatedParentFlags prints a deprecation warning for every legacy
+// parent flag the user set on a non --agent-type invocation.
+func warnDeprecatedParentFlags(cmd *cobra.Command) {
+	for _, d := range deprecatedParentFlags {
+		if !cmd.Flags().Changed(d.flag) {
+			continue
+		}
+		// With --template-dir, --template selects a subdirectory of the
+		// user's own template tree; there is no subcommand equivalent.
+		if d.flag == "template" && cmd.Flags().Changed("template-dir") {
+			continue
+		}
+		// --provider was never read on this path (only the --agent-type
+		// shim forwards it), so say so rather than imply it took effect.
+		effect, note := "", ""
+		switch d.flag {
+		case "provider":
+			effect = " and has no effect here"
+		case "template":
+			effect = " without --template-dir"
+			note = " (--template remains for picking a template under --template-dir)"
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"Warning: --%s on 'meshctl scaffold' is deprecated%s; use %s instead%s.\n", d.flag, effect, d.use, note)
+	}
+}
+
+// warnParentFlagsDroppedByAgentType reports parent flags that the
+// --agent-type shim renames or cannot carry over to the target subcommand.
+// Flags the subcommand accepts under the same name are copied silently (the
+// --agent-type warning already points at the subcommand). --llm-selector is
+// renamed to --vendor. --provider is copied onto the subcommand's own
+// deprecated alias, which warns for itself, unless --llm-selector already
+// supplied the vendor, in which case it is dropped here.
+func warnParentFlagsDroppedByAgentType(parent, sub *cobra.Command) {
+	selectorSet := parent.Flags().Changed("llm-selector")
+	parent.Flags().Visit(func(f *pflag.Flag) {
+		switch {
+		case f.Name == "agent-type":
+			return
+		case f.Name == "llm-selector" && sub.Flags().Lookup("vendor") != nil:
+			fmt.Fprintf(parent.ErrOrStderr(),
+				"Warning: --llm-selector is deprecated; use --vendor instead.\n")
+			return
+		case f.Name == "provider" && selectorSet && sub.Flags().Lookup("vendor") != nil:
+			fmt.Fprintf(parent.ErrOrStderr(),
+				"Warning: --provider is deprecated; use --vendor instead (ignoring --provider because --llm-selector is also set).\n")
+			return
+		}
+		if sub.Flags().Lookup(f.Name) != nil || sub.InheritedFlags().Lookup(f.Name) != nil {
+			return
+		}
+		fmt.Fprintf(parent.ErrOrStderr(),
+			"Warning: --%s is not supported by 'meshctl scaffold %s' and was ignored.\n", f.Name, sub.Name())
+	})
+}
+
 // agentTypeToSubcommand maps the legacy --agent-type value to the
 // canonical subcommand name introduced by PR #958.
 var agentTypeToSubcommand = map[string]string{
@@ -267,6 +364,7 @@ func routeDeprecatedAgentType(cmd *cobra.Command, agentType string, _ []string) 
 	// RunE sees what it expects. Then dispatch the subcommand RunE
 	// directly — calling sub.Execute() would walk back through the root
 	// and re-enter this parent RunE, recursing infinitely.
+	warnParentFlagsDroppedByAgentType(cmd, sub)
 	copyParentFlagsToSub(cmd, sub)
 	if sub.RunE != nil {
 		return sub.RunE(sub, nil)
@@ -289,6 +387,11 @@ func copyParentFlagsToSub(parent, sub *cobra.Command) {
 	parent.Flags().Visit(func(f *pflag.Flag) {
 		subFlag := sub.Flags().Lookup(f.Name)
 		if subFlag == nil {
+			return
+		}
+		// --llm-selector supplies --vendor below; don't also hand the
+		// subcommand a competing --provider alias value.
+		if f.Name == "provider" && parent.Flags().Changed("llm-selector") && sub.Flags().Lookup("vendor") != nil {
 			return
 		}
 		// Slice values: f.Value.String() returns the bracketed form
@@ -525,18 +628,25 @@ func runComposeGeneration(cmd *cobra.Command) error {
 	observability, _ := cmd.Flags().GetBool("observability")
 	projectName, _ := cmd.Flags().GetString("project-name")
 	force, _ := cmd.Flags().GetBool("force")
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
 
 	cmd.Println("Scanning for agents...")
 
 	// Scan for agents in the output directory
-	agents, err := scaffold.ScanForAgents(output)
+	agents, skipped, err := scaffold.ScanForAgentsWithSkipped(output)
 	if err != nil {
 		return fmt.Errorf("failed to scan for agents: %w", err)
+	}
+	for _, s := range skipped {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"Warning: skipping the %s API gateway in %s/: could not determine its port. "+
+				"Declare %s and re-run, or add its service to docker-compose.yml by hand.\n",
+			s.Language, s.Dir, s.PortHint)
 	}
 
 	if len(agents) == 0 {
 		if !observability {
-			return fmt.Errorf("no agents found in %s; create agents first with 'meshctl scaffold --name <agent-name>'", output)
+			return fmt.Errorf("no agents found in %s; create agents first with 'meshctl scaffold basic --name <agent-name>'", output)
 		}
 		cmd.Println("No agents found, generating registry + observability stack only...")
 		cmd.Println()
@@ -555,12 +665,22 @@ func runComposeGeneration(cmd *cobra.Command) error {
 		ProjectName:   projectName,
 		NetworkName:   "",
 		Force:         force,
+		DryRun:        dryRun,
+		DryRunOut:     cmd.OutOrStdout(),
+	}
+
+	if dryRun {
+		cmd.Printf("Dry-run: docker-compose.yml that would be written to %s (no files are changed):\n\n",
+			filepath.Join(output, "docker-compose.yml"))
 	}
 
 	// Generate docker-compose.yml
 	result, err := scaffold.GenerateDockerCompose(config, output)
 	if err != nil {
 		return fmt.Errorf("failed to generate docker-compose.yml: %w", err)
+	}
+	if dryRun {
+		return nil
 	}
 
 	// Display results based on what happened

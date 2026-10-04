@@ -95,7 +95,7 @@ Pydantic model with fields specific to its domain.
 Scaffold the agent:
 
 ```shell
-$ meshctl scaffold --name budget-analyst --agent-type llm-agent --port 9110
+$ meshctl scaffold llm --name budget-analyst --port 9110
 ```
 
 ```
@@ -137,7 +137,7 @@ Replace the prompt template at `prompts/budget_analysis.j2`:
 Scaffold:
 
 ```shell
-$ meshctl scaffold --name adventure-advisor --agent-type llm-agent --port 9111
+$ meshctl scaffold llm --name adventure-advisor --port 9111
 ```
 
 Replace `main.py`:
@@ -161,7 +161,7 @@ Replace the prompt at `prompts/adventure_advice.j2`:
 Scaffold:
 
 ```shell
-$ meshctl scaffold --name logistics-planner --agent-type llm-agent --port 9112
+$ meshctl scaffold llm --name logistics-planner --port 9112
 ```
 
 Replace `main.py`:

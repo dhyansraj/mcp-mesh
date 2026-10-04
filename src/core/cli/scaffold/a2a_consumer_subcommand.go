@@ -48,9 +48,10 @@ declares bearer authentication, the generated code wires up an env-var
 based bearer token placeholder (default A2A_BEARER_TOKEN).
 
 Examples:
-  # Fetch a producer's card and generate a Python consumer
+  # Fetch a local producer's card and generate a Python consumer
+  # (--allow-private-network is required for localhost / RFC1918 URLs)
   meshctl scaffold a2a-consumer --url http://localhost:9090/agents/date \
-    --lang python --name date-bridge --port 9201
+    --allow-private-network --lang python --name date-bridge --port 9201
 
   # TypeScript consumer
   meshctl scaffold a2a-consumer --url https://weather.com/agents/forecast \

@@ -3,6 +3,7 @@ package scaffold
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -20,7 +21,19 @@ type DetectedAgent struct {
 	Port     int    // From http_port=... or httpPort: ...
 	Dir      string // Directory containing main.py or src/index.ts (relative to scan root)
 	MainFile string // Full path to main.py or src/index.ts
-	Language string // "python" or "typescript"
+	Language string // "python", "typescript" or "java"
+
+	// portHint says where an API gateway's port must be declared; set only
+	// when the port could not be read (Port == 0).
+	portHint string
+}
+
+// SkippedAgent is an API gateway that was detected but left out because its
+// port could not be determined.
+type SkippedAgent struct {
+	Dir      string // Directory relative to the scan root
+	Language string
+	PortHint string // Where a literal port must be declared for detection
 }
 
 // ComposeConfig holds configuration for docker-compose generation
@@ -30,6 +43,12 @@ type ComposeConfig struct {
 	NetworkName   string // Docker network name
 	ProjectName   string // Docker compose project name
 	Force         bool   // Force regenerate agent configurations
+
+	// DryRun writes the docker-compose.yml that would be produced to
+	// DryRunOut (os.Stdout when nil) and touches no files (no tempo/grafana
+	// configs either).
+	DryRun    bool
+	DryRunOut io.Writer
 }
 
 // GenerateResult contains information about what happened during generation
@@ -39,16 +58,23 @@ type GenerateResult struct {
 	SkippedAgents []string // Names of agents that already existed (preserved)
 }
 
-// ScanForAgents walks the directory tree looking for Python and TypeScript agent files
-// Python: main.py with @mesh.agent decorator
-// TypeScript: src/index.ts with mesh(server, {...}) call
-func ScanForAgents(dir string) ([]DetectedAgent, error) {
+// ScanForAgentsWithSkipped walks the directory tree looking for Python, TypeScript and Java agents.
+// Python: main.py with @mesh.agent, or an API gateway with @mesh.route
+// TypeScript: src/index.ts with mesh(server, {...}), or an API gateway with mesh.route()
+// Java: pom.xml whose sources carry @MeshAgent, or an API gateway with @MeshRoute
+//
+// API gateways (`meshctl scaffold api`) declare no agent name in code, so
+// their name is the directory name, which is what the scaffold wrote.
+//
+// Gateways whose port cannot be read are returned in the skipped list rather
+// than with a guessed port.
+func ScanForAgentsWithSkipped(dir string) ([]DetectedAgent, []SkippedAgent, error) {
 	var agents []DetectedAgent
 
 	// Get absolute path for consistent handling
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get absolute path: %w", err)
+		return nil, nil, fmt.Errorf("failed to get absolute path: %w", err)
 	}
 
 	err = filepath.WalkDir(absDir, func(path string, d fs.DirEntry, err error) error {
@@ -77,8 +103,11 @@ func ScanForAgents(dir string) ([]DetectedAgent, error) {
 			}
 
 			agent, err := parseAgentDecorator(string(content))
+			if err == nil && agent == nil {
+				agent = parsePythonAPIAgent(string(content), filepath.Dir(path))
+			}
 			if err != nil || agent == nil {
-				return nil // Skip files without @mesh.agent
+				return nil // Skip files without @mesh.agent or @mesh.route
 			}
 
 			// Set directory relative to scan root
@@ -99,14 +128,18 @@ func ScanForAgents(dir string) ([]DetectedAgent, error) {
 				return nil // Skip unreadable files
 			}
 
-			agent, err := parseTypeScriptAgent(string(content))
-			if err != nil || agent == nil {
-				return nil // Skip files without mesh() call
-			}
-
 			// For TypeScript, the agent dir is parent of 'src' (where package.json lives)
 			srcDir := filepath.Dir(path)
 			agentDir := filepath.Dir(srcDir)
+
+			agent, err := parseTypeScriptAgent(string(content))
+			if err == nil && agent == nil {
+				agent = parseTypeScriptAPIAgent(string(content), agentDir)
+			}
+			if err != nil || agent == nil {
+				return nil // Skip files without mesh() or mesh.route() call
+			}
+
 			relDir, err := filepath.Rel(absDir, agentDir)
 			if err != nil {
 				relDir = agentDir
@@ -134,10 +167,28 @@ func ScanForAgents(dir string) ([]DetectedAgent, error) {
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to scan directory: %w", err)
+		return nil, nil, fmt.Errorf("failed to scan directory: %w", err)
 	}
 
-	return agents, nil
+	// A gateway whose port could not be read is reported, never given a
+	// guessed port: a guess can collide with a real agent (failing the whole
+	// compose run) or produce a wrong port mapping and healthcheck.
+	var detected []DetectedAgent
+	var skipped []SkippedAgent
+	for _, a := range agents {
+		if a.Port > 0 {
+			detected = append(detected, a)
+			continue
+		}
+		skipped = append(skipped, SkippedAgent{Dir: a.Dir, Language: a.Language, PortHint: a.portHint})
+	}
+	return detected, skipped, nil
+}
+
+// ScanForAgents is ScanForAgentsWithSkipped without the skipped list.
+func ScanForAgents(dir string) ([]DetectedAgent, error) {
+	agents, _, err := ScanForAgentsWithSkipped(dir)
+	return agents, err
 }
 
 // DefaultScaffoldPort is the starting port used when no existing agent is
@@ -354,7 +405,250 @@ func parseJavaAgent(dir string) (*DetectedAgent, error) {
 		return filepath.SkipAll // Found it, stop walking
 	})
 
+	if agent == nil {
+		agent = parseJavaAPIAgent(dir, srcDir)
+	}
 	return agent, nil
+}
+
+// hasLiveCodeLine reports whether any non-comment line of a source file
+// contains marker. Lines starting with a comment leader ("//", "/*", "*",
+// "#") are skipped so that prose and commented-out examples don't count.
+func hasLiveCodeLine(content, marker string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") ||
+			strings.HasPrefix(trimmed, "*") || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.Contains(trimmed, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+var pythonTripleQuoted = regexp.MustCompile(`(?s)""".*?"""|'''.*?'''`)
+
+// pythonLiveCode drops triple-quoted strings (docstrings) and comment lines
+// from Python source, so neither prose nor commented-out code is mistaken
+// for a live @mesh.route or uvicorn.run call.
+func pythonLiveCode(content string) string {
+	content = pythonTripleQuoted.ReplaceAllString(content, "")
+	lines := strings.Split(content, "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		if !strings.HasPrefix(strings.TrimSpace(line), "#") {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n")
+}
+
+var (
+	// uvicorn.run(..., port=9000) or port=int(os.getenv("PORT", "9000")) /
+	// os.environ.get(...). The env-var form uses its default, which is what
+	// runs in compose: the generated service sets no such variable.
+	pythonAPIPortPattern = regexp.MustCompile(
+		`\bport\s*=\s*(?:int\(\s*os\.(?:getenv|environ\.get)\(\s*["'][A-Za-z_][A-Za-z0-9_]*["']\s*,\s*["']?(\d+)["']?\s*\)\s*\)|(\d+)\b)`)
+	// process.env.PORT || 3000, || "3000", ?? 3000, Number(process.env.PORT) || 3000,
+	// or a literal app.listen(3000).
+	tsAPIPortPattern = regexp.MustCompile(
+		`(?:Number\(\s*)?process\.env\.[A-Z_]*PORT\s*\)?\s*(?:\|\||\?\?)\s*["']?(\d+)["']?|\.listen\(\s*(\d+)\s*[,)]`)
+	// server.port=9000 or server.port=${PORT:9000} in application.properties.
+	springPortProperties = regexp.MustCompile(`(?m)^\s*server\.port\s*[=:]\s*(?:\$\{[A-Za-z0-9_.]+:)?(\d+)\}?\s*$`)
+	// A server.port value as YAML hands it back: 9000, "9000" or ${PORT:9000}.
+	springPortValue = regexp.MustCompile(`^\s*(?:\$\{[A-Za-z0-9_.]+:)?(\d+)\}?\s*$`)
+)
+
+// firstPortMatch returns the first non-empty capture group of pattern in
+// content as a port, or 0 when there is none.
+func firstPortMatch(pattern *regexp.Regexp, content string) int {
+	m := pattern.FindStringSubmatch(content)
+	if len(m) < 2 {
+		return 0
+	}
+	for _, g := range m[1:] {
+		if g != "" {
+			if port, err := strconv.Atoi(g); err == nil && port > 0 && port < 65536 {
+				return port
+			}
+		}
+	}
+	return 0
+}
+
+// parsePythonAPIAgent detects a FastAPI gateway that consumes mesh
+// capabilities through @mesh.route (no @mesh.agent). The port comes from the
+// uvicorn.run(...) call the `api` scaffold emits; Port is 0 when it can't be read.
+func parsePythonAPIAgent(content, agentDir string) *DetectedAgent {
+	live := pythonLiveCode(content)
+	if !hasLiveCodeLine(live, "@mesh.route") {
+		return nil
+	}
+	port := 0
+	if run := extractBalancedParen(live, "uvicorn.run"); run != "" {
+		port = firstPortMatch(pythonAPIPortPattern, run)
+	}
+	return &DetectedAgent{
+		Name: filepath.Base(agentDir), Port: port, Language: "python",
+		portHint: "a literal port in the uvicorn.run(...) call in main.py",
+	}
+}
+
+// parseTypeScriptAPIAgent detects an Express gateway that consumes mesh
+// capabilities through mesh.route() (no mesh(server, {...}) call). The port
+// comes from `process.env.PORT || N` (or ??, quoted N, Number(...)) or
+// `app.listen(N)`; Port is 0 when it can't be read.
+func parseTypeScriptAPIAgent(content, agentDir string) *DetectedAgent {
+	if !hasLiveCodeLine(content, "mesh.route(") {
+		return nil
+	}
+	var live []string
+	for _, line := range strings.Split(content, "\n") {
+		t := strings.TrimSpace(line)
+		if !strings.HasPrefix(t, "//") && !strings.HasPrefix(t, "*") && !strings.HasPrefix(t, "/*") {
+			live = append(live, line)
+		}
+	}
+	return &DetectedAgent{
+		Name:     filepath.Base(agentDir),
+		Port:     firstPortMatch(tsAPIPortPattern, strings.Join(live, "\n")),
+		Language: "typescript",
+		portHint: "`process.env.PORT || <port>` or `app.listen(<port>)` in src/index.ts",
+	}
+}
+
+// springServerPortFromYAML reads server.port from a Spring YAML file: either
+// nested (server: {port: ...}) or flat ("server.port": ...), in any document
+// of a multi-document file. Other `port:` keys (redis, management) are ignored.
+func springServerPortFromYAML(content []byte) int {
+	dec := yaml.NewDecoder(bytes.NewReader(content))
+	for {
+		var doc map[string]interface{}
+		if err := dec.Decode(&doc); err != nil {
+			return 0
+		}
+		var raw interface{}
+		if server, ok := doc["server"].(map[string]interface{}); ok {
+			raw = server["port"]
+		}
+		if raw == nil {
+			raw = doc["server.port"]
+		}
+		if raw != nil {
+			if port := firstPortMatch(springPortValue, fmt.Sprint(raw)); port > 0 {
+				return port
+			}
+		}
+	}
+}
+
+// parseJavaAPIAgent detects a Spring Boot gateway that consumes mesh
+// capabilities through @MeshRoute (no @MeshAgent). The port comes from
+// server.port in application.yml / application.yaml / application.properties;
+// Port is 0 when none of them declares it.
+func parseJavaAPIAgent(dir, srcDir string) *DetectedAgent {
+	found := false
+	filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".java") {
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err == nil && hasLiveCodeLine(string(content), "@MeshRoute") {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if !found {
+		return nil
+	}
+
+	port := 0
+	resources := filepath.Join(dir, "src", "main", "resources")
+	for _, file := range []string{"application.yml", "application.yaml", "application.properties"} {
+		content, err := os.ReadFile(filepath.Join(resources, file))
+		if err != nil {
+			continue
+		}
+		if strings.HasSuffix(file, ".properties") {
+			port = firstPortMatch(springPortProperties, string(content))
+		} else {
+			port = springServerPortFromYAML(content)
+		}
+		if port > 0 {
+			break
+		}
+	}
+	return &DetectedAgent{
+		Name: filepath.Base(dir), Port: port, Language: "java",
+		portHint: "server.port in src/main/resources/application.yml or application.properties",
+	}
+}
+
+// infrastructureServices are the service names the generator itself emits.
+var infrastructureServices = []string{"postgres", "registry", "redis", "tempo", "grafana"}
+
+// validateAgentNames fails when two detected agents resolve to the same
+// compose service name, or an agent takes the name of an infrastructure
+// service. Either would otherwise emit a duplicate key, or (on merge) treat
+// the second agent as "already present" and silently drop it.
+func validateAgentNames(agents []DetectedAgent) error {
+	seen := make(map[string]DetectedAgent)
+	for _, agent := range agents {
+		for _, infra := range infrastructureServices {
+			if agent.Name == infra {
+				return fmt.Errorf("service name conflict: the agent in %s/ resolves to service %q, "+
+					"which the compose file uses for infrastructure; rename the agent", agent.Dir, agent.Name)
+			}
+		}
+		if prev, ok := seen[agent.Name]; ok {
+			return fmt.Errorf("service name conflict: the agents in %s/ and %s/ both resolve to service %q; "+
+				"rename one of them (API gateways are named after their directory)", prev.Dir, agent.Dir, agent.Name)
+		}
+		seen[agent.Name] = agent
+	}
+	return nil
+}
+
+// publishedHostPorts maps each host port published by a service in an
+// existing compose file to that service's name. Handles short syntax
+// ("8080:8080", "127.0.0.1:8080:80", "8080:80/tcp") and long syntax
+// (published: 8080); a bare container port publishes nothing fixed.
+func publishedHostPorts(servicesNode *yaml.Node) map[int]string {
+	out := make(map[int]string)
+	for i := 0; i+1 < len(servicesNode.Content); i += 2 {
+		name, svc := servicesNode.Content[i].Value, servicesNode.Content[i+1]
+		if svc.Kind != yaml.MappingNode {
+			continue
+		}
+		for j := 0; j+1 < len(svc.Content); j += 2 {
+			if svc.Content[j].Value != "ports" || svc.Content[j+1].Kind != yaml.SequenceNode {
+				continue
+			}
+			for _, entry := range svc.Content[j+1].Content {
+				host := ""
+				switch entry.Kind {
+				case yaml.ScalarNode:
+					parts := strings.Split(strings.SplitN(entry.Value, "/", 2)[0], ":")
+					if len(parts) >= 2 {
+						host = parts[len(parts)-2]
+					}
+				case yaml.MappingNode:
+					for k := 0; k+1 < len(entry.Content); k += 2 {
+						if entry.Content[k].Value == "published" {
+							host = entry.Content[k+1].Value
+						}
+					}
+				}
+				if port, err := strconv.Atoi(host); err == nil {
+					out[port] = name
+				}
+			}
+		}
+	}
+	return out
 }
 
 // validateAgentPorts checks for port conflicts among agents
@@ -373,7 +667,12 @@ func validateAgentPorts(agents []DetectedAgent) error {
 // GenerateDockerCompose generates a docker-compose.yml file for the given configuration
 // If the file already exists, it merges new agents without overwriting existing services
 func GenerateDockerCompose(config *ComposeConfig, outputDir string) (*GenerateResult, error) {
-	// Validate ports
+	if config.DryRun && config.DryRunOut == nil {
+		config.DryRunOut = os.Stdout
+	}
+	if err := validateAgentNames(config.Agents); err != nil {
+		return nil, err
+	}
 	if err := validateAgentPorts(config.Agents); err != nil {
 		return nil, err
 	}
@@ -470,6 +769,13 @@ func generateFreshCompose(config *ComposeConfig, outputPath string) error {
 		return fmt.Errorf("failed to parse template: %w", err)
 	}
 
+	if config.DryRun {
+		if err := tmpl.Execute(config.DryRunOut, config); err != nil {
+			return fmt.Errorf("failed to render template: %w", err)
+		}
+		return nil
+	}
+
 	file, err := os.Create(outputPath)
 	if err != nil {
 		return fmt.Errorf("failed to create docker-compose.yml: %w", err)
@@ -518,22 +824,6 @@ func mergeAgentsIntoCompose(config *ComposeConfig, outputPath string, existingCo
 	// Get existing service names
 	existingServices := getExistingServiceNames(servicesNode)
 
-	// Add observability stack if requested and not already present
-	if config.Observability {
-		if err := addObservabilityToExisting(&doc, servicesNode, existingServices, config); err != nil {
-			return nil, fmt.Errorf("failed to add observability: %w", err)
-		}
-
-		// Generate observability configs if observability is enabled
-		outputDir := filepath.Dir(outputPath)
-		if err := generateTempoConfig(outputDir); err != nil {
-			return nil, fmt.Errorf("failed to generate tempo.yaml: %w", err)
-		}
-		if err := generateGrafanaConfig(outputDir); err != nil {
-			return nil, fmt.Errorf("failed to generate grafana configs: %w", err)
-		}
-	}
-
 	// Determine which agents to add
 	var agentsToAdd []DetectedAgent
 	for _, agent := range config.Agents {
@@ -542,6 +832,35 @@ func mergeAgentsIntoCompose(config *ComposeConfig, outputPath string, existingCo
 		} else {
 			agentsToAdd = append(agentsToAdd, agent)
 			result.AddedAgents = append(result.AddedAgents, agent.Name)
+		}
+	}
+
+	// A new agent must not publish a host port an existing service already
+	// publishes; compose would only fail at `up` time.
+	published := publishedHostPorts(servicesNode)
+	for _, agent := range agentsToAdd {
+		if owner, taken := published[agent.Port]; taken {
+			return nil, fmt.Errorf("port conflict: new agent %s (in %s/) uses host port %d, which service %q "+
+				"in the existing docker-compose.yml already publishes; change the agent's port, "+
+				"or regenerate the file with --force", agent.Name, agent.Dir, agent.Port, owner)
+		}
+	}
+
+	// Add observability stack if requested and not already present
+	if config.Observability {
+		if err := addObservabilityToExisting(&doc, servicesNode, existingServices, config); err != nil {
+			return nil, fmt.Errorf("failed to add observability: %w", err)
+		}
+
+		// Generate observability configs if observability is enabled
+		if !config.DryRun {
+			outputDir := filepath.Dir(outputPath)
+			if err := generateTempoConfig(outputDir); err != nil {
+				return nil, fmt.Errorf("failed to generate tempo.yaml: %w", err)
+			}
+			if err := generateGrafanaConfig(outputDir); err != nil {
+				return nil, fmt.Errorf("failed to generate grafana configs: %w", err)
+			}
 		}
 	}
 
@@ -578,6 +897,13 @@ func mergeAgentsIntoCompose(config *ComposeConfig, outputPath string, existingCo
 		return nil, fmt.Errorf("failed to encode merged docker-compose.yml: %w", err)
 	}
 	encoder.Close()
+
+	if config.DryRun {
+		if _, err := config.DryRunOut.Write(buf.Bytes()); err != nil {
+			return nil, fmt.Errorf("failed to write dry-run output: %w", err)
+		}
+		return result, nil
+	}
 
 	if err := os.WriteFile(outputPath, buf.Bytes(), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write docker-compose.yml: %w", err)

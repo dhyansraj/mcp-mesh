@@ -32,24 +32,25 @@ For scripting or when you know what you want:
 
 ```bash
 # Basic tool agent
-meshctl scaffold --name my-agent --agent-type tool
+meshctl scaffold basic --name my-agent
 
 # LLM-powered agent
-meshctl scaffold --name emotion-analyzer --agent-type llm-agent \
+meshctl scaffold llm --name emotion-analyzer \
   --vendor openai --response-format json
 
 # LLM provider (zero-code)
-meshctl scaffold --name claude-provider --agent-type llm-provider \
-  --model anthropic/claude-sonnet-4-5
+meshctl scaffold llm-provider --name claude-provider \
+  --vendor claude --model anthropic/claude-sonnet-4-5
 ```
 
 ## Agent Types
 
-| Type           | Description                   | Use Case                             |
-| -------------- | ----------------------------- | ------------------------------------ |
-| `tool`         | Basic agent with `@mesh.tool` | Services, utilities, data processing |
-| `llm-agent`    | LLM-powered with `@mesh.llm`  | AI assistants, text analysis         |
-| `llm-provider` | Zero-code LLM wrapper         | Expose LLM as mesh capability        |
+| Subcommand     | Description                     | Use Case                             |
+| -------------- | ------------------------------- | ------------------------------------ |
+| `basic`        | Basic agent with `@mesh.tool`   | Services, utilities, data processing |
+| `llm`          | LLM-powered with `@mesh.llm`    | AI assistants, text analysis         |
+| `llm-provider` | Zero-code LLM wrapper           | Expose LLM as mesh capability        |
+| `api`          | FastAPI gateway (`@mesh.route`) | HTTP APIs that call mesh tools       |
 
 ## Generated Files
 
@@ -81,7 +82,7 @@ Use `--compose --observability` even if you run agents locally. Start the infras
 
 ```bash
 # Dry run - see what would be generated
-meshctl scaffold --name my-agent --agent-type tool --dry-run
+meshctl scaffold basic --name my-agent --dry-run
 ```
 
 ## More Options

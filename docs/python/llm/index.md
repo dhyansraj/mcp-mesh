@@ -484,10 +484,10 @@ return await llm("Standalone query", context={}, context_mode="replace")
 
 ```bash
 # Generate LLM agent
-meshctl scaffold --name my-agent --agent-type llm-agent --vendor claude
+meshctl scaffold llm --name my-agent --vendor claude
 
 # Generate LLM provider
-meshctl scaffold --name claude-provider --agent-type llm-provider --model anthropic/claude-sonnet-4-5
+meshctl scaffold llm-provider --name claude-provider --vendor claude --model anthropic/claude-sonnet-4-5
 ```
 
 ## See Also

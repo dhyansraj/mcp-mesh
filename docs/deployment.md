@@ -23,7 +23,8 @@ MCP Mesh supports multiple deployment options to fit your infrastructure needs. 
 
 ```bash
 # Quick start
-meshctl scaffold --name my-agent --compose
+meshctl scaffold basic --name my-agent
+meshctl scaffold --compose
 docker-compose up
 ```
 

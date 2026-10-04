@@ -36,7 +36,7 @@ npm install -g @mcpmesh/cli
 meshctl man quickstart --typescript
 
 # Or scaffold a new agent
-meshctl scaffold --name my-agent --lang typescript
+meshctl scaffold basic --name my-agent --lang typescript
 ```
 
 ## Documentation

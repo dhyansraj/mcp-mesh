@@ -67,7 +67,12 @@ meshctl scaffold --compose --observability
 
 # Custom project name
 meshctl scaffold --compose --project-name my-project
+
+# Preview the compose file on stdout without writing anything
+meshctl scaffold --compose --dry-run
 ```
+
+`--compose` detects `@mesh.agent` agents and `scaffold api` gateways. A gateway whose port it cannot read (for example, a port taken only from an environment variable with no default) is skipped with a warning; declare a literal port, or add its service by hand.
 
 ### Generate observability stack alone
 
@@ -105,7 +110,7 @@ LLM agent flags (`llm` and `llm-provider` subcommands):
 | Flag                | Description                                                                          |
 | ------------------- | ------------------------------------------------------------------------------------ |
 | `--vendor`          | Provider tag: `claude` (default), `openai`, `gemini`, `litellm-fallback`             |
-| `--model`           | Override LiteLLM model string (default derived from `--vendor`)                      |
+| `--model`           | `llm-provider` only: override LiteLLM model string (default from `--vendor`)         |
 | `--response-format` | LLM response format: `text` (default), `json` (`llm` subcommand)                     |
 | `--max-iterations`  | Max agentic loop iterations (default 1) (`llm` subcommand)                           |
 | `--system-prompt`   | System prompt (inline or `file://path` for Jinja2 template) (`llm` subcommand)       |
@@ -146,9 +151,10 @@ meshctl scaffold llm --name analyzer --filter '[{"tags": ["math"]}]' --filter-mo
 Bridge an external A2A v1.0 producer's skills into the mesh as ordinary capabilities. Fetches the producer's `/.well-known/agent.json` at scaffold time; each skill in the card becomes a mesh capability in the generated agent.
 
 ```bash
-# Python consumer bridging an external A2A producer
+# Python consumer bridging a local A2A producer
+# (--allow-private-network is required for localhost / private-IP URLs)
 meshctl scaffold a2a-consumer --url http://localhost:9090/agents/date \
-  --lang python --name date-bridge --port 9201
+  --allow-private-network --lang python --name date-bridge --port 9201
 
 # TypeScript variant
 meshctl scaffold a2a-consumer --url https://weather.com/agents/forecast \
