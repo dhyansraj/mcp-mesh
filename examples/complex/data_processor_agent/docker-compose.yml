@@ -54,7 +54,6 @@ services:
   #   ports:
   #     - "8000:8000"
   #   environment:
-  #     DATABASE_TYPE: sqlite
   #     LOG_LEVEL: INFO
   #   networks:
   #     - mcp-mesh

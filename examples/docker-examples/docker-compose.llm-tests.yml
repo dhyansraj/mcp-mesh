@@ -132,7 +132,6 @@ services:
       - MCP_MESH_HEALTH_INTERVAL=5
       - MCP_MESH_LOG_LEVEL=DEBUG
       - MCP_MESH_DEBUG_MODE=true
-      - MCP_MESH_DYNAMIC_UPDATES=true
       - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
       - REDIS_URL=redis://redis:6379
     networks:
@@ -190,7 +189,6 @@ services:
       - MCP_MESH_HEALTH_INTERVAL=5
       - MCP_MESH_LOG_LEVEL=DEBUG
       - MCP_MESH_DEBUG_MODE=true
-      - MCP_MESH_DYNAMIC_UPDATES=true
       - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
       - REDIS_URL=redis://redis:6379
     networks:
@@ -244,7 +242,6 @@ services:
       - MCP_MESH_HEALTH_INTERVAL=5
       - MCP_MESH_LOG_LEVEL=DEBUG
       - MCP_MESH_DEBUG_MODE=true
-      - MCP_MESH_DYNAMIC_UPDATES=true
       - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
       - REDIS_URL=redis://redis:6379
     networks:
@@ -300,7 +297,6 @@ services:
       - MCP_MESH_HEALTH_INTERVAL=5
       - MCP_MESH_LOG_LEVEL=DEBUG
       - MCP_MESH_DEBUG_MODE=true
-      - MCP_MESH_DYNAMIC_UPDATES=true
       - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
       - REDIS_URL=redis://redis:6379
     networks:
@@ -356,7 +352,6 @@ services:
       - MCP_MESH_HEALTH_INTERVAL=5
       - MCP_MESH_LOG_LEVEL=DEBUG
       - MCP_MESH_DEBUG_MODE=true
-      - MCP_MESH_DYNAMIC_UPDATES=true
       - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
       - REDIS_URL=redis://redis:6379
     networks:
@@ -412,7 +407,6 @@ services:
       - MCP_MESH_HEALTH_INTERVAL=5
       - MCP_MESH_LOG_LEVEL=DEBUG
       - MCP_MESH_DEBUG_MODE=true
-      - MCP_MESH_DYNAMIC_UPDATES=true
       - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
       - REDIS_URL=redis://redis:6379
     networks:

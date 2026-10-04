@@ -82,6 +82,7 @@ because the default name is derived from the release name.
 | `registry.port`                    | Registry port                                     | `8080`                |
 | `registry.database.type`           | Database type (sqlite, postgres, mysql)           | `"sqlite"`            |
 | `registry.database.path`           | SQLite database path                              | `"/data/registry.db"` |
+| `registry.database.waitForDatabase` | Run the wait-for-db init container until the database accepts connections (non-sqlite) | `true` |
 | `registry.database.host`           | External database host                            | `""`                  |
 | `registry.database.port`           | External database port                            | `5432`                |
 | `registry.database.name`           | Database name                                     | `"mcp_mesh"`          |
@@ -133,8 +134,6 @@ here; an explicit value always wins.
 | `registry.security.tls.secretName`      | Existing TLS secret              | `""`      |
 | `registry.security.tls.mode`            | `off`, `auto` or `strict`; any mode other than `off` requires `registry.security.trust.backend` | `"off"` |
 | `registry.security.trust.backend`       | Trust backend(s), comma-separated: `localca`, `filestore`, `k8s-secrets`, `spire` | `""` |
-| `registry.security.auth.enabled`        | Enable authentication            | `false`   |
-| `registry.security.auth.type`           | Auth type (token, basic, oauth2) | `"token"` |
 
 ### Ingress
 
@@ -367,9 +366,6 @@ registry:
   security:
     tls:
       enabled: true
-    auth:
-      enabled: true
-      type: token
 ```
 
 ## Upgrading

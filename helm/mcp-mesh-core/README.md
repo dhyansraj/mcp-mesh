@@ -733,19 +733,27 @@ mcp-mesh-ui:
       url: "postgresql://mcp_mesh_readonly:<password>@mcp-core-mcp-mesh-postgres:5432/mcpmesh?sslmode=disable"
 ```
 
-### Registry auth
+### Registry access control
+
+The registry authenticates agents with mTLS, not tokens: serve TLS from an
+existing certificate secret, require client certificates, and name a trust
+backend that verifies them.
 
 ```yaml
 # values.yaml
 mcp-mesh-registry:
   registry:
     security:
-      auth:
+      tls:
         enabled: true
-        type: "token"
-        tokens:
-          - "your-secure-token"
+        secretName: mcp-registry-tls # kubernetes.io/tls secret
+        mode: strict
+      trust:
+        backend: filestore
+        caSecret: mcp-mesh-ca # CA that signed the agent certificates
 ```
+
+See `meshctl man security` for the trust backends and agent-side settings.
 
 ## Uninstall
 

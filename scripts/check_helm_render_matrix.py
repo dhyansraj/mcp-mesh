@@ -40,6 +40,21 @@ back, and every render stays green when it does. Declaring the paths makes
 that edit fail here. Two declared probes sharing a path is additionally
 rejected outright, whatever the declared paths were.
 
+And it may pin rendered configuration:
+
+  config_data={"MCP_MESH_HTTP_ENABLED": "false"}
+      some rendered ConfigMap must carry each key with exactly this value
+  forbids_env=("AUTH_TOKENS",)
+      no ConfigMap data key and no container env entry may use these names
+  requires_init_container="wait-for-db" / forbids_init_container="wait-for-db"
+      a workload must (or must not) declare an init container of this name
+
+Issue #1573: Sprig `default` treats false as unset, so `enabled: false`
+rendered "true" and every render stayed green. Pinning the rendered value of
+each boolean, both set to false and left unset, is what catches a `| default
+true` creeping back. The forbidden names are env vars the charts used to
+inject that no runtime reads.
+
 Usage: python3 scripts/check_helm_render_matrix.py  (run from anywhere)
 Exit code 0 = every case behaved as declared.
 """
@@ -77,6 +92,39 @@ class Case:
     requires_kind: str | None = None
     forbids_kind: str | None = None
     probe_paths: dict[str, str] | None = None
+    config_data: dict[str, str] | None = None
+    forbids_env: tuple[str, ...] = field(default_factory=tuple)
+    requires_init_container: str | None = None
+    forbids_init_container: str | None = None
+
+
+# Env vars the charts once injected that no runtime reads (issue #1573).
+DEAD_AGENT_ENV = (
+    "MCP_MESH_TRACING_ENABLED",
+    "MCP_MESH_METRICS_ENABLED",
+    "MCP_MESH_DYNAMIC_UPDATES",
+    "MCP_MESH_UPDATE_STRATEGY",
+)
+DEAD_REGISTRY_ENV = (
+    "AUTH_TOKENS",
+    "DATABASE_TYPE",
+    "DATABASE_PATH",
+    "DATABASE_HOST",
+    "DATABASE_PORT",
+    "DATABASE_NAME",
+    "DATABASE_USERNAME",
+)
+
+# The registry chart's former security.auth block, verbatim from values.yaml
+# before its removal. A copied values file carries it without intent.
+SHIPPED_REGISTRY_AUTH = {
+    "enabled": False,
+    "type": "token",
+    "tokens": [],
+    "existingSecret": "",
+    "secretKey": "tokens",
+}
+REGISTRY_AUTH_REMOVED = "has been removed: the registry has no token authentication"
 
 
 CASES: list[Case] = [
@@ -384,13 +432,102 @@ CASES: list[Case] = [
     Case(
         "mcp-mesh-agent",
         "an agent.environment default carried forward with a changed value",
-        {"agent": {"environment": {"MCP_MESH_TRACING_ENABLED": "false"}}},
+        {"agent": {"environment": {"MCP_MESH_DISTRIBUTED_TRACING_ENABLED": "false"}}},
         expect_fail="diverges from the old shipped default",
     ),
     Case(
         "mcp-mesh-agent",
         "the v2.4.0 agent.environment defaults verbatim",
         {"agent": {"environment": dict(V240_AGENT_ENVIRONMENT)}},
+    ),
+    # --- mcp-mesh-agent: booleans honour an explicit false (#1573) ---------
+    Case(
+        "mcp-mesh-agent",
+        "agent booleans render true when unset, and no dead env is injected",
+        {},
+        config_data={
+            "MCP_MESH_HTTP_ENABLED": "true",
+            "MCP_MESH_ENABLED": "true",
+            "MCP_MESH_DISTRIBUTED_TRACING_ENABLED": "true",
+        },
+        forbids_env=DEAD_AGENT_ENV,
+    ),
+    Case(
+        "mcp-mesh-agent",
+        "agent.http.enabled=false renders false",
+        {"agent": {"http": {"enabled": False}}},
+        config_data={"MCP_MESH_HTTP_ENABLED": "false"},
+    ),
+    Case(
+        "mcp-mesh-agent",
+        "mesh.enabled=false renders false",
+        {"mesh": {"enabled": False}},
+        config_data={"MCP_MESH_ENABLED": "false"},
+    ),
+    Case(
+        "mcp-mesh-agent",
+        "agent distributedTracing.enabled=false renders false",
+        {"agent": {"observability": {"distributedTracing": {"enabled": False}}}},
+        config_data={"MCP_MESH_DISTRIBUTED_TRACING_ENABLED": "false"},
+    ),
+    # --- mcp-mesh-agent: removed observability switches -------------------
+    Case(
+        "mcp-mesh-agent",
+        "mesh.tracingEnabled=false never turned tracing off",
+        {"mesh": {"tracingEnabled": False}},
+        expect_fail="mesh.tracingEnabled was never consumed",
+    ),
+    Case(
+        "mcp-mesh-agent",
+        "mesh.metricsEnabled=false never turned anything off",
+        {"mesh": {"metricsEnabled": False}},
+        expect_fail="mesh.metricsEnabled was never consumed",
+    ),
+    Case(
+        "mcp-mesh-agent",
+        "agent.observability.tracing.enabled=false never turned tracing off",
+        {"agent": {"observability": {"tracing": {"enabled": False}}}},
+        expect_fail="agent.observability.tracing.enabled was never consumed",
+    ),
+    Case(
+        "mcp-mesh-agent",
+        "agent.observability.metrics.enabled=false never turned anything off",
+        {"agent": {"observability": {"metrics": {"enabled": False}}}},
+        expect_fail="agent.observability.metrics.enabled was never consumed",
+    ),
+    Case(
+        "mcp-mesh-agent",
+        "a scalar agent.observability.tracing=false gets the guided message",
+        {"agent": {"observability": {"tracing": False}}},
+        expect_fail="agent.observability.tracing was never consumed",
+    ),
+    Case(
+        "mcp-mesh-agent",
+        "a scalar agent.observability.metrics=false gets the guided message",
+        {"agent": {"observability": {"metrics": False}}},
+        expect_fail="agent.observability.metrics was never consumed",
+    ),
+    Case(
+        "mcp-mesh-agent",
+        "scalar true and null observability switches carry no intent",
+        {
+            "mesh": {"tracingEnabled": None, "metricsEnabled": None},
+            "agent": {"observability": {"tracing": True, "metrics": None}},
+        },
+    ),
+    Case(
+        "mcp-mesh-agent",
+        "the shipped observability switch defaults are grandfathered",
+        {
+            "mesh": {"tracingEnabled": True, "metricsEnabled": True},
+            "agent": {
+                "observability": {
+                    "tracing": {"enabled": True},
+                    "metrics": {"enabled": True},
+                }
+            },
+        },
+        forbids_env=DEAD_AGENT_ENV,
     ),
     # --- mcp-mesh-agent: every probe is a different URL --------------------
     # Issues #1467/#1468: liveness may only fail for something a restart can
@@ -418,6 +555,151 @@ CASES: list[Case] = [
             "livenessProbe": "/livez",
             "readinessProbe": "/ready",
         },
+    ),
+    # --- mcp-mesh-ui (standalone chart): booleans (#1573) ----------------
+    Case(
+        "mcp-mesh-ui",
+        "ui tracing renders true when unset",
+        {},
+        config_data={"MCP_MESH_DISTRIBUTED_TRACING_ENABLED": "true"},
+    ),
+    Case(
+        "mcp-mesh-ui",
+        "ui.tracing.enabled=false renders false",
+        {"ui": {"tracing": {"enabled": False}}},
+        config_data={"MCP_MESH_DISTRIBUTED_TRACING_ENABLED": "false"},
+    ),
+    # --- mcp-mesh-registry (standalone chart): booleans (#1573) ----------
+    Case(
+        "mcp-mesh-registry",
+        "registry booleans at their defaults, and no dead env is injected",
+        {},
+        config_data={
+            "MCP_MESH_DEBUG_MODE": "true",
+            "MCP_MESH_DISTRIBUTED_TRACING_ENABLED": "true",
+        },
+        forbids_env=DEAD_REGISTRY_ENV,
+        requires_init_container="wait-for-db",
+    ),
+    # The default render is postgres, so DATABASE_PATH (sqlite-only) can
+    # only reappear on this path.
+    Case(
+        "mcp-mesh-registry",
+        "no dead env is injected on sqlite",
+        {"registry": {"database": {"type": "sqlite"}}},
+        forbids_env=DEAD_REGISTRY_ENV,
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "registry.logging.debug=false renders false",
+        {"registry": {"logging": {"debug": False}}},
+        config_data={"MCP_MESH_DEBUG_MODE": "false"},
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "registry distributedTracing.enabled=false renders false",
+        {"registry": {"observability": {"distributedTracing": {"enabled": False}}}},
+        config_data={"MCP_MESH_DISTRIBUTED_TRACING_ENABLED": "false"},
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "registry.database.waitForDatabase=false drops the init container",
+        {"registry": {"database": {"waitForDatabase": False}}},
+        forbids_init_container="wait-for-db",
+    ),
+    # A quoted "false" is truthy in an `if`; it must disable the wait too.
+    Case(
+        "mcp-mesh-registry",
+        'registry.database.waitForDatabase="false" (string) drops the init container',
+        {"registry": {"database": {"waitForDatabase": "false"}}},
+        forbids_init_container="wait-for-db",
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "registry.database.waitForDatabase=null keeps the default",
+        {"registry": {"database": {"waitForDatabase": None}}},
+        requires_init_container="wait-for-db",
+    ),
+    # The `initContainers:` header used to be emitted only with wait-for-db,
+    # so user initContainers without it rendered invalid YAML — previously
+    # reachable only on sqlite, and on any database once false was honoured.
+    Case(
+        "mcp-mesh-registry",
+        "user initContainers still render with waitForDatabase=false",
+        {
+            "registry": {"database": {"waitForDatabase": False}},
+            "initContainers": [{"name": "mine", "image": "busybox:1.35"}],
+        },
+        requires_init_container="mine",
+        forbids_init_container="wait-for-db",
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "user initContainers render on sqlite",
+        {
+            "registry": {"database": {"type": "sqlite"}},
+            "initContainers": [{"name": "mine", "image": "busybox:1.35"}],
+        },
+        requires_init_container="mine",
+        forbids_init_container="wait-for-db",
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "user initContainers render alongside wait-for-db",
+        {"initContainers": [{"name": "mine", "image": "busybox:1.35"}]},
+        requires_init_container="mine",
+    ),
+    # The umbrella sets waitForDatabase: true explicitly, so this is the
+    # path an operator actually takes.
+    Case(
+        "mcp-mesh-core",
+        "waitForDatabase=false through the umbrella drops the init container",
+        {"mcp-mesh-registry": {"registry": {"database": {"waitForDatabase": False}}}},
+        forbids_init_container="wait-for-db",
+    ),
+    Case(
+        "mcp-mesh-core",
+        "...and the umbrella default keeps it",
+        {},
+        requires_init_container="wait-for-db",
+    ),
+    # --- mcp-mesh-registry: removed token auth (#1573) -------------------
+    # The registry has no token auth. These keys mounted an AUTH_TOKENS var
+    # nothing reads, so enabling them looked protected and was not.
+    Case(
+        "mcp-mesh-registry",
+        "registry.security.auth.enabled=true protects nothing",
+        {"registry": {"security": {"auth": {"enabled": True}}}},
+        expect_fail=f"registry.security.auth.enabled {REGISTRY_AUTH_REMOVED}",
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "registry.security.auth.tokens protects nothing",
+        {"registry": {"security": {"auth": {"tokens": ["s3cret"]}}}},
+        expect_fail=f"registry.security.auth.tokens {REGISTRY_AUTH_REMOVED}",
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "registry.security.auth.existingSecret protects nothing",
+        {"registry": {"security": {"auth": {"existingSecret": "registry-tokens"}}}},
+        expect_fail=f"registry.security.auth.existingSecret {REGISTRY_AUTH_REMOVED}",
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "the shipped registry.security.auth defaults are grandfathered",
+        {"registry": {"security": {"auth": dict(SHIPPED_REGISTRY_AUTH)}}},
+        forbids_env=DEAD_REGISTRY_ENV,
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "null registry.security.auth values carry no intent",
+        {"registry": {"security": {"auth": {"existingSecret": None, "tokens": None}}}},
+    ),
+    Case(
+        "mcp-mesh-core",
+        "registry auth through the umbrella still fails",
+        {"mcp-mesh-registry": {"registry": {"security": {"auth": {"enabled": True}}}}},
+        expect_fail=f"registry.security.auth.enabled {REGISTRY_AUTH_REMOVED}",
     ),
     # --- mcp-mesh-ingress (standalone chart) ------------------------------
     Case(
@@ -476,8 +758,10 @@ def run_case(case: Case, values_file: Path) -> str | None:
                 "these values must not produce"
             )
         if case.probe_paths:
-            return _check_probe_paths(result.stdout, case.probe_paths)
-        return None
+            reason = _check_probe_paths(result.stdout, case.probe_paths)
+            if reason:
+                return reason
+        return _check_config(result.stdout, case)
 
     if result.returncode == 0:
         return (
@@ -543,6 +827,51 @@ def _check_probe_paths(manifests: str, expected: dict[str, str]) -> str | None:
                     "own failure action and needs its own endpoint"
                 )
             seen[path] = probe
+    return None
+
+
+def _check_config(manifests: str, case: Case) -> str | None:
+    """Assert the ConfigMap values, forbidden env names and init containers."""
+    docs = [d for d in yaml.safe_load_all(manifests) if isinstance(d, dict)]
+    config: dict[str, list[str]] = {}
+    for doc in docs:
+        if doc.get("kind") == "ConfigMap":
+            for key, val in (doc.get("data") or {}).items():
+                config.setdefault(key, []).append(str(val))
+
+    pod_specs = [
+        doc["spec"]["template"]["spec"]
+        for doc in docs
+        if doc.get("kind") in {"Deployment", "StatefulSet", "DaemonSet"}
+    ]
+    env_names: set[str] = set()
+    init_names: set[str] = set()
+    for spec in pod_specs:
+        for container in spec.get("initContainers") or []:
+            init_names.add(container.get("name"))
+        for container in (spec.get("containers") or []) + (
+            spec.get("initContainers") or []
+        ):
+            env_names.update(e.get("name") for e in container.get("env") or [])
+
+    for key, want in (case.config_data or {}).items():
+        got = config.get(key)
+        if not got:
+            return f"no rendered ConfigMap carries {key}"
+        if want not in got:
+            return f"{key} renders {got}, expected {want!r}"
+    for name in case.forbids_env:
+        if name in config:
+            return f"a ConfigMap still injects {name}, which no runtime reads"
+        if name in env_names:
+            return f"a container still injects {name}, which no runtime reads"
+    if case.requires_init_container and case.requires_init_container not in init_names:
+        return f"no workload declares the {case.requires_init_container!r} init container"
+    if case.forbids_init_container and case.forbids_init_container in init_names:
+        return (
+            f"a workload still declares the {case.forbids_init_container!r} "
+            "init container"
+        )
     return None
 
 

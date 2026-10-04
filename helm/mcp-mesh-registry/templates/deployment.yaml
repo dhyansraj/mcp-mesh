@@ -53,8 +53,16 @@ spec:
       serviceAccountName: {{ include "mcp-mesh-registry.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      {{- if and (ne .Values.registry.database.type "sqlite") (.Values.registry.database.waitForDatabase | default true) }}
+      {{- /* Not `default true`: Sprig `default` treats false as unset, so
+             waitForDatabase: false would still render the init container.
+             Compared as a string so the quoted "false" (truthy in an `if`)
+             disables it too; unset or nil keeps the default (on). */}}
+      {{- $waitSetting := .Values.registry.database.waitForDatabase }}
+      {{- $waitForDatabase := and (ne .Values.registry.database.type "sqlite") (or (kindIs "invalid" $waitSetting) (ne (lower (toString $waitSetting)) "false")) }}
+      {{- if or $waitForDatabase .Values.initContainers }}
       initContainers:
+      {{- end }}
+      {{- if $waitForDatabase }}
         # Wait for database (if using external DB)
         - name: wait-for-db
           image: "{{ include "mcp-mesh-registry.imageRef" (dict "image" .Values.waitForDbImage "root" $) }}"
@@ -156,21 +164,6 @@ spec:
                 secretKeyRef:
                   name: {{ include "mcp-mesh-registry.fullname" . }}-secret
                   key: database-url
-            {{- end }}
-            {{- end }}
-            {{- if .Values.registry.security.auth.enabled }}
-            {{- if .Values.registry.security.auth.existingSecret }}
-            - name: AUTH_TOKENS
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.registry.security.auth.existingSecret }}
-                  key: {{ .Values.registry.security.auth.secretKey }}
-            {{- else }}
-            - name: AUTH_TOKENS
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "mcp-mesh-registry.fullname" . }}-secret
-                  key: auth-tokens
             {{- end }}
             {{- end }}
             {{- if .Values.registry.redis.enabled }}
