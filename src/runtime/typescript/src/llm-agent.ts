@@ -501,6 +501,16 @@ export class MeshDelegatedProvider implements LlmProvider {
 }
 
 /**
+ * The `MESH_LLM_MODEL` override, or `undefined` when unset or blank. An empty
+ * value means "not set" (issue #1619): it must fall through to the configured
+ * model rather than send an empty model id to the provider.
+ */
+export function envLlmModel(): string | undefined {
+  const v = process.env.MESH_LLM_MODEL?.trim();
+  return v ? v : undefined;
+}
+
+/**
  * MeshLlmAgent - The core agentic loop implementation.
  */
 export class MeshLlmAgent<T = string> {
@@ -726,7 +736,7 @@ export class MeshLlmAgent<T = string> {
     // Determine model (mesh provider > MESH_LLM_MODEL env > config > default)
     const model =
       context.meshProvider?.model ??
-      process.env.MESH_LLM_MODEL ??
+      envLlmModel() ??
       this.config.model ??
       this.getDefaultModel();
 
@@ -964,7 +974,7 @@ export class MeshLlmAgent<T = string> {
 
     const model =
       context.meshProvider?.model ??
-      process.env.MESH_LLM_MODEL ??
+      envLlmModel() ??
       this.config.model ??
       this.getDefaultModel();
 

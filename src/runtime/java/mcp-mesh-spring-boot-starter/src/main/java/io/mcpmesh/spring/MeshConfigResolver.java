@@ -160,11 +160,7 @@ public class MeshConfigResolver {
      * @return true if MCP_MESH_DEBUG=true
      */
     public boolean isDebugEnabled() {
-        String debug = System.getenv("MCP_MESH_DEBUG");
-        if (debug == null) {
-            debug = System.getProperty("MCP_MESH_DEBUG");
-        }
-        return "true".equalsIgnoreCase(debug);
+        return isDebugEnabled(System.getenv("MCP_MESH_DEBUG"), System.getProperty("MCP_MESH_DEBUG"));
     }
 
     /**
@@ -173,10 +169,31 @@ public class MeshConfigResolver {
      * @return Log level string or "info" as default
      */
     public String getLogLevel() {
-        String level = System.getenv("MCP_MESH_LOG_LEVEL");
-        if (level == null) {
-            level = System.getProperty("MCP_MESH_LOG_LEVEL");
-        }
+        return logLevel(System.getenv("MCP_MESH_LOG_LEVEL"), System.getProperty("MCP_MESH_LOG_LEVEL"));
+    }
+
+    /** The env-free core of {@link #isDebugEnabled()}. */
+    static boolean isDebugEnabled(String envValue, String propertyValue) {
+        return "true".equalsIgnoreCase(firstNonBlank(envValue, propertyValue));
+    }
+
+    /** The env-free core of {@link #getLogLevel()}. */
+    static String logLevel(String envValue, String propertyValue) {
+        String level = firstNonBlank(envValue, propertyValue);
         return level != null ? level : "info";
+    }
+
+    /**
+     * First value that is set and not blank, trimmed; {@code null} if none. A
+     * blank env value means unset (issue #1619), so it falls through to the
+     * system property and then the default instead of shadowing them.
+     */
+    static String firstNonBlank(String... values) {
+        for (String v : values) {
+            if (v != null && !v.isBlank()) {
+                return v.trim();
+            }
+        }
+        return null;
     }
 }

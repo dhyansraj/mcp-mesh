@@ -19,7 +19,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { z } from "zod";
 import type { JobController } from "@mcpmesh/core";
-import { MeshAgent } from "../agent.js";
+import { MeshAgent, toolIsolationEnv } from "../agent.js";
 import { spliceJobController } from "../inbound-job-dispatch.js";
 
 // Minimal FastMCP stub: `addTool` is the only surface `addTool`
@@ -475,6 +475,34 @@ describe("addTool — W4 worker-isolation force-disable warning", () => {
     expect(isolationCall).toBeDefined();
     expect(String(isolationCall![0])).toContain("'consumer-tool'");
     expect(String(isolationCall![0])).toContain("meshJobDepIndex: 0");
+  });
+
+  for (const blank of ["", "   "]) {
+    it(`does NOT warn when isolation env is blank ('${blank}' = unset, #1619)`, () => {
+      process.env.MCP_MESH_TOOL_ISOLATION = blank;
+      const agent = newAgent();
+      agent.addTool({
+        name: "task-tool",
+        task: true,
+        parameters: z.object({}),
+        execute: async () => "x",
+      });
+      const isolationCall = warnSpy.mock.calls.find((c) =>
+        String(c[0]).includes("worker isolation"),
+      );
+      expect(isolationCall).toBeUndefined();
+    });
+  }
+
+  it("toolIsolationEnv treats blank as unset and trims set values", () => {
+    for (const blank of ["", "   "]) {
+      process.env.MCP_MESH_TOOL_ISOLATION = blank;
+      expect(toolIsolationEnv()).toBeUndefined();
+    }
+    process.env.MCP_MESH_TOOL_ISOLATION = " FALSE ";
+    expect(toolIsolationEnv()).toBe("false");
+    delete process.env.MCP_MESH_TOOL_ISOLATION;
+    expect(toolIsolationEnv()).toBeUndefined();
   });
 
   it("does NOT warn when isolation env is explicitly set to 'false'", () => {

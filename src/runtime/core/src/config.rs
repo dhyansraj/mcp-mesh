@@ -313,7 +313,9 @@ pub fn resolve_config_int(key: ConfigKey, param_value: Option<i64>) -> Option<i6
     // Priority 1: Environment variable
     let env_var = key.env_var();
     if let Ok(value) = env::var(env_var) {
-        if let Ok(parsed) = value.parse::<i64>() {
+        // Trim like the bool path: " 5" is 5, and an empty or whitespace-only
+        // value fails to parse and falls through to param/default (unset).
+        if let Ok(parsed) = value.trim().parse::<i64>() {
             debug!("Config '{}' (int) resolved from ENV: {}", env_var, parsed);
             return Some(parsed);
         }
@@ -675,6 +677,46 @@ mod tests {
             );
         }
         env::remove_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED");
+    }
+
+    #[test]
+    fn test_resolve_config_int_trims_env() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+
+        for val in &[" 7", "7 ", "\t7\n"] {
+            env::set_var("MCP_MESH_HEALTH_INTERVAL", *val);
+            assert_eq!(
+                resolve_config_int(ConfigKey::HealthInterval, Some(30)),
+                Some(7),
+                "Expected 7 for {:?}",
+                val
+            );
+        }
+        env::remove_var("MCP_MESH_HEALTH_INTERVAL");
+    }
+
+    #[test]
+    fn test_resolve_config_int_blank_env_falls_through() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+
+        env::remove_var("MCP_MESH_HEALTH_INTERVAL");
+        let default = resolve_config_int(ConfigKey::HealthInterval, None);
+        for val in &["", "   "] {
+            env::set_var("MCP_MESH_HEALTH_INTERVAL", *val);
+            assert_eq!(
+                resolve_config_int(ConfigKey::HealthInterval, Some(30)),
+                Some(30),
+                "blank {:?} must fall through to param",
+                val
+            );
+            assert_eq!(
+                resolve_config_int(ConfigKey::HealthInterval, None),
+                default,
+                "blank {:?} must fall through to default",
+                val
+            );
+        }
+        env::remove_var("MCP_MESH_HEALTH_INTERVAL");
     }
 
     // =========================================================================

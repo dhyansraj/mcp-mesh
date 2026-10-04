@@ -194,6 +194,17 @@ export function __resetUnwiredSlotWarnedForTests(): void {
   _unwiredSlotWarned.clear();
 }
 
+/**
+ * `MCP_MESH_TOOL_ISOLATION`, trimmed and lower-cased, or `undefined` when it
+ * is unset OR blank. An empty value (empty Helm value, `docker run -e VAR`)
+ * means "not set" (issue #1619), so it neither counts as an explicit opt-in
+ * nor changes the default.
+ */
+export function toolIsolationEnv(): string | undefined {
+  const v = process.env.MCP_MESH_TOOL_ISOLATION?.trim().toLowerCase();
+  return v ? v : undefined;
+}
+
 // Schedule auto-start after module loading completes
 function scheduleAutoStart(): void {
   if (autoStartScheduled) return;
@@ -857,9 +868,8 @@ export class MeshAgent {
     // force-disable was silent — users who set MCP_MESH_TOOL_ISOLATION
     // expected it to apply to every tool.
     const isJobBoundForLog = isTaskTool || meshJobDepIndex !== undefined;
-    const isolationEnvSet =
-      typeof process.env.MCP_MESH_TOOL_ISOLATION === "string" &&
-      process.env.MCP_MESH_TOOL_ISOLATION.toLowerCase() !== "false";
+    const isolationEnv = toolIsolationEnv();
+    const isolationEnvSet = isolationEnv !== undefined && isolationEnv !== "false";
     if (isJobBoundForLog && isolationEnvSet) {
       console.warn(
         `[mesh-tool] '${toolName}' has ` +
@@ -1148,7 +1158,7 @@ export class MeshAgent {
         !isJobBound &&
         !isA2aBound &&
         !isViewBound &&
-        (process.env.MCP_MESH_TOOL_ISOLATION ?? "true").toLowerCase() !== "false";
+        (toolIsolationEnv() ?? "true") !== "false";
 
       try {
         let result: unknown;

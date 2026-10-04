@@ -180,14 +180,17 @@ def _resolve_via_python(
 ) -> Any:
     """Resolve config value via Python os.environ (fallback for non-mesh config).
 
-    Issue #1619: for every rule except ``STRING_RULE``, an env var that is set
-    but empty or whitespace-only (``FOO=`` from an empty Helm value,
-    ``docker run -e FOO``, ``export FOO="$UNSET"``) is treated as unset, so
-    resolution falls through to the override and then the default -- matching
-    the Rust core's resolver for mesh keys. An empty string can never pass
-    those rules, so it would otherwise shadow the override and log a spurious
-    validation error. ``STRING_RULE`` keeps the raw value: an empty string is
-    a valid string there.
+    Issue #1619: an env var that is set but empty (``FOO=`` from an empty Helm
+    value, ``docker run -e FOO``, ``export FOO="$UNSET"``) is treated as
+    unset, so resolution falls through to the override and then the default.
+    This mirrors the Rust core resolver used for mesh keys:
+
+    - ``STRING_RULE``: only ``""`` is unset; a whitespace-only value is kept,
+      as Rust's string resolver keeps it.
+    - Every other rule: whitespace-only is unset too, as Rust's bool resolver
+      (and its trimming int resolver) treat it. Such a value can never pass
+      those rules, so it would otherwise shadow the override and log a
+      spurious validation error.
 
     ``MCP_MESH_ENABLED`` deliberately does NOT go through this resolver: it is
     fail-closed (empty disables mesh, see ``_mcp_mesh/__init__.py``) so the
@@ -196,12 +199,14 @@ def _resolve_via_python(
     import os
 
     env_value = os.environ.get(env_var)
-    if (
-        env_value is not None
-        and rule != ValidationRule.STRING_RULE
-        and not env_value.strip()
-    ):
-        env_value = None
+    if env_value is not None:
+        blank = (
+            env_value == ""
+            if rule == ValidationRule.STRING_RULE
+            else not env_value.strip()
+        )
+        if blank:
+            env_value = None
     if env_value is not None:
         return env_value
     elif override is not None:

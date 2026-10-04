@@ -1,9 +1,10 @@
-"""Issue #1619: a set-but-empty env var means "unset" for validated rules.
+"""Issue #1619: a set-but-empty env var means "unset".
 
 ``FOO=`` is a routine outcome (empty Helm value, ``docker run -e FOO``,
-``export FOO="$UNSET"``). For every rule except ``STRING_RULE`` the empty
-value can never validate, so it must fall through to the override and then
-the default instead of shadowing them and logging a validation error.
+``export FOO="$UNSET"``). It must fall through to the override and then the
+default instead of shadowing them (and, for validated rules, logging a
+validation error). Whitespace-only follows the Rust core: unset for validated
+rules, kept for ``STRING_RULE``.
 """
 
 import logging
@@ -86,8 +87,34 @@ def test_set_value_still_wins_over_override(monkeypatch):
     )
 
 
-@pytest.mark.parametrize("value", ["", "   "], ids=["empty", "whitespace"])
-def test_string_rule_keeps_empty_value(monkeypatch, value):
-    # An empty string is a valid STRING_RULE value; it is not treated as unset.
-    monkeypatch.setenv(ENV, value)
-    assert get_config_value(ENV, override="o", default="d") == value
+class TestStringRuleMatchesRustCore:
+    """STRING_RULE mirrors the Rust string resolver: ``""`` is unset, a
+    whitespace-only value is kept."""
+
+    def test_empty_falls_through_to_override(self, monkeypatch):
+        monkeypatch.setenv(ENV, "")
+        assert get_config_value(ENV, override="o", default="d") == "o"
+
+    def test_empty_falls_through_to_default(self, monkeypatch):
+        monkeypatch.setenv(ENV, "")
+        assert get_config_value(ENV, default="d") == "d"
+
+    def test_empty_without_default_is_none(self, monkeypatch):
+        monkeypatch.setenv(ENV, "")
+        assert get_config_value(ENV) is None
+
+    def test_whitespace_is_kept(self, monkeypatch):
+        monkeypatch.setenv(ENV, "   ")
+        assert get_config_value(ENV, override="o", default="d") == "   "
+
+    def test_python_path_agrees_with_rust_path(self, monkeypatch):
+        # MCP_MESH_NAMESPACE resolves through the Rust core when available;
+        # the Python fallback must give the same answers.
+        if not config_resolver._RUST_CORE_AVAILABLE:
+            pytest.skip("mcp_mesh_core not available")
+        for value in ("", "   "):
+            monkeypatch.setenv("MCP_MESH_NAMESPACE", value)
+            monkeypatch.setenv(ENV, value)
+            rust = get_config_value("MCP_MESH_NAMESPACE", override="o", default="d")
+            python = get_config_value(ENV, override="o", default="d")
+            assert rust == python, f"value={value!r}: rust={rust!r} python={python!r}"
