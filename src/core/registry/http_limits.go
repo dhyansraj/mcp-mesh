@@ -75,7 +75,8 @@ func maxRequestBodyBytesFromEnv() int64 {
 //     before the agent sees a byte (issue #1608). At most
 //     proxyBufferConcurrency (16) such bodies are buffered at once;
 //     further ones wait for a slot, up to their X-Mesh-Timeout budget,
-//     then get 503.
+//     then get 503, and a body still unsent when that budget runs out
+//     gets 408 and frees its slot.
 //     A declared-length proxy body is already bounded by the pre-check,
 //     so it keeps streaming to the agent.
 //

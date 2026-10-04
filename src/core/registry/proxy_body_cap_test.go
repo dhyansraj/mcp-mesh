@@ -438,3 +438,97 @@ func TestProxy_ChunkedBufferingIsBounded(t *testing.T) {
 		t.Errorf("%d buffer slot(s) leaked after every request finished", len(proxyBufferSlots))
 	}
 }
+
+// TestProxy_StalledChunkedSenderReleasesSlotAtBudget pins that a chunked
+// sender which stalls mid-body holds its buffer slot only until its
+// X-Mesh-Timeout budget runs out: the read is then interrupted, the
+// sender gets 408 (it never overran the cap, so not 413), nothing reaches
+// the agent, and a caller queued behind it gets through.
+func TestProxy_StalledChunkedSenderReleasesSlotAtBudget(t *testing.T) {
+	saved := proxyBufferSlots
+	proxyBufferSlots = make(chan struct{}, 1)
+	t.Cleanup(func() { proxyBufferSlots = saved })
+
+	agent := &bodyRecordingAgent{}
+	base, path := newCappedProxy(t, 1<<20, agent)
+
+	// The staller sends part of a chunked body and then goes quiet.
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	stalled, _ := http.NewRequest("POST", base+path, pr)
+	stalled.Header.Set("X-Mesh-Timeout", "1")
+	type result struct {
+		code int
+		err  error
+		took time.Duration
+	}
+	stalledDone := make(chan result, 1)
+	start := time.Now()
+	go func() {
+		resp, err := http.DefaultClient.Do(stalled)
+		r := result{err: err, took: time.Since(start)}
+		if err == nil {
+			r.code = resp.StatusCode
+			resp.Body.Close()
+		}
+		stalledDone <- r
+	}()
+	if _, err := pw.Write([]byte(`{"partial":`)); err != nil {
+		t.Fatalf("write partial body: %v", err)
+	}
+	waitUntil := time.Now().Add(5 * time.Second)
+	for len(proxyBufferSlots) != 1 {
+		if time.Now().After(waitUntil) {
+			t.Fatal("the stalled sender never took the buffer slot")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// A second chunked caller queues behind it with a longer budget.
+	queuedDone := make(chan result, 1)
+	go func() {
+		req, _ := http.NewRequest("POST", base+path, unknownLengthBody{strings.NewReader(`{"queued":true}`)})
+		req.Header.Set("X-Mesh-Timeout", "10")
+		resp, err := http.DefaultClient.Do(req)
+		r := result{err: err, took: time.Since(start)}
+		if err == nil {
+			r.code = resp.StatusCode
+			resp.Body.Close()
+		}
+		queuedDone <- r
+	}()
+
+	select {
+	case r := <-stalledDone:
+		// The server answers 408 and closes; depending on timing the
+		// client may see that response or a broken write instead.
+		if r.err == nil && r.code != http.StatusRequestTimeout {
+			t.Fatalf("stalled sender got %d, want 408", r.code)
+		}
+		if r.took > 4*time.Second {
+			t.Errorf("stalled sender held on for %s, past its 1s budget", r.took)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("stalled sender still holding its slot well past its 1s budget")
+	}
+
+	select {
+	case r := <-queuedDone:
+		if r.err != nil || r.code != http.StatusOK {
+			t.Fatalf("queued caller = %d / %v, want 200 once the stalled slot freed", r.code, r.err)
+		}
+		if r.took > 5*time.Second {
+			t.Errorf("queued caller took %s; it should run soon after the 1s budget", r.took)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("queued caller never got the slot back")
+	}
+
+	n, bodies, _ := agent.snapshot()
+	if n != 1 || string(bodies[0]) != `{"queued":true}` {
+		t.Fatalf("agent received %d request(s) %q; want only the queued caller's", n, bodies)
+	}
+	if len(proxyBufferSlots) != 0 {
+		t.Errorf("%d buffer slot(s) still held after both callers finished", len(proxyBufferSlots))
+	}
+}

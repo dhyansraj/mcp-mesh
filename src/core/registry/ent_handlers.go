@@ -1096,7 +1096,9 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 // by the outbound request for that long. A request that finds every slot
 // taken waits for one rather than being refused, for at most the caller's
 // own proxy budget (wait: X-Mesh-Timeout, 60s by default) and never past a
-// registry shutdown; then it gets 503. The budget is what bounds the wait
+// registry shutdown; then it gets 503. The same budget bounds reading the
+// body once a slot is held, so a sender that stalls mid-body releases its
+// slot when the budget runs out (408) instead of holding it forever. The budget is what bounds the wait
 // in practice: on HTTP/1.1 Go does not cancel the request context for a
 // client that disconnects while its body is still unread, so a caller
 // that gives up while waiting is only noticed when the budget expires —
@@ -1104,8 +1106,8 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 // still be forwarded if a slot frees first. Declared-length bodies never
 // take a slot.
 //
-// Returns false when the request must not be forwarded: a 413, 400 or 503
-// has been written, or the caller's context ended while waiting.
+// Returns false when the request must not be forwarded: a 413, 408, 400 or
+// 503 has been written, or the caller's context ended while waiting.
 func proxyRequestBody(c *gin.Context, wait time.Duration, stopping <-chan struct{}) (io.Reader, func(), bool) {
 	noop := func() {}
 	limit := requestBodyLimit(c)
@@ -1113,6 +1115,10 @@ func proxyRequestBody(c *gin.Context, wait time.Duration, stopping <-chan struct
 		return c.Request.Body, noop, true
 	}
 
+	// One budget covers both the wait for a slot and the read: the caller
+	// asked for an answer within X-Mesh-Timeout, and buffering is part of
+	// the exchange.
+	deadline := time.Now().Add(wait)
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	select {
@@ -1129,13 +1135,39 @@ func proxyRequestBody(c *gin.Context, wait time.Duration, stopping <-chan struct
 	var once sync.Once
 	release := func() { once.Do(func() { <-proxyBufferSlots }) }
 
+	// Bound the read by the same budget. The server deliberately has no
+	// ReadTimeout (it would cut long-polls and SSE), so without this a
+	// client that stalls mid-body would hold its slot indefinitely, and
+	// enough of them would starve every later chunked call. The deadline
+	// is scoped to this read and cleared straight after: left in place it
+	// would fire on the server's post-body background read and cancel the
+	// request context mid-call. A writer that cannot set deadlines (a test
+	// recorder) just reads without one.
+	rc := http.NewResponseController(c.Writer)
+	deadlineSet := rc.SetReadDeadline(deadline) == nil
+
 	// The middleware has wrapped the body in http.MaxBytesReader at the
 	// same limit; the LimitReader is what bounds memory if it ever isn't.
 	buf, err := io.ReadAll(io.LimitReader(c.Request.Body, limit+1))
+	if deadlineSet {
+		_ = rc.SetReadDeadline(time.Time{})
+	}
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) || int64(len(buf)) > limit {
 		release()
 		writeBodyTooLarge(c, limit)
+		return nil, noop, false
+	}
+	if isProxyTimeoutError(err) {
+		// 408, not 413: the body never overran the cap, the caller just
+		// did not finish sending it within its budget. The connection's
+		// read side is now unusable, so it is not kept alive.
+		release()
+		c.Header("Connection", "close")
+		c.JSON(http.StatusRequestTimeout, generated.ErrorResponse{
+			Error:     fmt.Sprintf("Request body not received within the %s proxy budget (X-Mesh-Timeout)", wait),
+			Timestamp: time.Now().UTC(),
+		})
 		return nil, noop, false
 	}
 	if err != nil {
