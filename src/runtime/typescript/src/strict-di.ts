@@ -26,13 +26,14 @@ let strictDiEnabled: boolean | null = null;
 
 /**
  * Parse a boolean env value with Python's `ValidationRule.TRUTHY_RULE`
- * vocabulary: `true/1/yes/on` and `false/0/no/off`, case-insensitive. Any
- * other value is reported and falls back to `defaultValue`.
+ * vocabulary: `true/1/yes/on` and `false/0/no/off`, case-insensitive. An
+ * empty or whitespace-only value means unset (issue #1619) and silently
+ * yields `defaultValue`; any other value is reported and falls back to it.
  */
 function parseTruthyEnv(name: string, defaultValue: boolean): boolean {
   const raw = process.env[name];
-  if (raw === undefined) return defaultValue;
-  const lower = raw.toLowerCase();
+  if (raw === undefined || raw.trim() === "") return defaultValue;
+  const lower = raw.trim().toLowerCase();
   if (["true", "1", "yes", "on"].includes(lower)) return true;
   if (["false", "0", "no", "off"].includes(lower)) return false;
   console.error(

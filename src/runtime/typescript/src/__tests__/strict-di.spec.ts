@@ -156,6 +156,20 @@ describe("MCP_MESH_STRICT_DI truthy parsing (Python TRUTHY_RULE)", () => {
       expect(isStrictDiEnabled()).toBe(false);
     });
   }
+  for (const v of ["", "   "]) {
+    it(`blank '${v}' means unset: default, no validation error (#1619)`, () => {
+      process.env.MCP_MESH_STRICT_DI = v;
+      __resetStrictDiCacheForTests();
+      expect(isStrictDiEnabled()).toBe(false);
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+  }
+  it("a genuinely invalid value is still reported", () => {
+    process.env.MCP_MESH_STRICT_DI = "maybe";
+    __resetStrictDiCacheForTests();
+    expect(isStrictDiEnabled()).toBe(false);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("excess-dependency diagnostic (#1593)", () => {

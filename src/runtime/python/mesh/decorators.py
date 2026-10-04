@@ -2699,14 +2699,13 @@ def _resolve_pending_consumer_self_tags(agent_name: str) -> None:
 def _a2a_mount(*args: Any, **kwargs: Any):
     """Attribute alias for ``mesh.a2a.mount`` (see ``mesh.a2a.mount``).
 
+    ``mesh.a2a`` itself resolves to the callable ``mesh.a2a`` module (issue
+    #1617); this alias keeps ``mesh.decorators.a2a.mount`` working for code
+    that binds the decorator function directly.
+
     The implementation lives in ``mesh.a2a`` to keep the FastAPI import
     out of ``mesh.decorators`` (which is loaded eagerly by ``import mesh``
     and shouldn't pull FastAPI for users that only need ``@mesh.tool``).
-
-    Imports via ``importlib`` rather than ``from . import a2a`` because
-    the ``mesh`` package's ``__getattr__`` shadows ``a2a`` with the
-    decorator function — a plain ``from`` import would resolve
-    ``a2a`` to ``_a2a_mount`` itself and recurse.
     """
     import importlib
 
@@ -2895,6 +2894,19 @@ def _resolve_llm_agent_for_injection(
     return wrapper._mesh_llm_agent
 
 
+def _resolve_llm_model(model: str | None) -> str | None:
+    """Resolve the consumer-side model: ``MESH_LLM_MODEL`` env > ``model=``.
+
+    An empty or whitespace-only ``MESH_LLM_MODEL`` means unset (issue #1619),
+    matching the TypeScript SDK's ``envLlmModel()``: it falls through to
+    ``model=`` instead of sending a blank model id. A set value is trimmed.
+    """
+    import os
+
+    env_model = (os.environ.get("MESH_LLM_MODEL") or "").strip()
+    return env_model or model
+
+
 def llm(
     filter: dict[str, Any] | list[dict[str, Any] | str] | str | None = None,
     *,
@@ -3061,12 +3073,7 @@ def llm(
         resolved_provider = provider
 
         # Resolve optional consumer-side model override with env var override
-        resolved_model = get_config_value(
-            "MESH_LLM_MODEL",
-            override=model,
-            default=None,
-            rule=ValidationRule.STRING_RULE,
-        )
+        resolved_model = _resolve_llm_model(model)
 
         # Warn about missing configuration parameters
         if not system_prompt and not system_prompt_file:

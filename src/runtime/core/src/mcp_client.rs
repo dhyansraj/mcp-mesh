@@ -217,15 +217,16 @@ pub async fn call_tool(
             .header("Content-Type", "application/json")
             .header("Accept", "application/json, text/event-stream");
 
-        for (key, value) in &extra_headers {
-            request = request.header(key.as_str(), value.as_str());
-        }
-
         // Auto-inject X-Mesh-Job-Id / X-Mesh-Timeout from the active
         // JobContext (if this outbound call is happening inside a
-        // `with_job(...)` scope). Conceptually parallel to X-Trace-Id
-        // propagation — see job_context::inject_job_headers docs.
-        request = crate::job_context::inject_job_headers(request);
+        // `with_job(...)` scope), replacing any caller-propagated copy so
+        // each header is sent once and the job's own deadline wins (#1611).
+        // Re-merged per attempt so retries advertise the shrinking budget.
+        let mut headers = extra_headers.clone();
+        crate::job_context::merge_job_headers(&mut headers);
+        for (key, value) in &headers {
+            request = request.header(key.as_str(), value.as_str());
+        }
 
         // Wrap the send future so that an active JobContext's cancel token
         // can abort an in-flight outbound request. No-op when no context.
@@ -530,5 +531,130 @@ mod tests {
         let a = get_http_client() as *const reqwest::Client;
         let b = get_http_client() as *const reqwest::Client;
         assert_eq!(a, b, "get_http_client() must return the same static instance");
+    }
+
+    // =========================================================================
+    // call_tool job-header de-duplication (#1611)
+    // =========================================================================
+
+    /// One-shot server that returns the raw header lines (name lowercased,
+    /// value trimmed) of the first request, preserving duplicates.
+    async fn spawn_raw_header_server() -> (u16, tokio::task::JoinHandle<Vec<(String, String)>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            // Read until the end of the header block: one read() may return
+            // a partial request.
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = sock.read(&mut chunk).await.unwrap();
+                assert!(n > 0, "connection closed before the header block ended");
+                buf.extend_from_slice(&chunk[..n]);
+            }
+            let req = String::from_utf8_lossy(&buf).to_string();
+            let mut hdrs = Vec::new();
+            for line in req.lines().skip(1) {
+                if line.is_empty() {
+                    break;
+                }
+                if let Some((k, v)) = line.split_once(':') {
+                    hdrs.push((k.trim().to_lowercase(), v.trim().to_string()));
+                }
+            }
+            let body =
+                r#"{"jsonrpc":"2.0","id":"1","result":{"content":[{"type":"text","text":"ok"}]}}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            sock.write_all(resp.as_bytes()).await.unwrap();
+            hdrs
+        });
+        (port, server)
+    }
+
+    fn values_of<'a>(hdrs: &'a [(String, String)], name: &str) -> Vec<&'a str> {
+        hdrs.iter()
+            .filter(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn call_tool_job_context_replaces_caller_job_headers() {
+        use crate::job_context::{with_job, JobContext};
+        let (port, server) = spawn_raw_header_server().await;
+        let endpoint = format!("http://127.0.0.1:{}", port);
+        // Caller propagates an inherited (looser) budget and a different job
+        // id, in mixed case. Both must be replaced by the active JobContext.
+        let headers =
+            r#"{"X-Mesh-Timeout":"600","x-mesh-job-id":"inherited-job","X-Trace-Id":"t-1"}"#;
+        let ctx = JobContext::with_timeout("job-active", Duration::from_secs(30));
+        with_job(ctx, async {
+            call_tool(&endpoint, "greet", None, Some(headers), 5_000, 0)
+                .await
+                .unwrap();
+        })
+        .await;
+        let hdrs = server.await.unwrap();
+        assert_eq!(values_of(&hdrs, "x-mesh-job-id"), vec!["job-active"]);
+        assert_eq!(values_of(&hdrs, "x-mesh-timeout"), vec!["30"]);
+        assert_eq!(values_of(&hdrs, "x-trace-id"), vec!["t-1"]);
+    }
+
+    #[tokio::test]
+    async fn call_tool_keeps_caller_timeout_when_job_has_no_deadline() {
+        use crate::job_context::{with_job, JobContext};
+        let (port, server) = spawn_raw_header_server().await;
+        let endpoint = format!("http://127.0.0.1:{}", port);
+        let headers = r#"{"X-Mesh-Timeout":"600"}"#;
+        with_job(JobContext::new("job-unbounded"), async {
+            call_tool(&endpoint, "greet", None, Some(headers), 5_000, 0)
+                .await
+                .unwrap();
+        })
+        .await;
+        let hdrs = server.await.unwrap();
+        assert_eq!(values_of(&hdrs, "x-mesh-job-id"), vec!["job-unbounded"]);
+        assert_eq!(values_of(&hdrs, "x-mesh-timeout"), vec!["600"]);
+    }
+
+    #[tokio::test]
+    async fn call_tool_drops_caller_timeout_when_job_deadline_expired() {
+        use crate::job_context::{with_job, JobContext};
+        let (port, server) = spawn_raw_header_server().await;
+        let endpoint = format!("http://127.0.0.1:{}", port);
+        let headers = r#"{"X-Mesh-Timeout":"600"}"#;
+        let ctx = JobContext::with_timeout("job-blown", Duration::from_millis(10));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        with_job(ctx, async {
+            call_tool(&endpoint, "greet", None, Some(headers), 5_000, 0)
+                .await
+                .unwrap();
+        })
+        .await;
+        let hdrs = server.await.unwrap();
+        assert_eq!(values_of(&hdrs, "x-mesh-job-id"), vec!["job-blown"]);
+        assert!(
+            values_of(&hdrs, "x-mesh-timeout").is_empty(),
+            "an expired job deadline must not let an inherited budget through"
+        );
+    }
+
+    #[tokio::test]
+    async fn call_tool_passes_caller_job_headers_outside_job_scope() {
+        let (port, server) = spawn_raw_header_server().await;
+        let endpoint = format!("http://127.0.0.1:{}", port);
+        let headers = r#"{"X-Mesh-Timeout":"600","X-Mesh-Job-Id":"inherited-job"}"#;
+        call_tool(&endpoint, "greet", None, Some(headers), 5_000, 0)
+            .await
+            .unwrap();
+        let hdrs = server.await.unwrap();
+        assert_eq!(values_of(&hdrs, "x-mesh-job-id"), vec!["inherited-job"]);
+        assert_eq!(values_of(&hdrs, "x-mesh-timeout"), vec!["600"]);
     }
 }

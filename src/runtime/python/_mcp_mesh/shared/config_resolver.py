@@ -97,7 +97,7 @@ def get_config_value(
         raw_value = _resolve_via_rust(rust_key, override, default, rule)
     else:
         # Non-mesh config or Rust core unavailable - use Python fallback
-        raw_value = _resolve_via_python(env_var, override, default)
+        raw_value = _resolve_via_python(env_var, override, default, rule)
 
     # Validate and convert the value
     try:
@@ -142,7 +142,7 @@ def _resolve_via_rust(
             if isinstance(override, bool):
                 param_bool = override
             elif isinstance(override, str):
-                lower_val = override.lower()
+                lower_val = override.strip().lower()
                 if lower_val in ("true", "1", "yes", "on"):
                     param_bool = True
                 elif lower_val in ("false", "0", "no", "off"):
@@ -172,11 +172,41 @@ def _resolve_via_rust(
         return result if result else default
 
 
-def _resolve_via_python(env_var: str, override: Any, default: Any) -> Any:
-    """Resolve config value via Python os.environ (fallback for non-mesh config)."""
+def _resolve_via_python(
+    env_var: str,
+    override: Any,
+    default: Any,
+    rule: ValidationRule = ValidationRule.STRING_RULE,
+) -> Any:
+    """Resolve config value via Python os.environ (fallback for non-mesh config).
+
+    Issue #1619: an env var that is set but empty (``FOO=`` from an empty Helm
+    value, ``docker run -e FOO``, ``export FOO="$UNSET"``) is treated as
+    unset, so resolution falls through to the override and then the default.
+    This mirrors the Rust core resolver used for mesh keys:
+
+    - ``STRING_RULE``: only ``""`` is unset; a whitespace-only value is kept,
+      as Rust's string resolver keeps it.
+    - Every other rule: whitespace-only is unset too, as Rust's bool resolver
+      (and its trimming int resolver) treat it. Such a value can never pass
+      those rules, so it would otherwise shadow the override and log a
+      spurious validation error.
+
+    ``MCP_MESH_ENABLED`` deliberately does NOT go through this resolver: it is
+    fail-closed (empty disables mesh, see ``_mcp_mesh/__init__.py``) so the
+    master off-switch can never turn on through an empty render.
+    """
     import os
 
     env_value = os.environ.get(env_var)
+    if env_value is not None:
+        blank = (
+            env_value == ""
+            if rule == ValidationRule.STRING_RULE
+            else not env_value.strip()
+        )
+        if blank:
+            env_value = None
     if env_value is not None:
         return env_value
     elif override is not None:
@@ -223,7 +253,10 @@ def _validate_value(value: Any, rule: ValidationRule, env_var: str) -> Any:
         if isinstance(value, bool):
             return value
         if isinstance(value, str):
-            lower_val = value.lower()
+            # Strip like the Rust core and TS resolvers: " true " is true.
+            # (int()/float() already ignore surrounding whitespace for the
+            # numeric rules.)
+            lower_val = value.strip().lower()
             if lower_val in ("true", "1", "yes", "on"):
                 return True
             elif lower_val in ("false", "0", "no", "off"):

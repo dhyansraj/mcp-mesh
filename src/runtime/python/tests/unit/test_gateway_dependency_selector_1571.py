@@ -233,11 +233,8 @@ class TestUnifiedSelectorValidation:
 
     def test_a2a_keeps_required(self):
         import mesh
-        from mesh.decorators import a2a as a2a_decorator
 
-        @a2a_decorator(
-            path="/ask", dependencies=[{"capability": "llm", "required": True}]
-        )
+        @mesh.a2a(path="/ask", dependencies=[{"capability": "llm", "required": True}])
         async def handler(llm: mesh.McpMeshTool = None) -> dict:
             return {}
 
@@ -246,9 +243,8 @@ class TestUnifiedSelectorValidation:
 
     def test_a2a_keeps_expected_type_and_match_mode(self):
         import mesh
-        from mesh.decorators import a2a as a2a_decorator
 
-        @a2a_decorator(
+        @mesh.a2a(
             path="/ask",
             dependencies=[
                 {
@@ -287,12 +283,11 @@ class TestUnifiedSelectorValidation:
     )
     def test_all_three_decorators_reject_the_same_shapes(self, bad, message):
         import mesh
-        from mesh.decorators import a2a as a2a_decorator
 
         for make in (
             lambda: mesh.tool(capability="c", dependencies=[bad]),
             lambda: mesh.route(dependencies=[bad]),
-            lambda: a2a_decorator(path="/p", dependencies=[bad]),
+            lambda: mesh.a2a(path="/p", dependencies=[bad]),
         ):
             with pytest.raises(ValueError, match=message):
 

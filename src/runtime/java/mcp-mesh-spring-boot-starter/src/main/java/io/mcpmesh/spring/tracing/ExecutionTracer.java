@@ -195,10 +195,22 @@ public class ExecutionTracer {
         }
 
         // Fallback to direct env var check
-        String enabled = System.getenv("MCP_MESH_DISTRIBUTED_TRACING_ENABLED");
+        return tracingEnabledFallback(
+            System.getenv("MCP_MESH_DISTRIBUTED_TRACING_ENABLED"),
+            System.getProperty("mcp.mesh.distributed-tracing-enabled"));
+    }
+
+    /**
+     * The env-free core of the {@link #isTracingEnabled()} fallback. A blank env
+     * value means unset (issue #1619), so the system property still applies;
+     * neither set means disabled.
+     */
+    static boolean tracingEnabledFallback(String envValue, String propertyValue) {
+        String enabled = envValue != null && !envValue.isBlank() ? envValue : propertyValue;
         if (enabled == null) {
-            enabled = System.getProperty("mcp.mesh.distributed-tracing-enabled", "false");
+            return false;
         }
+        enabled = enabled.trim();
         return "true".equalsIgnoreCase(enabled) || "1".equals(enabled);
     }
 

@@ -444,6 +444,16 @@ export function __buildCardRenderContextForTests(
  * arg and the user code must surface a clear error (mirrors Java's
  * fallback).
  */
+/**
+ * Registry URL for the producer's MeshJobSubmitter. Resolved through the
+ * core's `resolveConfig("registry_url")`, like the rest of the SDK, so a
+ * set-but-empty `MCP_MESH_REGISTRY_URL` means unset (issue #1619) and the
+ * default applies instead of an empty URL.
+ */
+export function resolveProducerRegistryUrl(): string {
+  return resolveConfig("registry_url", null) || "http://localhost:8000";
+}
+
 function pickSubmitterCapability(surface: A2ASurfaceMetadata): string | null {
   if (surface.dependencies && surface.dependencies.length > 0) {
     const first = surface.dependencies[0]?.capability;
@@ -513,11 +523,7 @@ function buildJobSubmitterProvider(
       // scheduled start; subsequent requests succeed.
       return null;
     }
-    // Match the original example's resolution path so users see the
-    // same behavior. process.env.MCP_MESH_REGISTRY_URL is the env var
-    // the SDK's resolveConfig("registry_url", ...) reads.
-    const registryUrl =
-      process.env.MCP_MESH_REGISTRY_URL ?? "http://localhost:8000";
+    const registryUrl = resolveProducerRegistryUrl();
     try {
       cached = new MeshJobSubmitter(capability, agentId, registryUrl);
       return cached;

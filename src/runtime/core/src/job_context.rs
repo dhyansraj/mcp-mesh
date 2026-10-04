@@ -19,6 +19,7 @@
 //! - `MESHJOB_DESIGN.org` → "Timeout & Cancellation" → "Async-local primitives"
 //! - `crate::jobs` for the producer/consumer controllers that consume this.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::time::{Duration, Instant};
 
@@ -220,30 +221,67 @@ where
 /// outbound HTTP requests through the Rust core (or wrap reqwest
 /// directly) should call this at the call site, alongside any existing
 /// `X-Trace-Id` propagation.
+///
+/// `reqwest::RequestBuilder::header` APPENDS, so this must not be used on a
+/// builder that may already carry either header — use
+/// [`merge_job_headers`] on the header map instead (issue #1611).
 pub fn inject_job_headers(builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
     match current() {
         None => builder,
         Some(ctx) => {
             let mut b = builder.header("X-Mesh-Job-Id", &ctx.job_id);
-            match ctx.timeout_header_seconds() {
-                Some(secs) => b = b.header("X-Mesh-Timeout", secs.to_string()),
-                None if ctx.deadline.is_some() => {
-                    // Deadline already blown. Omit rather than send "0" —
-                    // "0" reads as "unset" downstream and would hand the
-                    // child an unbounded budget. The parent-scope cancel
-                    // token is the authoritative signal here.
-                    tracing::warn!(
-                        "outbound call under job={} has an expired deadline; \
-                         omitting X-Mesh-Timeout instead of emitting an \
-                         invalid '0' value",
-                        ctx.job_id
-                    );
-                }
-                None => {}
+            if let Some(secs) = outbound_timeout_seconds(&ctx) {
+                b = b.header("X-Mesh-Timeout", secs.to_string());
             }
             b
         }
     }
+}
+
+/// Merge the active [`JobContext`]'s headers into a caller-supplied header
+/// map so each job header appears exactly once on the wire. No-op outside a
+/// job scope.
+///
+/// Precedence (issue #1611): the active job is the more specific source, so
+/// its values REPLACE any caller-supplied copy (matched case-insensitively,
+/// typically one propagated from an inbound request further up the chain):
+///
+/// - `X-Mesh-Job-Id` is always the active job's id.
+/// - `X-Mesh-Timeout`: when the job has a deadline, the job owns the header.
+///   A live deadline replaces the caller's value; an expired one removes it
+///   without emitting a replacement, so an inherited budget cannot outlive
+///   the job. When the job has no deadline it imposes no budget, and the
+///   caller's value (if any) passes through untouched.
+pub fn merge_job_headers(headers: &mut HashMap<String, String>) {
+    let Some(ctx) = current() else {
+        return;
+    };
+    headers.retain(|k, _| !k.eq_ignore_ascii_case("X-Mesh-Job-Id"));
+    headers.insert("X-Mesh-Job-Id".to_string(), ctx.job_id.clone());
+    if ctx.deadline.is_some() {
+        headers.retain(|k, _| !k.eq_ignore_ascii_case("X-Mesh-Timeout"));
+        if let Some(secs) = outbound_timeout_seconds(&ctx) {
+            headers.insert("X-Mesh-Timeout".to_string(), secs.to_string());
+        }
+    }
+}
+
+/// The `X-Mesh-Timeout` value to emit for `ctx`, warning when an expired
+/// deadline forces the header to be omitted.
+fn outbound_timeout_seconds(ctx: &JobContext) -> Option<u64> {
+    let secs = ctx.timeout_header_seconds();
+    if secs.is_none() && ctx.deadline.is_some() {
+        // Deadline already blown. Omit rather than send "0" — "0" reads as
+        // "unset" downstream and would hand the child an unbounded budget.
+        // The parent-scope cancel token is the authoritative signal here.
+        tracing::warn!(
+            "outbound call under job={} has an expired deadline; \
+             omitting X-Mesh-Timeout instead of emitting an \
+             invalid '0' value",
+            ctx.job_id
+        );
+    }
+    secs
 }
 
 #[cfg(test)]
