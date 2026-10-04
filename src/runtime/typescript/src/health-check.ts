@@ -66,7 +66,11 @@ export interface MeshHealthResult {
    * only forced a cast at every call site that constructed the case.
    */
   status?: MeshHealthStatus | string | null;
-  /** Named sub-probes, surfaced verbatim for operators. */
+  /**
+   * Named sub-probes, each `true` or `false`. A value that is not a boolean
+   * (or one of the boolean spellings Python accepts) is dropped and reported
+   * in `errors`.
+   */
   checks?: Record<string, unknown>;
   /** Human-readable reasons, surfaced verbatim for operators. */
   errors?: string[];
@@ -89,7 +93,7 @@ export type MeshHealthCheck = () =>
 /** A normalized verdict — what the loop stores and publishes. */
 export interface HealthVerdict {
   status: MeshHealthStatus;
-  checks: Record<string, unknown>;
+  checks: Record<string, boolean>;
   errors: string[];
 }
 
@@ -174,6 +178,141 @@ export function __resetNullStatusWarning(): void {
 }
 
 /**
+ * Unusable `checks` entries (issue #1593, Python #1556 parity).
+ *
+ * `checks` maps a check name to a boolean. Python validates each value with
+ * Pydantic's lax `bool` and drops — and reports — what it cannot read as one;
+ * this mirrors that exactly. The verdict is never changed: `status` is read
+ * independently, and overriding it over a typo in `checks` would withdraw (or
+ * keep) an agent for an unrelated reason. Accepted spellings are the ones
+ * Pydantic coerces: booleans, the numbers 0/1, and the strings
+ * 0/1/f/t/n/y/no/yes/off/on/false/true in any case.
+ */
+const TRUE_STRINGS = new Set(["1", "on", "t", "true", "y", "yes"]);
+const FALSE_STRINGS = new Set(["0", "off", "f", "false", "n", "no"]);
+
+function coerceCheckValue(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (value === 1) return true;
+    if (value === 0) return false;
+    return undefined;
+  }
+  if (typeof value === "string") {
+    const lower = value.toLowerCase();
+    if (TRUE_STRINGS.has(lower)) return true;
+    if (FALSE_STRINGS.has(lower)) return false;
+  }
+  return undefined;
+}
+
+function typeLabel(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  if (typeof value === "object") {
+    try {
+      const name = (value as { constructor?: { name?: unknown } }).constructor?.name;
+      return typeof name === "string" && name ? name : "object";
+    } catch {
+      return "object";
+    }
+  }
+  return typeof value;
+}
+
+function quoteForWarning(value: unknown): string {
+  let text: string;
+  try {
+    text = typeof value === "string" ? JSON.stringify(value) : (JSON.stringify(value) ?? String(value));
+  } catch {
+    text = describeThrown(value);
+  }
+  return text.length > 200 ? `${text.slice(0, 200)}...` : text;
+}
+
+/**
+ * Split `checks` into what the verdict can carry and what it cannot.
+ * Returns `[checks, rejections]`; never throws (enumerating a Proxy or a
+ * getter-backed object runs user code).
+ */
+export function sanitizeChecks(raw: unknown): [Record<string, boolean>, string[]] {
+  if (raw === undefined || raw === null) return [{}, []];
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    return [
+      {},
+      [`Unusable \`checks\`: expected a dict of name -> bool, got ${typeLabel(raw)}.`],
+    ];
+  }
+  // Enumerating is all-or-nothing (Python parity): a key list that raises
+  // part way has no defined content. Reading each VALUE is per entry, so one
+  // throwing getter costs only that entry.
+  let names: string[];
+  try {
+    names = Object.keys(raw as Record<string, unknown>);
+  } catch (err) {
+    return [
+      {},
+      [`Unusable \`checks\`: reading the ${typeLabel(raw)} raised ${describeThrown(err)}.`],
+    ];
+  }
+  const checks: Record<string, boolean> = {};
+  const rejections: string[] = [];
+  for (const name of names) {
+    let value: unknown;
+    try {
+      value = (raw as Record<string, unknown>)[name];
+    } catch (err) {
+      rejections.push(
+        `Unusable check '${name}': reading it raised ${describeThrown(err)}.`,
+      );
+      continue;
+    }
+    const coerced = coerceCheckValue(value);
+    if (coerced === undefined) {
+      rejections.push(
+        `Unusable check '${name}': ${quoteForWarning(value)} is a ` +
+          `${typeLabel(value)}, not a bool.`,
+      );
+    } else {
+      checks[name] = coerced;
+    }
+  }
+  return [checks, rejections];
+}
+
+/**
+ * Coerce `errors` into a string list (Python `_sanitize_errors` parity): a
+ * bare string is one error, a non-string entry is stringified.
+ */
+function sanitizeErrors(raw: unknown): string[] {
+  if (raw === undefined || raw === null) return [];
+  if (typeof raw === "string") return [raw];
+  if (Array.isArray(raw)) {
+    return raw.map((e) => (typeof e === "string" ? e : describeThrown(e)));
+  }
+  return [describeThrown(raw)];
+}
+
+let unusableChecksWarned = false;
+
+function warnUnusableChecksOnce(agentName: string | undefined, rejections: string[]): void {
+  if (unusableChecksWarned) return;
+  unusableChecksWarned = true;
+  console.warn(
+    `[mesh-health] Health check for '${agentName ?? "agent"}' reported check ` +
+      `results the runtime could not use: ${rejections.join(" ")} The agent ` +
+      `keeps serving and its status is unchanged; the unusable entries are ` +
+      `dropped and reported on /health. \`checks\` maps a check name to true ` +
+      `or false.`,
+  );
+}
+
+/** Re-arm the once-per-process unusable-checks warning. Tests only. */
+export function __resetUnusableChecksWarning(): void {
+  unusableChecksWarned = false;
+}
+
+/**
  * Convert whatever a health check returned into a verdict.
  *
  * Never throws. Anything unrecognized becomes `degraded`, NOT
@@ -184,7 +323,7 @@ export function __resetNullStatusWarning(): void {
  * Those runtime-assigned `degraded` verdicts do NOT warn — nothing the
  * author can act on happened. Only a `degraded` the author SELECTED does.
  */
-export function normalizeHealthResult(raw: unknown): HealthVerdict {
+export function normalizeHealthResult(raw: unknown, agentName?: string): HealthVerdict {
   if (typeof raw === "boolean") {
     // Python parity: true → healthy, false → unhealthy.
     return raw
@@ -218,13 +357,16 @@ export function normalizeHealthResult(raw: unknown): HealthVerdict {
       };
     }
     if (status === "degraded") warnDegradedReturnOnce();
-    return {
-      status,
-      checks: isPlainRecord(result.checks) ? result.checks : {},
-      errors: Array.isArray(result.errors)
-        ? result.errors.map((e) => (typeof e === "string" ? e : describeThrown(e)))
-        : [],
-    };
+    const [checks, rejections] = sanitizeChecks(result.checks);
+    const errors = sanitizeErrors(result.errors);
+    if (rejections.length > 0) {
+      warnUnusableChecksOnce(agentName, rejections);
+      // Runtime-owned check reporting what the runtime found, named like
+      // `health_check_return_type` (Python parity).
+      checks.health_check_checks_type = false;
+      errors.push(...rejections);
+    }
+    return { status, checks, errors };
   }
 
   return {
@@ -247,10 +389,6 @@ function toStatus(value: unknown): MeshHealthStatus | null {
     : null;
 }
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 /**
  * Run a health check and normalize its verdict. Never throws and never
  * rejects.
@@ -263,7 +401,7 @@ export async function runHealthCheck(
   agentName: string,
 ): Promise<HealthVerdict> {
   try {
-    return normalizeHealthResult(await healthCheck());
+    return normalizeHealthResult(await healthCheck(), agentName);
   } catch (err) {
     const reason = describeThrown(err);
     console.warn(

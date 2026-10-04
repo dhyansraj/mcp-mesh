@@ -338,6 +338,7 @@ export {
   ResponseParseError as LlmResponseParseError,
   ProviderUnavailableError,
 } from "./errors.js";
+export { StrictDIError } from "./strict-di.js";
 
 // Typed supersession signal (issue #1278): a provider throws
 // MeshSupersededError to reject a superseded caller; the injected proxy

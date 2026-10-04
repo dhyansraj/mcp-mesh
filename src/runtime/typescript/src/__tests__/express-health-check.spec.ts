@@ -276,6 +276,31 @@ describe("MeshExpress probes under a failing gateway health check", () => {
     );
   });
 
+  it("/health answers 503 'starting' before a configured check's first run (#1593)", async () => {
+    await listen(() => true);
+    const res = await fetch(`${base}/health`);
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.status).toBe("starting");
+    expect(body.message).toBe("Agent is starting");
+  });
+
+  it("/ready carries the same body keys as the MCP agent's /ready (#1593)", async () => {
+    await listen(undefined);
+    const res = await fetch(`${base}/ready`);
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      ready: false,
+      agent: "health-test-api",
+      runtime: "starting",
+      mcp_wrappers: 0,
+      reason: "Mesh runtime has not started yet",
+    });
+    expect(typeof body.timestamp).toBe("string");
+    expect(typeof body.serviceId).toBe("string");
+  });
+
   it("/livez stays unconditional while the verdict is unhealthy", async () => {
     // A restart cannot fix an upstream outage; it only erases the evidence.
     await listen(() => false);

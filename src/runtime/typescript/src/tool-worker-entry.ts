@@ -34,6 +34,8 @@ interface WorkerData {
   userModulePath: string;
   sdkEntryPath: string;
   slotIdx: number;
+  /** Main thread's tracing metadata; null when tracing is disabled. */
+  tracingAgentMetadata?: unknown;
 }
 
 const data = workerData as WorkerData;
@@ -90,6 +92,18 @@ async function bootstrap(): Promise<void> {
   // 2. Import the SDK first so the worker-mode flag takes effect before the
   //    user's import of mesh() touches MeshAgent.constructor.
   const sdk = await import(pathToFileURL(sdkEntryPath).href);
+
+  // 2b. Issue #1593: tracing state is per-thread module state. Initialize it
+  //     from the main thread's metadata so outbound proxy spans published by
+  //     an isolated tool reach the trace stream instead of being dropped.
+  //     Skipped when the main thread has tracing off.
+  if (data.tracingAgentMetadata && typeof sdk.initTracing === "function") {
+    try {
+      await sdk.initTracing(data.tracingAgentMetadata);
+    } catch {
+      // Tracing is best-effort; a failed init must not take the worker down.
+    }
+  }
 
   // 3. Import the user's module — fires addTool() calls.
   await import(pathToFileURL(userModulePath).href);

@@ -108,7 +108,7 @@ export MCP_MESH_TOOL_WORKERS=1
 export MCP_MESH_TOOL_ISOLATION=true
 ```
 
-### Strict DI Diagnostics (Python, Java)
+### Strict DI Diagnostics (Python, TypeScript, Java)
 
 ```bash
 # Default: false. When truthy, ambiguous or skipped dependency-injection
@@ -116,6 +116,9 @@ export MCP_MESH_TOOL_ISOLATION=true
 # semantics are unchanged — only the diagnostic severity is promoted.
 #
 # - Python: raises StrictDIError at decoration/startup.
+# - TypeScript: an addTool whose dependencies outnumber the execute
+#   parameters after args throws StrictDIError at registration.
+#   Python and TypeScript accept true / 1 / yes / on (any case).
 # - Java: promotes the boot-time dependency/parameter arity mismatch and
 #   the @MeshRoute / @MeshA2A legacy-order warning to a startup failure.
 #   A contradicting @MeshInject value is fatal either way — it asserts the
@@ -141,9 +144,11 @@ export MCP_MESH_STRICT_DI=true
 # OR the window expires), the latch is permanent: calls never wait again and
 # unresolved dependencies inject None/null exactly as before.
 #
-# Scope: dependency-injection call paths only (@mesh.tool, @mesh.route).
-# Startup-hook usage, module-scope captured deps, and @mesh.llm
-# provider/filter assembly are not covered.
+# Scope: dependency-injection call paths (@mesh.tool, @mesh.route). On
+# Python and TypeScript it also covers A2A producer handlers (@mesh.a2a /
+# mesh.a2a.mount) and the @mesh.llm / mesh.llm provider slot. Startup-hook
+# usage, module-scope captured deps, and LLM tool-filter assembly are not
+# covered.
 #
 # Tuning: lower it (e.g. 2–5) in integration tests that intentionally
 # exercise unresolved-dependency behavior, so degraded-path assertions

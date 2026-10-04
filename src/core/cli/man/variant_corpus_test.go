@@ -183,7 +183,18 @@ func stripLangHeader(content string) string {
 // abort to the header rather than the per-job cancel watcher.
 // `jobs_typescript.md` names `awaitJobCancel` in the same replacement, so its
 // cancel bullet is span-neutral. 1662 + 4 - 2 - 1 = 1663.
-const wantVariantInlineCodeSpans = 1663
+//
+// Issue #1593 moves this to 1678. `health_typescript.md` gains the Python
+// page's `checks` paragraph (+6) and a `starting` clause on its `/health`
+// bullet (+1); `deployment_typescript.md`'s `/health` bullet trades "or one
+// whose first run has not finished" for the `starting` answer (+1); and
+// `dependency-injection_typescript.md` gains the arity / MCP_MESH_STRICT_DI
+// paragraph (+7). 1663 + 6 + 1 + 1 + 7 = 1678. Review follow-up: the
+// `health_typescript.md` `checks` sentence now lists the accepted boolean
+// spellings (6 -> 21 spans, +15), and the arity paragraph gains a sentence on
+// what the source scan skips (`arguments`, `keep_fargs: false`,
+// `MCP_MESH_STRICT_DI`, +3). 1678 + 15 + 3 = 1696.
+const wantVariantInlineCodeSpans = 1696
 
 // TestVariantCorpusCodeSpans is TestStyleInlineCorpus plus
 // TestRenderStyledCorpusListItems, run over the pages neither of them sees.

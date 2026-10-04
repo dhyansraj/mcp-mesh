@@ -25,10 +25,11 @@
  *   pre-grace behavior (unresolved deps inject `null` exactly as before).
  *
  * Scope (deliberate): the grace covers the dependency-injection invocation
- * paths only — the MCP tool execute wrapper, the claim-dispatch handler, and
- * the `mesh.route` middleware. Module-scope captured deps and `mesh.llm`
- * provider/filter assembly (registration-time, with its own update mechanism)
- * are NOT covered.
+ * paths — the MCP tool execute wrapper, the claim-dispatch handler, the
+ * `mesh.route` middleware, and the `mesh.a2a.mount` dispatcher — plus the
+ * `mesh.llm` provider slot (keyed `llm:<functionId>`, issue #1593 / Python
+ * #1456). Module-scope captured deps and `mesh.llm` tool-filter assembly are
+ * NOT covered.
  *
  * This is environmental, not a declaration mistake: strict-DI style
  * diagnostics never interact with the settle window in any way.

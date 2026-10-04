@@ -524,6 +524,9 @@ describe("MeshExpress /startupz", () => {
     const res = await fetch(`${base}/ready`);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.ready).toBe(false);
-    expect(body.reason).toBeUndefined();
+    // The reason names the mesh runtime (same body as the MCP agent's /ready,
+    // #1593), never the startup check.
+    expect(body.runtime).toBe("starting");
+    expect(body.reason).toBe("Mesh runtime has not started yet");
   });
 });

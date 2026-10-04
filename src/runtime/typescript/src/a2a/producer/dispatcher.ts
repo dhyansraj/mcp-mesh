@@ -44,6 +44,16 @@ import {
   type PositionalDependencies,
 } from "../../positional-deps.js";
 import { MeshJobSubmitter } from "../../mesh-job-submitter.js";
+import { runWithPropagatedHeaders, runWithTraceContext } from "../../proxy.js";
+import { getSettleState, type PendingSettleDep } from "../../settle.js";
+import {
+  PROPAGATE_HEADERS,
+  generateSpanId,
+  generateTraceId,
+  matchesPropagateHeader,
+  parseTraceContext,
+  publishTraceSpan,
+} from "../../tracing.js";
 import type { A2ASurfaceMetadata } from "./registry.js";
 import { A2ATaskStore, type TaskRecord } from "./task-store.js";
 import {
@@ -156,13 +166,103 @@ export interface DispatcherDeps {
  * drift. Called per dispatch: dependency resolution is live, so a proxy that
  * arrives between two `tasks/send` calls must be visible to the second.
  */
-function buildPositionalDeps(deps: DispatcherDeps): A2ADependencies {
+async function buildPositionalDeps(deps: DispatcherDeps): Promise<A2ADependencies> {
+  await awaitSettleForSurface(deps);
   return resolvePositionalDeps(
     deps.routeRegistry,
     deps.surface.routeId,
     deps.surface.dependencies.map((dep) => dep.capability),
     "mesh.a2a.mount"
   ).deps;
+}
+
+/**
+ * Settling-window grace (#1193), issue #1593: while the agent is still
+ * settling, wait — bounded by the remaining settle budget — for any declared
+ * dependency of this surface that is still unresolved. Same wait
+ * `mesh.route` performs; a no-op single latch check once settled.
+ */
+async function awaitSettleForSurface(deps: DispatcherDeps): Promise<void> {
+  const declared = deps.surface.dependencies;
+  const settleState = getSettleState();
+  if (declared.length === 0 || settleState.isSettled()) return;
+  const currentId = deps.routeRegistry.resolveRouteId(deps.surface.routeId);
+  const pending: PendingSettleDep[] = [];
+  declared.forEach((dep, depIndex) => {
+    if (deps.routeRegistry.getDependency(currentId, depIndex) === null) {
+      pending.push({ depKey: `${currentId}:dep_${depIndex}`, capability: dep.capability });
+    }
+  });
+  if (pending.length > 0) {
+    await settleState.awaitPending(pending);
+  }
+}
+
+/**
+ * Run the user handler inside the same inbound request scope `mesh.route`
+ * establishes (issue #1593): the inbound trace context (or a fresh trace),
+ * the allowlisted propagated headers, and a published handler span that
+ * downstream proxy calls parent on. Python gets this from the app-wide
+ * tracing middleware on A2A apps.
+ */
+async function invokeHandlerInRequestScope(
+  deps: DispatcherDeps,
+  headers: Request["headers"] | undefined,
+  resolvedDeps: A2ADependencies,
+  message: Record<string, unknown>,
+  jobSubmitter: MeshJobSubmitter | null
+): Promise<unknown> {
+  const propagatedHeaders: Record<string, string> = {};
+  const lowered: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(headers ?? {})) {
+    if (typeof value !== "string") continue;
+    lowered[key.toLowerCase()] = value;
+    if (PROPAGATE_HEADERS.length > 0 && matchesPropagateHeader(key)) {
+      propagatedHeaders[key.toLowerCase()] = value;
+    }
+  }
+  const incoming = parseTraceContext(lowered);
+  const traceId = incoming?.traceId ?? generateTraceId();
+  const spanId = generateSpanId();
+  const startTime = Date.now() / 1000;
+  let success = true;
+  let error: string | null = null;
+
+  const runHandler = async () =>
+    await deps.handler(resolvedDeps, message, jobSubmitter);
+  const runWithHeaders = async () =>
+    Object.keys(propagatedHeaders).length > 0
+      ? await runWithPropagatedHeaders(propagatedHeaders, runHandler)
+      : await runHandler();
+
+  try {
+    return await runWithTraceContext({ traceId, parentSpanId: spanId }, runWithHeaders);
+  } catch (err) {
+    success = false;
+    error = err instanceof Error ? err.message : String(err);
+    throw err;
+  } finally {
+    const endTime = Date.now() / 1000;
+    publishTraceSpan({
+      traceId,
+      spanId,
+      parentSpan: incoming?.parentSpanId ?? null,
+      functionName: `POST ${deps.surface.path}`,
+      startTime,
+      endTime,
+      durationMs: (endTime - startTime) * 1000,
+      success,
+      error,
+      resultType: "a2a_handler",
+      argsCount: 0,
+      kwargsCount: 0,
+      dependencies: [],
+      injectedDependencies: resolvedDeps.filter((d) => d !== null).length,
+      meshPositions: [],
+    }).catch(() => {
+      // Silently ignore publish errors (same as mesh.route).
+    });
+  }
 }
 
 /**
@@ -264,7 +364,7 @@ export function buildDispatcherMiddleware(deps: DispatcherDeps): RequestHandler 
 // ─────────────────────────────────────────────────────────────────────────
 
 async function handleTasksSend(
-  _req: Request,
+  req: Request,
   res: Response,
   reqId: unknown,
   params: Record<string, unknown>,
@@ -302,7 +402,7 @@ async function handleTasksSend(
   // RouteRegistry. The surface registered a synthetic route at mount time
   // (see mount.ts); resolved McpMeshTool proxies surface here BY POSITION,
   // index-aligned with the mount config's `dependencies[]` (issue #1401).
-  const resolvedDeps = buildPositionalDeps(deps);
+  const resolvedDeps = await buildPositionalDeps(deps);
 
   const jobSubmitter = deps.jobSubmitterProvider
     ? deps.jobSubmitterProvider()
@@ -310,7 +410,9 @@ async function handleTasksSend(
 
   let handlerResult: unknown;
   try {
-    handlerResult = await deps.handler(resolvedDeps, message, jobSubmitter);
+    handlerResult = await invokeHandlerInRequestScope(
+      deps, req.headers, resolvedDeps, message, jobSubmitter
+    );
   } catch (err) {
     // Spec §4.3 "Response — handler raised": exceptions become
     // state=failed Tasks, NOT JSON-RPC errors. Upgrade the placeholder
@@ -486,7 +588,8 @@ async function handleTasksCancel(
 export async function buildSendSubscribeStream(
   reqId: unknown,
   params: Record<string, unknown>,
-  deps: DispatcherDeps
+  deps: DispatcherDeps,
+  headers?: Request["headers"]
 ): Promise<SseStreamPlan> {
   let taskId = stringFromParams(params, "id");
   if (!taskId) {
@@ -516,7 +619,7 @@ export async function buildSendSubscribeStream(
     ));
   }
 
-  const resolvedDeps = buildPositionalDeps(deps);
+  const resolvedDeps = await buildPositionalDeps(deps);
 
   const jobSubmitter = deps.jobSubmitterProvider
     ? deps.jobSubmitterProvider()
@@ -524,7 +627,9 @@ export async function buildSendSubscribeStream(
 
   let handlerResult: unknown;
   try {
-    handlerResult = await deps.handler(resolvedDeps, message, jobSubmitter);
+    handlerResult = await invokeHandlerInRequestScope(
+      deps, headers, resolvedDeps, message, jobSubmitter
+    );
   } catch (err) {
     const errorText = errorTextOf(err);
     // Cache the failed envelope so a subsequent tasks/get returns it

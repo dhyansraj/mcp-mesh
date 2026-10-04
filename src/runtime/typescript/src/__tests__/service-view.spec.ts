@@ -318,7 +318,9 @@ describe("wire payload + settle keys", () => {
       name: "svt",
       parameters: z.object({}),
       dependencies: [View],
-      execute: async () => "ok",
+      // The view slot needs a parameter: a slot no parameter receives is
+      // surplus and is not a settle key (issue #1593).
+      execute: async (_args: unknown, _view: unknown) => "ok",
     });
     const settle = getSettleState();
     expect(settle.isSettled()).toBe(false);
