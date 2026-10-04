@@ -69,6 +69,15 @@ public class MeshA2ARegistry {
                     + "by " + previous.handlerMethodId() + ". Each producer path must be unique.");
         }
         orderedPaths.add(metadata.path());
+        // Settling-window grace (#1193, issue #1593): declare the surface's
+        // dependency capabilities exactly as MeshRouteRegistry does for
+        // @MeshRoute — A2A handlers resolve through the same injector-owned
+        // per-capability proxies, whose countdown is capability-keyed.
+        io.mcpmesh.spring.MeshSettleState settleState =
+            io.mcpmesh.spring.MeshSettleState.getInstance();
+        for (MeshRouteRegistry.DependencySpec dep : metadata.dependencies()) {
+            settleState.registerDeclared(dep.getCapability());
+        }
         log.info("Registered @MeshA2A surface: path={} skillId={} dependencies={}",
             metadata.path(), metadata.skillId(), metadata.dependencies().size());
     }

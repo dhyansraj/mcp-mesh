@@ -126,6 +126,25 @@ class McpHttpClientStreamTest {
         return collect(publisher, Long.MAX_VALUE);
     }
 
+    /**
+     * Like {@link #collect(Flow.Publisher)}, but records chunks into {@code sink}
+     * as they arrive, so a test can inspect what was delivered before an error.
+     */
+    private static void collectInto(Flow.Publisher<String> publisher, List<String> sink) throws Exception {
+        CompletableFuture<Throwable> done = new CompletableFuture<>();
+        publisher.subscribe(new Flow.Subscriber<>() {
+            @Override public void onSubscribe(Flow.Subscription s) { s.request(Long.MAX_VALUE); }
+            @Override public void onNext(String item) { sink.add(item); }
+            @Override public void onError(Throwable t) { done.complete(t); }
+            @Override public void onComplete() { done.complete(null); }
+        });
+        Throwable err = done.get(10, TimeUnit.SECONDS);
+        if (err != null) {
+            if (err instanceof RuntimeException) throw (RuntimeException) err;
+            throw new RuntimeException(err);
+        }
+    }
+
     private static List<String> collect(Flow.Publisher<String> publisher, long demand) throws Exception {
         ConcurrentLinkedQueue<String> chunks = new ConcurrentLinkedQueue<>();
         CompletableFuture<Throwable> done = new CompletableFuture<>();
@@ -306,8 +325,8 @@ class McpHttpClientStreamTest {
     }
 
     @Test
-    @DisplayName("#1278: a GENERIC tool-level isError ending a stream stays a clean end-of-stream (pre-existing behavior, unchanged)")
-    void onGenericIsError_stillCleanEndOfStream() throws Exception {
+    @DisplayName("#1593: a GENERIC tool-level isError ending a stream surfaces as an error, after the chunks already sent")
+    void onGenericIsError_surfacesAsError() throws Exception {
         server.setDispatcher(new okhttp3.mockwebserver.Dispatcher() {
             @Override
             public MockResponse dispatch(RecordedRequest request) {
@@ -328,11 +347,16 @@ class McpHttpClientStreamTest {
         });
 
         String endpoint = server.url("/").toString();
-        // Narrow scope: only the reserved envelope is surfaced. A generic
-        // tool-level isError remains a clean end-of-stream (the broader
-        // streaming-isError gap is pre-existing and intentionally untouched).
-        List<String> chunks = collect(client.streamTool(endpoint, "tool", null, null));
-        assertEquals(List.of("kept"), chunks);
+        // Python parity: FastMCP's call_tool raises ToolError on an isError
+        // result, which stream() re-raises after the chunks it already
+        // yielded. Swallowing it reported a failed producer as a clean,
+        // merely short stream.
+        List<String> received = new java.util.concurrent.CopyOnWriteArrayList<>();
+        MeshToolCallException ex = assertThrows(MeshToolCallException.class,
+            () -> collectInto(client.streamTool(endpoint, "tool", null, null), received));
+        assertTrue(ex.getMessage().contains("boom: generic tool error"),
+            "Expected the tool's error text, got: " + ex.getMessage());
+        assertEquals(List.of("kept"), received, "chunks before the error are still delivered");
     }
 
     @Test

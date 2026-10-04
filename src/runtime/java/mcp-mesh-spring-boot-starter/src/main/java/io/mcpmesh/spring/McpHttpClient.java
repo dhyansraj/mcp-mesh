@@ -1290,16 +1290,17 @@ public class McpHttpClient {
                         : errorNode.toString();
                     upstreamError = new MeshToolCallException(functionName, functionName, em);
                 } else {
-                    // Issue #1278: a stream ending with the reserved tool-level
-                    // {"error":"claim_superseded"} envelope must surface the typed
-                    // signal (via subscriber.onError) rather than be swallowed as a
-                    // clean end-of-stream. Narrowly scoped to the reserved marker —
-                    // surfacing GENERIC tool-level isError on streams is a separate
-                    // pre-existing gap and intentionally left unchanged here.
-                    MeshSupersededException superseded =
-                        supersededFromStreamResult(msg.get("result"));
-                    if (superseded != null) {
-                        upstreamError = superseded;
+                    // A stream whose final result is a tool-level isError ends in
+                    // an error (subscriber.onError), never a clean end-of-stream —
+                    // Python parity: FastMCP's call_tool raises ToolError on it and
+                    // stream() re-raises after the chunks already yielded (issue
+                    // #1593). The reserved {"error":"claim_superseded"} envelope
+                    // surfaces as the typed signal (#1278); any other isError as
+                    // MeshToolCallException carrying the tool's error text, the
+                    // same exception the unary path throws.
+                    RuntimeException toolError = errorFromStreamResult(functionName, msg.get("result"));
+                    if (toolError != null) {
+                        upstreamError = toolError;
                     }
                 }
                 // Final result content is intentionally NOT delivered — matches the
@@ -1312,26 +1313,38 @@ public class McpHttpClient {
     }
 
     /**
-     * Return a {@link MeshSupersededException} if a stream's final tool result
-     * carries the reserved {@code {"error":"claim_superseded"}} envelope
-     * (issue #1278), else {@code null}. Defensive: a missing/false
-     * {@code isError}, an empty/non-text content block, or any non-reserved
-     * envelope all return {@code null} so the stream ends normally.
+     * The error a stream's final tool result carries, or {@code null} when it
+     * is not an {@code isError} result (the stream then ends normally).
+     *
+     * <p>The reserved {@code {"error":"claim_superseded"}} envelope becomes a
+     * {@link MeshSupersededException} (issue #1278); any other {@code isError}
+     * becomes a {@link MeshToolCallException} with the first text block as its
+     * message — or {@code "Unknown tool error"} when there is none, the unary
+     * path's wording.
      */
-    private static MeshSupersededException supersededFromStreamResult(JsonNode result) {
+    private static RuntimeException errorFromStreamResult(String functionName, JsonNode result) {
         if (result == null || !result.has("isError") || !result.get("isError").asBoolean()) {
             return null;
         }
+        String errorText = null;
         JsonNode content = result.get("content");
-        if (content == null || !content.isArray() || content.size() == 0) {
-            return null;
+        if (content != null && content.isArray()) {
+            for (JsonNode item : content) {
+                JsonNode textNode = item != null ? item.get("text") : null;
+                if (textNode != null && textNode.isTextual()) {
+                    errorText = textNode.asText();
+                    break;
+                }
+            }
         }
-        JsonNode first = content.get(0);
-        JsonNode textNode = first != null ? first.get("text") : null;
-        if (textNode == null || !textNode.isTextual()) {
-            return null;
+        if (errorText != null) {
+            MeshSupersededException superseded = MeshSupersededException.fromEnvelope(errorText);
+            if (superseded != null) {
+                return superseded;
+            }
         }
-        return MeshSupersededException.fromEnvelope(textNode.asText());
+        return new MeshToolCallException(functionName, functionName,
+            errorText != null ? errorText : "Unknown tool error");
     }
 
     /**

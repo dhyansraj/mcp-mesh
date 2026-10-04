@@ -54,11 +54,16 @@ import java.util.Map;
  * exemption in {@link MeshHealthCheckScheduler} too, so no code in this package
  * asks what type of agent it is running in.
  *
- * <p>{@code /health} is unchanged: it carries the verdict, its {@code checks}
- * and its {@code errors}, and answers 503 when the verdict is not healthy.
- * Nothing probes it, so its status code is free to carry information — which
- * means {@code /ready} and {@code /health} now diverge on every agent type, by
- * design.
+ * <p>{@code /health} carries the user's verdict, its {@code checks} and its
+ * {@code errors}, and answers 503 when the verdict is not healthy. Nothing
+ * probes it, so its status code is free to carry information — which means
+ * {@code /ready} and {@code /health} diverge on every agent type, by design.
+ * It reads the health check alone, exactly as Python's
+ * {@code build_health_response} and TypeScript's {@code /health} do (issue
+ * #1593): an agent with no check is healthy, and one whose configured check has
+ * not completed its first run answers 503
+ * {@code {"status": "starting", "message": "Agent is starting"}}. Whether the
+ * mesh runtime is up is {@code /ready}'s question, not this endpoint's.
  */
 @Controller
 public class MeshHealthController {
@@ -83,22 +88,22 @@ public class MeshHealthController {
         this.startupChecks = startupChecks;
     }
 
+    /** Wire value {@code /health} reports before a configured check first completes. */
+    static final String STATUS_STARTING = "starting";
+
     /**
-     * The effective verdict: the user's health check, floored by the mesh
-     * runtime state.
-     *
-     * <p>The floor is not redundant with the user's check. A check that probes
-     * a vendor API says nothing about whether this agent is registered and
-     * reachable; a runtime that is down means no traffic should arrive here
-     * whatever the vendor's status is. Taking the worse of the two is the only
-     * answer that is true in both directions.
+     * The {@code /health} verdict: the user's health check, and nothing else —
+     * Python and TypeScript parity (issue #1593). No configured check reads as
+     * healthy; a configured check with no result yet is reported as
+     * {@link #STATUS_STARTING} by the callers, before this is consulted.
      */
-    private MeshHealthStatus effectiveStatus(MeshHealth latest) {
-        boolean running = runtime != null && runtime.isRunning();
-        if (!running) {
-            return MeshHealthStatus.UNHEALTHY;
-        }
+    private static MeshHealthStatus healthStatus(MeshHealth latest) {
         return latest == null ? MeshHealthStatus.HEALTHY : latest.status();
+    }
+
+    /** Whether a check is configured but has not produced its first verdict. */
+    private boolean starting(MeshHealthCheckRegistry.Result result) {
+        return result == null && healthChecks != null && healthChecks.hasHealthCheck();
     }
 
     /**
@@ -153,13 +158,19 @@ public class MeshHealthController {
     @GetMapping("/health")
     public ResponseEntity<Map<String, Object>> health() {
         MeshHealthCheckRegistry.Result result = latestResult();
-        MeshHealthStatus status = effectiveStatus(healthOf(result));
 
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("status", status.wireValue());
-        if (runtime != null && runtime.getAgentSpec() != null) {
-            body.put("agent", runtime.getAgentSpec().getName());
+        if (starting(result)) {
+            // Python: {"status": "starting", "message": "Agent is starting"}.
+            body.put("status", STATUS_STARTING);
+            putAgentName(body);
+            body.put("message", "Agent is starting");
+            return ResponseEntity.status(503).body(body);
         }
+
+        MeshHealthStatus status = healthStatus(healthOf(result));
+        body.put("status", status.wireValue());
+        putAgentName(body);
         if (result != null) {
             body.put("checks", result.health().checks());
             body.put("errors", result.health().errors());
@@ -170,8 +181,24 @@ public class MeshHealthController {
 
     @RequestMapping(value = "/health", method = RequestMethod.HEAD)
     public ResponseEntity<Void> healthHead() {
-        return ResponseEntity.status(
-            serving(effectiveStatus(healthOf(latestResult()))) ? 200 : 503).build();
+        MeshHealthCheckRegistry.Result result = latestResult();
+        boolean ok = !starting(result) && serving(healthStatus(healthOf(result)));
+        return ResponseEntity.status(ok ? 200 : 503).build();
+    }
+
+    /**
+     * Best-effort agent name: {@code runtime} is a lazy proxy and resolving it
+     * can raise while the context comes up — which is when {@code /health} now
+     * answers without consulting the runtime at all.
+     */
+    private void putAgentName(Map<String, Object> body) {
+        try {
+            if (runtime != null && runtime.getAgentSpec() != null) {
+                body.put("agent", runtime.getAgentSpec().getName());
+            }
+        } catch (Exception ignored) {
+            // Name is decoration; the verdict is not conditional on it.
+        }
     }
 
     /**

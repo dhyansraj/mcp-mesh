@@ -18,8 +18,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * produced (issue #1474).
  *
  * <p>Two readers share this one result so they can never disagree:
- * {@link MeshHealthController} renders it on {@code /health} and {@code /ready},
- * and {@link MeshHealthCheckScheduler} publishes it to the mesh runtime, where
+ * {@link MeshHealthController} renders it on {@code /health} (never on
+ * {@code /ready}, which reports the runtime alone since RFC #1502), and
+ * {@link MeshHealthCheckScheduler} publishes it to the mesh runtime, where
  * an unhealthy verdict suppresses the heartbeat.
  *
  * <p>Mirrors the storage half of Python's {@code health_check_manager} — with
@@ -226,7 +227,7 @@ public class MeshHealthCheckRegistry {
             if (health.status() == MeshHealthStatus.DEGRADED && !health.isUnreadableStatus()) {
                 warnDegradedReturnOnce();
             }
-            return health;
+            return sanitizeChecks(health);
         }
         if (raw instanceof Boolean ok) {
             // Python parity: True → healthy, False → unhealthy.
@@ -239,5 +240,128 @@ public class MeshHealthCheckRegistry {
             MeshHealthStatus.DEGRADED,
             Map.of("health_check_return_type", false),
             List.of("Invalid return type: " + (raw == null ? "null" : raw.getClass().getName())));
+    }
+
+    // ---- unusable `checks` values (issue #1593, Python #1556/#1557) ---------
+
+    /**
+     * The {@code checks} key the runtime sets when it dropped part of the
+     * author's {@code checks} — same name and {@code false} value as Python's
+     * and TypeScript's.
+     */
+    public static final String CHECKS_TYPE_CHECK = "health_check_checks_type";
+
+    /**
+     * String spellings Pydantic's lax {@code bool} accepts (Python reads each
+     * check value through it); TypeScript accepts the same set.
+     */
+    private static final java.util.Set<String> TRUE_STRINGS =
+        java.util.Set.of("1", "on", "t", "true", "y", "yes");
+    private static final java.util.Set<String> FALSE_STRINGS =
+        java.util.Set.of("0", "off", "f", "false", "n", "no");
+
+    private static final AtomicBoolean unusableChecksWarned = new AtomicBoolean(false);
+
+    /** Re-arm the once-per-process unusable-checks warning. Tests only. */
+    static void resetUnusableChecksWarning() {
+        unusableChecksWarned.set(false);
+    }
+
+    /**
+     * Read a {@code checks} value as a boolean the way Python does, or return
+     * {@code null} when it cannot be read as one.
+     */
+    static Boolean coerceCheckValue(Object value) {
+        if (value instanceof Boolean b) {
+            return b;
+        }
+        if (value instanceof Number n) {
+            double d = n.doubleValue();
+            if (d == 1.0) {
+                return Boolean.TRUE;
+            }
+            if (d == 0.0) {
+                return Boolean.FALSE;
+            }
+            return null;
+        }
+        if (value instanceof CharSequence cs) {
+            String lower = cs.toString().toLowerCase(java.util.Locale.ROOT);
+            if (TRUE_STRINGS.contains(lower)) {
+                return Boolean.TRUE;
+            }
+            if (FALSE_STRINGS.contains(lower)) {
+                return Boolean.FALSE;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * {@code checks} maps a check name to {@code true} or {@code false}. Each
+     * value is read independently: one that reads as a boolean is kept (and
+     * normalised to one), one that does not is dropped and reported — in
+     * {@code errors}, with {@link #CHECKS_TYPE_CHECK} set {@code false}, and in
+     * a once-per-process warning. The verdict is never changed: overriding
+     * {@code status} over a typo in {@code checks} would withdraw (or keep) an
+     * agent for an unrelated reason. Python and TypeScript do exactly this.
+     */
+    static MeshHealth sanitizeChecks(MeshHealth health) {
+        Map<String, Object> raw = health.checks();
+        if (raw.isEmpty()) {
+            return health;
+        }
+        Map<String, Object> checks = new java.util.LinkedHashMap<>();
+        List<String> rejections = new java.util.ArrayList<>();
+        for (Map.Entry<String, Object> entry : raw.entrySet()) {
+            String name = String.valueOf(entry.getKey());
+            Object value = entry.getValue();
+            Boolean coerced = coerceCheckValue(value);
+            if (coerced == null) {
+                rejections.add("Unusable check '" + name + "': " + quote(value) + " is a "
+                    + typeLabel(value) + ", not a bool.");
+            } else {
+                checks.put(name, coerced);
+            }
+        }
+        if (rejections.isEmpty() && checks.equals(raw)) {
+            return health;
+        }
+        List<String> errors = new java.util.ArrayList<>(health.errors());
+        if (!rejections.isEmpty()) {
+            warnUnusableChecksOnce(rejections);
+            checks.put(CHECKS_TYPE_CHECK, false);
+            errors.addAll(rejections);
+        }
+        return new MeshHealth(health.status(), checks, errors);
+    }
+
+    private static String typeLabel(Object value) {
+        return value == null ? "null" : value.getClass().getSimpleName();
+    }
+
+    private static String quote(Object value) {
+        String text;
+        try {
+            text = value instanceof CharSequence ? "\"" + value + "\"" : String.valueOf(value);
+        } catch (RuntimeException e) {
+            text = "<unprintable " + typeLabel(value) + ">";
+        }
+        return text.length() > 200 ? text.substring(0, 200) + "..." : text;
+    }
+
+    /**
+     * Once per process, for the reason the deprecation warning above is: the
+     * check re-runs every TTL. The rejections also ride in {@code errors}, which
+     * {@code /health} shows on every request.
+     */
+    private static void warnUnusableChecksOnce(List<String> rejections) {
+        if (!unusableChecksWarned.compareAndSet(false, true)) {
+            return;
+        }
+        log.warn("@MeshHealthCheck reported check results the runtime could not use: {} "
+            + "The agent keeps serving and its status is unchanged; the unusable entries are "
+            + "dropped and reported on /health. `checks` maps a check name to true or false.",
+            String.join(" ", rejections));
     }
 }

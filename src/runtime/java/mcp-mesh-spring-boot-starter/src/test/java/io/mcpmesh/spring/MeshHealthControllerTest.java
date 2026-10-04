@@ -145,11 +145,59 @@ class MeshHealthControllerTest {
     }
 
     @Test
-    void health_isUnchanged() {
+    void health_withNoCheck_isHealthyWhateverTheRuntimeState() {
+        // Python/TS parity (issue #1593): /health reads the health check alone.
+        // No check configured is healthy; the runtime state is /ready's question.
         assertEquals(200, new MeshHealthController(runtimeWith(true)).health()
             .getStatusCode().value());
-        assertEquals(503, new MeshHealthController(runtimeWith(false)).health()
+        assertEquals(200, new MeshHealthController(runtimeWith(false)).health()
             .getStatusCode().value());
+        assertEquals("healthy", new MeshHealthController(runtimeWith(false)).health()
+            .getBody().get("status"));
+        assertEquals(200, new MeshHealthController(runtimeWith(false)).healthHead()
+            .getStatusCode().value());
+    }
+
+    /** A check that has been registered but has not run yet. */
+    static class NeverRunCheck {
+        public io.mcpmesh.MeshHealth check() {
+            return io.mcpmesh.MeshHealth.healthy();
+        }
+    }
+
+    private static MeshHealthCheckRegistry configuredButNotRun() throws Exception {
+        MeshHealthCheckRegistry registry = new MeshHealthCheckRegistry();
+        registry.register(new NeverRunCheck(), NeverRunCheck.class.getMethod("check"), 15);
+        return registry;
+    }
+
+    @Test
+    void health_isStarting503_beforeAConfiguredCheckFirstCompletes() throws Exception {
+        // Python's build_health_response before its seed run stores a verdict,
+        // and TypeScript since #1628.
+        MeshHealthController controller =
+            new MeshHealthController(runtimeWith(true), configuredButNotRun());
+
+        ResponseEntity<Map<String, Object>> response = controller.health();
+
+        assertEquals(503, response.getStatusCode().value());
+        assertEquals("starting", response.getBody().get("status"));
+        assertEquals("Agent is starting", response.getBody().get("message"));
+        assertEquals(503, controller.healthHead().getStatusCode().value());
+        // Readiness is unaffected — it reports the runtime only.
+        assertEquals(200, controller.ready().getStatusCode().value());
+    }
+
+    @Test
+    void health_reportsTheVerdictOnceTheFirstCheckCompletes() throws Exception {
+        MeshHealthCheckRegistry registry = configuredButNotRun();
+        MeshHealthController controller = new MeshHealthController(runtimeWith(false), registry);
+        registry.store(io.mcpmesh.MeshHealth.healthy());
+
+        assertEquals(200, controller.health().getStatusCode().value(),
+            "a healthy verdict answers 200 even before the runtime is up — /ready carries that");
+        assertEquals("healthy", controller.health().getBody().get("status"));
+        assertEquals(200, controller.healthHead().getStatusCode().value());
     }
 
     // ---- @MeshHealthCheck reflection (issue #1474) --------------------------

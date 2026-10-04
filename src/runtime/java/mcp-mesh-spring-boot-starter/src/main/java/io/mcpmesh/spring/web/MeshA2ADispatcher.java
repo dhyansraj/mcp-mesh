@@ -258,40 +258,52 @@ public class MeshA2ADispatcher {
 
         // Spec §4.3: duplicate in-flight task_id → -32602 already in use.
         // Terminal entries within the eviction window are also rejected
-        // (matches Python's `_A2A_TASK_STORE` check).
-        if (taskStore.contains(taskId)) {
+        // (matches Python's `_A2A_TASK_STORE` check). Reserved atomically —
+        // the handler runs before the final store, so a separate check then
+        // put would let two concurrent requests with one id both through.
+        MeshA2ATaskStore.TaskRecord reservation = MeshA2ATaskStore.TaskRecord.inFlight(sessionId, message);
+        if (!taskStore.reserve(taskId, reservation)) {
             return jsonRpcErrorResponse(reqId, JSONRPC_INVALID_PARAMS,
                 "A2A task id '" + taskId + "' is already in use");
         }
 
-        Object handlerResult;
+        // Everything after the reservation runs under try/finally: a request
+        // that fails before storing its real record (a result whose toString()
+        // throws, a cyclic graph overflowing the serializer) must not leave the
+        // id reserved for the life of the process. release() is a no-op once
+        // the real record has replaced the reservation.
         try {
-            handlerResult = invokeHandler(surface, message);
-        } catch (Throwable t) {
-            // Spec §4.3 "Response — handler raised": exceptions become
-            // state=failed Tasks, NOT JSON-RPC errors.
-            String errorText = t.getMessage() != null ? t.getMessage() : t.getClass().getSimpleName();
-            log.debug("@MeshA2A handler {} raised: {}", surface.handlerMethodId(), errorText, t);
-            Map<String, Object> envelope = buildFailedTask(taskId, sessionId, message, errorText);
+            Object handlerResult;
+            try {
+                handlerResult = invokeHandler(surface, message);
+            } catch (Throwable t) {
+                // Spec §4.3 "Response — handler raised": exceptions become
+                // state=failed Tasks, NOT JSON-RPC errors.
+                String errorText = t.getMessage() != null ? t.getMessage() : t.getClass().getSimpleName();
+                log.debug("@MeshA2A handler {} raised: {}", surface.handlerMethodId(), errorText, t);
+                Map<String, Object> envelope = buildFailedTask(taskId, sessionId, message, errorText);
+                cacheTerminal(taskId, sessionId, message, envelope, null);
+                return jsonRpcSuccessResponse(reqId, envelope);
+            }
+
+            // Spec §4.3 long-running branch: handler returned a JobProxy →
+            // park the task and respond with state=working immediately. The
+            // client polls tasks/get / tasks/sendSubscribe for progress and
+            // the terminal artifact.
+            if (handlerResult instanceof JobProxy proxy) {
+                Map<String, Object> envelope = buildWorkingTask(taskId, sessionId, message, null, null);
+                parkLongRunning(taskId, sessionId, message, proxy);
+                log.info("@MeshA2A tasks/send: long-running task parked (task_id={} job_id={} path={})",
+                    taskId, proxy.jobId(), surface.path());
+                return jsonRpcSuccessResponse(reqId, envelope);
+            }
+
+            Map<String, Object> envelope = buildCompletedTask(taskId, sessionId, message, handlerResult);
             cacheTerminal(taskId, sessionId, message, envelope, null);
             return jsonRpcSuccessResponse(reqId, envelope);
+        } finally {
+            taskStore.release(taskId, reservation);
         }
-
-        // Spec §4.3 long-running branch: handler returned a JobProxy →
-        // park the task and respond with state=working immediately. The
-        // client polls tasks/get / tasks/sendSubscribe for progress and
-        // the terminal artifact.
-        if (handlerResult instanceof JobProxy proxy) {
-            Map<String, Object> envelope = buildWorkingTask(taskId, sessionId, message, null, null);
-            parkLongRunning(taskId, sessionId, message, proxy);
-            log.info("@MeshA2A tasks/send: long-running task parked (task_id={} job_id={} path={})",
-                taskId, proxy.jobId(), surface.path());
-            return jsonRpcSuccessResponse(reqId, envelope);
-        }
-
-        Map<String, Object> envelope = buildCompletedTask(taskId, sessionId, message, handlerResult);
-        cacheTerminal(taskId, sessionId, message, envelope, null);
-        return jsonRpcSuccessResponse(reqId, envelope);
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -341,6 +353,17 @@ public class MeshA2ADispatcher {
         // Spec §4.5 "Idempotent; best-effort".
         if (record.terminalEnvelope() != null) {
             return jsonRpcSuccessResponse(reqId, record.terminalEnvelope());
+        }
+
+        // A sync handler still running under its reservation (issue #1592):
+        // there is nothing to cancel — no job — and the handler's result will
+        // replace this record when it returns. Report the current state and
+        // leave the record alone; marking it terminal here would answer
+        // "canceled" for a task that then completes.
+        if (record.inFlight()) {
+            return jsonRpcSuccessResponse(reqId, buildWorkingTask(taskId,
+                record.sessionId() != null ? record.sessionId() : taskId,
+                record.requestMessage(), null, null));
         }
 
         String reason = stringFromParams(params, "reason");
@@ -433,7 +456,8 @@ public class MeshA2ADispatcher {
         }
         Map<String, Object> message = mapFromParams(params, "message");
 
-        if (taskStore.contains(taskId)) {
+        MeshA2ATaskStore.TaskRecord reservation = MeshA2ATaskStore.TaskRecord.inFlight(sessionId, message);
+        if (!taskStore.reserve(taskId, reservation)) {
             // Duplicate in-flight task_id — surface as a single SSE failed
             // event so the SSE client sees a structured A2A failure rather
             // than an opaque HTTP error (Python a2a.py:1143-1149).
@@ -442,39 +466,48 @@ public class MeshA2ADispatcher {
                 "A2A task id '" + taskId + "' is already in use", true, null));
         }
 
-        Object handlerResult;
+        // Everything after the reservation runs under try/finally: a request
+        // that fails before storing its real record (a result whose toString()
+        // throws, a cyclic graph overflowing the serializer) must not leave the
+        // id reserved for the life of the process. release() is a no-op once
+        // the real record has replaced the reservation.
         try {
-            handlerResult = invokeHandler(surface, message);
-        } catch (Throwable t) {
-            String errorText = t.getMessage() != null ? t.getMessage() : t.getClass().getSimpleName();
-            log.debug("@MeshA2A tasks/sendSubscribe handler {} raised: {}",
-                surface.handlerMethodId(), errorText, t);
-            // Even on failure, cache the terminal envelope so a subsequent
-            // tasks/get returns it consistently.
-            Map<String, Object> failed = buildFailedTask(taskId, sessionId, message, errorText);
-            cacheTerminal(taskId, sessionId, message, failed, null);
-            return SseStreamPlan.singleFrame(buildStatusUpdateFrame(
-                reqId, taskId, MeshA2AStateTranslator.A2A_FAILED, errorText, true, null));
-        }
+            Object handlerResult;
+            try {
+                handlerResult = invokeHandler(surface, message);
+            } catch (Throwable t) {
+                String errorText = t.getMessage() != null ? t.getMessage() : t.getClass().getSimpleName();
+                log.debug("@MeshA2A tasks/sendSubscribe handler {} raised: {}",
+                    surface.handlerMethodId(), errorText, t);
+                // Even on failure, cache the terminal envelope so a subsequent
+                // tasks/get returns it consistently.
+                Map<String, Object> failed = buildFailedTask(taskId, sessionId, message, errorText);
+                cacheTerminal(taskId, sessionId, message, failed, null);
+                return SseStreamPlan.singleFrame(buildStatusUpdateFrame(
+                    reqId, taskId, MeshA2AStateTranslator.A2A_FAILED, errorText, true, null));
+            }
 
-        if (handlerResult instanceof JobProxy proxy) {
-            parkLongRunning(taskId, sessionId, message, proxy);
-            log.info("@MeshA2A tasks/sendSubscribe: long-running stream started (task_id={} job_id={} path={})",
-                taskId, proxy.jobId(), surface.path());
-            return SseStreamPlan.longRunning(reqId, taskId, proxy);
-        }
+            if (handlerResult instanceof JobProxy proxy) {
+                parkLongRunning(taskId, sessionId, message, proxy);
+                log.info("@MeshA2A tasks/sendSubscribe: long-running stream started (task_id={} job_id={} path={})",
+                    taskId, proxy.jobId(), surface.path());
+                return SseStreamPlan.longRunning(reqId, taskId, proxy);
+            }
 
-        // Sync handler over tasks/sendSubscribe: per spec §5.3, emit one
-        // artifact event then one final status event (state=completed).
-        Map<String, Object> artifactFrame = buildArtifactUpdateFrame(reqId, taskId, handlerResult);
-        Map<String, Object> terminalFrame = buildStatusUpdateFrame(
-            reqId, taskId, MeshA2AStateTranslator.A2A_COMPLETED, null, true, null);
-        // Cache the resulting envelope so a follow-up tasks/get returns
-        // the same payload deterministically (the SSE branch is otherwise
-        // ephemeral — no terminal envelope would be stored).
-        Map<String, Object> envelope = buildCompletedTask(taskId, sessionId, message, handlerResult);
-        cacheTerminal(taskId, sessionId, message, envelope, null);
-        return SseStreamPlan.syncCompleted(reqId, taskId, artifactFrame, terminalFrame);
+            // Sync handler over tasks/sendSubscribe: per spec §5.3, emit one
+            // artifact event then one final status event (state=completed).
+            Map<String, Object> artifactFrame = buildArtifactUpdateFrame(reqId, taskId, handlerResult);
+            Map<String, Object> terminalFrame = buildStatusUpdateFrame(
+                reqId, taskId, MeshA2AStateTranslator.A2A_COMPLETED, null, true, null);
+            // Cache the resulting envelope so a follow-up tasks/get returns
+            // the same payload deterministically (the SSE branch is otherwise
+            // ephemeral — no terminal envelope would be stored).
+            Map<String, Object> envelope = buildCompletedTask(taskId, sessionId, message, handlerResult);
+            cacheTerminal(taskId, sessionId, message, envelope, null);
+            return SseStreamPlan.syncCompleted(reqId, taskId, artifactFrame, terminalFrame);
+        } finally {
+            taskStore.release(taskId, reservation);
+        }
     }
 
     /**
@@ -532,6 +565,14 @@ public class MeshA2ADispatcher {
             }
             return SseStreamPlan.singleFrame(buildStatusUpdateFrame(
                 reqId, taskId, state, msgText, true, null));
+        }
+        if (record.inFlight()) {
+            // A sync handler still running under its reservation (issue
+            // #1592): not a failure. Report `working`, non-final; the client
+            // reads the result with tasks/get, or resubscribes, once the
+            // handler returns.
+            return SseStreamPlan.singleFrame(buildStatusUpdateFrame(
+                reqId, taskId, MeshA2AStateTranslator.A2A_WORKING, null, false, null));
         }
         JobProxy proxy = record.jobProxy();
         if (proxy == null) {
@@ -948,9 +989,21 @@ public class MeshA2ADispatcher {
         List<MeshRouteRegistry.DependencySpec> deps = surface.dependencies();
         java.lang.reflect.Type proxyType = deps != null && depIndex < deps.size()
             ? deps.get(depIndex).getProxyType() : null;
-        return proxyType != null
+        McpMeshTool tool = proxyType != null
             ? injector.getToolProxy(capability, proxyType)
             : injector.getToolProxy(capability);
+        // Settling-window grace (#1193, issue #1593): while the agent is still
+        // settling, wait — bounded by the remaining budget — for this
+        // capability, exactly as @MeshRoute does (capability-keyed: the proxy
+        // is the injector's shared per-capability view, made live before the
+        // countdown). Keyed on availability; a single latch check once settled.
+        // Blocking is fine: dispatch runs on the servlet request thread.
+        io.mcpmesh.spring.MeshSettleState settleState =
+            io.mcpmesh.spring.MeshSettleState.getInstance();
+        if ((tool == null || !tool.isAvailable()) && !settleState.isSettled()) {
+            settleState.awaitDependency(capability, capability);
+        }
+        return tool;
     }
 
     // ─────────────────────────────────────────────────────────────────

@@ -263,7 +263,7 @@ helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
 | Local / docker-compose | Unique ports (8080, 8081...) | All containers share host network     |
 | Kubernetes             | All agents use 8080          | Each pod has its own IP, no conflicts |
 
-The Helm chart sets `MCP_MESH_HTTP_PORT=8080` which overrides `@MeshAgent(port = 8080)`. Your code does not need to change between environments.
+The Helm chart sets `MCP_MESH_HTTP_PORT=8080` which overrides `@MeshAgent(port = 8080)`. Your code does not need to change between environments. In an app without `@MeshAgent` on its main class - a route-only gateway, say - the mesh variables only fill gaps: an explicit `server.port` or `server.ssl.*` in your own configuration wins.
 
 ## Best Practices
 
@@ -276,9 +276,9 @@ The starter serves the four mesh endpoints, and Kubernetes probes must not share
 - `/startupz` - `startupProbe`. Reports your `@MeshStartupCheck`; an agent that declares none passes.
 - `/livez` - `livenessProbe`. 200 for as long as the process is serving; consults nothing else.
 - `/ready` - `readinessProbe`. Whether the mesh runtime is up, on every agent type. Your `@MeshHealthCheck` does not reach it: a failing check pauses the heartbeat and the registry stops resolving to this agent, which is the whole withdrawal, and a 503 here would also empty the Service that mesh traffic arrives on.
-- `/health` - no probe. Your check's verdict plus the `checks` and `errors` it returned, 503 while the verdict is not healthy.
+- `/health` - no probe. Your check's verdict plus the `checks` and `errors` it returned, 503 while the verdict is not healthy. An agent with no `@MeshHealthCheck` is healthy; one whose first run has not finished answers 503 with status `starting`.
 
-Both `/health` and `/ready` answer 503 until the mesh runtime is up - it starts late in the Spring lifecycle - so pointing liveness at either restarts pods that are merely still booting. Probe Wiring below has the manifest.
+`/ready` answers 503 until the mesh runtime is up - it starts late in the Spring lifecycle - and `/health` answers 503 while a check is still `starting`, so pointing liveness at either restarts pods that are merely still booting. Probe Wiring below has the manifest.
 
 Annotate one no-argument method with `@MeshHealthCheck` to say what "ready" means for this agent:
 

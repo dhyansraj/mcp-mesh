@@ -639,7 +639,7 @@ record CalculationResult(String op, int a, int b, int result) {}
 
 ### LLM Injection
 
-For `@MeshLlm` annotated tools, the LLM is injected as a `MeshLlmAgent` parameter:
+For `@MeshLlm` annotated tools, the LLM is injected as a `MeshLlmAgent` parameter. During startup, a call that arrives before the provider resolves waits for it within the settle window (`MCP_MESH_SETTLE_TIMEOUT`), the same grace tool dependencies get; once the window closes, an unresolved provider injects an agent whose `isAvailable()` is `false`.
 
 ```java
 @MeshLlm(providerSelector = @Selector(capability = "llm"),

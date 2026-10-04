@@ -154,20 +154,22 @@ test:
     capture: wait_gateway
     timeout: 120
 
-  # --- Poll /health so the HTTP listener (which also serves the SSE routes) is
-  #     confirmed up before we hit /stream/*. ---
-  - name: "Wait for gateway /health to respond"
+  # --- Poll /ready so the HTTP listener (which also serves the SSE routes) AND
+  #     the mesh runtime are confirmed up before we hit /stream/*. /health is
+  #     not that signal: it reports the health check alone, and a check-less
+  #     agent answers healthy before the runtime starts. ---
+  - name: "Wait for gateway /ready"
     handler: shell
     command: |
       for i in $(seq 1 45); do
-        if curl -sf http://localhost:9060/health 2>/dev/null | grep -q '"status":"healthy"'; then
-          echo "gateway /health healthy after $((i*2))s"
+        if curl -sf http://localhost:9060/ready 2>/dev/null | grep -q '"ready":true'; then
+          echo "gateway ready after $((i*2))s"
           exit 0
         fi
         sleep 2
       done
-      echo "WARNING: gateway /health did not report healthy within 90s"
-      curl -s http://localhost:9060/health 2>/dev/null || true
+      echo "WARNING: gateway /ready did not report ready within 90s"
+      curl -s http://localhost:9060/ready 2>/dev/null || true
       exit 1
     capture: wait_health
     timeout: 120

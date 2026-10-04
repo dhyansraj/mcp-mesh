@@ -512,6 +512,14 @@ public final class MeshSchemaSupport {
      * <p>Reads {@code MCP_MESH_SCHEMA_STRICT} env var. When true, WARN verdicts
      * are promoted to BLOCK so ops can harden a whole cluster without changing
      * every consumer.
+     *
+     * <p>Truthy values are {@code 1} / {@code true} / {@code yes} — exactly
+     * Python's {@code cluster_strict_enabled} and TypeScript's
+     * {@code clusterStrictEnabled}. This deliberately differs from
+     * {@code MCP_MESH_STRICT_DI} ({@link MeshDiValidator#strictDiEnabled()}),
+     * which also accepts {@code on} because Python reads that knob through its
+     * config resolver's {@code TRUTHY_RULE}: each Java knob matches its Python
+     * counterpart.
      */
     public static boolean clusterStrictEnabled() {
         String v = System.getenv("MCP_MESH_SCHEMA_STRICT");

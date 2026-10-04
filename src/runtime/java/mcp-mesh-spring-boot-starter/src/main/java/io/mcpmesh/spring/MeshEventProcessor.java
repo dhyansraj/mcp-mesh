@@ -496,6 +496,9 @@ public class MeshEventProcessor implements SmartLifecycle {
                 System.identityHashCode(existingProxy), endpoint, functionName, model);
             existingProxy.updateProvider(endpoint, functionName, model);
             log.info("  Proxy isAvailable after update: {} (providerRef set)", existingProxy.isAvailable());
+            // Settling-window grace (#1592): the slot already holds this proxy,
+            // now available — wake any call parked on the provider.
+            wrapper.markLlmProviderResolved();
             return;
         }
 
@@ -559,6 +562,9 @@ public class MeshEventProcessor implements SmartLifecycle {
             log.info("Updated LLM agent for {} (index={}, systemPrompt={}, maxIterations={})",
                 wrapperFuncId, llmIndex, systemPrompt.isEmpty() ? "<none>" : "<configured>", maxIterations);
         }
+        // Settling-window grace (#1592): every slot now holds an available
+        // proxy — wake any call parked on this consumer's provider.
+        wrapper.markLlmProviderResolved();
     }
 
     private void handleShutdown(MeshEvent event) {

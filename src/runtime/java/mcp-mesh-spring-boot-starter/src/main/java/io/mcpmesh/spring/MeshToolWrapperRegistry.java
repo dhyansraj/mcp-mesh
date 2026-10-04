@@ -142,6 +142,17 @@ public class MeshToolWrapperRegistry {
         for (int depIndex : wrapper.getSettleDepIndices()) {
             settleState.registerDeclared(buildDependencyKey(funcId, depIndex));
         }
+        // @MeshLlm provider slot (issue #1592, Python #1456): providers resolve
+        // on the same heartbeat schedule as tool dependencies, so the slot
+        // joins the same window under a per-consumer key. Declared only for a
+        // real @MeshLlm consumer, as Python declares it only in @mesh.llm: a
+        // MeshLlmAgent parameter without @MeshLlm never gets a provider, so its
+        // key would never resolve and hold early calls for the whole budget.
+        // Read from the annotation (what MeshLlmBeanPostProcessor registers
+        // from) so bean-post-processor ordering cannot matter.
+        if (wrapper.getLlmAgentCount() > 0 && isMeshLlmConsumer(wrapper)) {
+            settleState.registerDeclared(buildLlmSettleKey(funcId));
+        }
 
         log.info("Registered wrapper: {} (capability: {}, deps: {}, llm: {})",
             funcId, capability, wrapper.getDependencyCount(), wrapper.getLlmAgentCount());
@@ -566,6 +577,25 @@ public class MeshToolWrapperRegistry {
      */
     public static String buildLlmKey(String funcId, int llmIndex) {
         return funcId + LLM_SEPARATOR + llmIndex;
+    }
+
+    static boolean isMeshLlmConsumer(MeshToolWrapper wrapper) {
+        java.lang.reflect.Method method = wrapper.getMethod();
+        return method != null && org.springframework.core.annotation.AnnotationUtils
+            .findAnnotation(method, io.mcpmesh.MeshLlm.class) != null;
+    }
+
+    /**
+     * Settle key for a {@code @MeshLlm} consumer's provider slot — Python's
+     * {@code _llm_settle_key}: {@code "llm:<funcId>"}.
+     *
+     * <p>Keyed on the CONSUMER, never the provider capability: providers are
+     * resolved per consumer function (each has its own filter), and the waiter
+     * re-reads that consumer's own slot. A capability key would let one
+     * consumer's resolution wake another whose provider has not landed.
+     */
+    public static String buildLlmSettleKey(String funcId) {
+        return "llm:" + funcId;
     }
 
     /**
