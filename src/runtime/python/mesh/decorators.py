@@ -1042,6 +1042,23 @@ def _wrap_with_isolation(final_func: Callable, func_name: str) -> Callable:
     return isolated
 
 
+_DEPENDENCY_KWARGS_WARNED: set[str] = set()
+
+
+def _warn_dependency_kwargs_ignored(target: Any) -> None:
+    """Warn, once per tool, that ``dependency_kwargs`` has no effect (#1610)."""
+    name = getattr(target, "__qualname__", None) or getattr(target, "__name__", "?")
+    key = f"{getattr(target, '__module__', '?')}.{name}"
+    if key in _DEPENDENCY_KWARGS_WARNED:
+        return
+    _DEPENDENCY_KWARGS_WARNED.add(key)
+    logger.warning(
+        "@mesh.tool '%s': dependency_kwargs is not supported by the Python "
+        "runtime and is ignored",
+        name,
+    )
+
+
 def tool(
     capability: str | None = None,
     *,
@@ -1143,8 +1160,16 @@ def tool(
         Function with dependency injection wrapper if dependencies are specified,
         otherwise the original function with metadata attached
     """
+    # Issue #1610: `dependency_kwargs` is a TypeScript-only knob. Folding it
+    # into **kwargs advertised it as producer metadata and changed nothing on
+    # any consumer, silently. Drop it from the advertised kwargs and say so.
+    ignored_dependency_kwargs = "dependency_kwargs" in kwargs
+    kwargs.pop("dependency_kwargs", None)
 
     def decorator(target: T) -> T:
+        if ignored_dependency_kwargs:
+            _warn_dependency_kwargs_ignored(target)
+
         # Validate optional capability
         if capability is not None and not isinstance(capability, str):
             raise ValueError("capability must be a string")
