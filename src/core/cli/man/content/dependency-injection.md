@@ -35,7 +35,7 @@ health → capability_match → tags → version → schema → tiebreaker
 
 Every decision the registry makes is recorded as a `dependency_resolved` (or `dependency_unresolved`) event. Use `meshctl audit <agent>` to read them back — see `meshctl man audit`.
 
-## Loop topology (v2.2.4+)
+## Loop topology
 
 mcp-mesh runs your agent across two event loops:
 
@@ -44,7 +44,7 @@ mcp-mesh runs your agent across two event loops:
 
 A long-running tool body holds the user loop, but never the framework loop — K8s probes stay responsive during long tool calls.
 
-**Default `MCP_MESH_TOOL_WORKERS=1`** (since v2.2.4; previously `min(8, max(2, cpu_count()))`). Loop-affine resources (`asyncpg.Pool`, `redis.asyncio.Redis`, `motor.motor_asyncio.AsyncIOMotorClient`, `aiohttp.ClientSession`) created in `lifespan` startup bind to the single-user loop and are reused by every tool body on the same loop. FastMCP's `lifespan` parameter receives a FastMCP server instance (not a FastAPI app), so there is no `.state` namespace — the canonical Python pattern is a module-level global:
+**Default `MCP_MESH_TOOL_WORKERS=1`**. Loop-affine resources (`asyncpg.Pool`, `redis.asyncio.Redis`, `motor.motor_asyncio.AsyncIOMotorClient`, `aiohttp.ClientSession`) created in `lifespan` startup bind to the single-user loop and are reused by every tool body on the same loop. FastMCP's `lifespan` parameter receives a FastMCP server instance (not a FastAPI app), so there is no `.state` namespace — the canonical Python pattern is a module-level global:
 
 ```python
 from contextlib import asynccontextmanager

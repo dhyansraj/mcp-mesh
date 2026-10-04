@@ -211,7 +211,7 @@ app.post("/chat", mesh.route(
 app.listen(3000);
 ```
 
-**Note**: the handler's third argument is a positional array — `deps[i]` is the i-th declared dependency, `null` when unresolved. (Changed in 3.4.0; it used to be an object keyed by capability. See [Migrating to positional DI](../migration/3.4-positional-di.md).)
+**Note**: the handler's third argument is a positional array — `deps[i]` is the i-th declared dependency, `null` when unresolved.
 
 **Note**: `mesh.route()` is for Express backends that _consume_ mesh capabilities. Use `agent.addTool()` for MCP agents that _provide_ capabilities.
 

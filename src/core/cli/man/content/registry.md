@@ -79,7 +79,7 @@ export MCP_MESH_DEBUG_MODE=false
 
 ## Dependency Resolution
 
-When an agent requests dependencies, the registry:
+On every full heartbeat, for each dependency a tool declares, the registry:
 
 1. **Finds providers**: Agents with matching capability
 2. **Applies filters**: Tag and version constraints (the `version` field is a semver constraint; bare `4.6.0` = exact match)
@@ -87,36 +87,57 @@ When an agent requests dependencies, the registry:
 4. **Selects winner**: Among matches, highest tag-match score first, then **highest version**, then agent ID for determinism — the newest satisfying version wins
 5. **Returns topology**: Selected providers for each dependency
 
-### Resolution Request
+### Resolution rides the heartbeat
+
+There is no separate resolution call. Each full heartbeat (`POST /heartbeat`) carries the agent's tools and, on each tool, the dependencies it declares; the response carries the resolved providers, keyed by the consuming function. Abridged, per `api/mcp-mesh-registry.openapi.yaml`:
 
 ```json
 {
-  "agent_id": "hello-world",
-  "dependencies": [
-    { "capability": "date_service" },
-    { "capability": "weather", "tags": ["+fast"] }
+  "agent_id": "hello-world-a1b2c3d4",
+  "agent_type": "mcp_agent",
+  "name": "hello-world",
+  "http_host": "localhost",
+  "http_port": 9090,
+  "namespace": "default",
+  "tools": [
+    {
+      "function_name": "greet",
+      "capability": "greeting",
+      "dependencies": [
+        { "capability": "date_service" },
+        { "capability": "weather", "tags": ["+fast"] }
+      ]
+    }
   ]
 }
 ```
 
-### Resolution Response
-
 ```json
 {
-  "dependencies": {
-    "date_service": {
-      "agent_id": "system-agent",
-      "endpoint": "http://localhost:8081",
-      "capability": "date_service"
-    },
-    "weather": {
-      "agent_id": "weather-premium",
-      "endpoint": "http://localhost:8082",
-      "capability": "weather"
-    }
+  "status": "success",
+  "agent_id": "hello-world-a1b2c3d4",
+  "dependencies_resolved": {
+    "greet": [
+      {
+        "agent_id": "system-agent-5e6f7a8b",
+        "function_name": "get_date",
+        "endpoint": "http://localhost:8081",
+        "capability": "date_service",
+        "status": "available"
+      },
+      {
+        "agent_id": "weather-premium-9c0d1e2f",
+        "function_name": "get_weather",
+        "endpoint": "http://localhost:8082",
+        "capability": "weather",
+        "status": "available"
+      }
+    ]
   }
 }
 ```
+
+Between full heartbeats the agent sends the cheap `HEAD /heartbeat/{agent_id}`; a `202` answer tells it the topology changed and the next full heartbeat picks up the new resolution.
 
 ## Database Storage
 

@@ -27,7 +27,7 @@ export MCP_MESH_PROPAGATE_HEADERS=authorization,x-request-id,x-tenant-id
 With no value set, no custom headers are propagated. Trace headers
 (`X-Trace-ID`, `X-Parent-Span`) are always propagated independently.
 
-### Matching semantics (as of v1.4)
+### Matching semantics
 
 Each entry in the allowlist is one of:
 
@@ -47,27 +47,6 @@ export MCP_MESH_PROPAGATE_HEADERS=x-trace-*
 # Mixed: exact for auth tokens, prefix for trace/audit families.
 export MCP_MESH_PROPAGATE_HEADERS=authorization,x-trace-*,x-audit-*
 ```
-
-### Migration note (v1.3 → v1.4)
-
-Prior to v1.4, **all** entries used prefix matching. Setting
-`MCP_MESH_PROPAGATE_HEADERS=auth` would silently match `authorization`,
-`auth-token`, and anything else starting with `auth` — a credential-leakage
-risk. Starting in v1.4, plain tokens are exact-only.
-
-If you previously relied on a short token to match longer header names,
-update your allowlist to either the exact name or an explicit prefix:
-
-```bash
-# Before (v1.3):                    After (v1.4, pick one):
-export MCP_MESH_PROPAGATE_HEADERS=auth    # matched "authorization"
-export MCP_MESH_PROPAGATE_HEADERS=authorization        # exact
-export MCP_MESH_PROPAGATE_HEADERS=auth-*               # prefix family
-```
-
-> **Note**: `auth-*` matches `auth-token`, `auth-secret`, etc. — but **NOT**
-> `authorization`. If you previously relied on `auth` matching `authorization`,
-> the correct replacement is the exact entry `authorization`.
 
 > **Note**: A bare `*` (or any entry that becomes empty after stripping the
 > trailing `*`) is rejected at parse time. Such entries would be a

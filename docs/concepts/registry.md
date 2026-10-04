@@ -38,22 +38,32 @@ curl http://localhost:8000/agents
 
 Response:
 
+Abridged (`AgentsListResponse` in `api/mcp-mesh-registry.openapi.yaml`):
+
 ```json
 {
   "agents": [
     {
+      "id": "my-agent-a1b2c3d4",
       "name": "my-agent",
-      "host": "localhost",
-      "port": 9090,
-      "capabilities": {
-        "greeting": {
+      "agent_type": "mcp_agent",
+      "runtime": "python",
+      "status": "healthy",
+      "endpoint": "http://localhost:9090",
+      "capabilities": [
+        {
+          "name": "greeting",
           "version": "1.0.0",
+          "function_name": "greet",
           "tags": ["social"]
         }
-      },
-      "status": "healthy"
+      ],
+      "total_dependencies": 0,
+      "dependencies_resolved": 0
     }
-  ]
+  ],
+  "count": 1,
+  "timestamp": "2026-10-04T12:00:00Z"
 }
 ```
 
@@ -83,30 +93,38 @@ sequenceDiagram
 
 ### Registration Payload
 
+The full heartbeat body (`MeshAgentRegistration` in `api/mcp-mesh-registry.openapi.yaml`), abridged. Capabilities are declared per tool:
+
 ```json
 {
+  "agent_id": "my-agent-a1b2c3d4",
+  "agent_type": "mcp_agent",
+  "runtime": "python",
   "name": "my-agent",
-  "host": "localhost",
-  "port": 9090,
+  "version": "1.0.0",
+  "http_host": "localhost",
+  "http_port": 9090,
   "namespace": "default",
-  "capabilities": {
-    "greeting": {
+  "tools": [
+    {
+      "function_name": "greet",
+      "capability": "greeting",
       "version": "1.0.0",
       "tags": ["social", "basic"],
-      "dependencies": []
+      "dependencies": [{ "capability": "date_service" }]
     }
-  }
+  ]
 }
 ```
 
 ## Dependency Resolution
 
-When an agent registers with dependencies:
+There is no separate resolution call; resolution rides the heartbeat:
 
-1. Registry receives registration with `dependencies`
-2. Finds agents providing those capabilities
-3. Returns proxy configurations to consumer
-4. Consumer uses proxies to call providers
+1. Each full heartbeat carries every tool's declared `dependencies`
+2. The registry finds, filters and scores the providers of each
+3. The response's `dependencies_resolved` maps each consuming function to its resolved providers (`agent_id`, `function_name`, `endpoint`, `capability`, `status`)
+4. The agent builds a proxy per dependency and injects it
 
 ```mermaid
 graph LR

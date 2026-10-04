@@ -698,8 +698,17 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // DEFAULT_EVICTION_THRESHOLD, registry.md API-table and tutorial.md
 // --project-name edits are fenced, table lines or span swaps.
 // 1904 + 73 = 1977; 537 + 13 = 550; 455 + 4 = 459.
+//
+// Follow-up on the same sweep moves the inline constant to 1969 (-8) and
+// neither list constant. headers.md -11: the v1.3 -> v1.4 migration note is
+// gone (the docs show only the current matching rules).
+// dependency-injection.md -1: the "since v2.2.4; previously ..." worker
+// default history. registry.md +4: the invented Resolution Request/Response
+// exchange is replaced by the real POST /heartbeat body and its
+// dependencies_resolved answer, whose prose names /heartbeat, the HEAD
+// variant and the response field. 1977 - 11 - 1 + 4 = 1969.
 const (
-	wantInlineCodeSpans = 1977
+	wantInlineCodeSpans = 1969
 	wantListCodeSpans   = 550
 	wantMarkupListLines = 459
 )

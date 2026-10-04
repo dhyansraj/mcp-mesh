@@ -229,7 +229,15 @@ func stripLangHeader(content string) string {
 // score-based OR groups, dependency-injection_typescript.md +2 for the
 // isolation knob and the proxy-type sentence. llm_java.md -3 for the Spring AI
 // 2.0 google-genai Vertex setup. 1766 + 43 = 1809.
-const wantVariantInlineCodeSpans = 1809
+//
+// Follow-up moves this to 1812. jobs_java.md +4 and jobs_typescript.md +3:
+// spans such as `proxy.cancel(reason)` and `recvEvent(...)` were wrapped
+// across two source lines, which the per-line renderer showed as literal
+// backticks and this counter paired wrongly; each now sits on one line.
+// dependency-injection_typescript.md -4: the "Changed in 3.4.0" history
+// note becomes one version-neutral sentence on positional slots.
+// 1809 + 4 + 3 - 4 = 1812.
+const wantVariantInlineCodeSpans = 1812
 
 // TestVariantCorpusCodeSpans is TestStyleInlineCorpus plus
 // TestRenderStyledCorpusListItems, run over the pages neither of them sees.

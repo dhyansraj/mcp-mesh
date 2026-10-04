@@ -84,17 +84,7 @@ mesh.a2a.mount(
 
 Slots are never compacted: an unresolved dependency holds its own index as `null` and never shifts a later one up.
 
-!!! warning "Changed in 3.4.0"
-
-    Both surfaces used to hand the handler an object keyed by capability (`{ data_service, formatter }`). Reading a **declared** capability by name on the array now throws with the index and the corrected signature:
-
-    ```text
-    mesh.route dependencies are positional as of 3.4.0.
-    You accessed `deps.data_service`; "data_service" is declared dependency [0].
-    Rewrite the handler as:  async (req, res, [data_service, formatter]) => { ... }
-    ```
-
-    `RouteDependencies` and `A2ADependencies` now alias `PositionalDependencies` (`Array<McpMeshTool | null>`), so an object type argument — `mesh.a2a.mount<{ date_service: McpMeshTool }>(...)` — no longer compiles. Use per-slot tuples instead: `mount<[McpMeshTool | null]>(...)`. See [Migrating to positional DI](../migration/3.4-positional-di.md).
+Reading a **declared** capability by name on the array throws, naming its index and the corrected signature. `RouteDependencies` and `A2ADependencies` alias `PositionalDependencies` (`Array<McpMeshTool | null>`); type a handler with per-slot tuples, for example `mount<[McpMeshTool | null]>(...)`.
 
 ### Dependencies with Filters
 

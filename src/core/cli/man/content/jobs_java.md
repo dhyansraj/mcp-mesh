@@ -320,9 +320,9 @@ server). On the producer side, the cancel token fires:
   `Thread.interrupt()` cannot be signaled by the Tokio cancel token
   firing on the registry side. Long-running task handlers MUST poll
   `controller.isCancelled()` between work units (the cooperative
-  model), OR park on `controller.recvEvent(List.of("cancelled", ...),
-  ...)` to observe the synthetic cancel event (see [Event
-  injection](#event-injection) below).
+  model), OR park on
+  `controller.recvEvent(List.of("cancelled", ...), ...)` to observe the
+  synthetic cancel event (see [Event injection](#event-injection) below).
 - Outbound `McpMeshTool` proxy calls abort their underlying HTTP
   request. This is the per-job cancel watcher firing on the handler's
   own job context, not something the outbound request carries — the
@@ -543,11 +543,11 @@ public Map<String, Object> runToCompletion(@Param("job_id") String jobId) {
   `proxy.await(timeoutSecs)`. Skip the facade + cache lookup when you
   already have a proxy in scope.
 
-**Synthetic cancel event**. When a consumer calls `proxy.cancel(
-reason)`, the registry writes a synthetic event into the log before
-HTTP-forwarding the cancel signal. A handler parked on `recvEvent(
-List.of("cancelled", ...), ...)` observes the synthetic event and can
-return cleanly. This is the recommended pattern for cancel-aware Java
+**Synthetic cancel event**. When a consumer calls
+`proxy.cancel(reason)`, the registry writes a synthetic event into the
+log before HTTP-forwarding the cancel signal. A handler parked on
+`recvEvent(List.of("cancelled", ...), ...)` observes the synthetic event
+and can return cleanly. This is the recommended pattern for cancel-aware Java
 handlers — `Thread#sleep` cannot be interrupted by the registry's
 cancel token firing, so handlers that sleep between work units must
 poll `controller.isCancelled()` between intervals; `recvEvent` on the
@@ -881,8 +881,8 @@ try {
 ```
 
 `MeshSupersededException` is distinct from a generic tool failure and from
-the `dependency_unavailable` refusal (an unresolved required dep, `meshctl
-man dependency-injection --java`) — it means specifically *you are running
+the `dependency_unavailable` refusal (an unresolved required dep,
+`meshctl man dependency-injection --java`) — it means specifically *you are running
 under a superseded claim*. It does **not** change delivery: jobs remain
 **at-least-once** and a fenced re-execution still runs under the new claim;
 the typed signal only lets the stale attempt bow out on its first rejected

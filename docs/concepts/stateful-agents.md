@@ -39,7 +39,7 @@ several primitives — MeshJob, DDDI, the worker-pool topology — so the
   external signal; a timer fires at a deadline. None of this is gated
   on a user tool call landing.
 
-### Loop topology (v2.2.4+)
+### Loop topology
 
 mcp-mesh runs your agent across two event loops:
 
@@ -106,7 +106,7 @@ long-running work. From mesh's perspective it's an ordinary CRUD
 agent — every tool call is short, idempotent where possible, and
 returns. The pool lives inside the agent process — created in
 `lifespan` startup, stored in a module-level global, and closed in
-`lifespan` exit. Since v2.2.4, `lifespan` and all tool bodies share
+`lifespan` exit. `lifespan` and all tool bodies share
 the single user loop, so a module-level pool created in `lifespan`
 startup is the supported pattern. (FastMCP's `lifespan` receives a
 FastMCP server instance — there is no `.state` namespace as there is
@@ -401,7 +401,7 @@ streaming LLM call that runs for two minutes, the user clicking "extend
 my deadline" lands in `pending_inputs` and sits there until the next
 boundary — which may be after the event was useful.
 
-### Sub-iteration events: mesh-managed event channel (shipped in v2.2)
+### Sub-iteration events: mesh-managed event channel
 
 The sub-iteration gap above closes with **MeshJob event injection** —
 a per-job, ordered, append-only event log every running job carries.
