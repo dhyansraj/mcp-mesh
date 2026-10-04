@@ -47,8 +47,6 @@ import {
   startAgent,
   type JsAgentSpec,
   type JsAgentHandle,
-  type JsToolSpec,
-  type JsDependencySpec,
 } from "@mcpmesh/core";
 
 import type { AgentConfig, ResolvedAgentConfig } from "./types.js";
@@ -69,67 +67,21 @@ import {
   type HealthCheckLoop,
   type HealthVerdict,
 } from "./health-check.js";
-import { buildHealthBody, statusCodeFor } from "./health-routes.js";
+import {
+  buildHealthBody,
+  buildReadyBody,
+  healthReadingFor,
+  readyStatusCodeFor,
+  statusCodeFor,
+  type RuntimeState,
+} from "./health-routes.js";
 import { createProxy } from "./proxy.js";
-import { RouteRegistry, type RouteMetadata } from "./route.js";
+import { depSignature } from "./agent.js";
+import { RouteRegistry } from "./route.js";
 import { initTracing, type AgentMetadata } from "./tracing.js";
 import { getTlsConfigCached, getTlsOptions, prepareTls, cleanupTls } from "./tls-config.js";
-import {
-  clusterStrictEnabled,
-  normalizeSchemaWithPolicy,
-} from "./schema-normalize.js";
+import { buildRouteToolSpecs } from "./route-tool-specs.js";
 import { A2AProducerRegistry } from "./a2a/producer/registry.js";
-
-/**
- * Build tool specs from registered routes.
- * Shared helper for consistent tool spec generation.
- */
-function buildToolSpecs(routes: RouteMetadata[]): JsToolSpec[] {
-  // Issue #547 Phase 4: cluster strict knob promotes WARN→BLOCK. Routes are
-  // consumer-side so there's no per-tool override.
-  const clusterStrict = clusterStrictEnabled();
-
-  return routes
-    .filter((route) => route.dependencies.length > 0)
-    .map((route) => ({
-      functionName: route.routeId,
-      capability: "", // Routes don't provide capabilities, they consume them
-      version: "1.0.0",
-      tags: [],
-      description: "",
-      // Note: tags may contain nested arrays for OR alternatives (TagSpec[])
-      // Serialize to JSON for Rust binding - preserves nested structure
-      dependencies: route.dependencies.map(
-        (dep): JsDependencySpec => {
-          // Issue #547: per-dep expectedSchema → canonical + hash + matchMode.
-          let expectedCanonical: string | undefined;
-          let expectedHash: string | undefined;
-          if (dep.expectedSchemaRaw) {
-            const r = normalizeSchemaWithPolicy(
-              dep.expectedSchemaRaw,
-              `route ${route.routeId} dependency on '${dep.capability}'`,
-              clusterStrict,
-              true
-            );
-            expectedCanonical = r.canonicalJson ?? undefined;
-            expectedHash = r.hash ?? undefined;
-          }
-          return {
-            capability: dep.capability,
-            tags: JSON.stringify(dep.tags ?? []),
-            version: dep.version,
-            expectedSchemaCanonical: expectedCanonical,
-            expectedSchemaHash: expectedHash,
-            matchMode: dep.matchMode,
-            // Issue #1249: carry the required flag so the registry factors
-            // this route edge into transitive availability. Only when true.
-            required: dep.required ? true : undefined,
-          };
-        }
-      ),
-      inputSchema: undefined,
-    }));
-}
 
 /**
  * Configuration for MeshExpress.
@@ -160,6 +112,13 @@ export class MeshExpress {
   private server: Server | null = null;
   private started = false;
   private shutdownRequested = false;
+  /**
+   * #1314: last-applied resolution signature per depKey
+   * (`${requestingFunction}:dep_${depIndex}`), so the napi core's ~10s
+   * re-emit of believed-delivered edges does not rebuild every proxy each
+   * tick. Cleared on the removal path.
+   */
+  private appliedDepSignatures: Map<string, string> = new Map();
   /**
    * Memoized in-flight (or completed) teardown. `shutdown()` is
    * idempotent: the first caller creates this promise and every later
@@ -230,18 +189,23 @@ export class MeshExpress {
     // agent's `/health` (`health-routes.ts`) — nothing probes it, so its
     // status code is free to carry the verdict.
     this.app.get("/health", (_req: Request, res: Response) => {
-      const verdict = this.getHealthVerdict();
+      const verdict = healthReadingFor(
+        !!this.config.healthCheck,
+        this.getHealthVerdict(),
+      );
       res.status(statusCodeFor(verdict)).json({
         ...buildHealthBody(this.config.name, verdict),
         serviceId: this.serviceId,
       });
     });
 
-    // Ready check endpoint
+    // Ready check endpoint — the mesh runtime state, same body and rule as
+    // the MCP agent's `/ready` (health-routes.ts). A gateway fronts no MCP
+    // server, so `mcp_wrappers` is 0.
     this.app.get("/ready", (_req: Request, res: Response) => {
-      const isReady = this.handle !== null;
-      res.status(isReady ? 200 : 503).json({
-        ready: isReady,
+      const state = this.getRuntimeState();
+      res.status(readyStatusCodeFor(state)).json({
+        ...buildReadyBody(this.config.name, state, 0),
         serviceId: this.serviceId,
       });
     });
@@ -403,11 +367,18 @@ export class MeshExpress {
 
   /**
    * The latest health verdict, or null before the first run completes (or
-   * when no `healthCheck` is configured). Read per request by `/health`;
-   * null answers 200 there, so a gateway with no check is unaffected.
+   * when no `healthCheck` is configured). Read per request by `/health`:
+   * with no check configured null answers 200; with one configured it
+   * answers 503 "starting" until the first run finishes (Python parity).
    */
   getHealthVerdict(): HealthVerdict | null {
     return this.healthLoop?.latest() ?? null;
+  }
+
+  /** Whether the mesh runtime is up, for `/ready` (same rule as MeshAgent). */
+  getRuntimeState(): RuntimeState {
+    if (this.shutdownRequested) return "shutting_down";
+    return this.handle !== null ? "up" : "starting";
   }
 
   /**
@@ -461,7 +432,7 @@ export class MeshExpress {
   private async startHeartbeat(): Promise<void> {
     const registry = RouteRegistry.getInstance();
     const routes = registry.getRoutes();
-    const tools = buildToolSpecs(routes);
+    const tools = buildRouteToolSpecs(routes);
 
     // Issue #933 / #938: flip agent_type to "a2a" when any
     // mesh.a2a.mount(...) surface is registered (spec §2.3 / §8). A2A
@@ -667,8 +638,18 @@ export class MeshExpress {
       const route = registry.getRoute(requestingFunction);
       const kwargs = route?.dependencyKwargs?.[depIndex];
 
+      // #1314 idempotency guard (issue #1593: mirrors MeshAgent and the API
+      // runtime): skip the rebuild when the core's ~10s reconcile re-emit
+      // matches what is already wired for this edge.
+      const depKey = `${requestingFunction}:dep_${depIndex}`;
+      const signature = depSignature(endpoint, functionName, kwargs, agentId);
+      if (this.appliedDepSignatures.get(depKey) === signature) {
+        return;
+      }
+
       const proxy = createProxy(endpoint, capability, functionName, kwargs);
       registry.setDependency(requestingFunction, depIndex, proxy);
+      this.appliedDepSignatures.set(depKey, signature);
 
       console.log(
         `Dependency available: ${capability} at ${endpoint} (route: ${requestingFunction}, index: ${depIndex}, agent: ${agentId})`
@@ -682,8 +663,15 @@ export class MeshExpress {
       route.dependencies.forEach((dep, idx) => {
         if (dep.capability === capability) {
           const kwargs = route.dependencyKwargs?.[idx];
+          // #1314 idempotency guard (see position-info path above).
+          const depKey = `${route.routeId}:dep_${idx}`;
+          const signature = depSignature(endpoint, functionName, kwargs, agentId);
+          if (this.appliedDepSignatures.get(depKey) === signature) {
+            return;
+          }
           const proxy = createProxy(endpoint, capability, functionName, kwargs);
           registry.setDependency(route.routeId, idx, proxy);
+          this.appliedDepSignatures.set(depKey, signature);
           matchCount++;
         }
       });
@@ -706,6 +694,8 @@ export class MeshExpress {
     // If we have position info, use it directly
     if (requestingFunction !== undefined && depIndex !== undefined) {
       registry.removeDependency(requestingFunction, depIndex);
+      // #1314: drop the applied signature so a later re-add rebuilds.
+      this.appliedDepSignatures.delete(`${requestingFunction}:dep_${depIndex}`);
       console.log(
         `Dependency unavailable: ${capability} (route: ${requestingFunction}, index: ${depIndex})`
       );
@@ -718,6 +708,8 @@ export class MeshExpress {
       route.dependencies.forEach((dep, idx) => {
         if (dep.capability === capability) {
           registry.removeDependency(route.routeId, idx);
+          // #1314: drop the applied signature so a later re-add rebuilds.
+          this.appliedDepSignatures.delete(`${route.routeId}:dep_${idx}`);
           removeCount++;
         }
       });

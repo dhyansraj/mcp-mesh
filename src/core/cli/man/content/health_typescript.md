@@ -68,6 +68,8 @@ One check per agent, sync or async. Return `{ status, checks, errors }` for full
 
 The verdict drives `/health`, which answers 200 only while the check reports `healthy` and carries the `checks` and `errors` it returned. It does not drive `/ready`, which reports whether the mesh runtime is up: pausing the heartbeat already withdraws the agent, and a 503 on `/ready` would additionally empty the Service that mesh traffic arrives on. `/livez` never consults it either - a restart cannot fix a vendor outage.
 
+`checks` maps a check name to a boolean. Values are read the way Python's Pydantic reads a `bool`: besides `true`/`false`, the numbers `1`/`0` and the strings `true`/`false`, `yes`/`no`, `on`/`off`, `t`/`f`, `y`/`n`, `1`/`0` (any case) are accepted. Anything else - `"ok"`, a nested object - is dropped and reported in `errors` alongside a `health_check_checks_type: false` entry, and the verdict the check returned still stands.
+
 ### What a Failing Check Does
 
 While the check reports unhealthy the agent **stops heartbeating**. The registry marks it unhealthy after the staleness window, dependency resolution stops selecting it, and consumers move to another provider. When the check passes again the heartbeat resumes and the registry restores the agent through the `410 Gone` re-register path - no restart. The TTL is the cadence, not the end-to-end latency: it only bounds how long until the next check runs. Withdrawal costs that plus the registry's staleness window once heartbeats stop, and recovery costs it plus the heartbeat resume and re-register round trip.
@@ -190,7 +192,7 @@ TypeScript agents automatically expose four endpoints, and Kubernetes probes mus
 - `/startupz` - `startupProbe`. Reports your `startupCheck`; an agent that declares none passes.
 - `/livez` - `livenessProbe`. 200 for as long as the process is serving; consults nothing else.
 - `/ready` - `readinessProbe`. 200 once the mesh runtime is up; 503 before that and while shutting down. Your `healthCheck` does not reach it.
-- `/health` - no probe. The check's verdict plus the `checks` and `errors` it returned; 200 only while it reports `healthy`. An agent with no `healthCheck` is healthy.
+- `/health` - no probe. The check's verdict plus the `checks` and `errors` it returned; 200 only while it reports `healthy`. An agent with no `healthCheck` is healthy; one whose first run has not finished answers 503 with status `starting`.
 
 ```typescript
 // GET /health

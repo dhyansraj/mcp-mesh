@@ -37,49 +37,19 @@ import {
   autoDetectIp,
   type JsAgentSpec,
   type JsAgentHandle,
-  type JsToolSpec,
-  type JsDependencySpec,
 } from "@mcpmesh/core";
 
 import {
   MAX_CONSECUTIVE_NEXT_EVENT_FAILURES,
   NEXT_EVENT_BACKOFF_CAP_MS,
 } from "./config.js";
-import { RouteRegistry, type RouteMetadata } from "./route.js";
+import { RouteRegistry } from "./route.js";
+import { buildRouteToolSpecs } from "./route-tool-specs.js";
 import { createProxy } from "./proxy.js";
 import { depSignature } from "./agent.js";
 import { initTracing, type AgentMetadata } from "./tracing.js";
 import { getTlsConfigCached, prepareTls, cleanupTls } from "./tls-config.js";
 import { A2AProducerRegistry } from "./a2a/producer/registry.js";
-
-/**
- * Build tool specs from registered routes.
- * Shared helper to avoid duplication between start() and updateExpressInfo().
- */
-function buildToolSpecs(routes: RouteMetadata[]): JsToolSpec[] {
-  return routes
-    .filter((route) => route.dependencies.length > 0)
-    .map((route) => ({
-      functionName: route.routeId,
-      capability: "", // API routes don't provide capabilities
-      version: "1.0.0",
-      tags: [],
-      description: "",
-      // Note: tags may contain nested arrays for OR alternatives (TagSpec[])
-      // Serialize to JSON for Rust binding - preserves nested structure
-      dependencies: route.dependencies.map(
-        (dep): JsDependencySpec => ({
-          capability: dep.capability,
-          tags: JSON.stringify(dep.tags ?? []),
-          version: dep.version,
-          // Issue #1249: carry the required flag so the registry factors this
-          // route edge into transitive availability. Only when true.
-          required: dep.required ? true : undefined,
-        })
-      ),
-      inputSchema: undefined,
-    }));
-}
 
 /**
  * Configuration for API runtime (optional, uses env vars if not set).
@@ -93,6 +63,8 @@ export interface ApiRuntimeConfig {
   heartbeatInterval?: number;
   /** HTTP port the Express app is listening on (for registry display) */
   httpPort?: number;
+  /** Agent version reported to the registry. Default: "1.0.0" */
+  version?: string;
 }
 
 /**
@@ -253,7 +225,7 @@ class ApiRuntime {
       // Build tool specs from registered routes
       const registry = RouteRegistry.getInstance();
       const routes = registry.getRoutes();
-      const tools = buildToolSpecs(routes);
+      const tools = buildRouteToolSpecs(routes);
 
       // Issue #933 / #938: flip agent_type to "a2a" when any
       // mesh.a2a.mount(...) surface is registered (spec §2.3 / §8). A2A
@@ -270,7 +242,7 @@ class ApiRuntime {
         // Base name (shared across replicas), unique ID via agentId.
         name: namePart,
         agentId: this.serviceId,
-        version: "1.0.0",
+        version: this.config.version ?? "1.0.0",
         description: "",
         registryUrl,
         httpPort: port,
@@ -719,7 +691,7 @@ class ApiRuntime {
     // Build updated tool specs with proper route names
     const registry = RouteRegistry.getInstance();
     const routes = registry.getRoutes();
-    const tools = buildToolSpecs(routes);
+    const tools = buildRouteToolSpecs(routes);
 
     // Send updated tools to Rust core
     // The Rust core uses smart diffing - only sends heartbeat if tools changed

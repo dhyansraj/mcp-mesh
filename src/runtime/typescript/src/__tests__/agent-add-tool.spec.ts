@@ -70,6 +70,38 @@ describe("addTool — meshJobParamIndex validation", () => {
     });
   }
 
+  // Issue #1593: only the job-dispatch path splices the controller, so on a
+  // non-task tool the first dep proxy silently landed in the job slot.
+  it("accepts meshJobParamIndex with task: true", async () => {
+    const agent = newAgent();
+    expect(() =>
+      agent.addTool({
+        name: "job-ok",
+        task: true,
+        parameters: z.object({}),
+        dependencies: ["weather"],
+        meshJobParamIndex: 1,
+        execute: async (_a: unknown, _job: unknown, _weather: unknown) => "x",
+      }),
+    ).not.toThrow();
+  });
+
+  for (const task of [false, undefined]) {
+    it(`rejects meshJobParamIndex with task: ${task}`, () => {
+      const agent = newAgent();
+      expect(() =>
+        agent.addTool({
+          name: `job-bad-${task}`,
+          ...(task === undefined ? {} : { task }),
+          parameters: z.object({}),
+          dependencies: ["weather"],
+          meshJobParamIndex: 1,
+          execute: async (_a: unknown, _job: unknown, _weather: unknown) => "x",
+        }),
+      ).toThrow(/meshJobParamIndex is only valid with task: true/);
+    });
+  }
+
   it("rejects 0 (position 0 is reserved for args)", () => {
     const agent = newAgent();
     expect(() =>
@@ -587,14 +619,17 @@ describe("addTool — #925 wrappedExecute return shape (no structuredContent)", 
     expect(result).toBe("hello");
   });
 
-  it("returns an empty string for null/undefined results", async () => {
+  it("returns undefined for null/undefined results (FastMCP emits empty content, #1250/#1593)", async () => {
+    // A nullish return must reach the wire as `{content: []}` — the shape of a
+    // Python `None` return, which consumers read back as null. Text "" would
+    // be indistinguishable from a real "" return.
     const { agent, getWrapped } = captureWrappedExecute();
     agent.addTool({
       name: "null-tool",
       parameters: z.object({}),
       execute: async () => null,
     });
-    expect(await getWrapped()!({})).toBe("");
+    expect(await getWrapped()!({})).toBeUndefined();
 
     const { agent: agent2, getWrapped: getWrapped2 } = captureWrappedExecute();
     agent2.addTool({
@@ -602,7 +637,7 @@ describe("addTool — #925 wrappedExecute return shape (no structuredContent)", 
       parameters: z.object({}),
       execute: async () => undefined,
     });
-    expect(await getWrapped2()!({})).toBe("");
+    expect(await getWrapped2()!({})).toBeUndefined();
   });
 
   it("FastMCP-style dispatch validates without ContentResultZodSchema error (object return)", async () => {

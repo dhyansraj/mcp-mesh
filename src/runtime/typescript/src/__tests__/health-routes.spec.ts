@@ -30,6 +30,8 @@ import {
   buildReadyBody,
   readyStatusCodeFor,
   statusCodeFor,
+  healthReadingFor,
+  HEALTH_STARTING,
 } from "../health-routes.js";
 import type { RuntimeState } from "../health-routes.js";
 import type { HealthVerdict } from "../health-check.js";
@@ -109,7 +111,7 @@ const healthy: HealthVerdict = {
 function register(
   server: FastMCP,
   agentName: string,
-  getVerdict: () => HealthVerdict | null,
+  getVerdict: () => HealthVerdict | null | typeof HEALTH_STARTING,
   getRuntimeState: () => RuntimeState = () => "up",
 ): boolean {
   return registerHealthRoutes(server, agentName, getVerdict, getRuntimeState);
@@ -427,6 +429,33 @@ describe("body builders match the Python contract", () => {
     expect(statusCodeFor(healthy)).toBe(200);
     expect(statusCodeFor(degraded)).toBe(503);
     expect(statusCodeFor(unhealthy)).toBe(503);
+    expect(statusCodeFor(HEALTH_STARTING)).toBe(503);
+  });
+});
+
+describe("/health before a configured check's first run (#1593, Python parity)", () => {
+  it("healthReadingFor: configured + no verdict is starting; unconfigured is null", () => {
+    expect(healthReadingFor(true, null)).toBe(HEALTH_STARTING);
+    expect(healthReadingFor(false, null)).toBeNull();
+    expect(healthReadingFor(true, unhealthy)).toBe(unhealthy);
+  });
+
+  it("answers 503 with status 'starting', like Python's build_health_response", () => {
+    const { server, routes } = stubServer();
+    register(server, "provider-a", () => HEALTH_STARTING);
+    const answer = dispatch(routes, "/health", "GET");
+    expect(answer.status).toBe(503);
+    expect(answer.body.status).toBe("starting");
+    expect(answer.body.message).toBe("Agent is starting");
+    expect(answer.body.agent).toBe("provider-a");
+  });
+
+  it("an agent with no health check still answers 200 healthy", () => {
+    const { server, routes } = stubServer();
+    register(server, "provider-a", () => healthReadingFor(false, null));
+    const answer = dispatch(routes, "/health", "GET");
+    expect(answer.status).toBe(200);
+    expect(answer.body.status).toBe("healthy");
   });
 });
 

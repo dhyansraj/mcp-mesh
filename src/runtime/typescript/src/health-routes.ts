@@ -52,13 +52,15 @@
  *
  * ## An agent with no health check is unaffected on /health
  *
- * A null verdict means "no `healthCheck` configured, or the seed run has
- * not finished yet" and is treated as HEALTHY, so `/health` answers 200.
- * Only a configured check that reports a non-healthy verdict can make it
- * 503. Java's `MeshHealthController.effectiveStatus` returns `HEALTHY`
- * outright when `latest` is null and the runtime is running, and Python's
- * startup seed stores a default healthy result for an agent with no
- * `health_check` at all.
+ * A null verdict means "no `healthCheck` configured" and is treated as
+ * HEALTHY, so `/health` answers 200 — Python's startup seed stores a
+ * default healthy result for an agent with no `health_check` at all.
+ *
+ * A CONFIGURED check whose first run has not finished yet reads as
+ * {@link HEALTH_STARTING} and answers 503 `{"status": "starting"}`, the
+ * same answer Python's `build_health_response` gives before its seed run
+ * stores a verdict (issue #1593). Nothing probes `/health`, so this only
+ * stops the endpoint claiming a verdict the check has not reached.
  *
  * `/livez` is unchanged and stays in `livez-route.ts` — liveness must
  * never consult the verdict, or a vendor outage becomes a pod restart.
@@ -66,8 +68,25 @@
 import type { FastMCP } from "fastmcp";
 import type { HealthVerdict } from "./health-check.js";
 
-/** The latest verdict, or null when there is none. */
-export type HealthVerdictSource = () => HealthVerdict | null;
+/**
+ * What `/health` reads: a verdict; `null` when no `healthCheck` is
+ * configured; or {@link HEALTH_STARTING} when one is configured but its
+ * first run has not finished.
+ */
+export const HEALTH_STARTING = "starting" as const;
+export type HealthReading = HealthVerdict | null | typeof HEALTH_STARTING;
+
+/** Resolve a reading from whether a check is configured and its latest verdict. */
+export function healthReadingFor(
+  configured: boolean,
+  latest: HealthVerdict | null,
+): HealthReading {
+  if (latest) return latest;
+  return configured ? HEALTH_STARTING : null;
+}
+
+/** The latest reading (see {@link HealthReading}). */
+export type HealthVerdictSource = () => HealthReading;
 
 /**
  * Whether the mesh runtime is up, and in what state.
@@ -117,8 +136,20 @@ function serving(status: string): boolean {
  */
 export function buildHealthBody(
   agentName: string,
-  verdict: HealthVerdict | null,
+  verdict: HealthReading,
 ): Record<string, unknown> {
+  if (verdict === HEALTH_STARTING) {
+    // Python: {"status": "starting", "message": "Agent is starting"}; the
+    // other keys are kept so the body stays the one shape documented above.
+    return {
+      status: "starting",
+      agent: agentName,
+      checks: {},
+      errors: [],
+      message: "Agent is starting",
+      timestamp: new Date().toISOString(),
+    };
+  }
   return {
     status: verdict ? verdict.status : "healthy",
     agent: agentName,
@@ -143,18 +174,20 @@ export function buildHealthBody(
  * wired call site (`mesh/decorators.py`) passes none, so Python reports
  * 0 in practice — do NOT treat that 0 as a contract to copy. The field
  * is kept rather than dropped because operators and dashboards read one
- * key set across the runtimes.
+ * key set across the runtimes. A `MeshExpress` gateway fronts no MCP
+ * server and passes 0.
  */
 export function buildReadyBody(
   agentName: string,
   state: RuntimeState,
+  mcpWrappers = 1,
 ): Record<string, unknown> {
   const ready = state === "up";
   const body: Record<string, unknown> = {
     ready,
     agent: agentName,
     runtime: state,
-    mcp_wrappers: 1,
+    mcp_wrappers: mcpWrappers,
     timestamp: new Date().toISOString(),
   };
   if (!ready) {
@@ -168,8 +201,9 @@ export function readyStatusCodeFor(state: RuntimeState): 200 | 503 {
   return state === "up" ? 200 : 503;
 }
 
-/** HTTP status for `/health`: 200 healthy, 503 otherwise. */
-export function statusCodeFor(verdict: HealthVerdict | null): 200 | 503 {
+/** HTTP status for `/health`: 200 healthy, 503 otherwise (starting included). */
+export function statusCodeFor(verdict: HealthReading): 200 | 503 {
+  if (verdict === HEALTH_STARTING) return 503;
   return serving(verdict ? verdict.status : "healthy") ? 200 : 503;
 }
 
@@ -223,7 +257,7 @@ export function registerHealthRoutes(
   // diagnostic endpoint that 500s tells an operator less than one that
   // says "no verdict". Falling back to null answers exactly as an agent
   // with no health check does.
-  const snapshot = (): HealthVerdict | null => {
+  const snapshot = (): HealthReading => {
     try {
       return getVerdict();
     } catch (err) {

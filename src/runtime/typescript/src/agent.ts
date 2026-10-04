@@ -58,6 +58,12 @@ import {
 } from "./inbound-job-dispatch.js";
 import { MeshJobSubmitter } from "./mesh-job-submitter.js";
 import {
+  declaredParameters,
+  parameterLabel,
+  pluralize,
+  warnOrRaise,
+} from "./strict-di.js";
+import {
   getSettleState,
   type PendingSettleDep,
   type SettleState,
@@ -74,7 +80,7 @@ import {
 } from "./jobs-helper-tools.js";
 import { registerCancelRoute } from "./jobs-cancel-route.js";
 import { registerLivezRoute } from "./livez-route.js";
-import { registerHealthRoutes } from "./health-routes.js";
+import { registerHealthRoutes, healthReadingFor } from "./health-routes.js";
 import type { RuntimeState } from "./health-routes.js";
 import { registerStartupzRoute } from "./startupz-route.js";
 import {
@@ -609,6 +615,18 @@ export class MeshAgent {
             `param after the args payload), got: ${v}`,
         );
       }
+      // Issue #1593: only the job-dispatch path splices the JobController at
+      // meshJobParamIndex. On a non-task tool both the inline and the worker
+      // path ignore it, so the first dependency proxy silently landed in the
+      // controller's slot and every later dep shifted by one. Same rule and
+      // shape as the retryOn / resumeCursor checks below.
+      if (def.task !== true) {
+        throw new Error(
+          `addTool({ meshJobParamIndex }) for tool '${toolName}': ` +
+            `meshJobParamIndex is only valid with task: true; remove ` +
+            `meshJobParamIndex or set task: true.`,
+        );
+      }
     }
 
     // Issue #894: validate retryOn at registration so misuse fails loud
@@ -722,17 +740,8 @@ export class MeshAgent {
             `pollIntervalMs (${cfg.pollIntervalMs}).`,
         );
       }
-      if (!this._workerMode) {
-        const skillId = cfg.skillId ?? def.capability ?? toolName;
-        a2aClient = this._getOrBuildA2AClient({
-          url: cfg.url,
-          skillId,
-          auth: this._buildBearerFromConfig(cfg.auth),
-          timeoutMs: cfg.timeoutMs,
-          pollIntervalMs: cfg.pollIntervalMs,
-          pollIntervalMaxMs: cfg.pollIntervalMaxMs,
-        });
-      }
+      // The client itself is built below, AFTER the dependency-arity check:
+      // a StrictDIError thrown there must not leave an orphan cached client.
     }
 
     // Worker mode: register the raw execute fn in the worker tool map and
@@ -777,6 +786,33 @@ export class MeshAgent {
       }
     }
 
+    // Issue #1593: excess-dependency diagnostic, mirroring Python's
+    // analyze_injection_strategy. Warns by default; throws StrictDIError at
+    // registration under MCP_MESH_STRICT_DI. Runs before any settle/registry
+    // side effects (and before the A2A client is cached) so a strict-mode
+    // throw leaves no half-registered tool. Returns the edge indices no
+    // parameter can receive — they are not settle keys (Python sets their
+    // settle_keys[i] = None): waiting on a dep nothing reads is pure latency.
+    const surplusEdges = this._checkDependencyArity(
+      toolName,
+      execute,
+      depSlots,
+      normalizedDeps,
+      def,
+    );
+
+    if (def.a2aConfig !== undefined) {
+      const cfg = def.a2aConfig;
+      a2aClient = this._getOrBuildA2AClient({
+        url: cfg.url,
+        skillId: cfg.skillId ?? def.capability ?? toolName,
+        auth: this._buildBearerFromConfig(cfg.auth),
+        timeoutMs: cfg.timeoutMs,
+        pollIntervalMs: cfg.pollIntervalMs,
+        pollIntervalMaxMs: cfg.pollIntervalMaxMs,
+      });
+    }
+
     // The flat edge index of the MeshJob submitter slot (if any). Used by the
     // edge-indexed skip logic below (settle declaration/wait, required guard).
     // For a view-free tool this equals `def.meshJobDepIndex` (slot index ===
@@ -792,7 +828,7 @@ export class MeshAgent {
     // submitter is constructed locally, not resolved by an event.
     const settleState = getSettleState();
     normalizedDeps.forEach((_dep, depIndex) => {
-      if (depIndex !== meshJobEdgeIndex) {
+      if (depIndex !== meshJobEdgeIndex && !surplusEdges.has(depIndex)) {
         settleState.registerDeclared(`${toolName}:dep_${depIndex}`);
       }
     });
@@ -851,7 +887,7 @@ export class MeshAgent {
     // Create wrapper that injects dependencies positionally and handles tracing
     const wrappedExecute = async (
       args: z.infer<T>,
-    ): Promise<string> => {
+    ): Promise<string | undefined> => {
       // Settling-window grace (#1193): while the agent is still settling,
       // wait — bounded by the remaining settle budget — for any declared
       // dep this call would inject that is still unresolved. No-op (single
@@ -863,6 +899,7 @@ export class MeshAgent {
           const depKey = `${toolName}:dep_${depIndex}`;
           if (
             depIndex !== meshJobEdgeIndex &&
+            !surplusEdges.has(depIndex) &&
             !this.resolvedDeps.has(depKey)
           ) {
             pendingSettle.push({ depKey, capability: dep.capability });
@@ -960,12 +997,13 @@ export class MeshAgent {
           }
         }
         // Remove trace context and mesh headers from args before passing to tool.
-        // Keyed on `rawMeshHeaders`, not `propagatedHeaders` (issue #1570): a
-        // request whose only mesh header is `x-mesh-job-id` — a genuine push
-        // dispatch — allowlist-filters to an EMPTY propagated map, and gating
-        // on that would hand the tool's `execute` an internal `_mesh_headers`
-        // field in its arguments.
-        if (incomingTraceId || incomingParentSpan || rawMeshHeaders !== null) {
+        // Keyed on the PRESENCE of the `_mesh_headers` key (issue #1593), like
+        // Python's unconditional `arguments.pop("_mesh_headers", None)`: never
+        // on the allowlist-filtered `propagatedHeaders` (a push dispatch whose
+        // only header is `x-mesh-job-id` filters to an empty map, #1570), and
+        // never on the value's shape (a null or non-object value is still
+        // transport metadata and must not reach `execute`).
+        if (incomingTraceId || incomingParentSpan || "_mesh_headers" in argsObj) {
           const { _trace_id, _parent_span, _mesh_headers, ...rest } = argsObj;
           cleanArgs = rest as z.infer<T>;
         }
@@ -1245,7 +1283,11 @@ export class MeshAgent {
         if (typeof result === "string") {
           return result;
         } else if (result === undefined || result === null) {
-          return "";
+          // #1250 / #1593: a nullish return reaches the wire as an EMPTY
+          // content array (FastMCP builds `{content: []}` from undefined) —
+          // the shape a Python `None` return has, which every consumer reads
+          // back as null. Text "" would be indistinguishable from a real "".
+          return undefined;
         } else {
           // Return JSON-stringified text only — every consumer parses
           // content[0].text back into an object anyway. FastMCP TS will
@@ -1653,6 +1695,82 @@ export class MeshAgent {
   }
 
   /**
+   * Issue #1593: report dependencies that no `execute` parameter can receive.
+   * `execute(args, ...slots)` silently ignores trailing slots beyond its
+   * declared parameters, so an over-declared tool would resolve and advertise
+   * dependencies it never sees. Message shape mirrors Python's excess-
+   * dependency diagnostic in `dependency_injector.analyze_injection_strategy`.
+   *
+   * Injectable parameters are the declared ones after `args`, minus the
+   * JobController slot (`meshJobParamIndex`, task tools only). The A2AClient
+   * is appended AFTER every dependency at runtime, so it never displaces one
+   * and is not counted here; a missing parameter for it is a separate,
+   * never-strict warning (Python has no equivalent, and it is not excess DI).
+   * A signature the scanner cannot read reliably skips the check entirely.
+   *
+   * Returns the flat edge indices of the surplus slots (empty when none, or
+   * when the arity is unknown).
+   */
+  private _checkDependencyArity(
+    toolName: string,
+    execute: Function,
+    depSlots: DepSlot[],
+    edges: NormalizedDependency[],
+    def: { meshJobParamIndex?: number; a2aConfig?: unknown },
+  ): Set<number> {
+    const surplus = new Set<number>();
+    if (depSlots.length === 0 && def.a2aConfig === undefined) return surplus;
+    const params = declaredParameters(execute);
+    if (params === null) return surplus;
+
+    const injectable: string[] = [];
+    params.forEach((param, pos) => {
+      if (pos === 0) return;
+      if (pos === def.meshJobParamIndex) return;
+      injectable.push(parameterLabel(param));
+    });
+
+    if (depSlots.length > injectable.length) {
+      const slotNames = depSlots.map((slot) =>
+        slot.kind === "view" ? slot.name : edges[slot.edgeIndex].capability,
+      );
+      const excess = slotNames.slice(injectable.length);
+      const pairs = injectable.map(
+        (name, i) => `dependencies[${i}] '${slotNames[i]}' → parameter '${name}'`,
+      );
+      const selected =
+        pairs.length > 0 ? pairs.join(", ") : "nothing (no dependencies declared)";
+      warnOrRaise(
+        `Tool '${toolName}' has ` +
+          `${pluralize(depSlots.length, "dependency", "dependencies")} ` +
+          `but only ${pluralize(injectable.length, "injectable parameter")} ` +
+          `(execute parameters after args). Positional pairing (declaration ` +
+          `order) selected: ${selected}. Dependencies ${JSON.stringify(excess)} ` +
+          `will not be injected — no injectable parameter remains for them. ` +
+          `Fix: declare one execute parameter per excess dependency, e.g. ` +
+          `'async (args, ${[...injectable, "extraDep"].join(", ")}) => ...', ` +
+          `or remove the excess entries from dependencies: [...].`,
+      );
+      for (const slot of depSlots.slice(injectable.length)) {
+        if (slot.kind === "view") {
+          for (const m of slot.methods) surplus.add(m.edgeIndex);
+        } else {
+          surplus.add(slot.edgeIndex);
+        }
+      }
+    } else if (def.a2aConfig !== undefined && injectable.length === depSlots.length) {
+      console.warn(
+        `[mesh-tool] Tool '${toolName}' declares a2aConfig but no execute ` +
+          `parameter receives the A2AClient: it is passed after the ` +
+          `${pluralize(depSlots.length, "dependency", "dependencies")}, so ` +
+          `add a trailing parameter for it, e.g. ` +
+          `'async (args, ${[...injectable, "a2a"].join(", ")}) => ...'.`,
+      );
+    }
+    return surplus;
+  }
+
+  /**
    * Build the positional dependency-slot array for one tool call, shared by
    * BOTH the inbound HTTP wrapper (wrappedExecute) and the claim-dispatch
    * path (the ClaimHandler for task:true tools). Centralising this keeps the
@@ -2034,7 +2152,7 @@ export class MeshAgent {
       !registerHealthRoutes(
         this.server,
         this.config.name,
-        () => this.getHealthVerdict(),
+        () => healthReadingFor(!!this.config.healthCheck, this.getHealthVerdict()),
         () => this.getRuntimeState(),
       )
     ) {
@@ -2180,9 +2298,10 @@ export class MeshAgent {
    * Issue #1476: the latest health verdict, or null before the first run
    * completes (or when no `healthCheck` is configured).
    *
-   * Read per request by the `/health` route (#1478); null is answered as
-   * healthy there, so an agent with no `healthCheck` is unaffected by that
-   * endpoint becoming mesh-aware. `/ready` does NOT read this — RFC #1502
+   * Read per request by the `/health` route (#1478). With no `healthCheck`
+   * configured null answers healthy there; with one configured, null means
+   * the first run has not finished and answers 503 "starting" (Python
+   * parity, #1593). `/ready` does NOT read this — RFC #1502
    * put it on the mesh runtime state instead (`getRuntimeState`).
    */
   getHealthVerdict(): HealthVerdict | null {
@@ -2887,17 +3006,19 @@ export class MeshAgent {
 
   /**
    * Get a resolved dependency proxy by capability name.
-   * Returns the first matching proxy if multiple tools depend on the same capability.
+   * Returns the first RESOLVED proxy across every slot declaring the
+   * capability (issue #1593: an unresolved earlier slot no longer hides a
+   * resolved later one), or null when none is resolved.
    *
    * For more precise lookup, use getDependencyByKey with composite key "toolName:dep_index".
    */
   getDependency(capability: string): McpMeshTool | null {
-    // Find first matching capability in any tool
     for (const [toolName, meta] of this.tools.entries()) {
       if (!meta.dependencies) continue;
-      const depIndex = meta.dependencies.findIndex((d) => d.capability === capability);
-      if (depIndex >= 0) {
-        return this.resolvedDeps.get(`${toolName}:dep_${depIndex}`) ?? null;
+      for (let depIndex = 0; depIndex < meta.dependencies.length; depIndex++) {
+        if (meta.dependencies[depIndex].capability !== capability) continue;
+        const proxy = this.resolvedDeps.get(`${toolName}:dep_${depIndex}`) ?? null;
+        if (proxy !== null) return proxy;
       }
     }
     return null;

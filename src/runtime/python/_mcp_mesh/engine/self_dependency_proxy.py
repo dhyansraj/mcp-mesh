@@ -1,5 +1,6 @@
 """Self-dependency proxy for direct function calls within the same process."""
 
+import inspect
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -44,11 +45,70 @@ class SelfDependencyProxy:
         This is the fastest possible path - direct function invocation
         with no conditionals, searches, or protocol overhead.
         """
+        # Per-call ``headers=`` is transport metadata, never a tool argument —
+        # popped exactly as ``UnifiedMCPProxy.__call__`` pops it (issue #1593).
+        # A self-call has no wire, so the headers apply as this invocation's
+        # propagated-header scope, which is what a remote callee would see.
+        per_call_headers = kwargs.pop("headers", None)
+        scoped_headers = self._scoped_headers(per_call_headers)
+
         self.logger.info(
             f"🔄 SELF-CALL: Direct invocation of '{self.function_name}' (bypassing HTTP)"
         )
         self.logger.debug(f"🔄 Direct call args: {kwargs}")
 
+        if scoped_headers is None:
+            return self._invoke(kwargs)
+
+        from ..tracing.context import TraceContext
+
+        previous = TraceContext.get_propagated_headers()
+        TraceContext.set_propagated_headers(scoped_headers)
+        try:
+            result = self._invoke(kwargs)
+        finally:
+            TraceContext.set_propagated_headers(previous)
+        if inspect.isawaitable(result):
+            # An async target runs when the caller awaits it, after this frame
+            # has restored the outer scope — re-enter the scope for that await.
+            return self._await_in_scope(result, scoped_headers)
+        return result
+
+    @staticmethod
+    def _scoped_headers(per_call_headers: dict[str, str] | None) -> dict | None:
+        """Propagated headers for this call, merged the way the remote proxy
+        merges per-call headers: allowlist-filtered, keys lowercased, per-call
+        wins, and the inbound-only dispatch headers scrubbed (#1570).
+        ``None`` when there is nothing to apply."""
+        if not per_call_headers:
+            return None
+        from ..tracing.context import (
+            DISPATCH_HEADERS,
+            TraceContext,
+            matches_propagate_header,
+        )
+
+        merged = dict(TraceContext.get_propagated_headers())
+        for key, value in per_call_headers.items():
+            if matches_propagate_header(key):
+                merged[key.lower()] = value
+        for dispatch_only in DISPATCH_HEADERS:
+            merged.pop(dispatch_only, None)
+        return merged
+
+    @staticmethod
+    async def _await_in_scope(awaitable: Any, headers: dict[str, str]) -> Any:
+        from ..tracing.context import TraceContext
+
+        previous = TraceContext.get_propagated_headers()
+        TraceContext.set_propagated_headers(headers)
+        try:
+            return await awaitable
+        finally:
+            TraceContext.set_propagated_headers(previous)
+
+    def _invoke(self, kwargs: dict) -> Any:
+        """Run the original function under self-dependency tracing."""
         # ===== EXECUTE WITH SELF-DEPENDENCY TRACING =====
         from ..tracing.execution_tracer import ExecutionTracer
 

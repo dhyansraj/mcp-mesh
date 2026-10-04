@@ -23,6 +23,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { deserializeError } from "./worker-error-serde.js";
+import { getTracingAgentMetadata } from "./tracing.js";
 
 export interface DepConfig {
   endpoint: string;
@@ -137,6 +138,9 @@ function _spawnWorker(slot: WorkerSlot, slotIdx: number): void {
       userModulePath,
       sdkEntryPath,
       slotIdx,
+      // Issue #1593: the worker initializes its own tracing state from this
+      // (null when tracing is off), so outbound spans are not dropped.
+      tracingAgentMetadata: getTracingAgentMetadata(),
     },
   });
 

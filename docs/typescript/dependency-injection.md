@@ -50,6 +50,8 @@ agent.addTool({
 
 **How pairing works**: Dependencies are injected **by position** as parameters after the first `args` parameter, in declaration order (`dependencies[0]`, `dependencies[1]`, ...), and arrive as `null` if unavailable. Parameter names are never consulted, so they are yours to choose; pick whatever reads best.
 
+Declaring more dependencies than `execute` has parameters after `args` is reported at `addTool` time: the surplus would be resolved and advertised but injected nowhere. It warns by default; `MCP_MESH_STRICT_DI=true` makes `addTool` throw `StrictDIError` instead. A rest parameter (`...deps`) accepts any count and is never reported. The check reads the function's source, so it skips any function it cannot read reliably - transpiled code that uses `arguments`, wrappers such as memoizers, unusual method keys. It also cannot see parameters a minifier dropped (terser `keep_fargs: false`); keep argument names in bundles you run under `MCP_MESH_STRICT_DI`.
+
 ### `mesh.route` and `mesh.a2a.mount`
 
 The same rule, in array form. `mesh.route` hands the handler a positional `deps` array as its third argument; `mesh.a2a.mount` hands it as the first. `deps[i]` is the proxy for the i-th declared dependency, or `null` when it is not currently resolved:

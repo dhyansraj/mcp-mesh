@@ -122,6 +122,17 @@ export async function initTracing(agentMetadata: AgentMetadata): Promise<boolean
 }
 
 /**
+ * The agent metadata tracing was initialized with, or null when tracing is
+ * disabled or not initialized. Handed to tool worker threads (issue #1593)
+ * so outbound spans published from an isolated tool carry the same agent
+ * identity — worker threads have their own module state and would otherwise
+ * drop every span.
+ */
+export function getTracingAgentMetadata(): AgentMetadata | null {
+  return tracingEnabled ? currentAgentMetadata : null;
+}
+
+/**
  * Check if tracing is currently available.
  */
 export async function isTracingAvailable(): Promise<boolean> {

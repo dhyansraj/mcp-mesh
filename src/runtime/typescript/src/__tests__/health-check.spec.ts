@@ -18,6 +18,8 @@ import {
   startHealthCheckLoop,
   describeThrown,
   __resetNullStatusWarning,
+  __resetUnusableChecksWarning,
+  sanitizeChecks,
   DEFAULT_HEALTH_CHECK_TTL_SECONDS,
   HEALTH_CHECK_TTL_ENV,
   type MeshHealthStatus,
@@ -124,14 +126,22 @@ describe("normalizeHealthResult — verdict table", () => {
     expect(normalizeHealthResult(raw).status).toBe("degraded");
   });
 
-  it("tolerates non-object checks and non-array errors", () => {
+  it("reports non-object checks and keeps a bare-string error (Python parity)", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    __resetUnusableChecksWarning();
     const verdict = normalizeHealthResult({
       status: "healthy",
       checks: "nope" as unknown as Record<string, unknown>,
       errors: "nope" as unknown as string[],
     });
-    expect(verdict.checks).toEqual({});
-    expect(verdict.errors).toEqual([]);
+    // The verdict stands; the unusable detail is dropped and described.
+    expect(verdict.status).toBe("healthy");
+    expect(verdict.checks).toEqual({ health_check_checks_type: false });
+    expect(verdict.errors).toEqual([
+      "nope",
+      "Unusable `checks`: expected a dict of name -> bool, got string.",
+    ]);
+    warn.mockRestore();
   });
 
   it("stringifies non-string error entries instead of leaking them", () => {
@@ -140,6 +150,88 @@ describe("normalizeHealthResult — verdict table", () => {
       errors: [new Error("boom"), 7] as unknown as string[],
     });
     expect(verdict.errors).toEqual(["boom", "7"]);
+  });
+});
+
+describe("unusable checks values (#1593, Python #1556 parity)", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    __resetUnusableChecksWarning();
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+  afterEach(() => warnSpy.mockRestore());
+
+  it("coerces the boolean spellings Pydantic accepts", () => {
+    const [checks, rejections] = sanitizeChecks({
+      a: true, b: false, c: 1, d: 0, e: "TRUE", f: "off", g: "y", h: "N",
+    });
+    expect(rejections).toEqual([]);
+    expect(checks).toEqual({
+      a: true, b: false, c: true, d: false, e: true, f: false, g: true, h: false,
+    });
+  });
+
+  it("drops and reports non-bool values without changing the verdict", () => {
+    const verdict = normalizeHealthResult({
+      status: "unhealthy",
+      checks: { db: true, disk_space: "ok", latency: 12, nested: { x: 1 }, gone: null },
+      errors: ["db slow"],
+    });
+    expect(verdict.status).toBe("unhealthy");
+    expect(verdict.checks).toEqual({ db: true, health_check_checks_type: false });
+    expect(verdict.errors[0]).toBe("db slow");
+    expect(verdict.errors).toContain(
+      `Unusable check 'disk_space': "ok" is a string, not a bool.`,
+    );
+    expect(verdict.errors).toContain(
+      "Unusable check 'latency': 12 is a number, not a bool.",
+    );
+    expect(verdict.errors).toContain(
+      "Unusable check 'gone': null is a null, not a bool.",
+    );
+    expect(verdict.errors).toHaveLength(5);
+  });
+
+  it("warns once per process, not per refresh", () => {
+    normalizeHealthResult({ checks: { x: "bad" } }, "agent-1");
+    normalizeHealthResult({ checks: { x: "bad" } }, "agent-1");
+    const warnings = warnSpy.mock.calls
+      .map((c) => String(c[0]))
+      .filter((m) => m.includes("could not use"));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("'agent-1'");
+  });
+
+  it("a throwing getter costs only its own entry (Python parity)", () => {
+    const checks = {
+      db: true,
+      get flaky(): boolean {
+        throw new Error("getter boom");
+      },
+      cache: "yes",
+    };
+    const verdict = normalizeHealthResult({ status: "healthy", checks });
+    expect(verdict.status).toBe("healthy");
+    expect(verdict.checks).toEqual({
+      db: true,
+      cache: true,
+      health_check_checks_type: false,
+    });
+    expect(verdict.errors).toEqual([
+      "Unusable check 'flaky': reading it raised getter boom.",
+    ]);
+  });
+
+  it("survives a checks object whose enumeration throws", () => {
+    const hostile = new Proxy({}, {
+      ownKeys() {
+        throw new Error("boom");
+      },
+    });
+    const verdict = normalizeHealthResult({ status: "healthy", checks: hostile });
+    expect(verdict.status).toBe("healthy");
+    expect(verdict.checks).toEqual({ health_check_checks_type: false });
+    expect(verdict.errors[0]).toContain("raised boom");
   });
 });
 

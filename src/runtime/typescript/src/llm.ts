@@ -49,6 +49,18 @@ import { debug } from "./debug.js";
 import { generateTraceId, generateSpanId, publishTraceSpan, matchesPropagateHeader } from "./tracing.js";
 import type { TraceContext, SpanData } from "./tracing.js";
 import { runWithTraceContext, runWithPropagatedHeaders } from "./proxy.js";
+import { getSettleState } from "./settle.js";
+
+/**
+ * Settle key for a `mesh.llm` consumer's provider slot (issue #1593, Python
+ * #1456). Keyed on the CONSUMER function id, never the provider capability:
+ * providers resolve per consumer (`llm_provider_available` carries the
+ * consumer's function id), so the key must be 1:1 with the slot a woken
+ * waiter re-reads.
+ */
+export function llmSettleKey(functionId: string): string {
+  return `llm:${functionId}`;
+}
 
 /**
  * Registry for LLM tools - stores configuration and resolved dependencies.
@@ -264,6 +276,12 @@ export function llm<
   // Register with LLM tool registry
   registry.register(functionId, llmConfig);
 
+  // Settling-window grace (#1456 parity): declare this consumer's provider
+  // slot so a call landing before the provider resolves waits on the
+  // remaining settle budget instead of running with no provider.
+  const settleKey = llmSettleKey(functionId);
+  getSettleState().registerDeclared(settleKey);
+
   // Create MeshLlmAgent once (cached for reuse)
   const agent = new MeshLlmAgent({
     functionId,
@@ -308,7 +326,7 @@ export function llm<
         }
       }
       // Remove trace context and mesh headers from args before passing to tool
-      if (incomingTraceId || incomingParentSpan || argsObj._mesh_headers || Object.keys(propagatedHeaders).length > 0) {
+      if (incomingTraceId || incomingParentSpan || "_mesh_headers" in argsObj) {
         const { _trace_id, _parent_span, _mesh_headers, ...rest } = argsObj;
         cleanArgs = rest as z.infer<TParams>;
       }
@@ -337,6 +355,23 @@ export function llm<
         return await runWithPropagatedHeaders(propagatedHeaders, async () => {
           try {
             debug.llm(`Executing ${functionId} with args:`, JSON.stringify(cleanArgs));
+
+            // Settling-window grace (#1456 parity): while the agent is still
+            // settling and this consumer's provider has not resolved, wait —
+            // bounded by the remaining budget — before reading it. On expiry
+            // the call proceeds exactly as before (no provider).
+            const settleState = getSettleState();
+            if (
+              !settleState.isSettled() &&
+              registry.getResolvedProvider(functionId) === undefined
+            ) {
+              await settleState.awaitPending([
+                {
+                  depKey: settleKey,
+                  capability: `${llmConfig.provider.capability} (LLM provider for ${functionId})`,
+                },
+              ]);
+            }
 
             // Get resolved tools and provider
             const tools = registry.getResolvedTools(functionId);
@@ -550,6 +585,9 @@ export function handleLlmProviderAvailable(
     model: providerInfo.model,
     agentId: providerInfo.agentId,
   });
+  // Wake any settling call parked on this consumer's provider slot AFTER the
+  // provider is stored, so the woken call re-reads a real provider.
+  getSettleState().markResolved(llmSettleKey(functionId));
   debug.llm(`Provider stored for ${functionId}`);
 }
 

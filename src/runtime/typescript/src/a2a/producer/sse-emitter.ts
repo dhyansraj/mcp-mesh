@@ -119,7 +119,7 @@ export function buildSseDispatcherMiddleware(deps: DispatcherDeps): RequestHandl
     let plan: SseStreamPlan;
     try {
       if (method === "tasks/sendSubscribe") {
-        plan = await buildSendSubscribeStream(reqId, params, deps);
+        plan = await buildSendSubscribeStream(reqId, params, deps, req.headers);
       } else {
         plan = buildResubscribeStream(reqId, params, deps.taskStore);
       }

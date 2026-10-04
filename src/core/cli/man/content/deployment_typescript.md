@@ -229,7 +229,7 @@ There are four of them, and Kubernetes probes must not share one:
 - `/startupz` - `startupProbe`. Reports your `startupCheck`; an agent that declares none passes.
 - `/livez` - `livenessProbe`. 200 for as long as the process is serving; consults nothing else.
 - `/ready` - `readinessProbe`. Whether the mesh runtime is up. Your `healthCheck` does not reach it: a failing check pauses the heartbeat and the registry stops resolving to this agent, which is the whole withdrawal, and a 503 here would also empty the Service that mesh traffic arrives on.
-- `/health` - no probe. Your `healthCheck`'s verdict plus the `checks` and `errors` it returned, answering 200 only while it reports `healthy`. An agent with no `healthCheck` - or one whose first run has not finished - is healthy, so it is unaffected.
+- `/health` - no probe. Your `healthCheck`'s verdict plus the `checks` and `errors` it returned, answering 200 only while it reports `healthy`. An agent with no `healthCheck` is healthy, so it is unaffected; one whose first run has not finished answers 503 with status `starting`.
 
 `/health` answers 503 whenever the check is not reporting `healthy`, so pointing liveness at it turns a vendor outage into a pod restart, which cannot fix it. Probe Wiring below has the manifest.
 
