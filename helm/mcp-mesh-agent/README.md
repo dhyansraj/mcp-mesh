@@ -301,9 +301,6 @@ serviceMonitor:
   interval: 30s
   labels:
     prometheus: kube-prometheus
-
-mesh:
-  metricsEnabled: true
 ```
 
 ## Troubleshooting

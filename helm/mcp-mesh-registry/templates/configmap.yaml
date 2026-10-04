@@ -16,27 +16,28 @@ metadata:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 data:
-  # Database configuration - matches working K8s examples
-  DATABASE_TYPE: {{ .Values.registry.database.type | quote }}
-  {{- if eq .Values.registry.database.type "sqlite" }}
-  DATABASE_PATH: {{ .Values.registry.database.path | quote }}
-  {{- else }}
-  {{- /* Silent invocation so an invalid sslmode fails in every mode,
-         including database.existingSecret. */}}
+  {{- /* The registry reads only DATABASE_URL, so no decomposed DATABASE_*
+         variables are rendered. The deployment sets DATABASE_URL for
+         postgres only (chart Secret, existing-secret DSN, or composed via
+         $(DATABASE_PASSWORD)); sqlite and mysql get none, and the binary
+         falls back to a relative mcp_mesh_registry.db. Silent invocation so
+         an invalid sslmode fails in every non-sqlite mode, including
+         database.existingSecret with a full DSN. */}}
+  {{- if ne .Values.registry.database.type "sqlite" }}
   {{- $_ := include "mcp-mesh-registry.databaseSSLMode" . }}
-  DATABASE_HOST: {{ $db.host | quote }}
-  DATABASE_PORT: {{ $db.port | int | quote }}
-  DATABASE_NAME: {{ $db.name | quote }}
-  DATABASE_USERNAME: {{ $db.username | quote }}
   {{- end }}
-
   # Registry server configuration - matches working K8s examples
   HOST: {{ .Values.registry.host | quote }}
   PORT: {{ .Values.registry.port | quote }}
 
   # Logging configuration - matches working K8s examples
+  {{- /* hasKey instead of `default` for booleans and durations: Sprig
+         `default` treats false and 0 as unset, so `debug: false` /
+         `enabled: false` would render "true" and `retention: 0` (unquoted)
+         would render "24h". */}}
   MCP_MESH_LOG_LEVEL: {{ .Values.registry.logging.level | default "DEBUG" | quote }}
-  MCP_MESH_DEBUG_MODE: {{ .Values.registry.logging.debug | default "true" | quote }}
+  {{- $logging := .Values.registry.logging | default dict }}
+  MCP_MESH_DEBUG_MODE: {{ hasKey $logging "debug" | ternary $logging.debug true | toString | quote }}
 
   # Connection pool configuration
   DB_CONNECTION_TIMEOUT: "30"
@@ -53,9 +54,6 @@ data:
   REGISTRY_NAME: {{ .Values.registry.name | default "mcp-mesh-registry" | quote }}
 
   # Observability configuration - matches Docker setup
-  {{- /* hasKey instead of `default`: Sprig `default` treats false and 0 as
-         unset, so `enabled: false` would render "true" and `retention: 0`
-         (unquoted) would render "24h". */}}
   {{- $dt := ((.Values.registry.observability).distributedTracing) | default dict }}
   MCP_MESH_DISTRIBUTED_TRACING_ENABLED: {{ hasKey $dt "enabled" | ternary $dt.enabled true | toString | quote }}
   MCP_MESH_TRACE_RETENTION: {{ hasKey $dt "retention" | ternary $dt.retention "24h" | toString | quote }}

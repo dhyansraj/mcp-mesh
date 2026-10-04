@@ -185,8 +185,6 @@ mesh:
   enabled: true
   debug: true
   logLevel: "DEBUG"
-  tracingEnabled: true
-  metricsEnabled: true
 
   # TLS configuration for agent-to-registry communication
   tls:
@@ -292,10 +290,6 @@ agent:
     # OTLP endpoint for trace export. Empty defaults to
     # "<global.coreReleaseName>-mcp-mesh-tempo:4317".
     telemetryEndpoint: ""
-    tracing:
-      enabled: true
-    metrics:
-      enabled: true
 # Duplicate registry and mesh sections removed - see lines 85-97 for the main definitions
 
 # ConfigMap for agent code

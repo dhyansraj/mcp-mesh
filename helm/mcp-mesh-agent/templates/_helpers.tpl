@@ -138,6 +138,17 @@ file copied from it carries those entries without any user intent, so
 entries exactly matching the old shipped defaults are tolerated; only a
 divergent value or an extra entry — user intent that would silently
 no-op — fails.
+
+The four observability switches below were shipped as `true` and never had
+an effect: mesh.tracingEnabled and mesh.metricsEnabled were never rendered,
+and agent.observability.{tracing,metrics}.enabled rendered
+MCP_MESH_TRACING_ENABLED / MCP_MESH_METRICS_ENABLED, which no runtime reads.
+The shipped `true` is tolerated (a copied values file, no intent); any other
+value is someone trying to turn something off and fails:
+- the tracing switches map to the real one,
+  agent.observability.distributedTracing.enabled;
+- the metrics switches never had a feature behind them; scraping is opted
+  into with serviceMonitor.enabled.
 */}}
 {{- define "mcp-mesh-agent.validateNoRemovedKeys" -}}
 {{/* Old shipped defaults, verbatim from the v2.4.0 chart values.yaml. */}}
@@ -152,6 +163,32 @@ no-op — fails.
 {{- fail (printf "agent.environment was never consumed and has been removed (entry %s is not in the old shipped defaults, so it would silently no-op); add environment variables via the top-level env list (name/value entries) instead. REDIS_URL is derived from global.redis / agent.observability.distributedTracing.redisUrl" $key) -}}
 {{- else if ne (toString $val) (get $oldEnvironmentDefaults $key) -}}
 {{- fail (printf "agent.environment was never consumed and has been removed (%s=%q diverges from the old shipped default %q, so it would silently no-op); add environment variables via the top-level env list (name/value entries) instead. REDIS_URL is derived from global.redis / agent.observability.distributedTracing.redisUrl" $key (toString $val) (get $oldEnvironmentDefaults $key)) -}}
+{{- end -}}
+{{- end -}}
+{{- $mesh := .Values.mesh | default dict -}}
+{{- $obs := (dig "observability" (dict) (.Values.agent | default dict)) | default dict -}}
+{{- $tracingMsg := "was never consumed and has been removed (set to %s, so it would silently no-op). Use agent.observability.distributedTracing.enabled — the only tracing switch the agent reads" -}}
+{{- $metricsMsg := "was never consumed and has been removed (set to %s, so it would silently no-op): agents have no metrics switch. Prometheus scraping is opted into with serviceMonitor.enabled" -}}
+{{- /* nil (a carried `key: ~`) carries no intent and passes, like the
+       shipped `true`. */ -}}
+{{- range $key, $msg := dict "tracingEnabled" $tracingMsg "metricsEnabled" $metricsMsg -}}
+{{- $val := get $mesh $key -}}
+{{- if and (hasKey $mesh $key) (not (kindIs "invalid" $val)) (ne (toString $val) "true") -}}
+{{- fail (printf (printf "mesh.%s %s" $key $msg) (toString $val)) -}}
+{{- end -}}
+{{- end -}}
+{{- range $switch, $msg := dict "tracing" $tracingMsg "metrics" $metricsMsg -}}
+{{- $block := get $obs $switch -}}
+{{- if not (hasKey $obs $switch) -}}
+{{- else if kindIs "map" $block -}}
+{{- range $key, $val := $block -}}
+{{- if and (not (kindIs "invalid" $val)) (or (ne $key "enabled") (ne (toString $val) "true")) -}}
+{{- fail (printf (printf "agent.observability.%s.%s %s" $switch $key $msg) (toString $val)) -}}
+{{- end -}}
+{{- end -}}
+{{- else if and (not (kindIs "invalid" $block)) (ne (toString $block) "true") -}}
+{{- /* A scalar in place of the block (e.g. `tracing: false`). */ -}}
+{{- fail (printf (printf "agent.observability.%s %s" $switch $msg) (toString $block)) -}}
 {{- end -}}
 {{- end -}}
 {{- end }}

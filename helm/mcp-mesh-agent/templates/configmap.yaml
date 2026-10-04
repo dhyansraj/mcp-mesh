@@ -36,16 +36,16 @@ data:
   MCP_MESH_HTTP_HOST: {{ $advertisedHost | quote }}
 
   # Environment defaults (can be overridden) - matches working examples
-  MCP_MESH_HTTP_ENABLED: {{ .Values.agent.http.enabled | default true | quote }}
+  {{- /* hasKey instead of `default` for booleans: Sprig `default` treats
+         false as unset, so `enabled: false` would render "true". */}}
+  MCP_MESH_HTTP_ENABLED: {{ hasKey .Values.agent.http "enabled" | ternary .Values.agent.http.enabled true | toString | quote }}
   MCP_MESH_HTTP_PORT: {{ .Values.agent.http.port | default 8080 | quote }}
   MCP_MESH_LOG_LEVEL: {{ .Values.mesh.logLevel | default "INFO" | quote }}
   MCP_MESH_DEBUG_MODE: {{ .Values.mesh.debug | default false | quote }}
-  MCP_MESH_ENABLED: {{ .Values.mesh.enabled | default true | quote }}
+  MCP_MESH_ENABLED: {{ hasKey .Values.mesh "enabled" | ternary .Values.mesh.enabled true | toString | quote }}
   MCP_MESH_AUTO_RUN: "true"
   MCP_MESH_AUTO_RUN_INTERVAL: "5"
   MCP_MESH_HEALTH_INTERVAL: "5"
-  MCP_MESH_DYNAMIC_UPDATES: "true"
-  MCP_MESH_UPDATE_STRATEGY: "immediate"
   MCP_MESH_NAMESPACE: "default"
   HOST: "0.0.0.0"
 
@@ -61,10 +61,9 @@ data:
   {{- end }}
 
   # Observability configuration - matches Docker setup
-  MCP_MESH_DISTRIBUTED_TRACING_ENABLED: {{ .Values.agent.observability.distributedTracing.enabled | default true | quote }}
+  {{- $dt := ((.Values.agent.observability).distributedTracing) | default dict }}
+  MCP_MESH_DISTRIBUTED_TRACING_ENABLED: {{ hasKey $dt "enabled" | ternary $dt.enabled true | toString | quote }}
   TELEMETRY_ENDPOINT: {{ .Values.agent.observability.telemetryEndpoint | default (printf "%s-mcp-mesh-tempo:4317" $corePrefix) | quote }}
-  MCP_MESH_TRACING_ENABLED: {{ .Values.agent.observability.tracing.enabled | default true | quote }}
-  MCP_MESH_METRICS_ENABLED: {{ .Values.agent.observability.metrics.enabled | default true | quote }}
 
   # TLS configuration for agent-to-registry communication
   {{- if .Values.mesh.tls.mode }}

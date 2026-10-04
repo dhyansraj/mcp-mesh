@@ -161,6 +161,9 @@ registry:
     path: "/data/registry.db"
     # Database type (sqlite, postgres, mysql)
     type: "postgres" # Default to postgres like working examples
+    # Block registry startup on a wait-for-db init container until the
+    # database host:port accepts connections (non-sqlite only).
+    waitForDatabase: true
     # For external databases (postgres/mysql)
     host: "" # default: mcp-mesh-postgres
     port: null # default: 5432
@@ -191,8 +194,8 @@ registry:
     #    URL-safe. sslmode and tls.* apply; the username comes from
     #    registry.database.username.
     #
-    # In both modes registry.database.{host,port,name,username} still feed the
-    # configmap and the wait-for-db init container.
+    # In both modes registry.database.{host,port} still feed the wait-for-db
+    # init container.
     existingSecret: ""
     # Key holding a complete DSN in the existing secret (mode 1). Empty
     # selects mode 2. The chart's own Secret uses "database-url" for this.
@@ -256,16 +259,6 @@ registry:
 
     # Admin API port (0 = admin endpoints on main port)
     adminPort: 0
-
-    # Authentication
-    auth:
-      enabled: false
-      type: "token" # token, basic, oauth2
-      # For token auth
-      tokens: []
-      # Use existing secret for tokens
-      existingSecret: ""
-      secretKey: "tokens"
 
   # Observability configuration - matches Docker setup
   observability:

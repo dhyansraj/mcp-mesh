@@ -1135,19 +1135,6 @@ export HEALTH_CHECK_INTERVAL=10
 - Background monitor detects unhealthy agents and creates events
 - Other agents get notified via 202 responses on their HEAD checks
 
-### Dynamic Updates
-
-```bash
-# Enable dynamic capability updates
-export MCP_MESH_DYNAMIC_UPDATES=true
-
-# Update strategy (immediate, graceful)
-export MCP_MESH_UPDATE_STRATEGY=graceful
-
-# Grace period for updates (seconds)
-export MCP_MESH_UPDATE_GRACE_PERIOD=30
-```
-
 ## Real-World Examples
 
 ### Multi-Service Development
@@ -1330,8 +1317,6 @@ MCP_MESH_REGISTRY_URL=https://registry.company.com
 MCP_MESH_NAMESPACE=production
 MCP_MESH_AUTO_RUN_INTERVAL=30
 MCP_MESH_HEALTH_INTERVAL=30
-MCP_MESH_UPDATE_STRATEGY=graceful
-MCP_MESH_UPDATE_GRACE_PERIOD=60
 MCP_MESH_HTTP_HOST=0.0.0.0
 ```
 
