@@ -136,7 +136,8 @@ grafana:
       enabled: true
       # Tempo query URL. Empty derives http://<release>-mcp-mesh-tempo:3200,
       # the bundled Tempo of the mcp-mesh-core release this chart is part of.
-      # Set it for any other Tempo; a value containing "{{ }}" is rendered
+      # Set it for any other Tempo, or when the tempo subchart has a
+      # nameOverride/fullnameOverride; a value containing "{{ }}" is rendered
       # with tpl.
       url: ""
     prometheus:

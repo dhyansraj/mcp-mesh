@@ -24,7 +24,7 @@ meshctl scaffold basic --name my-agent
 cd my-agent
 docker buildx build --platform linux/amd64 -t myregistry/my-agent:v1.0.0 --push .
 
-helm install my-agent ./helm/mcp-mesh-agent -n mcp-mesh \
+helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent -n mcp-mesh \
   -f helm-values.yaml \
   --set image.repository=myregistry/my-agent \
   --set image.tag=v1.0.0

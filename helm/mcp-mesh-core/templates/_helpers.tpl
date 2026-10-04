@@ -106,7 +106,12 @@ namespace.yaml.
 {{- define "mcp-mesh-core.validateExternalDatabase" -}}
 {{- if not .Values.postgres.enabled -}}
 {{- $g := dig "postgres" (dict) (.Values.global | default dict) | default dict -}}
-{{- $bundled := list (printf "%s-mcp-mesh-postgres" .Release.Name) "mcp-core-mcp-mesh-postgres" -}}
+{{- /* The bundled Service follows the postgres chart's fullname rule (a
+       release name already containing the chart name is used as-is), plus
+       the shipped global default and the consumers' own fallback when no
+       host is set at any layer. */ -}}
+{{- $pgService := ternary .Release.Name (printf "%s-mcp-mesh-postgres" .Release.Name) (contains "mcp-mesh-postgres" .Release.Name) | trunc 63 | trimSuffix "-" -}}
+{{- $bundled := list $pgService "mcp-core-mcp-mesh-postgres" "mcp-mesh-postgres" -}}
 {{- $consumers := list -}}
 {{- $reg := index .Values "mcp-mesh-registry" | default dict -}}
 {{- $regDb := dig "registry" "database" (dict) $reg | default dict -}}

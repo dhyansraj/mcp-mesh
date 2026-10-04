@@ -156,6 +156,13 @@ can be tuned or replaced (for an `exec` handler, also set `httpGet: null`);
 `null` restores a probe's default. All three use `GET /health`, which never
 consults the database or any dependency.
 
+With `registry.security.tls` on (`tls.enabled` and `tls.mode` `auto` or
+`strict`) the main port serves only HTTPS, so an `httpGet` probe without an
+explicit `scheme` is rendered with `scheme: HTTPS`. In `strict` mode every
+request without a client certificate gets 403, `/health` included, and the
+kubelet presents none, so those probes are rendered as `tcpSocket` checks of
+the same port instead.
+
 | Parameter                             | Description                    | Default |
 | ------------------------------------- | ------------------------------ | ------- |
 | `startupProbe.failureThreshold`       | Startup attempts, 10s apart    | `30`    |
@@ -375,7 +382,8 @@ is what makes multiple replicas safe for tracing — see
 `persistence` stays off. The TLS block assumes a `registry-tls` Secret (for
 example from a cert-manager `Certificate`) and entity CAs published as
 Secrets labelled for the `k8s-secrets` trust backend; see `meshctl man
-security`.
+security`. With `mode: strict` the probes become `tcpSocket` checks, since the
+kubelet cannot present a client certificate (see [Probes](#probes)).
 
 ```yaml
 resources:

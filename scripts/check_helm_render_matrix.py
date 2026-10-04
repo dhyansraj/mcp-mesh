@@ -122,6 +122,7 @@ class Case:
     probe_specs: dict[str, dict | None] | None = None
     forbids_kinds: tuple[str, ...] = field(default_factory=tuple)
     env_unique: tuple[str, ...] = field(default_factory=tuple)
+    release: str = "render-matrix"
     routes_to: tuple[tuple[str, str, tuple[str, ...]], ...] = field(
         default_factory=tuple
     )
@@ -1203,6 +1204,104 @@ CASES: list[Case] = [
             ),
         ),
     ),
+    Case(
+        "mcp-mesh-core",
+        "postgres off with no host at any layer falls back to a bundled name",
+        {
+            "postgres": {"enabled": False},
+            "global": {"postgres": {"host": "", "password": "x"}},
+        },
+        expect_fail="the registry still connects to it (mcp-mesh-postgres)",
+    ),
+    # --- #1633 review: registry probes under TLS ---------------------------
+    Case(
+        "mcp-mesh-registry",
+        "TLS auto: probes speak HTTPS to the HTTPS-only port",
+        {
+            "registry": {
+                "security": {
+                    "tls": {"enabled": True, "mode": "auto", "secretName": "reg-tls"},
+                    "trust": {"backend": "k8s-secrets"},
+                }
+            }
+        },
+        probe_specs={
+            name: {**spec, "httpGet": {**spec["httpGet"], "scheme": "HTTPS"}}
+            for name, spec in REGISTRY_PROBES_BEFORE_1574.items()
+        },
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "TLS strict: certless probes would get 403, so they check the socket",
+        {
+            "registry": {
+                "security": {
+                    "tls": {"enabled": True, "mode": "strict", "secretName": "reg-tls"},
+                    "trust": {"backend": "k8s-secrets"},
+                }
+            }
+        },
+        probe_specs={
+            name: {
+                **{k: v for k, v in spec.items() if k != "httpGet"},
+                "tcpSocket": {"port": "http"},
+            }
+            for name, spec in REGISTRY_PROBES_BEFORE_1574.items()
+        },
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "TLS strict leaves a probe with an explicit scheme alone",
+        {
+            "registry": {
+                "security": {
+                    "tls": {"enabled": True, "mode": "strict", "secretName": "reg-tls"},
+                    "trust": {"backend": "k8s-secrets"},
+                }
+            },
+            "livenessProbe": {"httpGet": {"scheme": "HTTP"}},
+        },
+        probe_specs={
+            "livenessProbe": {
+                **REGISTRY_PROBES_BEFORE_1574["livenessProbe"],
+                "httpGet": {"path": "/health", "port": "http", "scheme": "HTTP"},
+            }
+        },
+    ),
+    Case(
+        "mcp-mesh-registry",
+        "a moved sqlite volume with envFrom renders no DATABASE_URL over it",
+        {
+            "registry": {"database": {"type": "sqlite"}},
+            "persistence": {"mountPath": "/var/lib/registry"},
+            "envFrom": [{"secretRef": {"name": "registry-db"}}],
+        },
+        forbids_env=("DATABASE_URL",),
+    ),
+    # --- #1633 review: derived names follow the component fullname rule ----
+    Case(
+        "mcp-mesh-ingress",
+        "a core release named after a component chart routes to its Service",
+        {"global": {"coreReleaseName": "mcp-mesh-registry"}},
+        routes_to=(("mcp-mesh-core", "mcp-mesh-registry", ()),),
+    ),
+    Case(
+        "mcp-mesh-ingress",
+        "a templated agent service is rendered with tpl",
+        {
+            "agents": [
+                {"name": "hello", "service": "{{ .Release.Name }}-mcp-mesh-agent"}
+            ]
+        },
+        routes_to=(CORE_AT_MCP_CORE, ("mcp-mesh-agent", "render-matrix", ())),
+    ),
+    Case(
+        "mcp-mesh-grafana",
+        "a release named after the tempo chart uses the tempo chart's fullname",
+        {"grafana": {"config": {"adminPassword": "x"}}},
+        release="mcp-mesh-tempo",
+        config_contains={"datasources.yaml": "url: http://mcp-mesh-tempo:3200"},
+    ),
     # --- #1574: agent.http.enabled off makes a valid non-HTTP agent --------
     Case(
         "mcp-mesh-agent",
@@ -1369,7 +1468,7 @@ def run_case(case: Case, values_file: Path) -> str | None:
         [
             "helm",
             "template",
-            "render-matrix",
+            case.release,
             str(HELM_DIR / case.chart),
             "--values",
             str(values_file),

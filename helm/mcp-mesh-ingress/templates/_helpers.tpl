@@ -77,7 +77,11 @@ A carried copy of it is treated as unset.
 {{- $service := toString (dig "service" "" (index ($root.Values.core | default dict) .component | default dict)) -}}
 {{- $oldDefault := printf "{{ .Release.Name }}-mcp-mesh-%s" .component -}}
 {{- if or (not $service) (eq $service $oldDefault) -}}
-{{- printf "%s-mcp-mesh-%s" (dig "coreReleaseName" "" ($root.Values.global | default dict) | default "mcp-core") .component | trunc 63 | trimSuffix "-" -}}
+{{- $core := dig "coreReleaseName" "" ($root.Values.global | default dict) | default "mcp-core" -}}
+{{- $chart := printf "mcp-mesh-%s" .component -}}
+{{- /* The component chart's fullname rule: a release name that already
+       contains the chart name is used as-is. */ -}}
+{{- ternary $core (printf "%s-%s" $core $chart) (contains $chart $core) | trunc 63 | trimSuffix "-" -}}
 {{- else if contains "{{" $service -}}
 {{- tpl $service $root -}}
 {{- else -}}
@@ -98,8 +102,12 @@ release called <name>), port 8080 (its service.port), host <name>, path
 {{- fail (printf "agents[%d] needs a name: the agent's mcp-mesh-agent release name, from which its Service, host and path are derived" $i) -}}
 {{- end -}}
 {{- if or (not (hasKey $a "enabled")) (kindIs "invalid" $a.enabled) (ne (lower (toString $a.enabled)) "false") -}}
-{{- $service := $a.service | default (ternary $a.name (printf "%s-mcp-mesh-agent" $a.name) (contains "mcp-mesh-agent" $a.name)) | trunc 63 | trimSuffix "-" -}}
-{{- if contains "{{" $service -}}{{- $service = tpl $service $ -}}{{- end -}}
+{{- $service := toString ($a.service | default "") -}}
+{{- if contains "{{" $service -}}
+{{- $service = tpl $service $ -}}
+{{- else if not $service -}}
+{{- $service = ternary $a.name (printf "%s-mcp-mesh-agent" $a.name) (contains "mcp-mesh-agent" $a.name) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
 {{- $out = append $out (dict
       "name" $a.name
       "service" $service

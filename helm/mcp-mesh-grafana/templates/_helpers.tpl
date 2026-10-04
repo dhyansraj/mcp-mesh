@@ -149,7 +149,10 @@ of it is treated as unset.
 {{- define "mcp-mesh-grafana.tempoURL" -}}
 {{- $url := toString (.Values.grafana.datasources.tempo.url | default "") -}}
 {{- if or (not $url) (contains "mcp-mesh-core.fullname" $url) -}}
-{{- printf "http://%s:3200" (printf "%s-mcp-mesh-tempo" .Release.Name | trunc 63 | trimSuffix "-") -}}
+{{- /* The tempo chart's fullname rule for a release name that already
+       contains the chart name. Its nameOverride / fullnameOverride are not
+       visible from here (sibling subchart values); set this URL then. */ -}}
+{{- printf "http://%s:3200" (ternary .Release.Name (printf "%s-mcp-mesh-tempo" .Release.Name) (contains "mcp-mesh-tempo" .Release.Name) | trunc 63 | trimSuffix "-") -}}
 {{- else if contains "{{" $url -}}
 {{- tpl $url . -}}
 {{- else -}}

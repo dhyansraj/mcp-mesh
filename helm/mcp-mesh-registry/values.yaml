@@ -385,6 +385,12 @@ envFrom: []
 #
 # The startup probe allows up to five minutes (30 x 10s) for the first
 # successful check; liveness and readiness only start once it has passed.
+#
+# With registry.security.tls on (tls.enabled and tls.mode auto or strict) the
+# main port serves only HTTPS, so an httpGet without an explicit scheme is
+# rendered with scheme: HTTPS. In strict mode every request without a client
+# certificate is refused, /health included, and the kubelet sends none, so
+# such a probe is rendered as a tcpSocket check of the same port instead.
 startupProbe:
   httpGet:
     path: /health

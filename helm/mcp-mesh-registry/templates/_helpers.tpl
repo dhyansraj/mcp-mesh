@@ -464,7 +464,25 @@ pins both.
 {{- range $h := list "exec" "tcpSocket" "grpc" -}}
 {{- if hasKey $v $h -}}{{- $base = omit $base "httpGet" -}}{{- end -}}
 {{- end -}}
-{{- toYaml (mergeOverwrite $base (deepCopy $v)) -}}
+{{- $probe := mergeOverwrite $base (deepCopy $v) -}}
+{{- /* With TLS on, the main port speaks only HTTPS (runWithTLS), so a plain
+       httpGet is answered 400 and the probe fails: an httpGet that names no
+       scheme gets HTTPS (the kubelet does not verify the certificate). In
+       strict mode TLSVerifyMiddleware answers every certless request 403,
+       /health included, and the kubelet presents no client certificate, so
+       no httpGet can pass there: such a probe becomes a tcpSocket check of
+       the same port. A scheme set explicitly is left alone. */ -}}
+{{- $tls := .root.Values.registry.security.tls | default dict -}}
+{{- $mode := toString ($tls.mode | default "") -}}
+{{- $httpGet := get $probe "httpGet" -}}
+{{- if and $tls.enabled $mode (ne $mode "off") (kindIs "map" $httpGet) (not (hasKey $httpGet "scheme")) -}}
+{{- if eq $mode "strict" -}}
+{{- $probe = set (omit $probe "httpGet") "tcpSocket" (dict "port" ($httpGet.port | default "http")) -}}
+{{- else -}}
+{{- $_ := set $httpGet "scheme" "HTTPS" -}}
+{{- end -}}
+{{- end -}}
+{{- toYaml $probe -}}
 {{- end }}
 
 {{/*
@@ -500,7 +518,10 @@ sqlite install has run, and a DATABASE_URL the user supplies through env or
 envFrom stays in charge. Only a different mountPath needs one — the image's
 /data path is then on the read-only root filesystem, so those installs
 crash-looped and hold no data to lose. Skipped when the env list already
-sets DATABASE_URL, so the container never declares the name twice.
+sets DATABASE_URL, so the container never declares the name twice, and
+whenever envFrom is set: the chart cannot see inside a referenced
+ConfigMap/Secret, and an env entry would silently override a DATABASE_URL it
+supplies. With envFrom and a moved volume, set DATABASE_URL yourself.
 */}}
 {{- define "mcp-mesh-registry.sqliteDatabaseURL" -}}
 {{- if ne (.Values.persistence.mountPath | default "/data" | trimSuffix "/") "/data" -}}
@@ -508,7 +529,7 @@ sets DATABASE_URL, so the container never declares the name twice.
 {{- range .Values.env | default list -}}
 {{- if and (kindIs "map" .) (eq (toString (get . "name")) "DATABASE_URL") -}}{{- $userSet = true -}}{{- end -}}
 {{- end -}}
-{{- if not $userSet -}}{{- include "mcp-mesh-registry.sqliteDefaultPath" . -}}{{- end -}}
+{{- if and (not $userSet) (not .Values.envFrom) -}}{{- include "mcp-mesh-registry.sqliteDefaultPath" . -}}{{- end -}}
 {{- end -}}
 {{- end }}
 
