@@ -37,8 +37,10 @@ data:
 
   # Environment defaults (can be overridden) - matches working examples
   {{- /* hasKey instead of `default` for booleans: Sprig `default` treats
-         false as unset, so `enabled: false` would render "true". */}}
-  MCP_MESH_HTTP_ENABLED: {{ hasKey .Values.agent.http "enabled" | ternary .Values.agent.http.enabled true | toString | quote }}
+         false as unset, so `enabled: false` would render "true". The HTTP
+         switch goes through the shared helper so the runtime and the
+         Service/ports/probes always agree. */}}
+  MCP_MESH_HTTP_ENABLED: {{ include "mcp-mesh-agent.httpEnabled" . | eq "true" | toString | quote }}
   MCP_MESH_HTTP_PORT: {{ .Values.agent.http.port | default 8080 | quote }}
   MCP_MESH_LOG_LEVEL: {{ .Values.mesh.logLevel | default "INFO" | quote }}
   MCP_MESH_DEBUG_MODE: {{ .Values.mesh.debug | default false | quote }}

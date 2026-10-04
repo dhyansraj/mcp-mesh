@@ -185,7 +185,7 @@ resources:
     memory: 128Mi
 ```
 
-**Note:** Unlike Python agents which may use `agent.script`, TypeScript agents rely on the Docker image's CMD. The runtime is baked into your image when you build from the scaffolded Dockerfile.
+**Note:** The chart starts the agent with your image's own entrypoint and CMD. The runtime and your code are baked into the image when you build from the scaffolded Dockerfile.
 
 ### Deployment Workflow
 

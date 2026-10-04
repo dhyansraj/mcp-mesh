@@ -1071,6 +1071,67 @@ def test_cargo_lock_reminder_is_the_targeted_command():
     assert "check_release_lockfiles.py" in source
 
 
+# --- #1574: Chart.lock digest is regenerated, never left stale ---------------
+
+
+class _Result:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def test_chart_lock_regeneration_runs_update_then_build():
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append((cmd, kwargs.get("cwd")))
+        return _Result()
+
+    assert bv.regenerate_chart_lock(False, which=lambda _: "/usr/bin/helm", run=run) is None
+    assert [c for c, _ in calls] == [
+        ["helm", "dependency", "update", "--skip-refresh", "helm/mcp-mesh-core"],
+        ["helm", "dependency", "build", "helm/mcp-mesh-core"],
+    ]
+    assert all(cwd == bv.PROJECT_ROOT for _, cwd in calls)
+
+
+def test_chart_lock_without_helm_fails_with_the_exact_command():
+    def run(cmd, **kwargs):
+        raise AssertionError("must not run anything without helm")
+
+    err = bv.regenerate_chart_lock(False, which=lambda _: None, run=run)
+    assert err is not None
+    assert "helm dependency update --skip-refresh helm/mcp-mesh-core" in err
+    assert "helm dependency build helm/mcp-mesh-core" in err
+
+
+def test_chart_lock_helm_failure_is_reported():
+    def run(cmd, **kwargs):
+        return _Result(returncode=1, stderr="Error: boom")
+
+    err = bv.regenerate_chart_lock(False, which=lambda _: "/usr/bin/helm", run=run)
+    assert err is not None and "Error: boom" in err
+    assert "helm dependency update --skip-refresh helm/mcp-mesh-core" in err
+
+
+def test_chart_lock_dry_run_runs_nothing():
+    def run(cmd, **kwargs):
+        raise AssertionError("dry run must not invoke helm")
+
+    def which(_):
+        raise AssertionError("dry run must not need helm")
+
+    assert bv.regenerate_chart_lock(True, which=which, run=run) is None
+
+
+def test_chart_lock_is_not_a_reminder_anymore():
+    """The step used to be a printed reminder, which two releases skipped."""
+    source = pathlib.Path(bv.__file__).read_text()
+    assert "Reminder: run 'helm dependency update" not in source
+    assert "chart_lock_error = regenerate_chart_lock(dry_run)" in source
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

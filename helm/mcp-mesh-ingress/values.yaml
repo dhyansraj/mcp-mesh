@@ -7,8 +7,14 @@ global:
   domain: "mcp-mesh.local"
   # Ingress class to use
   ingressClass: "nginx"
-  # Namespace where services are deployed (if different from release namespace)
-  serviceNamespace: ""
+  # Release name the mcp-mesh-core chart was installed under. The core
+  # backends default to "<coreReleaseName>-mcp-mesh-<component>", the
+  # Service names that release creates. Same key as the mcp-mesh-agent chart.
+  # In your own umbrella holding core and this chart, set it to the umbrella's
+  # release name.
+  coreReleaseName: "mcp-core"
+  # An Ingress routes only to Services in its own namespace, so install this
+  # chart into the namespace core and the agents run in (-n).
 
 # Ingress routing patterns
 patterns:
@@ -36,8 +42,10 @@ core:
     enabled: true
     # Subdomain or path segment
     host: "registry"
-    # Service name pattern (supports templating)
-    service: "{{ .Release.Name }}-mcp-mesh-registry"
+    # Backend Service name. Empty derives
+    # "<global.coreReleaseName>-mcp-mesh-registry"; a value containing
+    # "{{ }}" is rendered with tpl.
+    service: ""
     port: 8000
     # Custom path for path-based routing
     path: "/registry(/|$)(.*)"
@@ -46,7 +54,7 @@ core:
   redis:
     enabled: false
     host: "redis"
-    service: "{{ .Release.Name }}-mcp-mesh-redis"
+    service: "" # default: <global.coreReleaseName>-mcp-mesh-redis
     port: 6379
     path: "/redis(/|$)(.*)"
 
@@ -54,7 +62,7 @@ core:
   ui:
     enabled: false
     host: "dashboard"
-    service: "{{ .Release.Name }}-mcp-mesh-ui"
+    service: "" # default: <global.coreReleaseName>-mcp-mesh-ui
     port: 3080
     path: "/ops/dashboard(/|$)(.*)"
 
@@ -62,47 +70,20 @@ core:
   grafana:
     enabled: false
     host: "grafana"
-    service: "{{ .Release.Name }}-mcp-mesh-grafana"
+    service: "" # default: <global.coreReleaseName>-mcp-mesh-grafana
     port: 3000
     path: "/ops/grafana(/|$)(.*)"
 
-# Agent services (dynamic list)
-agents:
-  # Example agents - users can override this list
-  - name: "hello-world"
-    enabled: true
-    host: "hello-world"
-    service: "hello-world-mcp-mesh-agent"
-    port: 9090
-    path: "/hello-world(/|$)(.*)"
-
-  - name: "system-agent"
-    enabled: true
-    host: "system-agent"
-    service: "system-agent-mcp-mesh-agent"
-    port: 8080
-    path: "/system-agent(/|$)(.*)"
-
-  - name: "fastmcp-agent"
-    enabled: true
-    host: "fastmcp-agent"
-    service: "fastmcp-agent-mcp-mesh-agent"
-    port: 8080
-    path: "/fastmcp-agent(/|$)(.*)"
-
-  - name: "enhanced-fastmcp-agent"
-    enabled: false
-    host: "enhanced-fastmcp-agent"
-    service: "enhanced-fastmcp-agent-mcp-mesh-agent"
-    port: 9094
-    path: "/enhanced-fastmcp-agent(/|$)(.*)"
-
-  - name: "dependent-agent"
-    enabled: true
-    host: "dependent-agent"
-    service: "dependent-agent-mcp-mesh-agent"
-    port: 8080
-    path: "/dependent-agent(/|$)(.*)"
+# Agent services. One entry per mcp-mesh-agent release to expose; only name
+# is required. The defaults match an agent installed with
+# `helm install <name> mcp-mesh-agent` in the same namespace.
+agents: []
+  # - name: hello-world   # also the default host and path segment
+  #   service: ""         # default: <name>-mcp-mesh-agent (the agent chart's Service)
+  #   port: 8080          # default: 8080 (the agent chart's service.port)
+  #   host: ""            # default: <name> (host-based: <name>.<global.domain>)
+  #   path: ""            # default: /<name>(/|$)(.*) (path-based)
+  #   enabled: true       # default: true
 
 # TLS configuration
 tls:
@@ -131,15 +112,3 @@ networkPolicy:
     # Labels that allowed namespaces must have
     allowedNamespaceLabels:
       mcp-mesh.io/ops-access: "true"
-
-# Resource limits (optional)
-resources: {}
-
-# Node selector for ingress controller affinity
-nodeSelector: {}
-
-# Tolerations for ingress controller scheduling
-tolerations: []
-
-# Affinity rules for ingress controller placement
-affinity: {}

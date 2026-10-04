@@ -1,25 +1,23 @@
-# Example: Auto-Generated ConfigMap from Script Path
-# This example shows how to use agentCode.scriptPath to automatically
-# create ConfigMaps from Python files without manual ConfigMap management
+# Example: chart-rendered ConfigMap from agentCode.scriptPath
+# Renders scripts/demo-agent.py (a file inside this chart directory) into the
+# ConfigMap "<fullname>-code" under the key agent.py, mounts it at
+# agentCode.mountPath and runs it on the stock Python runtime image. Needs a
+# local copy of the chart: .Files.Get cannot read outside the chart directory.
+#
+#   helm install demo-agent ./helm/mcp-mesh-agent -n mcp-mesh \
+#     -f ./helm/mcp-mesh-agent/examples/auto-configmap-values.yaml
+#
+# The agent's name, version and capabilities come from the script's decorators.
 
-# Agent configuration (name comes from @mesh.agent decorator in script)
-agent:
-  # name: ""  # Optional override - usually comes from script's @mesh.agent decorator
-  version: "1.0.0"
-  description: "Demo agent with auto-generated ConfigMap"
-  http:
-    enabled: true
-    host: "demo-agent"
-    port: 9094
-
-# Auto-generated ConfigMap from script path
 agentCode:
   enabled: true
-  # Script path relative to chart root - Helm will read this file
-  # and automatically create a ConfigMap with the contents
+  # Script path relative to the chart root
   scriptPath: "scripts/demo-agent.py"
-  # configMapName: ""  # Auto-generated: {release-name}-code
-  mountPath: "/app"
+  mountPath: "/app/agent"
+
+agent:
+  # The runtime image's entrypoint is python with no script, so name it here.
+  command: ["python", "/app/agent/agent.py"]
 
 # Registry connection (host empty defaults to
 # "<global.coreReleaseName>-mcp-mesh-registry")
@@ -27,12 +25,8 @@ registry:
   host: ""
   port: "8000"
 
-# Container image
-image:
-  repository: "mcpmesh/python-runtime"
-  tag: "0.3"
+# image stays at the chart default, mcpmesh/python-runtime
 
-# Resources
 resources:
   limits:
     cpu: 500m

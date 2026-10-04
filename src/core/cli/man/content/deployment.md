@@ -300,13 +300,11 @@ helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
   -n mcp-mesh --create-namespace \
   --set grafana.enabled=false \
   --set tempo.enabled=false
-
-# Core without PostgreSQL (in-memory registry)
-helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 3.7.1 \
-  -n mcp-mesh --create-namespace \
-  --set postgres.enabled=false
 ```
+
+The registry always needs a database: `postgres.enabled=false` is only for
+pointing it at an external PostgreSQL through `global.postgres.*`, and the
+render fails without one.
 
 ## Port Strategy: Local vs Kubernetes
 

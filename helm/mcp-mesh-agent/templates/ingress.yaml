@@ -1,4 +1,4 @@
-{{- if and .Values.ingress.enabled .Values.agent.http.enabled -}}
+{{- if and .Values.ingress.enabled (include "mcp-mesh-agent.httpEnabled" .) -}}
 {{- $fullName := include "mcp-mesh-agent.fullname" . -}}
 {{- $svcPort := .Values.service.port -}}
 {{- if and .Values.ingress.className (not (semverCompare ">=1.18-0" .Capabilities.KubeVersion.GitVersion)) }}

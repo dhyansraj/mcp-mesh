@@ -17,18 +17,23 @@ This chart provides ingress routing for MCP Mesh components with two routing pat
 - MCP Mesh core components deployed
 - MCP Mesh agents deployed
 
+An Ingress can only route to Services in its own namespace, so install this
+chart into the namespace core and the agents run in. Backends are derived from
+release names: the core components from `global.coreReleaseName` (default
+`mcp-core`), each agent from its `name`.
+
 ### Installation
 
 ```bash
-# Deploy with default configuration (host-based routing)
-helm install mcp-ingress ./mcp-mesh-ingress
+# Deploy with default configuration (host-based routing to the registry)
+helm install mcp-ingress ./mcp-mesh-ingress -n mcp-mesh
 
 # Deploy with custom domain
-helm install mcp-ingress ./mcp-mesh-ingress \
+helm install mcp-ingress ./mcp-mesh-ingress -n mcp-mesh \
   --set global.domain=mycompany.local
 
 # Deploy with path-based routing
-helm install mcp-ingress ./mcp-mesh-ingress \
+helm install mcp-ingress ./mcp-mesh-ingress -n mcp-mesh \
   --set patterns.hostBased.enabled=false \
   --set patterns.pathBased.enabled=true
 ```
@@ -45,6 +50,9 @@ patterns:
 
 global:
   domain: "mcp-mesh.local"
+
+agents:
+  - name: hello-world
 # Results in:
 # registry.mcp-mesh.local → Registry service
 # hello-world.mcp-mesh.local → Hello World agent
@@ -60,6 +68,9 @@ patterns:
   pathBased:
     enabled: true
     host: "mcp-mesh.local"
+
+agents:
+  - name: hello-world
 # Results in:
 # mcp-mesh.local/registry/ → Registry service
 # mcp-mesh.local/hello-world/ → Hello World agent
@@ -67,26 +78,29 @@ patterns:
 
 #### Custom Agent Configuration
 
+Only `name` is required. The rest default to what an agent installed as
+`helm install <name> mcp-mesh-agent` creates; override them for anything else:
+
 ```yaml
 # values.yaml
 agents:
   - name: "my-custom-agent"
-    enabled: true
-    host: "custom-agent"
-    service: "my-custom-agent-service"
-    port: 9000
-    path: "/custom-agent(/|$)(.*)"
+    host: "custom-agent" # default: the name
+    service: "my-custom-agent-service" # default: <name>-mcp-mesh-agent
+    port: 9000 # default: 8080
+    path: "/custom-agent(/|$)(.*)" # default: /<name>(/|$)(.*)
+    enabled: true # default: true
 ```
 
 ## Configuration
 
 ### Global Settings
 
-| Parameter                 | Description                           | Default                |
-| ------------------------- | ------------------------------------- | ---------------------- |
-| `global.domain`           | Base domain for all services          | `mcp-mesh.local`       |
-| `global.ingressClass`     | Ingress controller class              | `nginx`                |
-| `global.serviceNamespace` | Namespace where services are deployed | `""` (same as release) |
+| Parameter                | Description                                                     | Default          |
+| ------------------------ | --------------------------------------------------------------- | ---------------- |
+| `global.domain`          | Base domain for all services                                    | `mcp-mesh.local` |
+| `global.ingressClass`    | Ingress controller class                                        | `nginx`          |
+| `global.coreReleaseName` | Release name of the `mcp-mesh-core` install the core backends belong to | `mcp-core` |
 
 ### Routing Patterns
 
@@ -98,23 +112,24 @@ agents:
 
 ### Core Services
 
-| Parameter               | Description                 | Default                                 |
-| ----------------------- | --------------------------- | --------------------------------------- |
-| `core.registry.enabled` | Include registry in ingress | `true`                                  |
-| `core.registry.service` | Registry service name       | `{{ .Release.Name }}-mcp-mesh-registry` |
-| `core.redis.enabled`    | Include Redis in ingress    | `false`                                 |
+| Parameter               | Description                                                       | Default                                       |
+| ----------------------- | ----------------------------------------------------------------- | --------------------------------------------- |
+| `core.registry.enabled` | Include registry in ingress                                       | `true`                                        |
+| `core.registry.service` | Registry Service name (rendered with `tpl` if it contains `{{ }}`) | `<global.coreReleaseName>-mcp-mesh-registry` |
+| `core.ui.enabled`       | Include the dashboard UI in ingress                               | `false`                                       |
+| `core.grafana.enabled`  | Include Grafana in ingress                                        | `false`                                       |
+| `core.redis.enabled`    | Include Redis in ingress                                          | `false`                                       |
+
+Each `core.<component>.service` defaults to
+`<global.coreReleaseName>-mcp-mesh-<component>`.
 
 ### Agent Services
 
-Configure the `agents` array to include your deployed agents:
+`agents` is empty by default. Add one entry per agent release to expose:
 
 ```yaml
 agents:
   - name: "hello-world"
-    enabled: true
-    host: "hello-world"
-    service: "hello-world-mcp-mesh-agent"
-    port: 9090
 ```
 
 ## Usage Patterns
@@ -126,20 +141,31 @@ agents:
 helm install mcp-core ./mcp-mesh-core \
   -n mcp-mesh --create-namespace
 
-# Deploy individual agents
-helm install hello-world ./mcp-mesh-agent --set agent.name=hello-world
-helm install system-agent ./mcp-mesh-agent --set agent.name=system-agent
+# Deploy individual agents (each from its own image) into the same namespace
+helm install hello-world ./mcp-mesh-agent -n mcp-mesh \
+  --set image.repository=myregistry/hello-world --set image.tag=v1.0.0
+helm install system-agent ./mcp-mesh-agent -n mcp-mesh \
+  --set image.repository=myregistry/system-agent --set image.tag=v1.0.0
 
-# Deploy ingress routing
-helm install mcp-ingress ./mcp-mesh-ingress
+# Deploy ingress routing, naming the agent releases to expose
+helm install mcp-ingress ./mcp-mesh-ingress -n mcp-mesh \
+  --set agents[0].name=hello-world \
+  --set agents[1].name=system-agent
 ```
+
+With core installed under another release name, add
+`--set global.coreReleaseName=<release>`. If you install core and this chart
+together as subcharts of your own umbrella chart, set `global.coreReleaseName`
+to that umbrella's release name; the core chart accepts it when it matches its
+own release.
 
 ### Pattern 2: Custom Service Names
 
 ```bash
 # Deploy with custom service naming
-helm install mcp-ingress ./mcp-mesh-ingress \
+helm install mcp-ingress ./mcp-mesh-ingress -n mcp-mesh \
   --set core.registry.service="my-registry-service" \
+  --set agents[0].name=hello-world \
   --set agents[0].service="my-hello-world-service"
 ```
 

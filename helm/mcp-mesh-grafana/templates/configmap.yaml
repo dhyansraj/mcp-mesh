@@ -61,7 +61,7 @@ data:
     - name: Tempo
       type: tempo
       access: proxy
-      url: {{ .Values.grafana.datasources.tempo.url }}
+      url: {{ include "mcp-mesh-grafana.tempoURL" . }}
       uid: tempo
       editable: true
       isDefault: false

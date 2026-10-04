@@ -646,8 +646,16 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // bullets are list lines. The per-backend table, the troubleshooting row and
 // the env-table cell are table lines and count toward none of these.
 // 1871 + 23 = 1894; 531 + 6 = 537; 452 + 3 = 455.
+//
+// Issue #1574 removed the "Core without PostgreSQL (in-memory registry)"
+// recipe from `deployment.md` (there is no in-memory registry; that install
+// rendered a registry waiting forever on a database that did not exist) and
+// put a sentence after the remaining Disable Optional Components block saying
+// postgres.enabled=false needs an external database. Two new inline spans
+// (`postgres.enabled=false`, `global.postgres.*`); the removed recipe was
+// fenced, so it held none. 1894 + 2 = 1896.
 const (
-	wantInlineCodeSpans = 1894
+	wantInlineCodeSpans = 1896
 	wantListCodeSpans   = 537
 	wantMarkupListLines = 455
 )

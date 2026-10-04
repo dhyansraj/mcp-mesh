@@ -1,4 +1,4 @@
-{{- /* These are the SOLE invocations of both guards in the chart, and they
+{{- /* These are the SOLE invocations of the guards in the chart, and they
        must stay above the `if` so they run regardless of namespaceCreate.
        namespaceCreate defaults to false, so the `if` is closed on virtually
        every install and this file's only output is the guards. Before
@@ -8,6 +8,7 @@
        which pins namespaceCreate: false on a fail case for each. */ -}}
 {{- include "mcp-mesh-core.validateNoRemovedKeys" . -}}
 {{- include "mcp-mesh-core.validateNamespaceResourcePolicy" . -}}
+{{- include "mcp-mesh-core.validateExternalDatabase" . -}}
 {{- if .Values.namespaceCreate }}
 apiVersion: v1
 kind: Namespace

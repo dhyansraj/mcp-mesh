@@ -22,8 +22,15 @@ To access the registry:
 
 Then visit: http://localhost:8000/health
 
-To deploy MCP agents, use the mcp-mesh-agent chart:
-  helm install my-agent ../mcp-mesh-agent --set agent.script=my_script.py
+To deploy MCP agents, package each one as an image (`meshctl scaffold`
+generates its Dockerfile and helm-values.yaml) and install the
+mcp-mesh-agent chart with it:
+  helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+    --version {{ .Chart.Version }} -n {{ .Release.Namespace }} \
+    --set image.repository=<your-registry>/my-agent --set image.tag=<tag>
+{{- if ne .Release.Name "mcp-core" }} \
+    --set global.coreReleaseName={{ .Release.Name }}
+{{- end }}
 
 {{- /* Mirrors the mcp-mesh-postgres credential resolution: existing secret >
        inline password (subchart override > global) > auto-generated. */}}

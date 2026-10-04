@@ -1,6 +1,7 @@
 {{- /* Render deployment — always enabled when image.repository is set */ -}}
 {{- $redisSource := include "mcp-mesh-agent.redisURLSource" . -}}
 {{- $gredis := include "mcp-mesh-agent.globalRedis" . | fromJson -}}
+{{- $httpEnabled := include "mcp-mesh-agent.httpEnabled" . -}}
 {{- if .Values.image.repository -}}
 apiVersion: apps/v1
 kind: Deployment
@@ -76,21 +77,23 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           image: "{{ include "mcp-mesh-agent.image" . }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          {{- if .Values.agent.http.enabled }}
+          {{- if $httpEnabled }}
           ports:
             - name: http
               containerPort: {{ .Values.agent.http.port | default 8080 }}
               protocol: TCP
           {{- end }}
-          {{- if .Values.startupProbe }}
+          {{- /* With HTTP off there is no "http" port and no probe endpoint,
+                 so probes aimed at it are dropped (see probeUsesHttpPort). */}}
+          {{- if and .Values.startupProbe (or $httpEnabled (not (include "mcp-mesh-agent.probeUsesHttpPort" .Values.startupProbe))) }}
           startupProbe:
             {{- toYaml .Values.startupProbe | nindent 12 }}
           {{- end }}
-          {{- if .Values.livenessProbe }}
+          {{- if and .Values.livenessProbe (or $httpEnabled (not (include "mcp-mesh-agent.probeUsesHttpPort" .Values.livenessProbe))) }}
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           {{- end }}
-          {{- if .Values.readinessProbe }}
+          {{- if and .Values.readinessProbe (or $httpEnabled (not (include "mcp-mesh-agent.probeUsesHttpPort" .Values.readinessProbe))) }}
           readinessProbe:
             {{- toYaml .Values.readinessProbe | nindent 12 }}
           {{- end }}

@@ -4,16 +4,22 @@ This Helm chart deploys the MCP Mesh Registry service on Kubernetes.
 
 ## Prerequisites
 
-- Kubernetes 1.19+
-- Helm 3.2.0+
+- Kubernetes 1.21+
+- Helm 3.8+
+- A PostgreSQL database (the default `registry.database.type`), or
+  `registry.database.type: sqlite` for a single replica
 - PV provisioner support in the underlying infrastructure (if persistence is enabled)
 
 ## Installing the Chart
 
-To install the chart with the release name `mcp-registry`:
+Most installs get this chart through the `mcp-mesh-core` umbrella, which
+bundles PostgreSQL and wires it up. Standalone, point it at your database. To
+install the chart with the release name `mcp-registry`:
 
 ```bash
-helm install mcp-registry ./helm/mcp-mesh-registry
+helm install mcp-registry ./helm/mcp-mesh-registry \
+  --set registry.database.host=postgres.database.svc.cluster.local \
+  --set registry.database.password=change-me
 ```
 
 ## Uninstalling the Chart
@@ -36,7 +42,7 @@ The following table lists the configurable parameters of the MCP Mesh Registry c
 | `image.registry`           | Image registry prefix (overrides `global.imageRegistry`)                   | `""`                |
 | `image.repository`         | Registry image repository                                                   | `mcpmesh/registry`  |
 | `image.pullPolicy`         | Image pull policy                                                           | `IfNotPresent`      |
-| `image.tag`                | Image tag (overrides chart appVersion)                                      | `"2.4"`             |
+| `image.tag`                | Image tag (overrides chart appVersion)                                      | `"3.7"`             |
 | `waitForDbImage.registry`  | wait-for-db init image registry prefix (overrides `global.imageRegistry`)  | `""`                |
 | `waitForDbImage.repository` | wait-for-db init image repository                                           | `busybox`           |
 | `waitForDbImage.tag`       | wait-for-db init image tag                                                  | `"1.35"`            |
@@ -52,12 +58,11 @@ Mirror images to the same paths in a private registry.
 
 ### Service Configuration
 
-| Parameter             | Description         | Default     |
-| --------------------- | ------------------- | ----------- |
-| `service.type`        | Service type        | `ClusterIP` |
-| `service.port`        | Service port        | `8080`      |
-| `service.targetPort`  | Target port         | `8080`      |
-| `service.annotations` | Service annotations | `{}`        |
+| Parameter             | Description                                                   | Default     |
+| --------------------- | ------------------------------------------------------------- | ----------- |
+| `service.type`        | Service type                                                  | `ClusterIP` |
+| `service.port`        | Service port (targets the container port, `registry.port`)    | `8000`      |
+| `service.annotations` | Service annotations                                           | Prometheus scrape annotations |
 
 ### Registry Configuration
 
@@ -79,14 +84,13 @@ because the default name is derived from the release name.
 | Parameter                          | Description                                       | Default               |
 | ---------------------------------- | ------------------------------------------------- | --------------------- |
 | `registry.host`                    | Registry host address                             | `"0.0.0.0"`           |
-| `registry.port`                    | Registry port                                     | `8080`                |
-| `registry.database.type`           | Database type (sqlite, postgres, mysql)           | `"sqlite"`            |
-| `registry.database.path`           | SQLite database path                              | `"/data/registry.db"` |
-| `registry.database.waitForDatabase` | Run the wait-for-db init container until the database accepts connections (non-sqlite) | `true` |
-| `registry.database.host`           | External database host                            | `""`                  |
-| `registry.database.port`           | External database port                            | `5432`                |
-| `registry.database.name`           | Database name                                     | `"mcp_mesh"`          |
-| `registry.database.username`       | Database username                                 | `""`                  |
+| `registry.port`                    | Registry port                                     | `8000`                |
+| `registry.database.type`           | `postgres` or `sqlite` (single replica only; the registry has no other driver) | `"postgres"` |
+| `registry.database.waitForDatabase` | Run the wait-for-db init container until the database accepts connections (postgres) | `true` |
+| `registry.database.host`           | PostgreSQL host                                   | `"mcp-mesh-postgres"` |
+| `registry.database.port`           | PostgreSQL port                                   | `5432`                |
+| `registry.database.name`           | Database name                                     | `"mcpmesh"`           |
+| `registry.database.username`       | Database username                                 | `"mcpmesh"`           |
 | `registry.database.password`       | Database password (URL-encoded into the DSN)      | `""`                  |
 | `registry.database.sslmode`        | PostgreSQL SSL mode: `disable`, `require`, `verify-ca`, `verify-full` | `"disable"` |
 | `registry.database.tls.caSecret`   | Secret with CA cert for `verify-ca`/`verify-full` (mounted, added to DSN as `sslrootcert`) | `""` |
@@ -94,8 +98,11 @@ because the default name is derived from the release name.
 | `registry.database.existingSecret` | Existing secret with the DB credentials (see modes below)                     | `""` |
 | `registry.database.existingSecretUrlKey` | Key in the existing secret holding a complete `postgres://` DSN, consumed directly (no composition, no URL-safety requirement). Empty = password-only mode | `""` |
 | `registry.database.existingSecretPasswordKey` | Key in the existing secret holding the password (injected via `$(DATABASE_PASSWORD)`; must be URL-safe) | `"password"` |
-| `registry.logging.level`           | Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL) | `"INFO"`              |
-| `registry.logging.format`          | Log format (json or text)                         | `"json"`              |
+| `registry.logging.level`           | Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL) | `"DEBUG"`             |
+| `registry.logging.debug`           | Debug mode                                        | `"true"`              |
+| `registry.performance.timeoutThreshold` | Seconds without a heartbeat before an agent is marked unhealthy | `20` |
+| `registry.performance.healthCheckInterval` | Seconds between the registry's agent health sweeps | `10` |
+| `registry.observability.exporterType` | Trace exporter: `otlp`, `console` or `json` (see [Autoscaling](#autoscaling)) | `"otlp"` |
 
 ### Redis Configuration
 
@@ -117,9 +124,14 @@ here; an explicit value always wins.
 
 ### Persistence
 
+With sqlite the database file lives on the data volume at
+`persistence.mountPath`: a PVC when `persistence.enabled`, otherwise an
+`emptyDir` that is lost when the pod is replaced. With postgres nothing is
+written there.
+
 | Parameter                   | Description        | Default         |
 | --------------------------- | ------------------ | --------------- |
-| `persistence.enabled`       | Enable persistence | `true`          |
+| `persistence.enabled`       | Enable persistence | `false`         |
 | `persistence.storageClass`  | Storage class name | `""`            |
 | `persistence.accessMode`    | Access mode        | `ReadWriteOnce` |
 | `persistence.size`          | Volume size        | `10Gi`          |
@@ -134,6 +146,21 @@ here; an explicit value always wins.
 | `registry.security.tls.secretName`      | Existing TLS secret              | `""`      |
 | `registry.security.tls.mode`            | `off`, `auto` or `strict`; any mode other than `off` requires `registry.security.trust.backend` | `"off"` |
 | `registry.security.trust.backend`       | Trust backend(s), comma-separated: `localca`, `filestore`, `k8s-secrets`, `spire` | `""` |
+| `registry.security.adminPort`           | Serve `/admin/*` on this separate port instead of the main one (`0` = main port). Plain `http://` with no client-certificate check unless `adminTLS` — restrict it with a NetworkPolicy | `0` |
+| `registry.security.adminTLS`            | Serve `adminPort` with the registry's certificate and `tls.mode` client-certificate policy (`MCP_MESH_ADMIN_TLS`). Requires `adminPort`, `tls.enabled` and a `tls.mode` other than `off`. Switches the admin port to `https://`; with `tls.mode=strict` only a cert-capable client gets through, and `meshctl` has none, so `meshctl registry drain` gets 403 | `false` |
+
+### Probes
+
+`startupProbe`, `livenessProbe` and `readinessProbe` are rendered as given and
+can be tuned or replaced (for an `exec` handler, also set `httpGet: null`);
+`null` restores a probe's default. All three use `GET /health`, which never
+consults the database or any dependency.
+
+| Parameter                             | Description                    | Default |
+| ------------------------------------- | ------------------------------ | ------- |
+| `startupProbe.failureThreshold`       | Startup attempts, 10s apart    | `30`    |
+| `livenessProbe.initialDelaySeconds`   | Liveness delay                 | `30`    |
+| `readinessProbe.initialDelaySeconds`  | Readiness delay                | `10`    |
 
 ### Ingress
 
@@ -217,6 +244,21 @@ registry:
     username: mcp_user
     password: supersecret
 ```
+
+### Using sqlite (single replica)
+
+```yaml
+registry:
+  database:
+    type: sqlite
+persistence:
+  enabled: true # keep the database across pod restarts
+```
+
+The database file is `<persistence.mountPath>/mcp_mesh_registry.db`
+(`/data/mcp_mesh_registry.db` by default, the registry image's own
+`DATABASE_URL`). To use a different file, set `DATABASE_URL` in `env`, on a
+writable volume — the root filesystem is read-only.
 
 ### External Managed Datastores (TLS + auth)
 
@@ -328,17 +370,14 @@ when `tls.mode` is set and `trust.backend` is empty.
 ### Production Configuration
 
 This keeps `registry.observability.exporterType` at its `otlp` default, which
-is what makes `replicaCount: 3` safe for tracing — see
-[Autoscaling](#autoscaling).
+is what makes multiple replicas safe for tracing — see
+[Autoscaling](#autoscaling). With postgres the registry needs no volume, so
+`persistence` stays off. The TLS block assumes a `registry-tls` Secret (for
+example from a cert-manager `Certificate`) and entity CAs published as
+Secrets labelled for the `k8s-secrets` trust backend; see `meshctl man
+security`.
 
 ```yaml
-replicaCount: 3
-
-persistence:
-  enabled: true
-  storageClass: fast-ssd
-  size: 50Gi
-
 resources:
   limits:
     cpu: 2
@@ -363,9 +402,15 @@ registry:
   database:
     type: postgres
     host: postgres.database.svc.cluster.local
+    existingSecret: registry-db
+    existingSecretUrlKey: database-url
   security:
     tls:
       enabled: true
+      mode: strict
+      secretName: registry-tls
+    trust:
+      backend: k8s-secrets
 ```
 
 ## Upgrading

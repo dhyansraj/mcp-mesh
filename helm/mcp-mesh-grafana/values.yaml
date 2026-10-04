@@ -134,7 +134,11 @@ grafana:
   datasources:
     tempo:
       enabled: true
-      url: 'http://{{ include "mcp-mesh-core.fullname" . }}-tempo:3200'
+      # Tempo query URL. Empty derives http://<release>-mcp-mesh-tempo:3200,
+      # the bundled Tempo of the mcp-mesh-core release this chart is part of.
+      # Set it for any other Tempo; a value containing "{{ }}" is rendered
+      # with tpl.
+      url: ""
     prometheus:
       enabled: true
       url: "http://prometheus:9090"
