@@ -67,7 +67,12 @@ meshctl scaffold --compose --observability
 
 # Custom project name
 meshctl scaffold --compose --project-name my-project
+
+# Preview the compose file on stdout without writing anything
+meshctl scaffold --compose --dry-run
 ```
+
+`--compose` detects `@mesh.agent` agents and `scaffold api` gateways. A gateway whose port it cannot read (for example, a port taken only from an environment variable with no default) is skipped with a warning; declare a literal port, or add its service by hand.
 
 ### Generate observability stack alone
 

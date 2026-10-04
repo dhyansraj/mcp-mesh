@@ -451,10 +451,38 @@ func TestParsePythonAPIAgent(t *testing.T) {
 		assert.Equal(t, 9010, a.Port)
 		assert.Equal(t, "python", a.Language)
 	})
-	t.Run("no_uvicorn_defaults_port", func(t *testing.T) {
+	t.Run("no_uvicorn_leaves_port_unknown", func(t *testing.T) {
 		a := parsePythonAPIAgent("@mesh.route(dependencies=['a'])\ndef x(): ...\n", "/tmp/gw")
 		require.NotNil(t, a)
-		assert.Equal(t, DefaultScaffoldPort, a.Port)
+		assert.Equal(t, 0, a.Port, "an unreadable port must not be guessed")
+	})
+	t.Run("env_var_with_default", func(t *testing.T) {
+		for _, call := range []string{
+			`uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "9000")))`,
+			`uvicorn.run(app, port=int(os.environ.get('PORT', 9001)))`,
+		} {
+			a := parsePythonAPIAgent("@mesh.route(dependencies=['a'])\ndef x(): ...\n"+call+"\n", "/tmp/gw")
+			require.NotNil(t, a)
+			assert.Contains(t, []int{9000, 9001}, a.Port, call)
+		}
+	})
+	t.Run("env_var_without_default_is_unknown", func(t *testing.T) {
+		a := parsePythonAPIAgent("@mesh.route(dependencies=['a'])\ndef x(): ...\nuvicorn.run(app, port=int(os.environ['PORT']))\n", "/tmp/gw")
+		require.NotNil(t, a)
+		assert.Equal(t, 0, a.Port)
+	})
+	t.Run("commented_and_docstring_uvicorn_calls_are_ignored", func(t *testing.T) {
+		src := "\"\"\"Run with:\n    uvicorn.run(app, port=7000)\n@mesh.route is used below\n\"\"\"\n" +
+			"@mesh.route(dependencies=['a'])\ndef x(): ...\n" +
+			"# uvicorn.run(app, port=7001)\n" +
+			"uvicorn.run(app, port=9002)\n"
+		a := parsePythonAPIAgent(src, "/tmp/gw")
+		require.NotNil(t, a)
+		assert.Equal(t, 9002, a.Port)
+	})
+	t.Run("route_only_in_docstring_is_not_a_gateway", func(t *testing.T) {
+		src := "\"\"\"\nThis module could use @mesh.route(dependencies=['a']).\n\"\"\"\nprint('hi')\n"
+		assert.Nil(t, parsePythonAPIAgent(src, "/tmp/x"))
 	})
 	t.Run("commented_route_is_not_a_gateway", func(t *testing.T) {
 		assert.Nil(t, parsePythonAPIAgent("# @mesh.route(dependencies=['a'])\nprint('hi')\n", "/tmp/x"))
@@ -482,6 +510,31 @@ func TestParseTypeScriptAPIAgent(t *testing.T) {
 	t.Run("comment_only_mentions_are_ignored", func(t *testing.T) {
 		src := "/**\n * consumes capabilities via mesh.route().\n */\n// app.get('/x', mesh.route([], h));\n"
 		assert.Nil(t, parseTypeScriptAPIAgent(src, "/tmp/x"))
+	})
+	t.Run("port_expression_variants", func(t *testing.T) {
+		route := "app.get('/x', mesh.route([{ capability: 'a' }], h));\n"
+		for expr, want := range map[string]int{
+			`const PORT = process.env.PORT || "3000";`:           3000,
+			`const PORT = process.env.PORT ?? 3001;`:             3001,
+			`const PORT = Number(process.env.PORT) || 3002;`:     3002,
+			`const PORT = parseInt(process.env.PORT || '3003');`: 3003,
+		} {
+			a := parseTypeScriptAPIAgent(expr+"\n"+route, "/tmp/gw-ts")
+			require.NotNil(t, a, expr)
+			assert.Equal(t, want, a.Port, expr)
+		}
+	})
+	t.Run("no_literal_port_is_unknown", func(t *testing.T) {
+		src := "const PORT = process.env.PORT;\napp.get('/x', mesh.route([{ capability: 'a' }], h));\napp.listen(PORT);\n"
+		a := parseTypeScriptAPIAgent(src, "/tmp/gw-ts")
+		require.NotNil(t, a)
+		assert.Equal(t, 0, a.Port)
+	})
+	t.Run("commented_port_is_ignored", func(t *testing.T) {
+		src := "// const PORT = process.env.PORT || 4000;\napp.get('/x', mesh.route([{ capability: 'a' }], h));\n"
+		a := parseTypeScriptAPIAgent(src, "/tmp/gw-ts")
+		require.NotNil(t, a)
+		assert.Equal(t, 0, a.Port)
 	})
 }
 
@@ -511,6 +564,53 @@ func TestParseJavaAgent_APIGatewayPortSources(t *testing.T) {
 		assert.Equal(t, 9031, a.Port)
 		assert.Equal(t, "java", a.Language)
 	})
+	t.Run("properties_placeholder_port", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "gw-ph")
+		writeJava(t, dir, route)
+		writeResource(t, dir, "application.properties", "spring.application.name=x\nserver.port=${PORT:9034}\n")
+		a, err := parseJavaAgent(dir)
+		require.NoError(t, err)
+		require.NotNil(t, a)
+		assert.Equal(t, 9034, a.Port)
+	})
+	t.Run("yaml_other_port_keys_before_server_are_ignored", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "gw-other")
+		writeJava(t, dir, route)
+		writeResource(t, dir, "application.yml",
+			"spring:\n  data:\n    redis:\n      port: 6379\nmanagement:\n  server:\n    port: 9999\nserver:\n  port: ${MCP_MESH_HTTP_PORT:9035}\n")
+		a, err := parseJavaAgent(dir)
+		require.NoError(t, err)
+		require.NotNil(t, a)
+		assert.Equal(t, 9035, a.Port)
+	})
+	t.Run("yaml_flat_server_port_key", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "gw-flat")
+		writeJava(t, dir, route)
+		writeResource(t, dir, "application.yml", "management.server.port: 9998\nserver.port: 9036\n")
+		a, err := parseJavaAgent(dir)
+		require.NoError(t, err)
+		require.NotNil(t, a)
+		assert.Equal(t, 9036, a.Port)
+	})
+	t.Run("yaml_without_server_port_falls_through_to_properties", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "gw-fall")
+		writeJava(t, dir, route)
+		writeResource(t, dir, "application.yml", "spring:\n  data:\n    redis:\n      port: 6379\n")
+		writeResource(t, dir, "application.properties", "server.port=9037\n")
+		a, err := parseJavaAgent(dir)
+		require.NoError(t, err)
+		require.NotNil(t, a)
+		assert.Equal(t, 9037, a.Port)
+	})
+	t.Run("no_server_port_anywhere_is_unknown", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "gw-none")
+		writeJava(t, dir, route)
+		writeResource(t, dir, "application.yml", "redis:\n  port: 6379\n")
+		a, err := parseJavaAgent(dir)
+		require.NoError(t, err)
+		require.NotNil(t, a)
+		assert.Equal(t, 0, a.Port)
+	})
 	t.Run("plain_yaml_port", func(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "gw-yaml")
 		writeJava(t, dir, route)
@@ -536,4 +636,116 @@ func TestParseJavaAgent_APIGatewayPortSources(t *testing.T) {
 		assert.Equal(t, "real-name", a.Name)
 		assert.Equal(t, 9033, a.Port)
 	})
+}
+
+// TestScanForAgents_UnparseableGatewayIsSkippedNotGuessed: a gateway whose
+// port can't be read used to fall back to 8080, which collides with a real
+// 8080 agent and fails the whole compose run. It must be reported and left out.
+func TestScanForAgents_UnparseableGatewayIsSkippedNotGuessed(t *testing.T) {
+	tmpDir := t.TempDir()
+	writePyAgent(t, tmpDir, "tool-agent", 8080)
+	gw := filepath.Join(tmpDir, "gw-env")
+	require.NoError(t, os.MkdirAll(gw, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(gw, "main.py"), []byte(
+		"import os\nimport mesh\n@app.get('/x')\n@mesh.route(dependencies=['a'])\nasync def x(): ...\n"+
+			"uvicorn.run(app, port=int(os.environ['PORT']))\n"), 0644))
+
+	agents, skipped, err := ScanForAgentsWithSkipped(tmpDir)
+	require.NoError(t, err)
+	require.Len(t, agents, 1)
+	assert.Equal(t, "tool-agent", agents[0].Name)
+	require.Len(t, skipped, 1)
+	assert.Equal(t, "gw-env", skipped[0].Dir)
+	assert.Equal(t, "python", skipped[0].Language)
+	assert.Contains(t, skipped[0].PortHint, "uvicorn.run")
+
+	_, err = GenerateDockerCompose(&ComposeConfig{Agents: agents, ProjectName: "t"}, tmpDir)
+	require.NoError(t, err, "compose must still succeed with the gateway skipped")
+
+	// Auto-port ignores it too rather than counting a guessed 8080.
+	assert.Equal(t, 8081, NextAvailablePort(tmpDir))
+}
+
+func TestValidateAgentNames(t *testing.T) {
+	t.Run("duplicate_service_name", func(t *testing.T) {
+		err := validateAgentNames([]DetectedAgent{
+			{Name: "gateway", Dir: "a/gateway", Port: 8080},
+			{Name: "gateway", Dir: "b/gateway", Port: 8081},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `a/gateway/ and b/gateway/ both resolve to service "gateway"`)
+	})
+	t.Run("infrastructure_name", func(t *testing.T) {
+		err := validateAgentNames([]DetectedAgent{{Name: "registry", Dir: "registry", Port: 8080}})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `resolves to service "registry"`)
+	})
+	t.Run("distinct_names_pass", func(t *testing.T) {
+		require.NoError(t, validateAgentNames([]DetectedAgent{
+			{Name: "a", Dir: "a", Port: 8080}, {Name: "b", Dir: "b", Port: 8081},
+		}))
+	})
+}
+
+// TestGenerateDockerCompose_DuplicateGatewayDirsFail: two gateways in
+// same-named directories under different parents used to emit one service.
+func TestGenerateDockerCompose_DuplicateGatewayDirsFail(t *testing.T) {
+	tmpDir := t.TempDir()
+	scaffoldAPIGateway(t, filepath.Join(tmpDir, "team-a"), "python", "gateway", 9601)
+	scaffoldAPIGateway(t, filepath.Join(tmpDir, "team-b"), "typescript", "gateway", 9602)
+
+	agents, err := ScanForAgents(tmpDir)
+	require.NoError(t, err)
+	_, err = GenerateDockerCompose(&ComposeConfig{Agents: agents, ProjectName: "t"}, tmpDir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "service name conflict")
+	assert.NoFileExists(t, filepath.Join(tmpDir, "docker-compose.yml"))
+}
+
+func TestPublishedHostPorts(t *testing.T) {
+	src := "services:\n" +
+		"  a:\n    ports:\n      - \"8080:8080\"\n      - \"127.0.0.1:9090:90/tcp\"\n      - \"7000\"\n" +
+		"  b:\n    ports:\n      - target: 80\n        published: 8443\n" +
+		"  c:\n    image: x\n"
+	var doc yaml.Node
+	require.NoError(t, yaml.Unmarshal([]byte(src), &doc))
+	got := publishedHostPorts(findServicesNode(&doc))
+	assert.Equal(t, map[int]string{8080: "a", 9090: "a", 8443: "b"}, got)
+}
+
+// TestGenerateDockerCompose_MergeRejectsHostPortClash: on merge, a new agent
+// whose port an existing service already publishes fails with a clear error
+// instead of producing a file that only fails at `docker compose up`.
+func TestGenerateDockerCompose_MergeRejectsHostPortClash(t *testing.T) {
+	tmpDir := t.TempDir()
+	existing := "services:\n  mesh-ui:\n    image: mcpmesh/mesh-ui\n    ports:\n      - \"3080:3080\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "docker-compose.yml"), []byte(existing), 0644))
+
+	_, err := GenerateDockerCompose(&ComposeConfig{
+		Agents:      []DetectedAgent{{Name: "new-agent", Dir: "new-agent", Port: 3080, Language: "python"}},
+		ProjectName: "t",
+	}, tmpDir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `new agent new-agent (in new-agent/) uses host port 3080, which service "mesh-ui"`)
+
+	after, err := os.ReadFile(filepath.Join(tmpDir, "docker-compose.yml"))
+	require.NoError(t, err)
+	assert.Equal(t, existing, string(after), "a rejected merge must not touch the file")
+}
+
+// TestGenerateDockerCompose_DryRun: no files are written; the YAML goes to DryRunOut.
+func TestGenerateDockerCompose_DryRun(t *testing.T) {
+	tmpDir := t.TempDir()
+	var out bytes.Buffer
+	_, err := GenerateDockerCompose(&ComposeConfig{
+		Agents:        []DetectedAgent{{Name: "a1", Dir: "a1", Port: 9701, Language: "python"}},
+		ProjectName:   "t",
+		Observability: true,
+		DryRun:        true,
+		DryRunOut:     &out,
+	}, tmpDir)
+	require.NoError(t, err)
+	assert.Contains(t, out.String(), "a1:")
+	assert.NoFileExists(t, filepath.Join(tmpDir, "docker-compose.yml"))
+	assert.NoFileExists(t, filepath.Join(tmpDir, "tempo.yaml"))
 }

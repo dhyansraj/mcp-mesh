@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -92,19 +94,23 @@ func TestScaffoldCommand_LegacyParentFlagsHidden(t *testing.T) {
 	for _, d := range deprecatedParentFlags {
 		f := cmd.Flags().Lookup(d.flag)
 		require.NotNil(t, f, "--%s must stay registered for back-compat", d.flag)
-		assert.True(t, f.Hidden, "--%s must be hidden from 'meshctl scaffold --help'", d.flag)
+		assert.Equal(t, !d.visible, f.Hidden, "--%s hidden state", d.flag)
 	}
 
 	var help bytes.Buffer
 	cmd.SetOut(&help)
 	cmd.SetArgs([]string{"--help"})
 	require.NoError(t, cmd.Execute())
-	for _, name := range []string{"--llm-selector", "--provider", "--template ", "--tool-name", "--max-iterations", "--model"} {
+	for _, name := range []string{"--llm-selector", "--provider", "--tool-name", "--max-iterations", "--model", "--system-prompt"} {
 		assert.NotContains(t, help.String(), name)
 	}
 	for _, name := range []string{"--compose", "--observability", "--config", "--project-name"} {
 		assert.Contains(t, help.String(), name)
 	}
+	// --template stays visible because it is how --template-dir picks a
+	// template, and both help texts say so.
+	assert.Contains(t, help.String(), "Template name under --template-dir")
+	assert.Contains(t, help.String(), "(pick the template with --template)")
 }
 
 // TestScaffoldCommand_LegacyParentFlagsWarn: every hidden legacy parent flag
@@ -127,7 +133,7 @@ func TestScaffoldCommand_LegacyParentFlagsWarn(t *testing.T) {
 	for _, d := range deprecatedParentFlags {
 		assert.Contains(t, stderr, "Warning: --"+d.flag+" on 'meshctl scaffold' is deprecated",
 			"no deprecation warning for --%s; stderr:\n%s", d.flag, stderr)
-		assert.Contains(t, stderr, "use "+d.use+" instead.",
+		assert.Contains(t, stderr, "use "+d.use+" instead",
 			"warning for --%s must name the canonical form; stderr:\n%s", d.flag, stderr)
 	}
 	assert.Contains(t, stderr, "--provider on 'meshctl scaffold' is deprecated and has no effect here")
@@ -166,8 +172,67 @@ func TestScaffoldCommand_AgentTypeReportsRenamedAndDroppedFlags(t *testing.T) {
 	stderr := errOut.String()
 	assert.Contains(t, stderr, "Warning: --llm-selector is deprecated; use --vendor instead.")
 	assert.Contains(t, stderr, "Warning: --model is not supported by 'meshctl scaffold llm' and was ignored.")
-	// --provider is carried onto the subcommand's own alias, which warns.
-	assert.Contains(t, stderr, "Warning: --provider is deprecated; use --vendor instead")
+	// Both vendor sources given: the message names --llm-selector, which is
+	// where the shim's --vendor value came from, not a --vendor the user never typed.
+	assert.Contains(t, stderr, "ignoring --provider because --llm-selector is also set")
+	assert.NotContains(t, stderr, "because --vendor is also set")
+}
+
+// TestScaffoldCommand_AgentTypeProviderAloneWarnsOnSub: without
+// --llm-selector, --provider is forwarded to the subcommand's alias, which
+// warns for itself.
+func TestScaffoldCommand_AgentTypeProviderAloneWarnsOnSub(t *testing.T) {
+	cmd := NewScaffoldCommand()
+	errOut := bytes.NewBufferString("")
+	cmd.SetErr(errOut)
+	cmd.SetOut(bytes.NewBufferString(""))
+	cmd.SetArgs([]string{
+		"--name", "foo", "--agent-type", "llm-agent", "--no-interactive", "--dry-run",
+		"--provider", "gemini",
+	})
+	_ = cmd.Execute()
+	assert.Contains(t, errOut.String(), "Warning: --provider is deprecated; use --vendor instead.")
+}
+
+// TestScaffoldCommand_AgentTypeReportsDroppedNonDeprecatedFlags: parent-only
+// flags such as --template-dir and --config have no meaning on the target
+// subcommand; the shim must say it ignored them.
+func TestScaffoldCommand_AgentTypeReportsDroppedNonDeprecatedFlags(t *testing.T) {
+	cmd := NewScaffoldCommand()
+	errOut := bytes.NewBufferString("")
+	cmd.SetErr(errOut)
+	cmd.SetOut(bytes.NewBufferString(""))
+	cmd.SetArgs([]string{
+		"--name", "foo", "--agent-type", "tool", "--no-interactive", "--dry-run",
+		"--template-dir", t.TempDir(), "--config", "x.yaml",
+	})
+	_ = cmd.Execute()
+	stderr := errOut.String()
+	assert.Contains(t, stderr, "Warning: --template-dir is not supported by 'meshctl scaffold basic' and was ignored.")
+	assert.Contains(t, stderr, "Warning: --config is not supported by 'meshctl scaffold basic' and was ignored.")
+	assert.NotContains(t, stderr, "--name is not supported")
+	assert.NotContains(t, stderr, "--agent-type is not supported")
+}
+
+// TestScaffoldCommand_ComposeDryRunWritesNothing: --compose --dry-run prints
+// the YAML to stdout and leaves the directory untouched.
+func TestScaffoldCommand_ComposeDryRunWritesNothing(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "a1"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a1", "main.py"),
+		[]byte("import mesh\n@mesh.agent(name=\"a1\", http_port=9501)\nclass A: pass\n"), 0644))
+
+	cmd := NewScaffoldCommand()
+	out := bytes.NewBufferString("")
+	cmd.SetOut(out)
+	cmd.SetErr(bytes.NewBufferString(""))
+	cmd.SetArgs([]string{"--compose", "--observability", "--dry-run", "-o", dir})
+	require.NoError(t, cmd.Execute())
+
+	assert.Contains(t, out.String(), "a1:")
+	assert.Contains(t, out.String(), `"9501:9501"`)
+	assert.NoFileExists(t, filepath.Join(dir, "docker-compose.yml"))
+	assert.NoFileExists(t, filepath.Join(dir, "tempo.yaml"))
 }
 
 func TestScaffoldCommand_DefaultLanguage(t *testing.T) {

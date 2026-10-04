@@ -669,8 +669,14 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // `@mesh.route` gateway as well. One new inline span; the other #1575 man
 // edits (scaffold.md, capabilities*.md flag tables, deployment*.md commands)
 // are table lines, fenced, or swap one span for another. 1900 + 1 = 1901.
+//
+// The #1575 review follow-up added a paragraph under Docker Compose
+// Generation in `scaffold.md` saying what `--compose` detects (`@mesh.agent`
+// agents and `scaffold api` gateways) and that a gateway with an unreadable
+// port is skipped. Three new inline spans; the --dry-run example is fenced.
+// 1901 + 3 = 1904.
 const (
-	wantInlineCodeSpans = 1901
+	wantInlineCodeSpans = 1904
 	wantListCodeSpans   = 537
 	wantMarkupListLines = 455
 )
