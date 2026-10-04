@@ -586,11 +586,11 @@ discovery layer, not a routing layer.) The agent exposes a single tool,
 and returns stub flight data. That’s the complete Day 1 mesh.</p>
 <h2 id="step-1-scaffold-the-agent">Step 1: Scaffold the agent</h2>
 <p><code>meshctl scaffold</code> generates a ready-to-run agent from a
-built-in template. For a basic Python tool agent, the flags you need are
-<code>--name</code>, <code>--agent-type tool</code>, and
+built-in template. For a basic Python tool agent, you use the
+<code>basic</code> subcommand with <code>--name</code> and optionally
 <code>--lang python</code> (which is the default, so you can omit
 it).</p>
-<pre class="shell"><code>$ meshctl scaffold --name flight-agent --agent-type tool --port 9101
+<pre class="shell"><code>$ meshctl scaffold basic --name flight-agent --port 9101
 
 Created agent &#39;flight-agent&#39; in flight-agent/
 
@@ -900,10 +900,10 @@ dependencies.</p>
 agents</h2>
 <p>You know <code>meshctl scaffold</code> from Day 1. Scaffold four new
 agents:</p>
-<pre class="shell"><code>$ meshctl scaffold --name hotel-agent --agent-type tool --port 9102
-$ meshctl scaffold --name weather-agent --agent-type tool --port 9103
-$ meshctl scaffold --name poi-agent --agent-type tool --port 9104
-$ meshctl scaffold --name user-prefs-agent --agent-type tool --port 9105</code></pre>
+<pre class="shell"><code>$ meshctl scaffold basic --name hotel-agent --port 9102
+$ meshctl scaffold basic --name weather-agent --port 9103
+$ meshctl scaffold basic --name poi-agent --port 9104
+$ meshctl scaffold basic --name user-prefs-agent --port 9105</code></pre>
 <p>Each command creates the same set of files you saw on Day 1:
 <code>main.py</code>, <code>Dockerfile</code>,
 <code>helm-values.yaml</code>, and the rest. You’ll replace the
@@ -1313,7 +1313,7 @@ itinerary.</p>
 the context model at call time.</p>
 <h3 id="the-planner-code">The planner code</h3>
 <p>Scaffold the agent, then replace <code>main.py</code>:</p>
-<pre class="shell"><code>$ meshctl scaffold --name planner-agent --agent-type llm-agent --port 9107</code></pre>
+<pre class="shell"><code>$ meshctl scaffold llm --name planner-agent --port 9107</code></pre>
 <div class="sourceCode" id="cb50"><pre
 class="sourceCode python"><code class="sourceCode python"><span id="cb50-1"><a href="#cb50-1" aria-hidden="true" tabindex="-1"></a><span class="op">&gt;</span> <span class="op">*</span>See the source code <span class="kw">in</span> the day<span class="st">&#39;s example directory.*</span></span></code></pre></div>
 <p>Three things to note:</p>
@@ -2046,7 +2046,7 @@ to tool agents</li>
 </ol>
 <h2 id="part-1-build-the-gateway">Part 1: Build the gateway</h2>
 <h3 id="scaffold-the-gateway">Scaffold the gateway</h3>
-<pre class="shell"><code>$ meshctl scaffold --name gateway --agent-type api --lang python --port 8080</code></pre>
+<pre class="shell"><code>$ meshctl scaffold api --name gateway --lang python --port 8080</code></pre>
 <p>Replace the generated <code>main.py</code> with:</p>
 <div class="sourceCode" id="cb92"><pre
 class="sourceCode python"><code class="sourceCode python"><span id="cb92-1"><a href="#cb92-1" aria-hidden="true" tabindex="-1"></a><span class="op">&gt;</span> <span class="op">*</span>See the source code <span class="kw">in</span> the day<span class="st">&#39;s example directory.*</span></span></code></pre></div>
@@ -2320,7 +2320,7 @@ injection that wires <code>flight-agent</code> wires
 for state – you write an agent that wraps a data store, and other agents
 call it like any other tool.</p>
 <h3 id="scaffold-the-agent">Scaffold the agent</h3>
-<pre class="shell"><code>$ meshctl scaffold --name chat-history-agent --agent-type tool --port 9109</code></pre>
+<pre class="shell"><code>$ meshctl scaffold basic --name chat-history-agent --port 9109</code></pre>
 <pre><code>Created agent &#39;chat-history-agent&#39; in chat-history-agent/
 
 Generated files:
@@ -2680,7 +2680,7 @@ its own Pydantic model with fields specific to its domain.</p>
 <h2 id="part-2-build-the-specialists">Part 2: Build the specialists</h2>
 <h3 id="budget-analyst">Budget analyst</h3>
 <p>Scaffold the agent:</p>
-<pre class="shell"><code>$ meshctl scaffold --name budget-analyst --agent-type llm-agent --port 9110</code></pre>
+<pre class="shell"><code>$ meshctl scaffold llm --name budget-analyst --port 9110</code></pre>
 <pre><code>Created agent &#39;budget-analyst&#39; in budget-analyst/
 
 Generated files:
@@ -2709,7 +2709,7 @@ loop – the specialist makes one LLM call and returns.</p>
 <pre class="jinja"><code>&gt; *See the source code in the day&#39;s example directory.*</code></pre>
 <h3 id="adventure-advisor">Adventure advisor</h3>
 <p>Scaffold:</p>
-<pre class="shell"><code>$ meshctl scaffold --name adventure-advisor --agent-type llm-agent --port 9111</code></pre>
+<pre class="shell"><code>$ meshctl scaffold llm --name adventure-advisor --port 9111</code></pre>
 <p>Replace <code>main.py</code>:</p>
 <div class="sourceCode" id="cb145"><pre
 class="sourceCode python"><code class="sourceCode python"><span id="cb145-1"><a href="#cb145-1" aria-hidden="true" tabindex="-1"></a><span class="op">&gt;</span> <span class="op">*</span>See the source code <span class="kw">in</span> the day<span class="st">&#39;s example directory.*</span></span></code></pre></div>
@@ -2722,7 +2722,7 @@ sub-models with name, description, and why_special),
 <pre class="jinja"><code>&gt; *See the source code in the day&#39;s example directory.*</code></pre>
 <h3 id="logistics-planner">Logistics planner</h3>
 <p>Scaffold:</p>
-<pre class="shell"><code>$ meshctl scaffold --name logistics-planner --agent-type llm-agent --port 9112</code></pre>
+<pre class="shell"><code>$ meshctl scaffold llm --name logistics-planner --port 9112</code></pre>
 <p>Replace <code>main.py</code>:</p>
 <div class="sourceCode" id="cb148"><pre
 class="sourceCode python"><code class="sourceCode python"><span id="cb148-1"><a href="#cb148-1" aria-hidden="true" tabindex="-1"></a><span class="op">&gt;</span> <span class="op">*</span>See the source code <span class="kw">in</span> the day<span class="st">&#39;s example directory.*</span></span></code></pre></div>
@@ -3035,12 +3035,13 @@ $ cd day-08</code></pre>
 <h3 id="run-the-scaffold">Run the scaffold</h3>
 <pre class="shell"><code>$ meshctl scaffold --compose --observability</code></pre>
 <pre class="text"><code>Scanning for agents...
-Found 12 agent(s):
+Found 13 agent(s):
   - adventure-advisor (port 9111) in adventure-advisor/
   - budget-analyst (port 9110) in budget-analyst/
   - chat-history-agent (port 9109) in chat-history-agent/
   - claude-provider (port 9106) in claude-provider/
   - flight-agent (port 9101) in flight-agent/
+  - gateway (port 8080) in gateway/
   - hotel-agent (port 9102) in hotel-agent/
   - logistics-planner (port 9112) in logistics-planner/
   - openai-provider (port 9108) in openai-provider/
@@ -3062,6 +3063,7 @@ Services included:
   - chat-history-agent (9109)
   - claude-provider (9106)
   - flight-agent (9101)
+  - gateway (8080)
   - hotel-agent (9102)
   - logistics-planner (9112)
   - openai-provider (9108)
@@ -3070,10 +3072,13 @@ Services included:
   - user-prefs-agent (9105)
   - weather-agent (9103)</code></pre>
 <p>The scaffold scanned every subdirectory, found
-<code>@mesh.agent</code> decorators in twelve Python files, extracted
-each agent’s name and port, and generated a complete
-<code>docker-compose.yml</code> with infrastructure services, health
-checks, and networking.</p>
+<code>@mesh.agent</code> decorators in twelve Python files and the
+<code>@mesh.route</code> handlers in the gateway, extracted each agent’s
+name and port, and generated a complete <code>docker-compose.yml</code>
+with infrastructure services, health checks, and networking. The gateway
+is a FastAPI app rather than a <code>@mesh.agent</code> class, so its
+service is named after its directory and its port comes from the
+<code>uvicorn.run(...)</code> call in <code>gateway/main.py</code>.</p>
 <p>It also generated observability configuration files:</p>
 <pre class="text"><code>.
 ├── docker-compose.yml
@@ -3085,37 +3090,28 @@ checks, and networking.</p>
     └── provisioning/
         ├── dashboards/dashboards.yaml
         └── datasources/datasources.yaml</code></pre>
-<h3 id="what-about-the-gateway">What about the gateway?</h3>
-<p>The scaffold detected twelve agents, not thirteen. The gateway uses
-<code>@mesh.route</code> on a FastAPI app – it is not a
-<code>@mesh.agent</code> class. The scaffold looks for
-<code>@mesh.agent</code> decorators to auto-detect agents, so the
-gateway needs to be added manually.</p>
-<p>Add the gateway service to <code>docker-compose.yml</code>:</p>
-<div class="sourceCode" id="cb172"><pre
-class="sourceCode yaml"><code class="sourceCode yaml"><span id="cb172-1"><a href="#cb172-1" aria-hidden="true" tabindex="-1"></a><span class="at">&gt; *See the source code in the day&#39;s example directory.*</span></span></code></pre></div>
 <h3 id="add-the-mesh-ui">Add the Mesh UI</h3>
 <p>The scaffold does not include the Mesh UI dashboard. Add it after the
 registry service:</p>
-<div class="sourceCode" id="cb173"><pre
-class="sourceCode yaml"><code class="sourceCode yaml"><span id="cb173-1"><a href="#cb173-1" aria-hidden="true" tabindex="-1"></a><span class="at">&gt; *See the source code in the day&#39;s example directory.*</span></span></code></pre></div>
+<div class="sourceCode" id="cb172"><pre
+class="sourceCode yaml"><code class="sourceCode yaml"><span id="cb172-1"><a href="#cb172-1" aria-hidden="true" tabindex="-1"></a><span class="at">&gt; *See the source code in the day&#39;s example directory.*</span></span></code></pre></div>
 <h3 id="pass-api-keys">Pass API keys</h3>
 <p>The LLM providers need API keys. The scaffold does not know about
 your environment variables, so add them to the claude-provider and
 openai-provider services:</p>
-<div class="sourceCode" id="cb174"><pre
-class="sourceCode yaml"><code class="sourceCode yaml"><span id="cb174-1"><a href="#cb174-1" aria-hidden="true" tabindex="-1"></a><span class="co"># In the claude-provider service environment:</span></span>
-<span id="cb174-2"><a href="#cb174-2" aria-hidden="true" tabindex="-1"></a><span class="fu">ANTHROPIC_API_KEY</span><span class="kw">:</span><span class="at"> ${ANTHROPIC_API_KEY}</span></span>
-<span id="cb174-3"><a href="#cb174-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb174-4"><a href="#cb174-4" aria-hidden="true" tabindex="-1"></a><span class="co"># In the openai-provider service environment:</span></span>
-<span id="cb174-5"><a href="#cb174-5" aria-hidden="true" tabindex="-1"></a><span class="fu">OPENAI_API_KEY</span><span class="kw">:</span><span class="at"> ${OPENAI_API_KEY}</span></span></code></pre></div>
+<div class="sourceCode" id="cb173"><pre
+class="sourceCode yaml"><code class="sourceCode yaml"><span id="cb173-1"><a href="#cb173-1" aria-hidden="true" tabindex="-1"></a><span class="co"># In the claude-provider service environment:</span></span>
+<span id="cb173-2"><a href="#cb173-2" aria-hidden="true" tabindex="-1"></a><span class="fu">ANTHROPIC_API_KEY</span><span class="kw">:</span><span class="at"> ${ANTHROPIC_API_KEY}</span></span>
+<span id="cb173-3"><a href="#cb173-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb173-4"><a href="#cb173-4" aria-hidden="true" tabindex="-1"></a><span class="co"># In the openai-provider service environment:</span></span>
+<span id="cb173-5"><a href="#cb173-5" aria-hidden="true" tabindex="-1"></a><span class="fu">OPENAI_API_KEY</span><span class="kw">:</span><span class="at"> ${OPENAI_API_KEY}</span></span></code></pre></div>
 <p>Make sure these variables are set in your shell or in a
 <code>.env</code> file next to <code>docker-compose.yml</code>.</p>
 <p>!!! tip “meshctl DX” The compose file was generated from your agent
 code. You did not write it. When you add a new agent, re-run
 <code>meshctl scaffold --compose</code> and the compose file updates
 automatically. The scaffold merges new agents into the existing file
-without overwriting your manual additions like the gateway and API
+without overwriting your manual additions like the Mesh UI and API
 keys.</p>
 <h2 id="part-2-start-the-containerized-mesh">Part 2: Start the
 containerized mesh</h2>
@@ -3268,10 +3264,10 @@ Check its logs: <code>docker compose logs mesh-ui</code>. The UI needs
 the registry to be healthy before it starts.</p>
 <h2 id="recap-7">Recap</h2>
 <p>You generated a Docker Compose file from your agent code with a
-single command. The scaffold detected twelve agents, extracted their
-names and ports, and produced a complete compose file with
-infrastructure, health checks, and observability. You added the gateway
-and Mesh UI manually, started everything with
+single command. The scaffold detected all thirteen agents, extracted
+their names and ports, and produced a complete compose file with
+infrastructure, health checks, and observability. You added the Mesh UI
+and API keys manually, started everything with
 <code>docker compose up -d</code>, and verified the mesh works
 identically to the local setup. The Mesh UI dashboard gave you real-time
 visibility into agent topology, traffic, and traces.</p>
@@ -3377,8 +3373,8 @@ are identical. The function you wrote on Day 1 and evolved through Day 8
 runs on Kubernetes without a single code change.</p>
 <p>Remember that <code>helm-values.yaml</code> file from Day 1 that you
 ignored?</p>
-<div class="sourceCode" id="cb189"><pre
-class="sourceCode yaml"><code class="sourceCode yaml"><span id="cb189-1"><a href="#cb189-1" aria-hidden="true" tabindex="-1"></a><span class="at">&gt; *See the source code in the day&#39;s example directory.*</span></span></code></pre></div>
+<div class="sourceCode" id="cb188"><pre
+class="sourceCode yaml"><code class="sourceCode yaml"><span id="cb188-1"><a href="#cb188-1" aria-hidden="true" tabindex="-1"></a><span class="at">&gt; *See the source code in the day&#39;s example directory.*</span></span></code></pre></div>
 <p>That is the Kubernetes deployment manifest for your flight agent. The
 scaffold generated it on Day 1. It tells the Helm chart which image to
 pull, what to name the agent, and how many resources to give it. The
@@ -3441,8 +3437,8 @@ namespace and secrets</h2>
 <pre class="text"><code>secret/llm-keys created</code></pre>
 <p>The Helm values files for LLM agents reference this secret by
 name:</p>
-<div class="sourceCode" id="cb198"><pre
-class="sourceCode yaml"><code class="sourceCode yaml"><span id="cb198-1"><a href="#cb198-1" aria-hidden="true" tabindex="-1"></a><span class="at">&gt; *See the source code in the day&#39;s example directory.*</span></span></code></pre></div>
+<div class="sourceCode" id="cb197"><pre
+class="sourceCode yaml"><code class="sourceCode yaml"><span id="cb197-1"><a href="#cb197-1" aria-hidden="true" tabindex="-1"></a><span class="at">&gt; *See the source code in the day&#39;s example directory.*</span></span></code></pre></div>
 <p>The <code>secretKeyRef</code> mounts the key as an environment
 variable inside the pod. The agent code reads
 <code>ANTHROPIC_API_KEY</code> from the environment – the same way it
@@ -3568,8 +3564,8 @@ resolve automatically within the cluster.</p>
 <pre class="shell"><code>$ kubectl -n trip-planner port-forward svc/gateway-mcp-mesh-agent 8080:8080 &amp;
 
 $ curl -s http://localhost:8080/health</code></pre>
-<div class="sourceCode" id="cb210"><pre
-class="sourceCode json"><code class="sourceCode json"><span id="cb210-1"><a href="#cb210-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">&quot;status&quot;</span><span class="fu">:</span> <span class="st">&quot;healthy&quot;</span><span class="fu">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb209"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb209-1"><a href="#cb209-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">&quot;status&quot;</span><span class="fu">:</span> <span class="st">&quot;healthy&quot;</span><span class="fu">}</span></span></code></pre></div>
 <pre class="shell"><code>$ curl -s -X POST http://localhost:8080/plan \
     -H &quot;Content-Type: application/json&quot; \
     -H &quot;X-Session-Id: k8s-test-1&quot; \
@@ -3584,31 +3580,31 @@ you did on Day 1:</p>
 <pre class="shell"><code>$ meshctl call flight_search \
     &#39;{&quot;origin&quot;:&quot;SFO&quot;,&quot;destination&quot;:&quot;NRT&quot;,&quot;date&quot;:&quot;2026-06-01&quot;}&#39; \
     --registry-url http://localhost:8000</code></pre>
-<div class="sourceCode" id="cb213"><pre
-class="sourceCode json"><code class="sourceCode json"><span id="cb213-1"><a href="#cb213-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
-<span id="cb213-2"><a href="#cb213-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;result&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
-<span id="cb213-3"><a href="#cb213-3" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span></span>
-<span id="cb213-4"><a href="#cb213-4" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;carrier&quot;</span><span class="fu">:</span> <span class="st">&quot;MH&quot;</span><span class="fu">,</span></span>
-<span id="cb213-5"><a href="#cb213-5" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;flight&quot;</span><span class="fu">:</span> <span class="st">&quot;MH007&quot;</span><span class="fu">,</span></span>
-<span id="cb213-6"><a href="#cb213-6" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;origin&quot;</span><span class="fu">:</span> <span class="st">&quot;SFO&quot;</span><span class="fu">,</span></span>
-<span id="cb213-7"><a href="#cb213-7" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;destination&quot;</span><span class="fu">:</span> <span class="st">&quot;NRT&quot;</span><span class="fu">,</span></span>
-<span id="cb213-8"><a href="#cb213-8" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;date&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-06-01&quot;</span><span class="fu">,</span></span>
-<span id="cb213-9"><a href="#cb213-9" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;depart&quot;</span><span class="fu">:</span> <span class="st">&quot;09:15&quot;</span><span class="fu">,</span></span>
-<span id="cb213-10"><a href="#cb213-10" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;arrive&quot;</span><span class="fu">:</span> <span class="st">&quot;14:40&quot;</span><span class="fu">,</span></span>
-<span id="cb213-11"><a href="#cb213-11" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;price_usd&quot;</span><span class="fu">:</span> <span class="dv">842</span></span>
-<span id="cb213-12"><a href="#cb213-12" aria-hidden="true" tabindex="-1"></a>    <span class="fu">}</span><span class="ot">,</span></span>
-<span id="cb213-13"><a href="#cb213-13" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span></span>
-<span id="cb213-14"><a href="#cb213-14" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;carrier&quot;</span><span class="fu">:</span> <span class="st">&quot;SQ&quot;</span><span class="fu">,</span></span>
-<span id="cb213-15"><a href="#cb213-15" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;flight&quot;</span><span class="fu">:</span> <span class="st">&quot;SQ017&quot;</span><span class="fu">,</span></span>
-<span id="cb213-16"><a href="#cb213-16" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;origin&quot;</span><span class="fu">:</span> <span class="st">&quot;SFO&quot;</span><span class="fu">,</span></span>
-<span id="cb213-17"><a href="#cb213-17" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;destination&quot;</span><span class="fu">:</span> <span class="st">&quot;NRT&quot;</span><span class="fu">,</span></span>
-<span id="cb213-18"><a href="#cb213-18" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;date&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-06-01&quot;</span><span class="fu">,</span></span>
-<span id="cb213-19"><a href="#cb213-19" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;depart&quot;</span><span class="fu">:</span> <span class="st">&quot;11:50&quot;</span><span class="fu">,</span></span>
-<span id="cb213-20"><a href="#cb213-20" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;arrive&quot;</span><span class="fu">:</span> <span class="st">&quot;17:05&quot;</span><span class="fu">,</span></span>
-<span id="cb213-21"><a href="#cb213-21" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;price_usd&quot;</span><span class="fu">:</span> <span class="dv">901</span></span>
-<span id="cb213-22"><a href="#cb213-22" aria-hidden="true" tabindex="-1"></a>    <span class="fu">}</span></span>
-<span id="cb213-23"><a href="#cb213-23" aria-hidden="true" tabindex="-1"></a>  <span class="ot">]</span></span>
-<span id="cb213-24"><a href="#cb213-24" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb212"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb212-1"><a href="#cb212-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb212-2"><a href="#cb212-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;result&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb212-3"><a href="#cb212-3" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span></span>
+<span id="cb212-4"><a href="#cb212-4" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;carrier&quot;</span><span class="fu">:</span> <span class="st">&quot;MH&quot;</span><span class="fu">,</span></span>
+<span id="cb212-5"><a href="#cb212-5" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;flight&quot;</span><span class="fu">:</span> <span class="st">&quot;MH007&quot;</span><span class="fu">,</span></span>
+<span id="cb212-6"><a href="#cb212-6" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;origin&quot;</span><span class="fu">:</span> <span class="st">&quot;SFO&quot;</span><span class="fu">,</span></span>
+<span id="cb212-7"><a href="#cb212-7" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;destination&quot;</span><span class="fu">:</span> <span class="st">&quot;NRT&quot;</span><span class="fu">,</span></span>
+<span id="cb212-8"><a href="#cb212-8" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;date&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-06-01&quot;</span><span class="fu">,</span></span>
+<span id="cb212-9"><a href="#cb212-9" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;depart&quot;</span><span class="fu">:</span> <span class="st">&quot;09:15&quot;</span><span class="fu">,</span></span>
+<span id="cb212-10"><a href="#cb212-10" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;arrive&quot;</span><span class="fu">:</span> <span class="st">&quot;14:40&quot;</span><span class="fu">,</span></span>
+<span id="cb212-11"><a href="#cb212-11" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;price_usd&quot;</span><span class="fu">:</span> <span class="dv">842</span></span>
+<span id="cb212-12"><a href="#cb212-12" aria-hidden="true" tabindex="-1"></a>    <span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb212-13"><a href="#cb212-13" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span></span>
+<span id="cb212-14"><a href="#cb212-14" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;carrier&quot;</span><span class="fu">:</span> <span class="st">&quot;SQ&quot;</span><span class="fu">,</span></span>
+<span id="cb212-15"><a href="#cb212-15" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;flight&quot;</span><span class="fu">:</span> <span class="st">&quot;SQ017&quot;</span><span class="fu">,</span></span>
+<span id="cb212-16"><a href="#cb212-16" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;origin&quot;</span><span class="fu">:</span> <span class="st">&quot;SFO&quot;</span><span class="fu">,</span></span>
+<span id="cb212-17"><a href="#cb212-17" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;destination&quot;</span><span class="fu">:</span> <span class="st">&quot;NRT&quot;</span><span class="fu">,</span></span>
+<span id="cb212-18"><a href="#cb212-18" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;date&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-06-01&quot;</span><span class="fu">,</span></span>
+<span id="cb212-19"><a href="#cb212-19" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;depart&quot;</span><span class="fu">:</span> <span class="st">&quot;11:50&quot;</span><span class="fu">,</span></span>
+<span id="cb212-20"><a href="#cb212-20" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;arrive&quot;</span><span class="fu">:</span> <span class="st">&quot;17:05&quot;</span><span class="fu">,</span></span>
+<span id="cb212-21"><a href="#cb212-21" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;price_usd&quot;</span><span class="fu">:</span> <span class="dv">901</span></span>
+<span id="cb212-22"><a href="#cb212-22" aria-hidden="true" tabindex="-1"></a>    <span class="fu">}</span></span>
+<span id="cb212-23"><a href="#cb212-23" aria-hidden="true" tabindex="-1"></a>  <span class="ot">]</span></span>
+<span id="cb212-24"><a href="#cb212-24" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
 <p>The same stub data. The same function. Running in a Kubernetes
 pod.</p>
 <h3 id="optional-ingress">Optional: Ingress</h3>
@@ -3617,8 +3613,8 @@ On minikube, enable the ingress addon:</p>
 <pre class="shell"><code>$ minikube addons enable ingress</code></pre>
 <p>Apply the ingress manifest:</p>
 <pre class="shell"><code>$ kubectl apply -f k8s/ingress-gateway.yaml</code></pre>
-<div class="sourceCode" id="cb216"><pre
-class="sourceCode yaml"><code class="sourceCode yaml"><span id="cb216-1"><a href="#cb216-1" aria-hidden="true" tabindex="-1"></a><span class="at">&gt; *See the source code in the day&#39;s example directory.*</span></span></code></pre></div>
+<div class="sourceCode" id="cb215"><pre
+class="sourceCode yaml"><code class="sourceCode yaml"><span id="cb215-1"><a href="#cb215-1" aria-hidden="true" tabindex="-1"></a><span class="at">&gt; *See the source code in the day&#39;s example directory.*</span></span></code></pre></div>
 <p>Add the hostname to your <code>/etc/hosts</code>:</p>
 <pre class="shell"><code>$ echo &quot;$(minikube ip) trip-planner.local&quot; | sudo tee -a /etc/hosts</code></pre>
 <p>Then call the gateway via the ingress:</p>
@@ -3985,15 +3981,15 @@ documentation</a></p>
 <p>Set CPU and memory limits in your Helm values files. You already have
 <code>helm-values.yaml</code> per agent from Day 9 – add resource
 blocks:</p>
-<div class="sourceCode" id="cb227"><pre
-class="sourceCode yaml"><code class="sourceCode yaml"><span id="cb227-1"><a href="#cb227-1" aria-hidden="true" tabindex="-1"></a><span class="fu">agent</span><span class="kw">:</span></span>
-<span id="cb227-2"><a href="#cb227-2" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">resources</span><span class="kw">:</span></span>
-<span id="cb227-3"><a href="#cb227-3" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">requests</span><span class="kw">:</span></span>
-<span id="cb227-4"><a href="#cb227-4" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">cpu</span><span class="kw">:</span><span class="at"> 100m</span></span>
-<span id="cb227-5"><a href="#cb227-5" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">memory</span><span class="kw">:</span><span class="at"> 128Mi</span></span>
-<span id="cb227-6"><a href="#cb227-6" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">limits</span><span class="kw">:</span></span>
-<span id="cb227-7"><a href="#cb227-7" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">cpu</span><span class="kw">:</span><span class="at"> 500m</span></span>
-<span id="cb227-8"><a href="#cb227-8" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">memory</span><span class="kw">:</span><span class="at"> 512Mi</span></span></code></pre></div>
+<div class="sourceCode" id="cb226"><pre
+class="sourceCode yaml"><code class="sourceCode yaml"><span id="cb226-1"><a href="#cb226-1" aria-hidden="true" tabindex="-1"></a><span class="fu">agent</span><span class="kw">:</span></span>
+<span id="cb226-2"><a href="#cb226-2" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">resources</span><span class="kw">:</span></span>
+<span id="cb226-3"><a href="#cb226-3" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">requests</span><span class="kw">:</span></span>
+<span id="cb226-4"><a href="#cb226-4" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">cpu</span><span class="kw">:</span><span class="at"> 100m</span></span>
+<span id="cb226-5"><a href="#cb226-5" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">memory</span><span class="kw">:</span><span class="at"> 128Mi</span></span>
+<span id="cb226-6"><a href="#cb226-6" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">limits</span><span class="kw">:</span></span>
+<span id="cb226-7"><a href="#cb226-7" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">cpu</span><span class="kw">:</span><span class="at"> 500m</span></span>
+<span id="cb226-8"><a href="#cb226-8" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">memory</span><span class="kw">:</span><span class="at"> 512Mi</span></span></code></pre></div>
 <h3 id="health-probes">Health probes</h3>
 <p>Mesh agents serve four health endpoints automatically, and every
 probe gets its own – the Helm chart wires <code>startupProbe</code> to
@@ -4024,9 +4020,9 @@ encrypt secrets in Git, decrypt at deploy time.</li>
 <h3 id="horizontal-scaling">Horizontal scaling</h3>
 <p>Tool agents are stateless – run multiple replicas for throughput. The
 mesh routes calls to any healthy instance automatically:</p>
-<div class="sourceCode" id="cb228"><pre
-class="sourceCode yaml"><code class="sourceCode yaml"><span id="cb228-1"><a href="#cb228-1" aria-hidden="true" tabindex="-1"></a><span class="fu">agent</span><span class="kw">:</span></span>
-<span id="cb228-2"><a href="#cb228-2" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">replicaCount</span><span class="kw">:</span><span class="at"> </span><span class="dv">3</span></span></code></pre></div>
+<div class="sourceCode" id="cb227"><pre
+class="sourceCode yaml"><code class="sourceCode yaml"><span id="cb227-1"><a href="#cb227-1" aria-hidden="true" tabindex="-1"></a><span class="fu">agent</span><span class="kw">:</span></span>
+<span id="cb227-2"><a href="#cb227-2" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">replicaCount</span><span class="kw">:</span><span class="at"> </span><span class="dv">3</span></span></code></pre></div>
 <p>LLM providers and the planner can also scale horizontally. The chat
 history agent is stateless too (state lives in Redis). The gateway
 scales behind a Kubernetes Service or Ingress.</p>
