@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::{mpsc, Mutex};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::config::is_tracing_enabled;
 use crate::events::MeshEvent;
@@ -75,8 +75,6 @@ pub struct MeshAgentHandle {
     runtime: tokio::runtime::Runtime,
     /// Whether the agent is still running
     is_running: AtomicBool,
-    /// Agent ID once registered
-    agent_id: Option<String>,
     /// Shared state with runtime (for health status updates)
     shared_state: Arc<tokio::sync::RwLock<HandleState>>,
 }
@@ -210,7 +208,6 @@ pub unsafe extern "C" fn mesh_start_agent(spec_json: *const c_char) -> *mut Mesh
         command_tx,
         runtime,
         is_running: AtomicBool::new(true),
-        agent_id: None,
         shared_state,
     });
 
@@ -2703,7 +2700,6 @@ mod tests {
             // Already stopped: free skips the graceful-shutdown wait and
             // exercises exactly the teardown drain.
             is_running: AtomicBool::new(false),
-            agent_id: None,
             shared_state: Arc::new(tokio::sync::RwLock::new(HandleState::default())),
         });
         unsafe { mesh_free_handle(Arc::into_raw(handle) as *mut MeshAgentHandle) };
@@ -2737,7 +2733,6 @@ mod tests {
             command_tx,
             runtime,
             is_running: AtomicBool::new(true),
-            agent_id: None,
             shared_state: Arc::new(tokio::sync::RwLock::new(HandleState::default())),
         });
         let ptr = Arc::into_raw(handle) as *mut MeshAgentHandle;
@@ -2785,7 +2780,6 @@ mod tests {
             command_tx,
             runtime,
             is_running: AtomicBool::new(true),
-            agent_id: None,
             shared_state: Arc::new(tokio::sync::RwLock::new(HandleState::default())),
         });
         (Arc::into_raw(handle) as *mut MeshAgentHandle, command_rx)

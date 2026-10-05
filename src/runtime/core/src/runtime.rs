@@ -66,7 +66,6 @@ pub enum RuntimeCommand {
 /// provider proxy.
 #[derive(Debug, Clone)]
 struct TrackedProvider {
-    function_id: String,
     agent_id: String,
     endpoint: String,
     function_name: String,
@@ -141,7 +140,6 @@ struct TopologyState {
 /// The agent runtime that runs in the background.
 pub struct AgentRuntime {
     spec: AgentSpec,
-    config: RuntimeConfig,
     registry_client: RegistryClient,
     state_machine: HeartbeatStateMachine,
     topology: TopologyState,
@@ -194,14 +192,13 @@ impl AgentRuntime {
         let registry_client = RegistryClient::new(&spec.registry_url, &tls_config)?;
         let heartbeat_config = HeartbeatConfig {
             interval: Duration::from_secs(spec.heartbeat_interval),
-            ..config.heartbeat.clone()
+            ..config.heartbeat
         };
         let state_machine = HeartbeatStateMachine::new(heartbeat_config);
         let (pending_jobs_tx, _) = watch::channel::<Option<u32>>(None);
 
         Ok(Self {
             spec,
-            config,
             registry_client,
             state_machine,
             topology: TopologyState::default(),
@@ -1008,7 +1005,6 @@ impl AgentRuntime {
 
             // Use internal tracking struct to avoid GIL issues
             let tracked = TrackedProvider {
-                function_id: function_id.clone(),
                 agent_id: provider.agent_id.clone(),
                 endpoint: provider.endpoint.clone(),
                 function_name: provider.function_name.clone(),
@@ -1522,7 +1518,6 @@ mod tests {
         let config = RuntimeConfig {
             heartbeat: HeartbeatConfig {
                 interval: Duration::from_secs(1),
-                max_retries: 5,
                 base_backoff: Duration::from_secs(2),
                 max_backoff: Duration::from_secs(2),
                 missed_threshold: 1,
@@ -1633,7 +1628,6 @@ mod tests {
         let config = RuntimeConfig {
             heartbeat: HeartbeatConfig {
                 interval: Duration::from_secs(1),
-                max_retries: 5,
                 // After one failure retry_attempt=1 -> capped at
                 // max_backoff=2s, equal jitter floors at 1s. The shutdown
                 // below lands ~300ms in, well inside the backoff window.
