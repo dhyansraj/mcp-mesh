@@ -3467,7 +3467,7 @@ $ docker compose down -v
 ## Troubleshooting
 
 **Docker build fails with missing requirements.** The compose file uses
-`mcpmesh/python-runtime:3.7.1` images with a dev-mode entrypoint that
+`mcpmesh/python-runtime:3.8.0` images with a dev-mode entrypoint that
 installs `requirements.txt` on startup. If an agent has dependencies not
 in the base image, check that `requirements.txt` exists in the agent
 directory and lists all dependencies.
@@ -3745,7 +3745,7 @@ and Grafana as a single Helm release:
 
 ```shell
 $ helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-    --version 3.7.1 \
+    --version 3.8.0 \
     -n trip-planner \
     -f helm/values-core.yaml \
     --wait --timeout 5m
@@ -3783,7 +3783,7 @@ $ for agent in "${AGENTS[@]}"; do
     echo "Installing $agent..."
     helm install "$agent" \
       oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-      --version 3.7.1 \
+      --version 3.8.0 \
       -n trip-planner \
       -f "helm/values-${agent}.yaml"
   done
