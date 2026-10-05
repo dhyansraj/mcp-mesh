@@ -370,13 +370,6 @@ function performExpressAutoDetection(req: Request): void {
 }
 
 /**
- * Reset auto-detection flag (for testing).
- */
-export function resetAutoDetection(): void {
-  expressAutoDetected = false;
-}
-
-/**
  * Create an Express middleware that injects mesh dependencies.
  *
  * @param dependencies - Array of dependency specifications

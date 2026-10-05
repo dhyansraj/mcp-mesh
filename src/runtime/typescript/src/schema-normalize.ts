@@ -57,67 +57,11 @@ export function shouldRefuseStartup(
 }
 
 /**
- * Normalize a raw JSON Schema via the Rust core.
+ * Normalize a raw JSON Schema via the Rust core and apply the verdict
+ * policy (Issue #547 Phase 4).
  *
- * Resolves to `null`-fielded result if `@mcpmesh/core` does not yet expose
- * `normalizeSchema` (legacy bundled binary). Logs a warning once per call.
- * Callers should treat that as "schema fields unavailable, ship without".
- *
- * @throws Error when the normalizer returns verdict === "BLOCK". The caller
- *         is expected to surface this with an actionable message including
- *         the function/dependency name (we don't have that context here).
- */
-export function normalizeSchemaRaw(
-  raw: object,
-  contextLabel: string
-): NormalizedSchemaResult {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const normalizeFn = (core as any).normalizeSchema as
-    | ((rawJson: string, origin?: string) => string)
-    | undefined;
-
-  if (typeof normalizeFn !== "function") {
-    console.warn(
-      `[mesh] normalizeSchema not found in @mcpmesh/core for ${contextLabel} ` +
-        `(rebuild napi binding to enable schema canonicalization)`
-    );
-    return { canonicalJson: null, hash: null, verdict: "OK", warnings: [] };
-  }
-
-  let parsed: { canonical?: unknown; hash?: string; verdict?: string; warnings?: string[] };
-  try {
-    parsed = JSON.parse(normalizeFn(JSON.stringify(raw), "typescript"));
-  } catch (err) {
-    console.warn(
-      `[mesh] schema normalization failed for ${contextLabel}: ${
-        err instanceof Error ? err.message : String(err)
-      }`
-    );
-    return { canonicalJson: null, hash: null, verdict: "OK", warnings: [] };
-  }
-
-  const verdict = parsed.verdict ?? "OK";
-  const warnings = parsed.warnings ?? [];
-
-  if (verdict === "BLOCK") {
-    throw new Error(
-      `Schema normalization BLOCKED for ${contextLabel}: ${warnings.join("; ")}. Cannot start agent.`
-    );
-  }
-
-  const canonicalJson =
-    parsed.canonical !== undefined && parsed.canonical !== null
-      ? JSON.stringify(parsed.canonical)
-      : null;
-  const hash = parsed.hash || null;
-  return { canonicalJson, hash, verdict, warnings };
-}
-
-/**
- * Issue #547 Phase 4: apply the verdict policy on top of {@link normalizeSchemaRaw}.
- *
- * Use this from callsites that need the per-tool override to take effect.
- * Returns the (possibly warning-tagged) result, or throws when startup must
+ * Resolves to a `null`-fielded result if `@mcpmesh/core` does not expose
+ * `normalizeSchema` (legacy bundled binary). Returns the (possibly warning-tagged) result, or throws when startup must
  * be refused. Logs WARN/demoted-BLOCK loudly so they show up in normal
  * deployments.
  */

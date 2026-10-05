@@ -275,15 +275,6 @@ export function getCurrentTraceContext(): TraceContext | null {
 }
 
 /**
- * @deprecated Use runWithTraceContext() instead for async-safe context propagation.
- * This function is kept for backward compatibility but does nothing.
- */
-export function setCurrentTraceContext(_ctx: TraceContext | null): void {
-  // No-op - use runWithTraceContext() instead
-  // This is kept for backward compatibility with any external code
-}
-
-/**
  * Create an McpMeshTool proxy for a resolved dependency.
  *
  * The returned object is callable (invokes the bound function)
