@@ -127,13 +127,12 @@ func TestProxy_ShutdownLeavesPostStreamRunning(t *testing.T) {
 	// cannot reach a declared-length POST (it only affects parked
 	// long-polls, proxied GETs and chunked slot waits), so the product
 	// behavior this test pins is intact; the drop itself is not yet
-	// root-caused and is tracked separately (see the tracking issue for
-	// "TestProxy_ShutdownLeavesPostStreamRunning"). Set
+	// root-caused and is tracked in #1639. Set
 	// MCP_MESH_RUN_PROXY_POST_SHUTDOWN_TEST=1 to run it while
 	// investigating; the failure message names the relay error.
 	if os.Getenv("MCP_MESH_RUN_PROXY_POST_SHUTDOWN_TEST") != "1" {
 		t.Skip("intermittent Linux CI upstream-connection drop, not caused by BeginShutdown; " +
-			"tracked separately — set MCP_MESH_RUN_PROXY_POST_SHUTDOWN_TEST=1 to run")
+			"tracked in #1639 — set MCP_MESH_RUN_PROXY_POST_SHUTDOWN_TEST=1 to run")
 	}
 
 	// Capture the relay's log so a failure says how the stream ended. A
