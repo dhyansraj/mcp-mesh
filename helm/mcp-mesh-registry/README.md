@@ -42,7 +42,7 @@ The following table lists the configurable parameters of the MCP Mesh Registry c
 | `image.registry`           | Image registry prefix (overrides `global.imageRegistry`)                   | `""`                |
 | `image.repository`         | Registry image repository                                                   | `mcpmesh/registry`  |
 | `image.pullPolicy`         | Image pull policy                                                           | `IfNotPresent`      |
-| `image.tag`                | Image tag (overrides chart appVersion)                                      | `"3.7"`             |
+| `image.tag`                | Image tag (overrides chart appVersion)                                      | `"3.8"`             |
 | `waitForDbImage.registry`  | wait-for-db init image registry prefix (overrides `global.imageRegistry`)  | `""`                |
 | `waitForDbImage.repository` | wait-for-db init image repository                                           | `busybox`           |
 | `waitForDbImage.tag`       | wait-for-db init image tag                                                  | `"1.35"`            |

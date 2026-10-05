@@ -1,6 +1,44 @@
 # MCP Mesh Release Notes
 
-[Unreleased changes](https://github.com/dhyansraj/mcp-mesh/compare/v3.7.1...HEAD)
+[Unreleased changes](https://github.com/dhyansraj/mcp-mesh/compare/v3.8.0...HEAD)
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.7.1...v3.8.0)
+
+## v3.8.0 (2026-10-05)
+
+Fixes across every runtime, the registry and the Helm charts.
+
+### ⚠️ Upgrade notes
+
+- **⚠️ The registry refuses to start with TLS on and no trust backend**; set `registry.security.trust.backend` or `tls.mode=off` (#1624).
+- **⚠️ The registry refuses an unknown `MCP_MESH_TLS_MODE`** (`true`, `on` and typos used to mean `auto`); use `off`, `auto` or `strict` (#1634).
+- **⚠️ Helm fails the render on removed or never-read keys** (e.g. `registry.security.auth.*`, `registry.database.path`) **and on `postgres.enabled=false` without an external database**; remove the keys or set `global.postgres.*` (#1632, #1633).
+- **⚠️ Helm booleans set to `false` are now honoured, and ingress backends follow `global.coreReleaseName`** (default `mcp-core`); recheck `false` values and set the name if yours differs (#1632, #1633).
+- **⚠️ `X-Mesh-Job-Id` is inbound-only, so a nested `task=true` call gets a `null` `MeshJob`**; upgrade producers before or with their callers (#1613).
+- **⚠️ Python `auto_run=False` / `MCP_MESH_AUTO_RUN=false` now registers the agent**; use `MCP_MESH_ENABLED=false` to stay out of the mesh (#1614).
+- **⚠️ Python `@mesh.route` / `@mesh.a2a` dependency tags and versions now reach the registry**; check gateway selectors match the providers you expect (#1614).
+- **⚠️ Four `Optional` / nested-union schema shapes hash differently**, so old and new peers may not match on them until the rollout completes (#1612).
+- **⚠️ Java refuses `MCP_MESH_TLS_PROVIDER=spire`**; use `file` or `vault` (#1637).
+
+### Behaviour changes
+
+- TypeScript and Java `/health` returns 503 `starting` until the first health check completes (#1628, #1631).
+- TypeScript's default call budget is 300s (was 30s), and `meshJobParamIndex` requires `task: true` (#1609, #1628).
+- Java typed consumers of a multi-text result throw unless the tool sets `structuredContent` (#1644).
+- Java apps without `@MeshAgent` read `MCP_MESH_TLS_MODE` / `MCP_MESH_HTTP_PORT`, and five unused public methods are deprecated (#1631, #1642).
+- Python drops `dependency_kwargs` with a warning (#1637).
+- An empty `MCP_MESH_*` env var means unset (#1635).
+- The registry rejects request bodies over 10 MB (`MCP_MESH_MAX_REQUEST_BODY_BYTES`) (#1607).
+
+### Fixes
+
+- **Registry:** no fleet-wide re-registration on a DB blip, no overwritten job completions, accurate status events, listener timeouts and graceful shutdown (#1599, #1607, #1634, #1643).
+- **Python:** a call that may have reached the provider is no longer re-run, `mesh.jobs` no longer hangs across event loops, and `@mesh.a2a(...)` works after `mount` (#1615, #1565, #1635).
+- **TypeScript:** `sseStream` no longer cuts slow consumers, and DI/settle match Python (#1620, #1628).
+- **Java:** per-consumer typing, inherited handlers, OR tags and token usage behind LLM providers (#1629, #1631).
+- **Helm:** configurable registry probes and a valid `agent.http.enabled: false` (#1633).
+- **meshctl:** `scaffold --compose` includes API gateways (#1636).
+- **Maintenance:** docs corrected against the code, dead code removed, CI hardening (#1563, #1595, #1622, #1637, #1640, #1642).
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v3.7.0...v3.7.1)
 

@@ -64,7 +64,7 @@ services:
 
   # MCP Mesh Registry
   registry:
-    image: mcpmesh/registry:3.7.1
+    image: mcpmesh/registry:3.8.0
     container_name: mcp-mesh-registry-llm-test
     ports:
       - "8000:8000"
@@ -105,7 +105,7 @@ services:
 
   # System Agent - provides date_service, info, uptime_info capabilities
   system-agent:
-    image: mcpmesh/python-runtime:3.7.1
+    image: mcpmesh/python-runtime:3.8.0
     container_name: mcp-mesh-system-agent-llm-test
     hostname: system-agent
     ports:
@@ -159,7 +159,7 @@ services:
 
   # Test 1: Basic LLM Agent (no tools)
   test-001-basic-llm:
-    image: mcpmesh/python-runtime:3.7.1
+    image: mcpmesh/python-runtime:3.8.0
     container_name: mcp-mesh-test-001-basic-llm
     hostname: test-001-basic-llm
     ports:
@@ -214,7 +214,7 @@ services:
 
   # Test 2: LLM Agent with Time Tools
   test-002-chat-with-time:
-    image: mcpmesh/python-runtime:3.7.1
+    image: mcpmesh/python-runtime:3.8.0
     container_name: mcp-mesh-test-002-chat-with-time
     hostname: test-002-chat-with-time
     ports:
@@ -269,7 +269,7 @@ services:
 
   # Test 3: Multi-Tool Chat Agent
   test-003-multi-tool:
-    image: mcpmesh/python-runtime:3.7.1
+    image: mcpmesh/python-runtime:3.8.0
     container_name: mcp-mesh-test-003-multi-tool
     hostname: test-003-multi-tool
     ports:
@@ -324,7 +324,7 @@ services:
 
   # Test 4a: System Analyst LLM Agent (specialist)
   test-004-analyst:
-    image: mcpmesh/python-runtime:3.7.1
+    image: mcpmesh/python-runtime:3.8.0
     container_name: mcp-mesh-test-004-analyst
     hostname: test-004-analyst
     ports:
@@ -379,7 +379,7 @@ services:
 
   # Test 4b: Orchestrator LLM Agent (coordinator)
   test-004-orchestrator:
-    image: mcpmesh/python-runtime:3.7.1
+    image: mcpmesh/python-runtime:3.8.0
     container_name: mcp-mesh-test-004-orchestrator
     hostname: test-004-orchestrator
     ports:
