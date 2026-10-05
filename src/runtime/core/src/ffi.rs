@@ -651,7 +651,7 @@ pub unsafe extern "C" fn mesh_update_port(
         return -1;
     }
 
-    if port < 0 || port > 65535 {
+    if !(0..=65535).contains(&port) {
         set_last_error(format!("Invalid port: {}", port));
         return -1;
     }
@@ -1495,10 +1495,7 @@ pub unsafe extern "C" fn mesh_normalize_schema(
     let origin_str = if origin.is_null() {
         "unknown"
     } else {
-        match CStr::from_ptr(origin).to_str() {
-            Ok(s) => s,
-            Err(_) => "unknown",
-        }
+        CStr::from_ptr(origin).to_str().unwrap_or("unknown")
     };
 
     let origin_enum = match origin_str {

@@ -83,9 +83,10 @@ impl EventType {
 
 /// Health status of an agent.
 #[cfg_attr(feature = "python", pyclass(eq, eq_int))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HealthStatus {
     /// Agent is fully operational
+    #[default]
     Healthy,
     /// Agent has reduced functionality
     Degraded,
@@ -118,12 +119,6 @@ impl HealthStatus {
             HealthStatus::Degraded => "degraded",
             HealthStatus::Unhealthy => "unhealthy",
         }
-    }
-}
-
-impl Default for HealthStatus {
-    fn default() -> Self {
-        Self::Healthy
     }
 }
 

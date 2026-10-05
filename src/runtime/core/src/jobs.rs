@@ -290,18 +290,6 @@ async fn flush_once(
 // JobController (producer-side)
 // =============================================================================
 
-/// Producer-side handle bound to a single job row. Application code calls
-/// `update_progress`/`complete`/`fail`. Updates are coalesced and flushed
-/// by the background batching tick (or immediately for terminal calls).
-///
-/// Also exposes [`Self::recv_event`] for handlers running inside a
-/// `task=True` job to drain events posted via [`JobProxy::send_event`].
-/// Event delivery uses PER-FILTER cursors (issue #1252 Phase 3): each
-/// distinct type filter is an independent stream with its own cursor,
-/// shared across `Clone`s of the same instance, so consuming a type-A
-/// match at seq N no longer skips a type-B event at seq < N. A NEW
-/// controller for the same `job_id` starts every cursor at seq=0 — replay
-/// is per-instance, per filter.
 // =============================================================================
 // JobController event-read tuning (issue #1585)
 // =============================================================================
@@ -361,6 +349,18 @@ const RECV_READAHEAD_MAX_AGE: Duration = Duration::from_secs(2);
 /// costs no wake-up latency the server side wasn't already imposing.
 const EMPTY_PAGE_POLL_PACE: Duration = Duration::from_millis(100);
 
+/// Producer-side handle bound to a single job row. Application code calls
+/// `update_progress`/`complete`/`fail`. Updates are coalesced and flushed
+/// by the background batching tick (or immediately for terminal calls).
+///
+/// Also exposes [`Self::recv_event`] for handlers running inside a
+/// `task=True` job to drain events posted via [`JobProxy::send_event`].
+/// Event delivery uses PER-FILTER cursors (issue #1252 Phase 3): each
+/// distinct type filter is an independent stream with its own cursor,
+/// shared across `Clone`s of the same instance, so consuming a type-A
+/// match at seq N no longer skips a type-B event at seq < N. A NEW
+/// controller for the same `job_id` starts every cursor at seq=0 — replay
+/// is per-instance, per filter.
 #[derive(Clone)]
 pub struct JobController {
     job_id: String,
@@ -479,8 +479,12 @@ pub struct JobController {
     /// and the re-claim replays them from the registry (at-least-once, never
     /// skip). Access is under filter K's `recv_locks` entry, same as the
     /// cursor window.
-    pending: Arc<std::sync::Mutex<HashMap<String, (Instant, VecDeque<JobEvent>)>>>,
+    pending: Arc<std::sync::Mutex<HashMap<String, ReadAheadBuffer>>>,
 }
+
+/// One filter's read-ahead buffer in [`JobController::pending`]: the instant
+/// of the round trip that filled it, and the not-yet-delivered events.
+type ReadAheadBuffer = (Instant, VecDeque<JobEvent>);
 
 impl JobController {
     /// Construct a new controller with NO claim epoch (push-mode inbound
@@ -1965,6 +1969,14 @@ mod tests {
         NotFound,
     }
 
+    /// One recorded post_job_event call: (job_id, event_type, payload, trace_context).
+    type EventPost = (
+        String,
+        String,
+        Option<serde_json::Value>,
+        Option<serde_json::Value>,
+    );
+
     /// Stateful mock backend used by the rest of the test suite.
     struct MockBackend {
         jobs: StdMutex<HashMap<String, Job>>,
@@ -1974,15 +1986,8 @@ mod tests {
         releases: StdMutex<Vec<(String, String, Option<String>)>>,
         /// All persisted events keyed by job_id. Seq is 1-based per job.
         events: StdMutex<HashMap<String, Vec<JobEvent>>>,
-        /// Record of post_job_event calls: (job_id, event_type, payload, trace_context)
-        event_posts: StdMutex<
-            Vec<(
-                String,
-                String,
-                Option<serde_json::Value>,
-                Option<serde_json::Value>,
-            )>,
-        >,
+        /// Record of post_job_event calls.
+        event_posts: StdMutex<Vec<EventPost>>,
         /// If set, every post_job_event returns Conflict (terminal job).
         events_post_returns_conflict: AtomicUsize,
         /// If set, every list_job_events returns NotFound.
@@ -2381,9 +2386,7 @@ mod tests {
                             .filter(|e| e.seq > after)
                             .filter(|e| {
                                 active_types.is_empty()
-                                    || active_types
-                                        .iter()
-                                        .any(|t| *t == e.event_type.as_str())
+                                    || active_types.contains(&e.event_type.as_str())
                             })
                             .take(limit)
                             .cloned()
@@ -5086,13 +5089,15 @@ mod tests {
 
     /// (log events as (seq,type), after, types, expected returned seqs,
     /// expected next_after).
-    fn list_events_contract_scenarios() -> Vec<(
+    type ListEventsScenario = (
         Vec<(i64, &'static str)>,
         i64,
         Option<Vec<String>>,
         Vec<i64>,
         i64,
-    )> {
+    );
+
+    fn list_events_contract_scenarios() -> Vec<ListEventsScenario> {
         let log = vec![(1_i64, "A"), (2, "B"), (3, "A")];
         vec![
             // Unfiltered from 0: all three, next_after = last returned.

@@ -399,7 +399,7 @@ impl TlsConfig {
             }
         };
         let advertised_host = get_env_string("MCP_MESH_HTTP_HOST")
-            .unwrap_or_else(|| crate::config::auto_detect_external_ip());
+            .unwrap_or_else(crate::config::auto_detect_external_ip);
         let credentials = provider.get_credentials(agent_name, &advertised_host).await?;
 
         Self::finalize_config(mode, &provider_name, credentials, agent_name)
@@ -520,7 +520,7 @@ impl TlsConfig {
         };
 
         let advertised_host = get_env_string("MCP_MESH_HTTP_HOST")
-            .unwrap_or_else(|| crate::config::auto_detect_external_ip());
+            .unwrap_or_else(crate::config::auto_detect_external_ip);
 
         // Create a Tokio runtime for the async provider call
         let rt = tokio::runtime::Runtime::new().map_err(|e| {
@@ -1239,6 +1239,6 @@ bUWvUN+ZGbSn";
         // just verifies it returns a valid config without panicking.
         let config = TlsConfig::get_resolved_or_env();
         // Should always return a valid config
-        assert!(config.provider.len() > 0);
+        assert!(!config.provider.is_empty());
     }
 }

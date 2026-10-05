@@ -160,7 +160,7 @@ fn start_agent_py(py: Python<'_>, spec: AgentSpec) -> PyResult<AgentHandle> {
     // Running it attached would freeze every other Python thread for the
     // duration of those calls.
     py.detach(|| start_agent_internal(spec))
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
+        .map_err(pyo3::exceptions::PyRuntimeError::new_err)
 }
 
 /// Internal agent start function (language-agnostic).
@@ -259,15 +259,14 @@ fn strip_code_fences_py(text: &str) -> String {
 #[pyo3(signature = (schema_json, add_all_required=true))]
 fn make_schema_strict_py(schema_json: &str, add_all_required: bool) -> PyResult<String> {
     schema::make_schema_strict(schema_json, add_all_required)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
+        .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 /// Sanitize a JSON schema by removing unsupported validation keywords (Python binding).
 #[cfg(feature = "python")]
 #[pyfunction]
 fn sanitize_schema_py(schema_json: &str) -> PyResult<String> {
-    schema::sanitize_schema(schema_json)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
+    schema::sanitize_schema(schema_json).map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 /// Check if any tool schema property contains x-media-type (Python binding).
@@ -327,7 +326,7 @@ fn generate_span_id_py() -> String {
 #[pyo3(signature = (args_json, trace_id, span_id, propagated_headers_json=None))]
 fn inject_trace_context_py(args_json: &str, trace_id: &str, span_id: &str, propagated_headers_json: Option<&str>) -> PyResult<String> {
     trace_context::inject_trace_context(args_json, trace_id, span_id, propagated_headers_json)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
+        .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 /// Extract trace context from HTTP headers with body fallback (Python binding).
@@ -343,7 +342,7 @@ fn extract_trace_context_py(headers_json: &str, body_json: Option<&str>) -> Stri
 #[pyfunction]
 fn filter_propagation_headers_py(headers_json: &str, allowlist_csv: &str) -> PyResult<String> {
     trace_context::filter_propagation_headers(headers_json, allowlist_csv)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
+        .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 /// Check if a header matches the propagation allowlist (Python binding).
@@ -396,7 +395,7 @@ fn get_vendor_capabilities_py(provider: &str) -> String {
 #[pyfunction]
 fn build_jsonrpc_request_py(method: &str, params_json: &str, request_id: &str) -> PyResult<String> {
     mcp_client::build_jsonrpc_request(method, params_json, request_id)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
+        .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 /// Generate a unique request ID (Python binding).
@@ -410,8 +409,7 @@ fn generate_request_id_py() -> String {
 #[cfg(feature = "python")]
 #[pyfunction]
 fn parse_sse_response_py(response_text: &str) -> PyResult<String> {
-    mcp_client::parse_sse_response(response_text)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
+    mcp_client::parse_sse_response(response_text).map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 /// Parse SSE or plain JSON response and return a Python dict directly.
@@ -422,9 +420,9 @@ fn parse_sse_response_py(response_text: &str) -> PyResult<String> {
 #[pyfunction]
 fn parse_sse_response_to_dict_py(py: Python<'_>, response_text: &str) -> PyResult<Py<PyAny>> {
     let json_str = mcp_client::parse_sse_response(response_text)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
-    let value = crate::json_fast::parse(&json_str)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let value =
+        crate::json_fast::parse(&json_str).map_err(pyo3::exceptions::PyValueError::new_err)?;
     json_value_to_pyobject(py, &value)
 }
 
@@ -470,8 +468,7 @@ pub(crate) fn json_value_to_pyobject(py: Python<'_>, val: &serde_json::Value) ->
 #[cfg(feature = "python")]
 #[pyfunction]
 fn extract_content_py(result_json: &str) -> PyResult<String> {
-    mcp_client::extract_content(result_json)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
+    mcp_client::extract_content(result_json).map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 /// Call a remote MCP tool via HTTP POST with retry (Python binding).
@@ -499,10 +496,15 @@ fn call_tool_py(
     py.detach(|| {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async {
             mcp_client::call_tool(
-                &endpoint, &tool_name,
-                args.as_deref(), headers.as_deref(),
-                timeout_ms, max_retries,
-            ).await.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
+                &endpoint,
+                &tool_name,
+                args.as_deref(),
+                headers.as_deref(),
+                timeout_ms,
+                max_retries,
+            )
+            .await
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)
         })
     })
 }

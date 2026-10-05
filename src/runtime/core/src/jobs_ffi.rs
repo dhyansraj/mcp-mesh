@@ -32,8 +32,6 @@
 //!   2. header injection on Rust-originated outbound work via
 //!      [`mesh_inject_job_headers`].
 
-#![cfg(feature = "ffi")]
-
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};
@@ -470,6 +468,11 @@ pub unsafe extern "C" fn mesh_job_controller_complete(
 }
 
 /// Mark the job failed with the given error reason. Flushes immediately.
+///
+/// # Safety
+/// `handle` must be NULL or a live pointer from `mesh_job_controller_new*`
+/// that has not been passed to [`mesh_job_controller_free`].
+/// String arguments must be NULL or valid NUL-terminated C strings.
 #[no_mangle]
 pub unsafe extern "C" fn mesh_job_controller_fail(
     handle: *mut JobControllerHandle,
@@ -505,6 +508,11 @@ pub unsafe extern "C" fn mesh_job_controller_fail(
 /// Marks the controller terminal locally before the backend call so
 /// racing `update_progress` from this defunct attempt is fenced (mirror
 /// of Python's / TS's release_lease contract).
+///
+/// # Safety
+/// `handle` must be NULL or a live pointer from `mesh_job_controller_new*`
+/// that has not been passed to [`mesh_job_controller_free`].
+/// String arguments must be NULL or valid NUL-terminated C strings.
 #[no_mangle]
 pub unsafe extern "C" fn mesh_job_controller_release_lease(
     handle: *mut JobControllerHandle,
@@ -578,6 +586,10 @@ pub unsafe extern "C" fn mesh_job_controller_request_input(
 ///
 /// # Returns
 /// `1` if terminal, `0` if not, `-1` on error.
+///
+/// # Safety
+/// `handle` must be NULL or a live pointer from `mesh_job_controller_new*`
+/// that has not been passed to [`mesh_job_controller_free`].
 #[no_mangle]
 pub unsafe extern "C" fn mesh_job_controller_is_terminal(
     handle: *const JobControllerHandle,
@@ -611,6 +623,10 @@ pub unsafe extern "C" fn mesh_job_controller_is_terminal(
 /// # Returns
 /// `1` if cancel token fired, `0` if not (or job not registered),
 /// `-1` on error.
+///
+/// # Safety
+/// `handle` must be NULL or a live pointer from `mesh_job_controller_new*`
+/// that has not been passed to [`mesh_job_controller_free`].
 #[no_mangle]
 pub unsafe extern "C" fn mesh_job_controller_is_cancelled(
     handle: *const JobControllerHandle,
@@ -665,6 +681,12 @@ pub unsafe extern "C" fn mesh_job_controller_is_cancelled(
 ///   `JobNotFoundException`.
 /// - `-3` on other backend errors (5xx after retries, network failure,
 ///   etc.). See `mesh_last_error` for details.
+///
+/// # Safety
+/// `handle` must be NULL or a live pointer from `mesh_job_controller_new*`
+/// that has not been passed to [`mesh_job_controller_free`].
+/// String arguments must be NULL or valid NUL-terminated C strings.
+/// `out_*` pointers must be NULL or valid for a pointer-sized write.
 #[no_mangle]
 pub unsafe extern "C" fn mesh_job_controller_recv_event(
     handle: *mut JobControllerHandle,
@@ -754,6 +776,11 @@ pub unsafe extern "C" fn mesh_job_controller_recv_event(
 
 /// Read the job ID this controller is bound to. Caller frees the returned
 /// string via `mesh_free_string`.
+///
+/// # Safety
+/// `handle` must be NULL or a live pointer from `mesh_job_controller_new*`
+/// that has not been passed to [`mesh_job_controller_free`].
+/// `out_*` pointers must be NULL or valid for a pointer-sized write.
 #[no_mangle]
 pub unsafe extern "C" fn mesh_job_controller_job_id(
     handle: *const JobControllerHandle,
@@ -809,6 +836,10 @@ pub unsafe extern "C" fn mesh_job_controller_free(handle: *mut JobControllerHand
 /// JSON-shaped (rather than positional) args mirror the napi-rs
 /// `JsSubmitJobArgs` object — keeps the C ABI signature stable as fields
 /// are added.
+///
+/// # Safety
+/// String arguments must be NULL or valid NUL-terminated C strings.
+/// `out_*` pointers must be NULL or valid for a pointer-sized write.
 #[no_mangle]
 pub unsafe extern "C" fn mesh_submit_job(
     args_json: *const c_char,
@@ -878,6 +909,10 @@ pub unsafe extern "C" fn mesh_submit_job(
 /// Construct a [`JobProxyHandle`] bound to a known job id + registry URL.
 /// Normally callers obtain a proxy via [`mesh_submit_job`] / DDDI injection
 /// rather than constructing one directly.
+///
+/// # Safety
+/// String arguments must be NULL or valid NUL-terminated C strings.
+/// `out_*` pointers must be NULL or valid for a pointer-sized write.
 #[no_mangle]
 pub unsafe extern "C" fn mesh_job_proxy_new(
     job_id: *const c_char,
@@ -909,6 +944,11 @@ pub unsafe extern "C" fn mesh_job_proxy_new(
 }
 
 /// Read the job id this proxy is bound to. Caller frees via `mesh_free_string`.
+///
+/// # Safety
+/// `handle` must be NULL or a live pointer from [`mesh_submit_job`] /
+/// [`mesh_job_proxy_new`] that has not been passed to [`mesh_job_proxy_free`].
+/// `out_*` pointers must be NULL or valid for a pointer-sized write.
 #[no_mangle]
 pub unsafe extern "C" fn mesh_job_proxy_job_id(
     handle: *const JobProxyHandle,
@@ -926,6 +966,11 @@ pub unsafe extern "C" fn mesh_job_proxy_job_id(
 /// Read the latest job state from the registry (single GET). The full Job
 /// row is serialized as JSON and written to `*out_job_json`; caller frees
 /// via `mesh_free_string`.
+///
+/// # Safety
+/// `handle` must be NULL or a live pointer from [`mesh_submit_job`] /
+/// [`mesh_job_proxy_new`] that has not been passed to [`mesh_job_proxy_free`].
+/// `out_*` pointers must be NULL or valid for a pointer-sized write.
 #[no_mangle]
 pub unsafe extern "C" fn mesh_job_proxy_status(
     handle: *mut JobProxyHandle,
@@ -960,6 +1005,11 @@ pub unsafe extern "C" fn mesh_job_proxy_status(
 /// them to "no timeout" while its sibling `mesh_job_controller_recv_event`
 /// rejected them, so the same bad input produced an unbounded wait on one
 /// call and a clean error on the other.
+///
+/// # Safety
+/// `handle` must be NULL or a live pointer from [`mesh_submit_job`] /
+/// [`mesh_job_proxy_new`] that has not been passed to [`mesh_job_proxy_free`].
+/// `out_*` pointers must be NULL or valid for a pointer-sized write.
 #[no_mangle]
 pub unsafe extern "C" fn mesh_job_proxy_wait(
     handle: *mut JobProxyHandle,
@@ -993,6 +1043,11 @@ pub unsafe extern "C" fn mesh_job_proxy_wait(
 
 /// Request cancellation. The registry forwards the signal to the owner
 /// replica when alive. `reason` may be NULL.
+///
+/// # Safety
+/// `handle` must be NULL or a live pointer from [`mesh_submit_job`] /
+/// [`mesh_job_proxy_new`] that has not been passed to [`mesh_job_proxy_free`].
+/// String arguments must be NULL or valid NUL-terminated C strings.
 #[no_mangle]
 pub unsafe extern "C" fn mesh_job_proxy_cancel(
     handle: *mut JobProxyHandle,
@@ -1043,6 +1098,12 @@ pub unsafe extern "C" fn mesh_job_proxy_cancel(
 ///   callers can branch on terminal-state vs. unknown-job.
 /// - `-4` on other backend errors (transport failure, 5xx after
 ///   retries, etc.). See `mesh_last_error` for details.
+///
+/// # Safety
+/// `handle` must be NULL or a live pointer from [`mesh_submit_job`] /
+/// [`mesh_job_proxy_new`] that has not been passed to [`mesh_job_proxy_free`].
+/// String arguments must be NULL or valid NUL-terminated C strings.
+/// `out_*` pointers must be NULL or valid for a pointer-sized write.
 #[no_mangle]
 pub unsafe extern "C" fn mesh_job_proxy_send_event(
     handle: *mut JobProxyHandle,
@@ -1138,6 +1199,12 @@ pub unsafe extern "C" fn mesh_job_proxy_send_event(
 ///   `JobNotFoundException`.
 /// - `-3` on other backend errors (transport failure, 5xx after
 ///   retries, decode failure, etc.). See `mesh_last_error` for details.
+///
+/// # Safety
+/// `handle` must be NULL or a live pointer from [`mesh_submit_job`] /
+/// [`mesh_job_proxy_new`] that has not been passed to [`mesh_job_proxy_free`].
+/// String arguments must be NULL or valid NUL-terminated C strings.
+/// `out_*` pointers must be NULL or valid for a pointer-sized write.
 #[no_mangle]
 pub unsafe extern "C" fn mesh_job_proxy_list_events(
     handle: *mut JobProxyHandle,
@@ -1240,6 +1307,11 @@ pub unsafe extern "C" fn mesh_job_proxy_list_events(
 
 /// Free a [`JobProxyHandle`] returned by [`mesh_submit_job`] /
 /// [`mesh_job_proxy_new`].
+///
+/// # Safety
+/// `handle` must be NULL or come from [`mesh_submit_job`] /
+/// [`mesh_job_proxy_new`]. After this call, `handle` is invalid and must
+/// not be used.
 #[no_mangle]
 pub unsafe extern "C" fn mesh_job_proxy_free(handle: *mut JobProxyHandle) {
     if handle.is_null() {
@@ -1260,6 +1332,9 @@ pub unsafe extern "C" fn mesh_job_proxy_free(handle: *mut JobProxyHandle) {
 /// (same convention as Python's `current_job` returning `None`).
 ///
 /// Caller frees the JSON string via `mesh_free_string` if it is non-NULL.
+///
+/// # Safety
+/// `out_*` pointers must be NULL or valid for a pointer-sized write.
 #[no_mangle]
 pub unsafe extern "C" fn mesh_current_job(out_snapshot_json: *mut *mut c_char) -> i32 {
     take_last_error();
@@ -1297,6 +1372,9 @@ pub unsafe extern "C" fn mesh_current_job(out_snapshot_json: *mut *mut c_char) -
 /// [`crate::job_context::JobContext::timeout_header_seconds`] (issue #1584).
 ///
 /// Caller frees the JSON string via `mesh_free_string` if it is non-NULL.
+///
+/// # Safety
+/// `out_*` pointers must be NULL or valid for a pointer-sized write.
 #[no_mangle]
 pub unsafe extern "C" fn mesh_inject_job_headers(out_headers_json: *mut *mut c_char) -> i32 {
     take_last_error();
@@ -1348,6 +1426,9 @@ pub unsafe extern "C" fn mesh_inject_job_headers(out_headers_json: *mut *mut c_c
 /// # Returns
 /// `1` if a token was found and fired, `0` if no active job for that id,
 /// `-1` on error (null/invalid `job_id`).
+///
+/// # Safety
+/// String arguments must be NULL or valid NUL-terminated C strings.
 #[no_mangle]
 pub unsafe extern "C" fn mesh_cancel_active_job(job_id: *const c_char) -> i32 {
     take_last_error();

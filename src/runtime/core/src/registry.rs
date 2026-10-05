@@ -290,7 +290,7 @@ pub struct DependencyRegistration {
 
 /// Helper to check if tags array is empty
 fn is_empty_tags(v: &serde_json::Value) -> bool {
-    v.as_array().map_or(true, |a| a.is_empty())
+    v.as_array().is_none_or(|a| a.is_empty())
 }
 
 /// LLM agent registration for heartbeat request.

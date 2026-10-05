@@ -12,9 +12,10 @@ use crate::events::HealthStatus;
 use crate::registry::{FastHeartbeatResponse, FastHeartbeatStatus};
 
 /// State of the heartbeat state machine.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum HeartbeatState {
     /// Not yet registered with registry
+    #[default]
     Unregistered,
     /// Registered and healthy
     Healthy,
@@ -24,12 +25,6 @@ pub enum HeartbeatState {
     Reconnecting,
     /// Shutting down
     ShuttingDown,
-}
-
-impl Default for HeartbeatState {
-    fn default() -> Self {
-        Self::Unregistered
-    }
 }
 
 /// Action to take based on heartbeat state.

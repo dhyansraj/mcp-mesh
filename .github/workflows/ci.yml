@@ -197,16 +197,12 @@ jobs:
       - name: Run Rust tests
         run: ${{ matrix.cmd }}
 
-      # ADVISORY, NOT A GATE — `continue-on-error: true` and no `-D warnings`.
-      # The crate has 26-45 style warnings depending on the feature set, most of
-      # them the dead code issue #1594 removes. Gating on them today would mean
-      # either a red wall on every PR or turning this CI change into a Rust
-      # cleanup. Once #1594 lands, drop `continue-on-error` and append
-      # `-- -D warnings` here; until then this exists so the count is visible in
-      # the log and a *new* warning is at least readable in the diff of a run.
-      - name: Clippy (advisory)
-        continue-on-error: true
-        run: cargo clippy ${{ matrix.features }} --all-targets
+      # A gate: any clippy warning fails the leg. The crate was brought to zero
+      # warnings on every feature set in #1594. The `default` leg only
+      # type-checks (see its matrix comment), which is all clippy needs, so
+      # the pyo3 link problem does not apply here.
+      - name: Clippy
+        run: cargo clippy ${{ matrix.features }} --all-targets -- -D warnings
 
   typescript-test:
     name: TypeScript Tests

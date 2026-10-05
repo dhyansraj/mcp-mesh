@@ -25,8 +25,6 @@
 //! side handles the cancel-registry binding plus header injection on
 //! Rust-originated outbound work (e.g. LLM provider `call_tool`).
 
-#![cfg(feature = "typescript")]
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -754,7 +752,7 @@ pub async fn with_job_async_napi(
     };
     // Carry the claim generation so `currentJob()` exposes it (issue #1252).
     let ctx = ctx.with_claim_epoch(claim_epoch);
-    run_as_job(ctx, async move { body.await }).await
+    run_as_job(ctx, body).await
 }
 
 #[cfg(test)]

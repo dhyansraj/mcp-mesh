@@ -869,6 +869,7 @@ impl TaskBackend for RegistryHttpBackend {
 /// negative sentinel to express `Option<Duration>::None` over a boundary that
 /// cannot pass `null` doubles (`true`), whereas the PyO3 / napi helpers treat
 /// negatives as errors (`false`).
+#[cfg(any(feature = "python", feature = "typescript", feature = "ffi", test))]
 pub(crate) fn validate_secs_to_duration(
     secs: f64,
     negative_is_none: bool,
@@ -879,6 +880,7 @@ pub(crate) fn validate_secs_to_duration(
 /// [`validate_secs_to_duration`] with a caller-chosen field name in the error
 /// messages, so the deadline path can say `deadline_secs` instead of
 /// `timeout_secs` without forking the policy.
+#[cfg(any(feature = "python", feature = "typescript", feature = "ffi", test))]
 pub(crate) fn validate_secs_to_duration_labeled(
     secs: f64,
     negative_is_none: bool,
@@ -910,6 +912,7 @@ pub(crate) fn validate_secs_to_duration_labeled(
 ///
 /// `negative_is_none` has the same meaning as in [`validate_secs_to_duration`]:
 /// `true` only for the C ABI, which cannot pass a null double.
+#[cfg(any(feature = "python", feature = "typescript", feature = "ffi", test))]
 pub(crate) fn validate_deadline_secs(
     secs: f64,
     negative_is_none: bool,
@@ -1276,7 +1279,7 @@ mod tests {
 
     #[test]
     fn job_serializes_full_shape() {
-        let v = serde_json::to_value(&full_job()).unwrap();
+        let v = serde_json::to_value(full_job()).unwrap();
         let obj = v.as_object().expect("Job serializes to a JSON object");
         assert_eq!(obj.len(), JOB_KEYS.len());
         for k in JOB_KEYS {

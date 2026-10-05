@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::events::{EventType, HealthStatus, LlmToolInfo, LlmProviderInfo, MeshEvent};
+use crate::events::{HealthStatus, LlmProviderInfo, LlmToolInfo, MeshEvent};
 use crate::handle::AgentHandle as RustAgentHandle;
 use crate::spec::{
     AgentSpec as RustAgentSpec, DependencySpec as RustDependencySpec,
@@ -783,14 +783,13 @@ pub fn strip_code_fences(text: String) -> String {
 #[napi]
 pub fn make_schema_strict(schema_json: String, add_all_required: Option<bool>) -> napi::Result<String> {
     crate::schema::make_schema_strict(&schema_json, add_all_required.unwrap_or(true))
-        .map_err(|e| napi::Error::from_reason(e))
+        .map_err(napi::Error::from_reason)
 }
 
 /// Sanitize a JSON schema by removing unsupported validation keywords.
 #[napi]
 pub fn sanitize_schema(schema_json: String) -> napi::Result<String> {
-    crate::schema::sanitize_schema(&schema_json)
-        .map_err(|e| napi::Error::from_reason(e))
+    crate::schema::sanitize_schema(&schema_json).map_err(napi::Error::from_reason)
 }
 
 /// Check if any tool schema property contains x-media-type.
@@ -858,7 +857,7 @@ pub fn inject_trace_context(
         &span_id,
         propagated_headers_json.as_deref(),
     )
-    .map_err(|e| napi::Error::from_reason(e))
+    .map_err(napi::Error::from_reason)
 }
 
 /// Extract trace context from HTTP headers with body fallback.
@@ -874,7 +873,7 @@ pub fn filter_propagation_headers(
     allowlist_csv: String,
 ) -> napi::Result<String> {
     crate::trace_context::filter_propagation_headers(&headers_json, &allowlist_csv)
-        .map_err(|e| napi::Error::from_reason(e))
+        .map_err(napi::Error::from_reason)
 }
 
 /// Check if a header matches the propagation allowlist.
@@ -896,7 +895,7 @@ pub fn matches_propagate_header(header_name: String, allowlist_csv: String) -> b
 #[napi]
 pub fn build_jsonrpc_request(method: String, params_json: String, request_id: String) -> napi::Result<String> {
     crate::mcp_client::build_jsonrpc_request(&method, &params_json, &request_id)
-        .map_err(|e| napi::Error::from_reason(e))
+        .map_err(napi::Error::from_reason)
 }
 
 /// Generate a unique request ID (format: req_{millis}_{hex6}).
@@ -911,8 +910,7 @@ pub fn generate_request_id() -> String {
 /// @returns Extracted JSON string
 #[napi]
 pub fn parse_sse_response(response_text: String) -> napi::Result<String> {
-    crate::mcp_client::parse_sse_response(&response_text)
-        .map_err(|e| napi::Error::from_reason(e))
+    crate::mcp_client::parse_sse_response(&response_text).map_err(napi::Error::from_reason)
 }
 
 /// Parse SSE or plain JSON response and return a JS object directly.
@@ -924,10 +922,9 @@ pub fn parse_sse_response(response_text: String) -> napi::Result<String> {
 /// @returns Parsed JavaScript object
 #[napi]
 pub fn parse_sse_response_to_object(response_text: String) -> napi::Result<serde_json::Value> {
-    let json_str = crate::mcp_client::parse_sse_response(&response_text)
-        .map_err(|e| napi::Error::from_reason(e))?;
-    crate::json_fast::parse(&json_str)
-        .map_err(|e| napi::Error::from_reason(e))
+    let json_str =
+        crate::mcp_client::parse_sse_response(&response_text).map_err(napi::Error::from_reason)?;
+    crate::json_fast::parse(&json_str).map_err(napi::Error::from_reason)
 }
 
 /// Extract text content from MCP CallToolResult JSON.
@@ -936,8 +933,7 @@ pub fn parse_sse_response_to_object(response_text: String) -> napi::Result<serde
 /// @returns Extracted content string
 #[napi]
 pub fn extract_content(result_json: String) -> napi::Result<String> {
-    crate::mcp_client::extract_content(&result_json)
-        .map_err(|e| napi::Error::from_reason(e))
+    crate::mcp_client::extract_content(&result_json).map_err(napi::Error::from_reason)
 }
 
 /// Call a remote MCP tool via HTTP POST with retry.
@@ -971,7 +967,9 @@ pub async fn call_tool(
         headers_json.as_deref(),
         timeout_ms as u64,
         max_retries as u32,
-    ).await.map_err(|e| napi::Error::from_reason(e))
+    )
+    .await
+    .map_err(napi::Error::from_reason)
 }
 
 // =============================================================================
