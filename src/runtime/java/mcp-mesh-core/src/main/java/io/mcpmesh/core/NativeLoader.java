@@ -11,6 +11,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Platform-specific native library loader for MCP Mesh core.
@@ -27,7 +28,7 @@ public final class NativeLoader {
     private static final Logger log = LoggerFactory.getLogger(NativeLoader.class);
     private static final String LIB_NAME = "mcp_mesh_core";
     private static volatile MeshCore instance;
-    private static volatile boolean loaded = false;
+    private static final AtomicBoolean IS_LOADED_WARNED = new AtomicBoolean(false);
 
     private NativeLoader() {
         // Utility class
@@ -72,7 +73,6 @@ public final class NativeLoader {
                 .option(LibraryOption.LoadNow, true)
                 .load(LIB_NAME);
 
-        loaded = true;
         log.info("MCP Mesh native library loaded successfully, version: {}", instance.mesh_version());
         return instance;
     }
@@ -80,10 +80,20 @@ public final class NativeLoader {
     /**
      * Check if the native library has been loaded.
      *
-     * @return true if loaded, false otherwise
+     * <p>Unused by the SDK and slated for removal.
+     *
+     * @return true once {@link #load()} has loaded the library from any source
+     *         (custom path, classpath, or system path), false otherwise
+     * @deprecated Unused; will be removed in a future release. Call {@link #load()},
+     *             which is idempotent, instead.
      */
+    @Deprecated(forRemoval = true)
     public static boolean isLoaded() {
-        return loaded;
+        if (IS_LOADED_WARNED.compareAndSet(false, true)) {
+            log.warn("NativeLoader.isLoaded() is deprecated and will be removed in a future release; "
+                + "call NativeLoader.load(), which is idempotent, instead");
+        }
+        return instance != null;
     }
 
     /**

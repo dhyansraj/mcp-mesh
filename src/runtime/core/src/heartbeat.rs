@@ -12,9 +12,10 @@ use crate::events::HealthStatus;
 use crate::registry::{FastHeartbeatResponse, FastHeartbeatStatus};
 
 /// State of the heartbeat state machine.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum HeartbeatState {
     /// Not yet registered with registry
+    #[default]
     Unregistered,
     /// Registered and healthy
     Healthy,
@@ -24,12 +25,6 @@ pub enum HeartbeatState {
     Reconnecting,
     /// Shutting down
     ShuttingDown,
-}
-
-impl Default for HeartbeatState {
-    fn default() -> Self {
-        Self::Unregistered
-    }
 }
 
 /// Action to take based on heartbeat state.
@@ -52,8 +47,6 @@ pub enum HeartbeatAction {
 pub struct HeartbeatConfig {
     /// Interval between heartbeats (seconds)
     pub interval: Duration,
-    /// Maximum retry attempts before giving up
-    pub max_retries: u32,
     /// Base backoff duration for retries
     pub base_backoff: Duration,
     /// Maximum backoff duration
@@ -66,7 +59,6 @@ impl Default for HeartbeatConfig {
     fn default() -> Self {
         Self {
             interval: Duration::from_secs(5),
-            max_retries: 5,
             base_backoff: Duration::from_secs(1),
             max_backoff: Duration::from_secs(30),
             missed_threshold: 4,

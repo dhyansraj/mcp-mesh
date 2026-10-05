@@ -118,18 +118,6 @@ CMD ["src/index.ts"]
 `
 }
 
-// GenerateHelmValues returns TypeScript-specific Helm values
-func (h *TypeScriptHandler) GenerateHelmValues() map[string]interface{} {
-	return map[string]interface{}{
-		"runtime": "typescript",
-		"image": map[string]interface{}{
-			"repository": "mcpmesh/typescript-runtime",
-			"tag":        "1.2.0",
-		},
-		"command": []string{"src/index.ts"},
-	}
-}
-
 // ParseAgentFile extracts agent info from a TypeScript file
 func (h *TypeScriptHandler) ParseAgentFile(path string) (*AgentInfo, error) {
 	content, err := os.ReadFile(path)

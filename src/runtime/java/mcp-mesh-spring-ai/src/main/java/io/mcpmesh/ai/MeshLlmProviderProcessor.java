@@ -68,6 +68,8 @@ import java.util.concurrent.CompletableFuture;
 public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationContextAware {
 
     private static final Logger log = LoggerFactory.getLogger(MeshLlmProviderProcessor.class);
+    private static final java.util.concurrent.atomic.AtomicBoolean BUILD_TOOL_SPEC_WARNED =
+        new java.util.concurrent.atomic.AtomicBoolean(false);
     private static final ObjectMapper objectMapper = MeshObjectMappers.create();
 
     /** Default tool name for LLM provider (matches Python/TypeScript SDKs). */
@@ -954,8 +956,16 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
 
     /**
      * Build tool specification for MCP registration.
+     *
+     * <p>Unused by the SDK and slated for removal.
+     *
+     * @deprecated Unused; will be removed in a future release.
      */
+    @Deprecated(forRemoval = true)
     public Map<String, Object> buildToolSpec(LlmProviderConfig config) {
+        if (BUILD_TOOL_SPEC_WARNED.compareAndSet(false, true)) {
+            log.warn("MeshLlmProviderProcessor.buildToolSpec() is deprecated and will be removed in a future release");
+        }
         Map<String, Object> spec = new LinkedHashMap<>();
         spec.put("name", "llm_generate");
         spec.put("description", "Generate LLM response using " + config.provider() + "/" + config.modelName());
@@ -1098,37 +1108,6 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
             .filter(p -> p.capability().equals(capability))
             .findFirst()
             .orElse(null);
-    }
-
-    private String extractSystemPrompt(List<Map<String, Object>> messages) {
-        if (messages == null) return "";
-
-        return messages.stream()
-            .filter(m -> "system".equals(m.get("role")))
-            .map(m -> (String) m.get("content"))
-            .filter(Objects::nonNull)
-            .findFirst()
-            .orElse("");
-    }
-
-    private String extractUserPrompt(List<Map<String, Object>> messages) {
-        if (messages == null) return "";
-
-        // Get the last user message
-        StringBuilder prompt = new StringBuilder();
-        for (int i = messages.size() - 1; i >= 0; i--) {
-            Map<String, Object> msg = messages.get(i);
-            if ("user".equals(msg.get("role"))) {
-                String content = (String) msg.get("content");
-                if (content != null) {
-                    prompt.insert(0, content);
-                }
-                break;
-            }
-        }
-
-        // Include assistant/tool history if present (for multi-turn)
-        return prompt.toString();
     }
 
     /**

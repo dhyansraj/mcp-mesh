@@ -51,25 +51,14 @@ type RegistryState struct {
 	LastCheck   time.Time         `json:"last_check"`
 }
 
-// MonitoringPolicy defines health monitoring configuration
-type MonitoringPolicy struct {
-	Enabled            bool          `json:"enabled"`
-	CheckInterval      time.Duration `json:"check_interval"`
-	RestartOnFailure   bool          `json:"restart_on_failure"`
-	MaxRestartAttempts int           `json:"max_restart_attempts"`
-	RestartCooldown    time.Duration `json:"restart_cooldown"`
-}
-
 // ProcessManager handles lifecycle management of MCP Mesh processes
 type ProcessManager struct {
-	processes        map[string]*ProcessInfo
-	mutex            sync.RWMutex
-	logger           *CLILogger
-	stateFile        string
-	monitoringTicker *time.Ticker
-	monitorPolicy    *MonitoringPolicy
-	shutdownChan     chan struct{}
-	config           *CLIConfig
+	processes    map[string]*ProcessInfo
+	mutex        sync.RWMutex
+	logger       *CLILogger
+	stateFile    string
+	shutdownChan chan struct{}
+	config       *CLIConfig
 }
 
 // Global process manager instance
@@ -86,13 +75,6 @@ func NewProcessManager(config *CLIConfig) *ProcessManager {
 		stateFile:    stateFile,
 		shutdownChan: make(chan struct{}),
 		config:       config,
-		monitorPolicy: &MonitoringPolicy{
-			Enabled:            true,
-			CheckInterval:      30 * time.Second,
-			RestartOnFailure:   true,
-			MaxRestartAttempts: 3,
-			RestartCooldown:    5 * time.Minute,
-		},
 	}
 
 	// Load existing state if available
@@ -295,11 +277,6 @@ func (pm *ProcessManager) isProcessRunning(info *ProcessInfo) bool {
 
 // StopHealthMonitoring stops background health monitoring
 func (pm *ProcessManager) StopHealthMonitoring() {
-	if pm.monitoringTicker != nil {
-		pm.monitoringTicker.Stop()
-		pm.monitoringTicker = nil
-	}
-
 	close(pm.shutdownChan)
 	pm.logger.Println("Stopped health monitoring")
 }

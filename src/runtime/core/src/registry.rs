@@ -13,7 +13,7 @@ use thiserror::Error;
 use tracing::{debug, info, trace, warn};
 
 use crate::events::HealthStatus;
-use crate::spec::{AgentSpec, AgentType};
+use crate::spec::AgentSpec;
 use crate::tls::TlsConfig;
 
 /// Errors that can occur during registry communication.
@@ -21,9 +21,6 @@ use crate::tls::TlsConfig;
 pub enum RegistryError {
     #[error("Network error: {0}")]
     Network(#[from] reqwest::Error),
-
-    #[error("Invalid URL: {0}")]
-    InvalidUrl(String),
 
     #[error("JSON serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
@@ -37,9 +34,6 @@ pub enum RegistryError {
     /// reason (issue #1260).
     #[error("Registry rejected agent: {message}")]
     SemanticRejection { message: String },
-
-    #[error("Unexpected response: {0}")]
-    UnexpectedResponse(String),
 
     #[error("TLS configuration error: {0}")]
     TlsError(String),
@@ -296,7 +290,7 @@ pub struct DependencyRegistration {
 
 /// Helper to check if tags array is empty
 fn is_empty_tags(v: &serde_json::Value) -> bool {
-    v.as_array().map_or(true, |a| a.is_empty())
+    v.as_array().is_none_or(|a| a.is_empty())
 }
 
 /// LLM agent registration for heartbeat request.

@@ -105,18 +105,6 @@ CMD ["target/agent-1.0.0-SNAPSHOT.jar"]
 `
 }
 
-// GenerateHelmValues returns Java-specific Helm values
-func (h *JavaHandler) GenerateHelmValues() map[string]interface{} {
-	return map[string]interface{}{
-		"runtime": "java",
-		"image": map[string]interface{}{
-			"repository": "mcpmesh/java-runtime",
-			"tag":        "1.2.0",
-		},
-		"command": []string{"target/agent-1.0.0-SNAPSHOT.jar"},
-	}
-}
-
 // ParseAgentFile extracts agent info from a Java file or pom.xml
 func (h *JavaHandler) ParseAgentFile(path string) (*AgentInfo, error) {
 	info := &AgentInfo{}

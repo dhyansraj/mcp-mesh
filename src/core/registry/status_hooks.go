@@ -125,7 +125,11 @@ func handleAgentStatusChange(ctx context.Context, m *ent.AgentMutation, config *
 			}
 		}
 
-		// Create the appropriate registry event in the same transaction (skip for API services).
+		// Create the appropriate registry event (skip for API services). This is
+		// only atomic with the status update when the mutation itself runs in a
+		// transaction (m.Client() is then tx-bound). On non-transactional paths
+		// such as the health monitor's conditional update, it is a separate
+		// write made before the update runs.
 		// Note: a2a-typed agents still generate lifecycle events because they can hold
 		// mesh capabilities alongside their A2A surfaces (see A2A_SURFACE_DESIGN.org —
 		// "agent_type=a2a" is additive over mesh-tool handling).
@@ -133,7 +137,6 @@ func handleAgentStatusChange(ctx context.Context, m *ent.AgentMutation, config *
 			eventType := getEventTypeForStatusChange(oldStatus, newStatus)
 			eventData := createEventDataForStatusChange(oldStatus, newStatus)
 
-			// Create the registry event in the same transaction
 			_, err = m.Client().RegistryEvent.Create().
 				SetEventType(eventType).
 				SetAgentID(agentID).

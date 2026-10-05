@@ -419,8 +419,9 @@ class HttpMcpWrapper:
         self.session_storage = SessionStorage()
         self.pod_ip = os.getenv("POD_IP", "localhost")
 
-        # Use resolved HTTP port: env var > decorator param > default (same resolution as FastAPI server)
-        # This ensures session forwarding uses the same port as the FastAPI server
+        # Port used when forwarding a sticky session to another pod. Only the
+        # MCP_MESH_HTTP_PORT env var is consulted (default 8080); the
+        # @mesh.agent(http_port=...) decorator value is NOT read here.
         self.pod_port = os.getenv("MCP_MESH_HTTP_PORT", "8080")
 
         # Get FastMCP's lifespan if available (for new FastMCP integration)

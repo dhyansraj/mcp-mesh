@@ -29,6 +29,7 @@ public class MeshRuntime implements SmartLifecycle {
     private final AgentSpec agentSpec;
     private final ObjectMapper objectMapper;
     private final AtomicBoolean running = new AtomicBoolean(false);
+    private static final AtomicBoolean UPDATE_TOOLS_WARNED = new AtomicBoolean(false);
 
     // Volatile + local-snapshot access pattern: stop() nulls this field
     // concurrently with accessors (nextEvent on the event-loop thread, health
@@ -221,13 +222,19 @@ public class MeshRuntime implements SmartLifecycle {
     }
 
     /**
-     * Update tool specifications at runtime.
+     * Update tool specifications at runtime. This has always been a no-op:
+     * tools are fixed at startup.
      *
-     * @param tools Updated tool specs
+     * <p>Unused by the SDK and slated for removal.
+     *
+     * @param tools Updated tool specs (ignored)
+     * @deprecated No-op and unused; will be removed in a future release.
      */
+    @Deprecated(forRemoval = true)
     public void updateTools(List<AgentSpec.ToolSpec> tools) {
-        // This would require adding a mesh_update_tools FFI function
-        // For now, tools are set at startup
-        log.debug("Tool updates at runtime not yet supported");
+        if (UPDATE_TOOLS_WARNED.compareAndSet(false, true)) {
+            log.warn("MeshRuntime.updateTools() is deprecated and will be removed in a future release; "
+                + "it is a no-op (tools are fixed at startup)");
+        }
     }
 }

@@ -98,20 +98,16 @@ fn traverse_schema(
             visitor(map);
 
             // Recurse into $defs
-            if let Some(defs) = map.get_mut("$defs") {
-                if let Value::Object(defs_map) = defs {
-                    for def_value in defs_map.values_mut() {
-                        traverse_schema(def_value, visitor);
-                    }
+            if let Some(Value::Object(defs_map)) = map.get_mut("$defs") {
+                for def_value in defs_map.values_mut() {
+                    traverse_schema(def_value, visitor);
                 }
             }
 
             // Recurse into properties
-            if let Some(props) = map.get_mut("properties") {
-                if let Value::Object(props_map) = props {
-                    for prop_value in props_map.values_mut() {
-                        traverse_schema(prop_value, visitor);
-                    }
+            if let Some(Value::Object(props_map)) = map.get_mut("properties") {
+                for prop_value in props_map.values_mut() {
+                    traverse_schema(prop_value, visitor);
                 }
             }
 
@@ -229,7 +225,7 @@ fn has_media_type(value: &Value) -> bool {
             }
             false
         }
-        Value::Array(arr) => arr.iter().any(|item| has_media_type(item)),
+        Value::Array(arr) => arr.iter().any(has_media_type),
         _ => false,
     }
 }

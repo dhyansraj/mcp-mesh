@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import java.lang.reflect.Type;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Factory for creating and caching McpMeshTool proxies.
@@ -32,6 +33,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public class McpMeshToolProxyFactory {
 
     private static final Logger log = LoggerFactory.getLogger(McpMeshToolProxyFactory.class);
+    private static final AtomicBoolean INVALIDATE_WARNED = new AtomicBoolean(false);
+    private static final AtomicBoolean CLEAR_ALL_WARNED = new AtomicBoolean(false);
 
     // Sub-key for the untyped/dynamic-parse variant. null (untyped) and a
     // literal Object.class target both deserialize dynamically and identically,
@@ -102,8 +105,8 @@ public class McpMeshToolProxyFactory {
         // tool that resolved first with a different type. The returnType is set
         // once at creation and never mutated cross-type.
         //
-        // Retry guards a detach race: a concurrent invalidateProxy can remove
-        // the inner map after computeIfAbsent captured it, which would orphan a
+        // Retry guards a detach race: a concurrent (deprecated) invalidateProxy
+        // or clearAll can remove the inner map after computeIfAbsent captured it, which would orphan a
         // proxy inserted into the now-detached map (invisible to all future
         // fan-outs). Re-check that the inner map is still the one bound under
         // cacheKey; if not, another thread detached it — loop and re-bind.
@@ -174,15 +177,25 @@ public class McpMeshToolProxyFactory {
     }
 
     /**
-     * Invalidate a cached proxy.
+     * Invalidate a cached proxy: mark every return-type variant for this
+     * endpoint:function unavailable and drop them from the cache.
      *
-     * <p>Call this when topology changes and the proxy should be recreated.
+     * <p>Unused by the SDK and slated for removal. Detaching the inner map is
+     * safe against a concurrent {@link #getOrCreateProxy}: its retry loop
+     * re-binds when the map it captured is no longer the one cached.
      *
      * @param endpoint     The remote endpoint URL
      * @param functionName The function name
+     * @deprecated Unused; will be removed in a future release. Use
+     *             {@link #markUnavailable(String, String)} instead.
      */
+    @Deprecated(forRemoval = true)
     @SuppressWarnings("rawtypes")
     public void invalidateProxy(String endpoint, String functionName) {
+        if (INVALIDATE_WARNED.compareAndSet(false, true)) {
+            log.warn("McpMeshToolProxyFactory.invalidateProxy() is deprecated and will be removed in a "
+                + "future release; use markUnavailable() instead");
+        }
         String cacheKey = buildCacheKey(endpoint, functionName);
         Map<String, McpMeshToolProxy> removed = proxyCache.remove(cacheKey);
         if (removed != null) {
@@ -210,12 +223,20 @@ public class McpMeshToolProxyFactory {
     }
 
     /**
-     * Clear all cached proxies.
+     * Clear all cached proxies, marking each unavailable first.
      *
-     * <p>Call this on agent shutdown or major topology reset.
+     * <p>Unused by the SDK and slated for removal. Safe against a concurrent
+     * {@link #getOrCreateProxy} for the same reason as
+     * {@link #invalidateProxy(String, String)}.
+     *
+     * @deprecated Unused; will be removed in a future release.
      */
+    @Deprecated(forRemoval = true)
     @SuppressWarnings("rawtypes")
     public void clearAll() {
+        if (CLEAR_ALL_WARNED.compareAndSet(false, true)) {
+            log.warn("McpMeshToolProxyFactory.clearAll() is deprecated and will be removed in a future release");
+        }
         proxyCache.values().forEach(byType -> byType.values().forEach(McpMeshToolProxy::markUnavailable));
         proxyCache.clear();
         log.info("Cleared all cached proxies");

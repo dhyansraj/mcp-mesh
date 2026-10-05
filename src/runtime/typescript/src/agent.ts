@@ -315,12 +315,6 @@ export class MeshAgent {
    * another. See `toolDeclarationIdentity`.
    */
   private toolDeclarations: Map<string, string> = new Map();
-  /**
-   * Maps LLM provider tool names to their vendor (e.g., "process_chat" -> "anthropic").
-   * TODO: Use for provider metrics, health checks, or exposing via getLlmProviderVendor() getter.
-   * Currently populated by addLlmProvider() for future introspection needs.
-   */
-  private llmProviderVendors: Map<string, string> = new Map();
   private handle: JsAgentHandle | null = null;
   /**
    * Issue #1476: the periodic health-check refresh, when the agent
@@ -1600,9 +1594,6 @@ export class MeshAgent {
         dependencies: [],
         dependencyKwargs: undefined,
       });
-
-      // Store vendor for provider handler selection
-      this.llmProviderVendors.set(toolDef.name, meta.vendor);
     }
 
     return this;

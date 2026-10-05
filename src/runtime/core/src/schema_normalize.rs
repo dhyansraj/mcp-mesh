@@ -679,10 +679,8 @@ fn normalize(v: &Value, ctx: &mut Ctx) -> Value {
             }
             // Strip additionalProperties regardless of true/false — different generators
             // emit different defaults.
-            if let Some(v) = node.remove("additionalProperties") {
-                if let Value::Bool(true) = v {
-                    ctx.warn("stripped additionalProperties: true (lossy)".to_string());
-                }
+            if let Some(Value::Bool(true)) = node.remove("additionalProperties") {
+                ctx.warn("stripped additionalProperties: true (lossy)".to_string());
             }
 
             // Rule: enum normalization

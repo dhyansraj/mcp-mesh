@@ -347,10 +347,14 @@ func (s *EntService) CountLiveClaims(ctx context.Context) (int, error) {
 // NewEntService creates a new Ent-based registry service instance
 func NewEntService(entDB *database.EntDatabase, config *RegistryConfig, logger *logger.Logger) *EntService {
 	if config == nil {
+		// Only StartupCleanupThreshold is read from the service's own config;
+		// the health monitor takes its thresholds from the config passed to
+		// NewServer. The other values mirror the live defaults in
+		// src/core/config/config.go.
 		config = &RegistryConfig{
-			DefaultTimeoutThreshold:  60,
-			DefaultEvictionThreshold: 120,
-			HealthCheckInterval:      30, // Health check every 30 seconds
+			DefaultTimeoutThreshold:  20,
+			DefaultEvictionThreshold: 60,
+			HealthCheckInterval:      10,
 			StartupCleanupThreshold:  30, // Mark agents as stale if no heartbeat for 30s on startup
 		}
 	}
@@ -2054,29 +2058,6 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 		Count:     len(agentInfos),
 		Timestamp: time.Now().UTC(),
 	}, nil
-}
-
-// Health returns service health information
-func (s *EntService) Health() map[string]interface{} {
-	stats, err := s.entDB.GetStats()
-	if err != nil {
-		s.logger.Warning("Failed to get database stats: %v", err)
-		stats = map[string]interface{}{
-			"error": "Failed to get database stats",
-		}
-	}
-
-	return map[string]interface{}{
-		"status":  "healthy",
-		"service": "mcp-mesh-registry",
-		"database_type": func() string {
-			if s.entDB.IsPostgreSQL() {
-				return "postgresql"
-			}
-			return "sqlite"
-		}(),
-		"stats": stats,
-	}
 }
 
 // GetAgentWithCapabilities retrieves agent data with capabilities for testing

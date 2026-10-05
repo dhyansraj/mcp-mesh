@@ -14,8 +14,6 @@
 //! [`crate::handle::AgentHandle::next_event`]), so callers `await` the
 //! returned coroutine on Python's asyncio event loop.
 
-#![cfg(feature = "python")]
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -370,7 +368,7 @@ impl PyJobController {
         let timeout = parse_timeout_secs(timeout_secs)?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let result = inner.recv_event(types, timeout).await.map_err(job_error_to_py)?;
-            Python::with_gil(|py| match result {
+            Python::attach(|py| match result {
                 None => Ok::<Py<PyAny>, PyErr>(py.None()),
                 Some(ev) => job_event_to_pydict(py, ev),
             })
@@ -417,7 +415,7 @@ impl PyJobProxy {
         let inner = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let job = inner.status().await.map_err(job_error_to_py)?;
-            Python::with_gil(|py| job_to_pydict(py, job))
+            Python::attach(|py| job_to_pydict(py, job))
         })
     }
 
@@ -435,7 +433,7 @@ impl PyJobProxy {
         let timeout = parse_timeout_secs(timeout_secs)?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let value = inner.wait(timeout).await.map_err(job_error_to_py)?;
-            Python::with_gil(|py| crate::json_value_to_pyobject(py, &value))
+            Python::attach(|py| crate::json_value_to_pyobject(py, &value))
         })
     }
 
@@ -476,7 +474,7 @@ impl PyJobProxy {
                 .send_event(event_type, payload_json)
                 .await
                 .map_err(job_error_to_py)?;
-            Python::with_gil(|py| job_event_receipt_to_pydict(py, receipt))
+            Python::attach(|py| job_event_receipt_to_pydict(py, receipt))
         })
     }
 
@@ -513,7 +511,7 @@ impl PyJobProxy {
                 .list_events(after, types, wait)
                 .await
                 .map_err(job_error_to_py)?;
-            Python::with_gil(|py| {
+            Python::attach(|py| {
                 let list = PyList::empty(py);
                 for ev in events {
                     list.append(job_event_to_pydict(py, ev)?)?;
@@ -756,12 +754,9 @@ pub fn with_job_async_py<'py>(
         // when the guard above drops. A Python `await_job_cancel(job_id)`
         // watcher that snapshotted EITHER frame therefore wakes on
         // natural end.
-        run_as_job(ctx, async move {
-            // Awaiting `fut` yields a `PyResult<Py<PyAny>>` — propagate
-            // both the success value and any Python exception verbatim.
-            fut.await
-        })
-        .await
+        // Awaiting `fut` yields a `PyResult<Py<PyAny>>` — propagate both
+        // the success value and any Python exception verbatim.
+        run_as_job(ctx, fut).await
     })
 }
 
