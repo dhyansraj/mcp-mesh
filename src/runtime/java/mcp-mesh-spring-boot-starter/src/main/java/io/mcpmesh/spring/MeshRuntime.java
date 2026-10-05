@@ -10,7 +10,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.SmartLifecycle;
 
-import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -218,16 +217,5 @@ public class MeshRuntime implements SmartLifecycle {
      */
     public AgentSpec getAgentSpec() {
         return agentSpec;
-    }
-
-    /**
-     * Update tool specifications at runtime.
-     *
-     * @param tools Updated tool specs
-     */
-    public void updateTools(List<AgentSpec.ToolSpec> tools) {
-        // This would require adding a mesh_update_tools FFI function
-        // For now, tools are set at startup
-        log.debug("Tool updates at runtime not yet supported");
     }
 }

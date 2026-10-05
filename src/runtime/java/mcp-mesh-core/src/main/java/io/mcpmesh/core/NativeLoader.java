@@ -27,7 +27,6 @@ public final class NativeLoader {
     private static final Logger log = LoggerFactory.getLogger(NativeLoader.class);
     private static final String LIB_NAME = "mcp_mesh_core";
     private static volatile MeshCore instance;
-    private static volatile boolean loaded = false;
 
     private NativeLoader() {
         // Utility class
@@ -72,18 +71,8 @@ public final class NativeLoader {
                 .option(LibraryOption.LoadNow, true)
                 .load(LIB_NAME);
 
-        loaded = true;
         log.info("MCP Mesh native library loaded successfully, version: {}", instance.mesh_version());
         return instance;
-    }
-
-    /**
-     * Check if the native library has been loaded.
-     *
-     * @return true if loaded, false otherwise
-     */
-    public static boolean isLoaded() {
-        return loaded;
     }
 
     /**

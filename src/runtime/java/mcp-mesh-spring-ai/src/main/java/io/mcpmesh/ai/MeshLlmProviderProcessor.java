@@ -953,52 +953,6 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
     }
 
     /**
-     * Build tool specification for MCP registration.
-     */
-    public Map<String, Object> buildToolSpec(LlmProviderConfig config) {
-        Map<String, Object> spec = new LinkedHashMap<>();
-        spec.put("name", "llm_generate");
-        spec.put("description", "Generate LLM response using " + config.provider() + "/" + config.modelName());
-
-        Map<String, Object> parameters = new LinkedHashMap<>();
-        parameters.put("type", "object");
-
-        Map<String, Object> properties = new LinkedHashMap<>();
-
-        // messages parameter
-        Map<String, Object> messagesSchema = new LinkedHashMap<>();
-        messagesSchema.put("type", "array");
-        messagesSchema.put("description", "Conversation messages");
-        Map<String, Object> messageItem = new LinkedHashMap<>();
-        messageItem.put("type", "object");
-        Map<String, Object> messageProps = new LinkedHashMap<>();
-        messageProps.put("role", Map.of("type", "string", "enum", List.of("system", "user", "assistant", "tool")));
-        messageProps.put("content", Map.of("type", "string"));
-        messageItem.put("properties", messageProps);
-        messagesSchema.put("items", messageItem);
-        properties.put("messages", messagesSchema);
-
-        // tools parameter (optional)
-        Map<String, Object> toolsSchema = new LinkedHashMap<>();
-        toolsSchema.put("type", "array");
-        toolsSchema.put("description", "Available tools (optional)");
-        properties.put("tools", toolsSchema);
-
-        // max_tokens parameter
-        properties.put("max_tokens", Map.of("type", "integer", "default", 4096));
-
-        // temperature parameter
-        properties.put("temperature", Map.of("type", "number", "default", 0.7));
-
-        parameters.put("properties", properties);
-        parameters.put("required", List.of("messages"));
-
-        spec.put("parameters", parameters);
-
-        return spec;
-    }
-
-    /**
      * Copy a present, non-null {@code model_params} entry into the handler
      * options map. Absent keys are not copied so the handler keeps the Spring AI
      * default (C2: don't force-set nulls).
@@ -1098,37 +1052,6 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
             .filter(p -> p.capability().equals(capability))
             .findFirst()
             .orElse(null);
-    }
-
-    private String extractSystemPrompt(List<Map<String, Object>> messages) {
-        if (messages == null) return "";
-
-        return messages.stream()
-            .filter(m -> "system".equals(m.get("role")))
-            .map(m -> (String) m.get("content"))
-            .filter(Objects::nonNull)
-            .findFirst()
-            .orElse("");
-    }
-
-    private String extractUserPrompt(List<Map<String, Object>> messages) {
-        if (messages == null) return "";
-
-        // Get the last user message
-        StringBuilder prompt = new StringBuilder();
-        for (int i = messages.size() - 1; i >= 0; i--) {
-            Map<String, Object> msg = messages.get(i);
-            if ("user".equals(msg.get("role"))) {
-                String content = (String) msg.get("content");
-                if (content != null) {
-                    prompt.insert(0, content);
-                }
-                break;
-            }
-        }
-
-        // Include assistant/tool history if present (for multi-turn)
-        return prompt.toString();
     }
 
     /**

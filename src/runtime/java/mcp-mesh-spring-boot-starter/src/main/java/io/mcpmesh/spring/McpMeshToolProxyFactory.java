@@ -174,24 +174,6 @@ public class McpMeshToolProxyFactory {
     }
 
     /**
-     * Invalidate a cached proxy.
-     *
-     * <p>Call this when topology changes and the proxy should be recreated.
-     *
-     * @param endpoint     The remote endpoint URL
-     * @param functionName The function name
-     */
-    @SuppressWarnings("rawtypes")
-    public void invalidateProxy(String endpoint, String functionName) {
-        String cacheKey = buildCacheKey(endpoint, functionName);
-        Map<String, McpMeshToolProxy> removed = proxyCache.remove(cacheKey);
-        if (removed != null) {
-            removed.values().forEach(McpMeshToolProxy::markUnavailable);
-            log.debug("Invalidated proxy for {}:{}", endpoint, functionName);
-        }
-    }
-
-    /**
      * Mark a proxy as unavailable without removing from cache.
      *
      * <p>The proxy remains cached but calls will fail until endpoint is updated.
@@ -207,18 +189,6 @@ public class McpMeshToolProxyFactory {
             byType.values().forEach(McpMeshToolProxy::markUnavailable);
             log.debug("Marked proxy unavailable for {}:{}", endpoint, functionName);
         }
-    }
-
-    /**
-     * Clear all cached proxies.
-     *
-     * <p>Call this on agent shutdown or major topology reset.
-     */
-    @SuppressWarnings("rawtypes")
-    public void clearAll() {
-        proxyCache.values().forEach(byType -> byType.values().forEach(McpMeshToolProxy::markUnavailable));
-        proxyCache.clear();
-        log.info("Cleared all cached proxies");
     }
 
     /**
