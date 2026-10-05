@@ -19,19 +19,16 @@ the model prefix and auth env vars change.
 3. Application Default Credentials configured — either:
    - User flow: `gcloud auth application-default login`
    - Service account: `GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json`
-4. **Install mesh with the `vertex` extra** — pulls in `google-auth` which LiteLLM
-   needs to read ADC for `vertex_ai/*` model strings:
-   ```bash
-   pip install 'mcp-mesh[vertex]'
-   ```
+4. `pip install mcp-mesh` — the bundled `google-genai` SDK serves both
+   AI Studio and Vertex AI, so no extra is needed.
 
 ## Run locally
 
 ```bash
-# Project + location: required if using user ADC (gcloud auth application-default login).
-# If using a service account JSON, project is auto-derived but location is still recommended.
-export VERTEXAI_PROJECT=my-gcp-project
-export VERTEXAI_LOCATION=us-central1
+# Project: GOOGLE_CLOUD_PROJECT, else the quota project of your ADC.
+# Location: GOOGLE_CLOUD_LOCATION, default us-central1.
+export GOOGLE_CLOUD_PROJECT=my-gcp-project
+export GOOGLE_CLOUD_LOCATION=us-central1
 
 # Start the registry in another terminal first, then:
 meshctl start examples/python/vertex-ai-agent/main.py
@@ -65,7 +62,7 @@ model="gemini/gemini-2.5-flash"   # was: vertex_ai/gemini-2.5-flash
 ```
 
 ```bash
-export GOOGLE_API_KEY=...         # instead of ADC + VERTEXAI_*
+export GOOGLE_API_KEY=...         # instead of ADC + GOOGLE_CLOUD_*
 ```
 
-The `mcp-mesh[vertex]` extra is not needed for the AI Studio path — `pip install mcp-mesh` is sufficient. No other code changes required.
+No other code changes required.

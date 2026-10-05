@@ -224,7 +224,7 @@ docker run -p 9092:9092 data-processor-agent
 **Docker Compose (full stack with registry):**
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 ## Architecture Patterns Demonstrated

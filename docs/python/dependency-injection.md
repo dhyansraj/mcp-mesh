@@ -75,8 +75,8 @@ Use nested arrays in tags to specify fallback providers:
 @mesh.tool(
     capability="calculator",
     dependencies=[
-        # Prefer python provider, fallback to typescript
-        {"capability": "math", "tags": ["addition", ["python", "typescript"]]},
+        # Require addition AND (python OR typescript), preferring python
+        {"capability": "math", "tags": ["addition", ["+python", "typescript"]]},
     ],
 )
 async def calculate(a: int, b: int, math: mesh.McpMeshTool = None):
@@ -84,14 +84,13 @@ async def calculate(a: int, b: int, math: mesh.McpMeshTool = None):
     return result
 ```
 
-Resolution order:
+How it resolves:
 
-1. Try to find provider with `addition` AND `python` tags
-2. If not found, try provider with `addition` AND `typescript` tags
-3. If neither found, dependency is unresolved (injected as `None`)
+1. Every provider with `addition` AND (`python` OR `typescript`) qualifies
+2. A provider matching `+python` scores higher than one matching only `typescript`, so it wins while it is available
+3. If no provider qualifies, the dependency is injected as `None`
 
-This is useful when you have multiple implementations of the same capability
-and want to prefer one but fallback to another if unavailable.
+The alternatives are not tried in order; the `+` is what expresses the preference.
 
 ## Injection Types
 
@@ -237,24 +236,7 @@ Each dotted `capability` is segment-validated against the dotted-capability gram
 
 ## Proxy Configuration
 
-Configure proxy behavior via `dependency_kwargs`:
-
-```python
-@mesh.tool(
-    dependencies=["slow_service"],
-    dependency_kwargs={
-        "slow_service": {
-            "timeout": 60,           # Request timeout (seconds)
-            "retry_count": 3,        # Retry attempts
-            "streaming": True,       # Enable streaming
-            "session_required": True, # Require session affinity
-        }
-    },
-)
-async def my_tool(slow_service: mesh.McpMeshTool = None):
-    result = await slow_service(data="large_payload")
-    ...
-```
+The Python runtime has no per-dependency proxy settings. Every outgoing call runs on one budget: `MCP_MESH_CALL_TIMEOUT` (default 300 seconds), replaced by an inbound `X-Mesh-Timeout` when the current call carries one. Per-dependency options are TypeScript-only (`dependencyKwargs`); every Python decorator (`@mesh.tool`, `@mesh.route`, `@mesh.llm`, ...) drops a `dependency_kwargs` argument and logs a warning.
 
 ## Proxy Types (Auto-Selected)
 
@@ -282,7 +264,7 @@ When topology changes (agents join/leave), the mesh:
 
 No code changes needed - happens transparently.
 
-## Loop topology (v2.2.4+)
+## Loop topology
 
 mcp-mesh runs your agent across two event loops:
 
@@ -297,8 +279,7 @@ loop — K8s liveness/readiness probes stay responsive.
 
 ### Default `MCP_MESH_TOOL_WORKERS=1`
 
-Since v2.2.4, default tool dispatch runs on a single-user loop (was
-`min(8, max(2, cpu_count()))`). The canonical pattern for loop-bound
+By default, tool dispatch runs on a single user loop. The canonical pattern for loop-bound
 resources works as expected — `lifespan` startup creates the resource
 on the user loop; every tool body uses it on the same loop; `lifespan`
 exit closes it on the same loop. Note that FastMCP's `lifespan`

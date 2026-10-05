@@ -25,7 +25,7 @@ meshctl start my_agent.py
 For custom configurations:
 
 ```bash
-meshctl registry start --port 8000 --host 0.0.0.0
+meshctl start --registry-only --registry-port 8000 --registry-host 0.0.0.0
 ```
 
 ## Registry API
@@ -38,29 +38,33 @@ curl http://localhost:8000/agents
 
 Response:
 
+Abridged (`AgentsListResponse` in `api/mcp-mesh-registry.openapi.yaml`):
+
 ```json
 {
   "agents": [
     {
+      "id": "my-agent-a1b2c3d4",
       "name": "my-agent",
-      "host": "localhost",
-      "port": 9090,
-      "capabilities": {
-        "greeting": {
+      "agent_type": "mcp_agent",
+      "runtime": "python",
+      "status": "healthy",
+      "endpoint": "http://localhost:9090",
+      "capabilities": [
+        {
+          "name": "greeting",
           "version": "1.0.0",
+          "function_name": "greet",
           "tags": ["social"]
         }
-      },
-      "status": "healthy"
+      ],
+      "total_dependencies": 0,
+      "dependencies_resolved": 0
     }
-  ]
+  ],
+  "count": 1,
+  "timestamp": "2026-10-04T12:00:00Z"
 }
-```
-
-### Get Agent Status
-
-```bash
-curl http://localhost:8000/agents/my-agent
 ```
 
 ### Health Check
@@ -78,41 +82,49 @@ sequenceDiagram
     participant A as Agent
     participant R as Registry
 
-    A->>R: POST /register
+    A->>R: POST /heartbeat (full registration)
     Note right of R: Store agent info
-    R->>A: 200 OK (agent ID)
+    R->>A: 200 OK (resolved dependencies)
     loop Heartbeat
-        A->>R: POST /heartbeat
-        R->>A: 200 OK
+        A->>R: HEAD /heartbeat/{agent_id}
+        R->>A: 200 OK (202 when topology changed)
     end
 ```
 
 ### Registration Payload
 
+The full heartbeat body (`MeshAgentRegistration` in `api/mcp-mesh-registry.openapi.yaml`), abridged. Capabilities are declared per tool:
+
 ```json
 {
+  "agent_id": "my-agent-a1b2c3d4",
+  "agent_type": "mcp_agent",
+  "runtime": "python",
   "name": "my-agent",
-  "host": "localhost",
-  "port": 9090,
+  "version": "1.0.0",
+  "http_host": "localhost",
+  "http_port": 9090,
   "namespace": "default",
-  "capabilities": {
-    "greeting": {
+  "tools": [
+    {
+      "function_name": "greet",
+      "capability": "greeting",
       "version": "1.0.0",
       "tags": ["social", "basic"],
-      "dependencies": []
+      "dependencies": [{ "capability": "date_service" }]
     }
-  }
+  ]
 }
 ```
 
 ## Dependency Resolution
 
-When an agent registers with dependencies:
+There is no separate resolution call; resolution rides the heartbeat:
 
-1. Registry receives registration with `dependencies`
-2. Finds agents providing those capabilities
-3. Returns proxy configurations to consumer
-4. Consumer uses proxies to call providers
+1. Each full heartbeat carries every tool's declared `dependencies`
+2. The registry finds, filters and scores the providers of each
+3. The response's `dependencies_resolved` maps each consuming function to its resolved providers (`agent_id`, `function_name`, `endpoint`, `capability`, `status`)
+4. The agent builds a proxy per dependency and injects it
 
 ```mermaid
 graph LR
@@ -127,15 +139,13 @@ graph LR
 ### Environment Variables
 
 ```bash
-# Registry host/port
+# Agents: where the registry is
 export MCP_MESH_REGISTRY_URL=http://localhost:8000
-
-# Custom registry host
-export MCP_MESH_REGISTRY_HOST=0.0.0.0
-export MCP_MESH_REGISTRY_PORT=8000
-
-# Health check settings
 export MCP_MESH_HEALTH_INTERVAL=5      # Agent heartbeat cadence (seconds, default 5)
+
+# Registry binary: listen address
+export HOST=0.0.0.0
+export PORT=8000
 
 # Registry-side: mark an agent unhealthy after N seconds of missed
 # heartbeats (default 20 = 4 missed heartbeats at the 5s cadence)
@@ -151,8 +161,8 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - MCP_MESH_REGISTRY_HOST=0.0.0.0
-      - MCP_MESH_HEALTH_INTERVAL=5
+      - HOST=0.0.0.0
+      - PORT=8000
 
   my-agent:
     build: ./my-agent

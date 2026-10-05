@@ -18,6 +18,66 @@ export MCP_MESH_PROPAGATE_HEADERS=authorization,x-request-id,x-tenant-id
 
 When Agent A calls Agent B, any headers matching the propagation list are forwarded automatically.
 
+A plain entry is an exact match (`authorization` matches only `authorization`); an entry ending in `*` is a prefix match (`x-audit-*` matches `x-audit-id`). A bare `*` is rejected. Matching is case-insensitive.
+
+### The allowlist is not access control
+
+`MCP_MESH_PROPAGATE_HEADERS` is a capture-and-relay setting scoped to the agent it is set on:
+
+- It decides which inbound headers this agent captures and then sends on every outbound mesh call. It never looks at the destination, so a captured header goes to every dependency the agent calls.
+- A callee cannot refuse a header. Leaving `authorization` out of agent B's allowlist means B does not relay it to C; B still receives it on the wire and holds it for the whole call.
+- A credential that enters the chain therefore reaches every downstream agent, at every hop whose allowlist relays it.
+
+Trace headers (`X-Trace-ID`, `X-Parent-Span`) travel separately, so withholding business headers does not break tracing.
+
+### Withholding headers from one call
+
+There is no per-dependency setting, and per-call headers can only add. To keep a header away from one downstream, run that call under a reduced propagated set. Remove only the names you mean to withhold: keys are lowercase, and the set also carries mesh infrastructure headers such as `x-mesh-timeout`, which carries the inbound call budget downstream.
+
+=== "Python"
+
+    ```python
+    from mesh import TraceContext
+
+    saved = TraceContext.get_propagated_headers()
+    TraceContext.set_propagated_headers(
+        {k: v for k, v in saved.items() if k != "authorization"}
+    )
+    try:
+        result = await untrusted_svc(query=query)
+    finally:
+        TraceContext.set_propagated_headers(saved)
+    ```
+
+=== "TypeScript"
+
+    ```typescript
+    import { getCurrentPropagatedHeaders, runWithPropagatedHeaders } from "@mcpmesh/sdk";
+
+    const { authorization, ...withoutAuth } = getCurrentPropagatedHeaders();
+    const result = await runWithPropagatedHeaders(withoutAuth, () =>
+      untrustedSvc({ query }),
+    );
+    ```
+
+=== "Java"
+
+    ```java
+    import io.mcpmesh.spring.tracing.TraceContext;
+
+    Map<String, String> saved = TraceContext.getPropagatedHeaders();
+    Map<String, String> withoutAuth = new HashMap<>(saved);
+    withoutAuth.remove("authorization");
+    TraceContext.setPropagatedHeaders(withoutAuth);
+    try {
+        return untrustedSvc.call(Map.of("query", query));
+    } finally {
+        TraceContext.setPropagatedHeaders(saved);
+    }
+    ```
+
+    The set is read on the calling thread when the request is built, so make the withheld call with `call`, inside the `try`.
+
 ## Application-Layer Authorization
 
 Use your platform's native auth framework to enforce access control:

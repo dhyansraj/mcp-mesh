@@ -27,7 +27,7 @@ The key feature is **automatic LLM provider failover**: if Claude is unavailable
 
 ```bash
 # From the examples/multi-agent-poc directory
-docker-compose -f ../docker-examples/docker-compose.multi-agent-poc.yml up -d
+docker compose -f ../docker-examples/docker-compose.multi-agent-poc.yml up -d
 ```
 
 This starts all 6 services:
@@ -116,7 +116,7 @@ ls -la workspace/
 1. **Stop Claude Provider** to simulate failure:
 
 ```bash
-docker-compose -f ../docker-examples/docker-compose.multi-agent-poc.yml stop claude-provider
+docker compose -f ../docker-examples/docker-compose.multi-agent-poc.yml stop claude-provider
 ```
 
 2. **Verify Claude is Down**:
@@ -150,7 +150,7 @@ Expected behavior:
 4. **Restart Claude Provider**:
 
 ```bash
-docker-compose -f ../docker-examples/docker-compose.multi-agent-poc.yml start claude-provider
+docker compose -f ../docker-examples/docker-compose.multi-agent-poc.yml start claude-provider
 
 # Wait for it to register (5-10 seconds)
 meshctl list --registry-port 8003
@@ -175,12 +175,12 @@ curl -s -X POST http://localhost:9200/mcp \
 
 ```bash
 # All services
-docker-compose -f ../docker-examples/docker-compose.multi-agent-poc.yml logs -f
+docker compose -f ../docker-examples/docker-compose.multi-agent-poc.yml logs -f
 
 # Specific service
-docker-compose -f ../docker-examples/docker-compose.multi-agent-poc.yml logs -f intent-agent
-docker-compose -f ../docker-examples/docker-compose.multi-agent-poc.yml logs -f claude-provider
-docker-compose -f ../docker-examples/docker-compose.multi-agent-poc.yml logs -f openai-provider
+docker compose -f ../docker-examples/docker-compose.multi-agent-poc.yml logs -f intent-agent
+docker compose -f ../docker-examples/docker-compose.multi-agent-poc.yml logs -f claude-provider
+docker compose -f ../docker-examples/docker-compose.multi-agent-poc.yml logs -f openai-provider
 ```
 
 ### Check Agent Dependencies
@@ -204,10 +204,10 @@ curl http://localhost:8003/api/v1/agents | jq
 
 ```bash
 # Stop all services
-docker-compose -f ../docker-examples/docker-compose.multi-agent-poc.yml down
+docker compose -f ../docker-examples/docker-compose.multi-agent-poc.yml down
 
 # Remove volumes (clears workspace files)
-docker-compose -f ../docker-examples/docker-compose.multi-agent-poc.yml down -v
+docker compose -f ../docker-examples/docker-compose.multi-agent-poc.yml down -v
 
 # Clean up generated files
 rm -rf workspace/*
@@ -283,7 +283,7 @@ Run the same request with both providers to see the difference:
 **Solution**: Verify intent-agent is running on port 9200:
 
 ```bash
-docker-compose -f ../docker-examples/docker-compose.multi-agent-poc.yml ps intent-agent
+docker compose -f ../docker-examples/docker-compose.multi-agent-poc.yml ps intent-agent
 ```
 
 ---

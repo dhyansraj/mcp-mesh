@@ -53,6 +53,12 @@ annotation defaults plus a fluent builder (`maxTokens()`, `temperature()`,
 `topP()`, `stop()`). Both runtimes serialize to the same `model_params` wire
 shape. See the full reference for typed examples per language.
 
+## Dependency kwargs (TypeScript only)
+
+Per-dependency proxy options (timeout, attempts, stream timeout, custom headers) are TypeScript-only: `dependencyKwargs` on `agent.addTool` and `mesh.route`, indexed by dependency position. See `meshctl man proxies --typescript`.
+
+Python and Java have no per-dependency proxy settings; every outgoing call runs on `MCP_MESH_CALL_TIMEOUT` (default 300 seconds). Every Python decorator (`@mesh.tool`, `@mesh.route`, `@mesh.llm`, ...) drops a `dependency_kwargs` argument and logs a warning.
+
 ## See also
 
 - `meshctl man environment` - provider API keys + `MESH_LLM_*` runtime overrides

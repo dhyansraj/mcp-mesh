@@ -35,7 +35,7 @@ health → capability_match → tags → version → schema → tiebreaker
 
 Every decision the registry makes is recorded as a `dependency_resolved` (or `dependency_unresolved`) event. Use `meshctl audit <agent>` to read them back — see `meshctl man audit`.
 
-## Loop topology (v2.2.4+)
+## Loop topology
 
 mcp-mesh runs your agent across two event loops:
 
@@ -44,7 +44,7 @@ mcp-mesh runs your agent across two event loops:
 
 A long-running tool body holds the user loop, but never the framework loop — K8s probes stay responsive during long tool calls.
 
-**Default `MCP_MESH_TOOL_WORKERS=1`** (since v2.2.4; previously `min(8, max(2, cpu_count()))`). Loop-affine resources (`asyncpg.Pool`, `redis.asyncio.Redis`, `motor.motor_asyncio.AsyncIOMotorClient`, `aiohttp.ClientSession`) created in `lifespan` startup bind to the single-user loop and are reused by every tool body on the same loop. FastMCP's `lifespan` parameter receives a FastMCP server instance (not a FastAPI app), so there is no `.state` namespace — the canonical Python pattern is a module-level global:
+**Default `MCP_MESH_TOOL_WORKERS=1`**. Loop-affine resources (`asyncpg.Pool`, `redis.asyncio.Redis`, `motor.motor_asyncio.AsyncIOMotorClient`, `aiohttp.ClientSession`) created in `lifespan` startup bind to the single-user loop and are reused by every tool body on the same loop. FastMCP's `lifespan` parameter receives a FastMCP server instance (not a FastAPI app), so there is no `.state` namespace — the canonical Python pattern is a module-level global:
 
 ```python
 from contextlib import asynccontextmanager
@@ -326,19 +326,9 @@ A legacy *union* capability (a single `session_state` tool that multiplexes seve
 
 ## Proxy Configuration
 
-Per-dependency proxy options (timeout, retry, streaming, session affinity, auth, custom headers, etc.) are configured via `dependency_kwargs`. See `meshctl man proxies` for the full options table.
+The Python runtime has no per-dependency proxy settings. Every outgoing call runs on one budget: `MCP_MESH_CALL_TIMEOUT` (default 300 seconds), replaced by an inbound `X-Mesh-Timeout` when the current call carries one. Per-dependency options are TypeScript-only (`dependencyKwargs`); every Python decorator (`@mesh.tool`, `@mesh.route`, `@mesh.llm`, ...) drops a `dependency_kwargs` argument and logs a warning.
 
-```python
-@mesh.tool(
-    dependencies=["slow_service"],
-    dependency_kwargs={
-        "slow_service": {"timeout": 60, "retry_count": 3},
-    },
-)
-async def my_tool(slow_service: mesh.McpMeshTool = None):
-    result = await slow_service(data="large_payload")
-    ...
-```
+See `meshctl man proxies` for streaming and session affinity.
 
 ## Proxy Types (Auto-Selected)
 

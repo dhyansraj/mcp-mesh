@@ -145,4 +145,109 @@ class MeshEnvironmentPostProcessorTest {
 
         assertNull(env.getProperty("server.ssl.certificate"));
     }
+
+    // Issue #1596: the Java runtime cannot serve the SPIRE provider. It used to
+    // reach the native core and fail with Vault-specific advice; it now refuses
+    // up front with a message that names the actual limitation.
+    @Test
+    void spireProviderIsRefusedBeforeTheCoreWithAnAccurateMessage() {
+        MockEnvironment env = new MockEnvironment();
+        env.setProperty("MCP_MESH_TLS_MODE", "strict");
+        Function<String, String> getenv = env(Map.of(
+            "MCP_MESH_TLS_PROVIDER", "spire",
+            "MCP_MESH_AGENT_NAME", "java-agent"));
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+            () -> process(env, AnnotatedMain.class, getenv));
+        assertEquals(
+            "MCP_MESH_TLS_PROVIDER=spire is not supported by the Java runtime; use file or vault.",
+            e.getMessage());
+        assertNull(e.getCause(), "the refusal must not come from a native TLS attempt");
+    }
+
+    @Test
+    void spireProviderIsRefusedEvenWithCertFilesPresent() {
+        MockEnvironment env = tlsEnvironment();
+        Function<String, String> getenv = env(Map.of("MCP_MESH_TLS_PROVIDER", " SPIRE "));
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+            () -> process(env, AnnotatedMain.class, getenv));
+        assertEquals(MeshTlsConfig.SPIRE_UNSUPPORTED_MESSAGE, e.getMessage());
+    }
+
+    @Test
+    void spireProviderIsIgnoredWhileTlsIsOff() {
+        MockEnvironment env = new MockEnvironment();
+        env.setProperty("MCP_MESH_TLS_MODE", "off");
+
+        assertDoesNotThrow(() -> process(env, AnnotatedMain.class,
+            env(Map.of("MCP_MESH_TLS_PROVIDER", "spire"))));
+        assertNull(env.getProperty("server.ssl.certificate"));
+    }
+
+    // Mode and provider are normalized the way the native core reads them
+    // (tls.rs TlsMode::from_str_value): trimmed, case-insensitive, blank or
+    // unknown mode = off, blank provider = unset (file).
+
+    @Test
+    void whitespaceOnlyTlsModeMeansOff() {
+        MockEnvironment env = new MockEnvironment();
+        env.setProperty("MCP_MESH_TLS_MODE", "   ");
+
+        assertDoesNotThrow(() -> process(env, AnnotatedMain.class, NO_ENV));
+        assertNull(env.getProperty("server.ssl.certificate"));
+    }
+
+    @Test
+    void unknownTlsModeMeansOffLikeTheCore() {
+        MockEnvironment env = new MockEnvironment();
+        env.setProperty("MCP_MESH_TLS_MODE", "sometimes");
+
+        assertDoesNotThrow(() -> process(env, AnnotatedMain.class, NO_ENV));
+        assertNull(env.getProperty("server.ssl.certificate"));
+    }
+
+    @Test
+    void paddedMixedCaseTlsModeIsRecognized() {
+        MockEnvironment env = tlsEnvironment();
+        env.setProperty("MCP_MESH_TLS_MODE", " Strict ");
+        process(env, AnnotatedMain.class, NO_ENV);
+
+        assertEquals("/certs/agent.pem", env.getProperty("server.ssl.certificate"));
+    }
+
+    @Test
+    void emptyProviderMeansFile() {
+        MockEnvironment withCerts = tlsEnvironment();
+        process(withCerts, AnnotatedMain.class, env(Map.of("MCP_MESH_TLS_PROVIDER", "")));
+        assertEquals("/certs/agent.pem", withCerts.getProperty("server.ssl.certificate"));
+
+        // As the file provider, missing cert paths still fail fast instead of
+        // being handed to a non-file credential provider.
+        MockEnvironment noCerts = new MockEnvironment();
+        noCerts.setProperty("MCP_MESH_TLS_MODE", "strict");
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+            () -> process(noCerts, AnnotatedMain.class, env(Map.of("MCP_MESH_TLS_PROVIDER", "  "))));
+        assertTrue(e.getMessage().contains("MCP_MESH_TLS_CERT"), e.getMessage());
+    }
+
+    @Test
+    void paddedMixedCaseSpireIsRefused() {
+        MockEnvironment env = new MockEnvironment();
+        env.setProperty("MCP_MESH_TLS_MODE", "auto");
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+            () -> process(env, AnnotatedMain.class, env(Map.of("MCP_MESH_TLS_PROVIDER", " Spire "))));
+        assertEquals(MeshTlsConfig.SPIRE_UNSUPPORTED_MESSAGE, e.getMessage());
+    }
+
+    @Test
+    void requireSupportedProviderAcceptsFileAndVault() {
+        assertDoesNotThrow(() -> MeshTlsConfig.requireSupportedProvider("strict", "file"));
+        assertDoesNotThrow(() -> MeshTlsConfig.requireSupportedProvider("auto", "vault"));
+        assertDoesNotThrow(() -> MeshTlsConfig.requireSupportedProvider("auto", null));
+        assertDoesNotThrow(() -> MeshTlsConfig.requireSupportedProvider(null, "spire"));
+        assertThrows(IllegalStateException.class,
+            () -> MeshTlsConfig.requireSupportedProvider("auto", "spire"));
+    }
 }

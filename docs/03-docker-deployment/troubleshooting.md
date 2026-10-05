@@ -21,7 +21,7 @@ docker version > /dev/null 2>&1 && echo "RUNNING" || echo "NOT RUNNING"
 
 # Check Docker Compose
 echo -n "Docker Compose: "
-docker-compose version > /dev/null 2>&1 && echo "INSTALLED" || echo "NOT FOUND"
+docker compose version > /dev/null 2>&1 && echo "INSTALLED" || echo "NOT FOUND"
 
 # Check running containers
 echo -e "\nRunning containers:"
@@ -62,10 +62,10 @@ ERROR: for agent Cannot start service agent: OCI runtime create failed
 
 ```bash
 # Check logs
-docker-compose logs agent
+docker compose logs agent
 
 # Inspect container
-docker inspect $(docker-compose ps -q agent)
+docker inspect $(docker compose ps -q agent)
 
 # Check events
 docker events --since 10m --filter container=agent
@@ -77,10 +77,10 @@ docker events --since 10m --filter container=agent
 
    ```bash
    # Build missing image
-   docker-compose build agent
+   docker compose build agent
 
    # Or pull from registry
-   docker-compose pull agent
+   docker compose pull agent
    ```
 
 2. **Port already in use:**
@@ -117,10 +117,10 @@ Registry at http://localhost:8000 not accessible
 curl http://localhost:8000/health
 
 # Test from container
-docker-compose exec agent curl http://registry:8000/health
+docker compose exec agent curl http://registry:8000/health
 
 # Check DNS resolution
-docker-compose exec agent nslookup registry
+docker compose exec agent nslookup registry
 ```
 
 **Solutions:**
@@ -171,16 +171,16 @@ could not connect to server: Connection refused
      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
 
    # Or docker-compose override
-   docker-compose run -e POSTGRES_PASSWORD=secret postgres
+   docker compose run -e POSTGRES_PASSWORD=secret postgres
    ```
 
 2. **Database not initialized:**
 
    ```bash
    # Remove old volume and reinitialize
-   docker-compose down -v
+   docker compose down -v
    docker volume rm project_postgres_data
-   docker-compose up -d postgres
+   docker compose up -d postgres
    ```
 
 3. **Health check timing:**
@@ -206,10 +206,10 @@ Container exits immediately after starting
 
 ```bash
 # Check exit code
-docker-compose ps
+docker compose ps
 
 # View recent logs
-docker-compose logs --tail=50 agent
+docker compose logs --tail=50 agent
 
 # Check restart policy
 docker inspect agent | jq '.[0].HostConfig.RestartPolicy'
@@ -224,7 +224,7 @@ docker inspect agent | jq '.[0].HostConfig.RestartPolicy'
    restart: "no"
 
    # Run interactively to debug
-   docker-compose run --rm agent bash
+   docker compose run --rm agent bash
    ```
 
 2. **Missing environment variables:**
@@ -283,7 +283,7 @@ Agent becomes unresponsive
    docker stats
 
    # Historical data
-   docker-compose exec agent cat /proc/meminfo
+   docker compose exec agent cat /proc/meminfo
    ```
 
 ### Issue 6: Volume Permission Issues
@@ -301,7 +301,7 @@ Cannot create directory: Operation not permitted
 
    ```bash
    # Check current ownership
-   docker-compose exec agent ls -la /data
+   docker compose exec agent ls -la /data
 
    # Fix from host
    sudo chown -R 1000:1000 ./data
@@ -372,11 +372,11 @@ Cannot create directory: Operation not permitted
 
    ```bash
    # Test DNS from container
-   docker-compose exec agent nslookup registry
-   docker-compose exec agent ping -c 3 registry
+   docker compose exec agent nslookup registry
+   docker compose exec agent ping -c 3 registry
 
    # Check resolv.conf
-   docker-compose exec agent cat /etc/resolv.conf
+   docker compose exec agent cat /etc/resolv.conf
    ```
 
 2. **Network inspection:**
@@ -420,7 +420,7 @@ Package installation fails
    docker builder prune -a
 
    # Build without cache
-   docker-compose build --no-cache agent
+   docker compose build --no-cache agent
    ```
 
 2. **Fix package sources:**
@@ -455,10 +455,10 @@ Invalid compose file
 1. **Check Docker Compose version:**
 
    ```bash
-   docker-compose version
+   docker compose version
 
-   # Upgrade if needed
-   sudo pip install --upgrade docker-compose
+   # Docker Desktop includes Compose v2. On Linux with Docker Engine, install the
+   # Compose plugin if this fails, e.g. sudo apt-get install docker-compose-plugin
    ```
 
 2. **Use compatible syntax:**
@@ -518,7 +518,7 @@ echo
 
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     # Stop all containers
-    docker-compose down
+    docker compose down
 
     # Remove all containers
     docker rm -f $(docker ps -aq) 2>/dev/null
@@ -549,7 +549,7 @@ BACKUP_DIR="docker-backup-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$BACKUP_DIR"
 
 # Export compose configuration
-docker-compose config > "$BACKUP_DIR/docker-compose.resolved.yml"
+docker compose config > "$BACKUP_DIR/docker-compose.resolved.yml"
 
 # Save running container state
 docker ps -a > "$BACKUP_DIR/containers.txt"
@@ -570,9 +570,9 @@ If these solutions don't resolve your issue:
 1. **Collect diagnostic information:**
 
    ```bash
-   docker-compose logs > docker-logs.txt
-   docker-compose ps > docker-status.txt
-   docker-compose config > docker-config.txt
+   docker compose logs > docker-logs.txt
+   docker compose ps > docker-status.txt
+   docker compose config > docker-config.txt
    docker version > docker-version.txt
    ```
 

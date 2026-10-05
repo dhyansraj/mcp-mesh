@@ -75,7 +75,7 @@ single command. Everything stops with a single command.
 
 Today has five parts:
 
-1. **Generate the compose file** -- `meshctl scaffold --compose --observability`
+1. **Generate the compose file** -- `meshctl scaffold --compose --observability --project-name trip-planner`
 2. **Start the containerized mesh** -- `docker compose up -d`
 3. **Verify** -- `meshctl list`, curl the gateway, check health
 4. **Mesh UI tour** -- agents, topology, traces at `localhost:3080`
@@ -104,7 +104,7 @@ $ cd day-08
 ### Run the scaffold
 
 ```shell
-$ meshctl scaffold --compose --observability
+$ meshctl scaffold --compose --observability --project-name trip-planner
 ```
 
 ```text
@@ -146,6 +146,12 @@ Services included:
   - user-prefs-agent (9105)
   - weather-agent (9103)
 ```
+
+`--project-name trip-planner` sets the prefix the generator uses for every
+container name (`trip-planner-registry`, `trip-planner-flight-agent`, ...)
+and for the network (`trip-planner-network`). Without it the prefix is the
+current directory's name, `day-08`. It does not set Docker Compose's own
+project name, which Compose still takes from the directory.
 
 The scaffold scanned every subdirectory, found `@mesh.agent` decorators in
 twelve Python files and the `@mesh.route` handlers in the gateway, extracted

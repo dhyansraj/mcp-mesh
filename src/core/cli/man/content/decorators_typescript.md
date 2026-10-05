@@ -11,7 +11,7 @@ MCP Mesh provides core functions that transform regular TypeScript functions int
 | `mesh()`           | Create mesh agent wrapping FastMCP |
 | `agent.addTool()`  | Register capability with DI        |
 | `mesh.llm()`       | Enable LLM-powered tools           |
-| `mesh.llmProvider()` | Create LLM provider (zero-code)  |
+| `agent.addLlmProvider()` | Create LLM provider (zero-code) |
 | `mesh.route()`     | Express route with mesh DI         |
 | `addTool({ a2aConfig })` | Bridge an external A2A skill as a mesh capability |
 
@@ -32,7 +32,7 @@ const agent = mesh(server, {
   version: "1.0.0",             // Semantic version
   description: "Service desc",  // Human-readable description
   httpPort: 8080,                   // HTTP server port (0 = auto-assign)
-  host: "localhost",            // Host announced to registry
+  httpHost: "localhost",        // Host announced to registry
   namespace: "default",         // Namespace for isolation
   heartbeatInterval: 30,        // Heartbeat interval in seconds
 });
@@ -177,9 +177,11 @@ Creates an LLM-powered tool with automatic tool discovery.
 ```typescript
 import { z } from "zod";
 
-agent.addTool({
-  name: "assist",
-  ...mesh.llm({
+server.addTool(
+  mesh.llm({
+    name: "assist",
+    capability: "smart_assistant",
+    description: "LLM-powered assistant",
     provider: { capability: "llm", tags: ["+claude"] },  // LLM provider selector
     maxIterations: 5,                    // Max agentic loop iterations
     systemPrompt: "file://prompts/agent.hbs",  // Handlebars template
@@ -188,19 +190,19 @@ agent.addTool({
     filterMode: "all",                   // "all", "best_match", or "*"
     responseModel: AnalystOutput,        // Optional: schema the LLM must emit (drives structured output)
     returns: RunDailyResult,             // Optional: schema for what execute returns to callers
-  }),
-  capability: "smart_assistant",
-  description: "LLM-powered assistant",
-  parameters: z.object({
-    ctx: z.object({
-      query: z.string(),
+    parameters: z.object({
+      ctx: z.object({
+        query: z.string(),
+      }),
     }),
+    execute: async ({ ctx }, { llm }) => {
+      return llm("Help the user with their request");
+    },
   }),
-  execute: async ({ ctx }, { llm }) => {
-    return llm("Help the user with their request");
-  },
-});
+);
 ```
+
+`mesh.llm()` takes the whole tool definition and returns a tool for the FastMCP server's `addTool` (here `server` is the instance passed to `mesh()`).
 
 `responseModel` is the schema the LLM is required to emit and is validated against (and types the injected `llm` callable); `returns` types what `execute` returns to callers. When `responseModel` is omitted, the LLM schema falls back to `returns`. See `meshctl man llm --typescript` for a combined-fields example.
 
@@ -212,19 +214,17 @@ agent.addTool({
 | `best_match` | One tool per capability (best tag match) |
 | `*`          | All available tools (wildcard)           |
 
-## mesh.llmProvider()
+## agent.addLlmProvider()
 
 Creates a zero-code LLM provider wrapping LiteLLM-compatible APIs.
 
 ```typescript
-agent.addTool({
-  name: "claude_chat",
-  ...mesh.llmProvider({
-    model: "anthropic/claude-sonnet-4-5",  // LiteLLM model string
-    capability: "llm",                      // Capability name
-    tags: ["llm", "claude", "provider"],    // Discovery tags
-    version: "1.0.0",                       // Provider version
-  }),
+agent.addLlmProvider({
+  name: "claude_chat",                    // Tool name (default: "process_chat")
+  model: "anthropic/claude-sonnet-4-5",  // LiteLLM model string
+  capability: "llm",                      // Capability name
+  tags: ["llm", "claude", "provider"],    // Discovery tags
+  version: "1.0.0",                       // Provider version
 });
 ```
 
@@ -257,7 +257,7 @@ app.post("/chat", mesh.route(
 app.listen(3000);
 ```
 
-**Note**: the handler's third argument is a positional array — `deps[i]` is the i-th declared dependency, `null` when unresolved. (Changed in 3.4.0; it used to be an object keyed by capability.)
+**Note**: the handler's third argument is a positional array — `deps[i]` is the i-th declared dependency, `null` when unresolved.
 
 **Note**: `mesh.route()` is for Express backends that _consume_ mesh capabilities. Use `agent.addTool()` for MCP agents that _provide_ capabilities.
 

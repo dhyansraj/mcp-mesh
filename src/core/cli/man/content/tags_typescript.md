@@ -122,16 +122,16 @@ Stack multiple `+` tags to create priority ordering. The provider matching the m
 
 ```typescript
 // Prefer Claude > GPT > any other LLM
-agent.addTool({
-  name: "smart_chat",
-  ...mesh.llm({
+server.addTool(
+  mesh.llm({
+    name: "smart_chat",
+    capability: "chat",
     provider: { capability: "llm", tags: ["+claude", "+anthropic", "+gpt"] },
     systemPrompt: "You are helpful.",
+    parameters: z.object({ message: z.string() }),
+    execute: async ({ message }, { llm }) => llm(message),
   }),
-  capability: "chat",
-  parameters: z.object({ message: z.string() }),
-  execute: async ({ message }, { llm }) => llm(message),
-});
+);
 ```
 
 | Provider | Its Tags                         | Matches             | Score  |
@@ -149,9 +149,10 @@ This works for any capability selection (dependencies, providers, tool filters).
 Filter which tools an LLM agent can access:
 
 ```typescript
-agent.addTool({
-  name: "smart_assistant",
-  ...mesh.llm({
+server.addTool(
+  mesh.llm({
+    name: "smart_assistant",
+    capability: "assistant",
     provider: { capability: "llm" },
     filter: [
       { tags: ["executor", "tools"] }, // Tools with these tags
@@ -159,11 +160,10 @@ agent.addTool({
     ],
     filterMode: "all", // Include all matching
     systemPrompt: "You are a helpful assistant.",
+    parameters: z.object({ query: z.string() }),
+    execute: async ({ query }, { llm }) => llm(query),
   }),
-  capability: "assistant",
-  parameters: z.object({ query: z.string() }),
-  execute: async ({ query }, { llm }) => llm(query),
-});
+);
 ```
 
 ## Filter Modes
@@ -220,10 +220,10 @@ agent.addTool({
 
 ## Tag OR Alternatives
 
-Use nested arrays in tags to express OR conditions with fallback behavior:
+Use nested arrays in tags to express OR conditions:
 
 ```typescript
-// Single OR: require "api" AND (prefer "python" OR fallback to "typescript")
+// Single OR: require "api" AND ("python" OR "typescript")
 tags: ["api", ["python", "typescript"]];
 
 // Multiple ORs: (fast OR cached) AND (sync OR async)
@@ -233,16 +233,18 @@ tags: [
 ];
 ```
 
-### Fallback Behavior
+### Preferring One Alternative
 
-When using tag-level OR, alternatives are tried in order:
+The order of the alternatives does not matter: any provider that carries one
+of them qualifies, and the highest-scoring provider wins. To prefer one
+alternative, give it a `+`:
 
 ```typescript
 agent.addTool({
   name: "calculate",
   capability: "calculator",
   dependencies: [
-    { capability: "math", tags: ["addition", ["python", "typescript"]] },
+    { capability: "math", tags: ["addition", ["+python", "typescript"]] },
   ],
   parameters: z.object({ a: z.number(), b: z.number() }),
   execute: async ({ a, b }, math: McpMeshTool | null = null) => {
@@ -254,12 +256,12 @@ agent.addTool({
 
 Resolution:
 
-1. First, try to find provider with `addition` AND `python`
-2. If not found, try provider with `addition` AND `typescript`
-3. If neither found, dependency is injected as `null`
+1. Every provider with `addition` AND (`python` OR `typescript`) qualifies
+2. A provider matching `+python` scores higher than one matching only `typescript`, so it wins while it is available
+3. If no provider qualifies, the dependency is injected as `null`
 
-This is useful when you have multiple implementations and want to prefer
-one but gracefully fallback to another when your preferred is unavailable.
+A `-` alternative never counts as a match. It only rejects providers that
+carry the tag, so write exclusions as separate tags (`"-legacy"`).
 
 ## See Also
 

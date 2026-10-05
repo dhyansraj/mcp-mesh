@@ -313,39 +313,40 @@ provider's `model` string, dependency, and auth config change.
 
 | Use case                                              | Pick                                                |
 | ----------------------------------------------------- | --------------------------------------------------- |
-| Quickstart / dev / lowest setup                       | AI Studio (`gemini/<model>`, `GOOGLE_AI_GEMINI_API_KEY`) |
+| Quickstart / dev / lowest setup                       | AI Studio (`gemini/<model>`, `spring.ai.google.genai.api-key`) |
 | Production with IAM auth, GCP audit logs, VPC-SC      | Vertex AI (`vertex_ai/<model>`, ADC)                |
 | Need Provisioned Throughput (no capacity 429s)        | Vertex AI                                           |
 | Multi-tenant org-controlled billing                   | Vertex AI                                           |
 
 ### Setup (Vertex AI provider agent)
 
-1. Add the Vertex AI Spring AI starter to your provider's `pom.xml`
-   (mesh's `mcp-mesh-spring-ai` does **not** pull it in by default — it's
-   optional so non-Vertex users don't drag in `google-cloud-aiplatform`):
+1. Add the Google GenAI Spring AI starter to your provider's `pom.xml`
+   (optional in `mcp-mesh-spring-ai`, so it is not pulled in by default).
+   The same starter serves AI Studio and Vertex AI:
 
    ```xml
    <dependency>
      <groupId>org.springframework.ai</groupId>
-     <artifactId>spring-ai-starter-model-vertex-ai-gemini</artifactId>
+     <artifactId>spring-ai-starter-model-google-genai</artifactId>
      <version>${spring-ai.version}</version>
    </dependency>
    ```
 
 2. Configure project + location in `application.yml` (or via env vars
-   through Spring Boot's relaxed binding):
+   through Spring Boot's relaxed binding). A project id and location with no
+   API key select the Vertex backend; if an API key is also set, add
+   `vertex-ai: true` to force Vertex:
 
    ```yaml
    spring:
      ai:
-       vertex:
-         ai:
-           gemini:
-             project-id: ${SPRING_AI_VERTEX_AI_GEMINI_PROJECT_ID:my-gcp-project}
-             location:   ${SPRING_AI_VERTEX_AI_GEMINI_LOCATION:us-central1}
-             chat:
-               options:
-                 model: gemini-2.5-flash
+       google:
+         genai:
+           project-id: ${SPRING_AI_GOOGLE_GENAI_PROJECT_ID:my-gcp-project}
+           location:   ${SPRING_AI_GOOGLE_GENAI_LOCATION:us-central1}
+           chat:
+             options:
+               model: gemini-2.5-flash
    ```
 
 3. Configure GCP Application Default Credentials:
@@ -394,10 +395,9 @@ Migrate from AI Studio to Vertex AI by updating only the provider agent:
 @MeshLlmProvider(model = "vertex_ai/gemini-2.5-flash", …)
 ```
 
-Swap the dependency in `pom.xml`
-(`spring-ai-starter-model-google-genai` → `spring-ai-starter-model-vertex-ai-gemini`)
-and replace `GOOGLE_AI_GEMINI_API_KEY` with ADC + the
-`spring.ai.vertex.ai.gemini.*` properties shown above. Consumer agents
+Keep the `spring-ai-starter-model-google-genai` dependency, remove
+`spring.ai.google.genai.api-key`, and set the project id and location shown
+above with Application Default Credentials. Consumer agents
 keep the same `@MeshLlm(providerSelector = …)` selector.
 
 ## Complete Example

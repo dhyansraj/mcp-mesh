@@ -81,21 +81,34 @@ helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
 | Deployment     | URL                                                      |
 | -------------- | -------------------------------------------------------- |
 | Docker Compose | http://localhost:3000                                    |
-| Kubernetes     | `kubectl port-forward svc/grafana 3000:3000 -n mcp-mesh` |
+| Kubernetes     | `kubectl port-forward svc/mcp-core-mcp-mesh-grafana 3000:3000 -n mcp-mesh` |
 
-Default credentials: `admin` / `admin`
+The Kubernetes Service is named `<release>-mcp-mesh-grafana`, so the command above matches the `mcp-core` release installed earlier.
 
-### Pre-built Dashboards
+Credentials:
 
-- **MCP Mesh Overview**: Agent health, request rates, error rates
-- **Trace Explorer**: Search and visualize distributed traces
-- **Agent Details**: Per-agent metrics and traces
+- **Docker Compose**: `admin` / `admin`. The generated compose file also enables anonymous access with the Admin role and publishes port 3000 on every host interface, so anyone who can reach the host gets Grafana Admin without a password. Run it on a trusted machine, or change the mapping to `127.0.0.1:3000:3000`.
+- **Kubernetes**: user `admin`. Unless you set `mcp-mesh-grafana.grafana.config.adminPassword` or `mcp-mesh-grafana.grafana.config.existingSecret` in the `mcp-mesh-core` values, the password is generated into a Secret; read it with:
+
+```bash
+kubectl get secret mcp-core-mcp-mesh-grafana-secret -n mcp-mesh \
+  -o jsonpath='{.data.admin-password}' | base64 -d
+```
+
+### Pre-built Dashboard
+
+Both deployments provision one dashboard, **MCP Mesh Distributed Tracing**: service activity, recent traces and per-span timing from Tempo.
+
+### Where Traces Are Stored
+
+- Agents publish spans to the Redis stream `mesh:trace`. The registry and meshui read it; `MCP_MESH_TRACE_RETENTION` (default `24h`) trims that stream and nothing else.
+- With the default `otlp` exporter, the registry forwards spans to Tempo. `meshctl trace` asks the registry (`GET /trace/<id>`), which queries Tempo, so a trace is found only while Tempo still holds it. Both shipped Tempo configurations (compose and the `mcp-mesh-tempo` chart) keep traces for 1 hour.
 
 ## Environment Variables
 
 | Variable                               | Description     | Default                 |
 | -------------------------------------- | --------------- | ----------------------- |
-| `MCP_MESH_DISTRIBUTED_TRACING_ENABLED` | Enable tracing  | `false`                 |
+| `MCP_MESH_DISTRIBUTED_TRACING_ENABLED` | Enable tracing  | `false` for agents and the registry, `true` for meshui; the Helm charts set it to `true` |
 | `TRACE_EXPORTER_TYPE`                  | Exporter type   | `otlp`                  |
 | `TELEMETRY_ENDPOINT`                   | OTLP endpoint   | `localhost:4317`        |
 | `TELEMETRY_PROTOCOL`                   | Protocol        | `grpc`                  |
@@ -113,7 +126,7 @@ Default credentials: `admin` / `admin`
 
 Possible reasons:
 
-- Trace ID incorrect or expired (traces expire after ~1 hour by default)
+- Trace ID incorrect or expired (Tempo keeps traces for 1 hour in both shipped configurations)
 - Distributed tracing not enabled (`MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true`)
 - Observability stack not deployed
 

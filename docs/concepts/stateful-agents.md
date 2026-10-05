@@ -39,7 +39,7 @@ several primitives — MeshJob, DDDI, the worker-pool topology — so the
   external signal; a timer fires at a deadline. None of this is gated
   on a user tool call landing.
 
-### Loop topology (v2.2.4+)
+### Loop topology
 
 mcp-mesh runs your agent across two event loops:
 
@@ -106,7 +106,7 @@ long-running work. From mesh's perspective it's an ordinary CRUD
 agent — every tool call is short, idempotent where possible, and
 returns. The pool lives inside the agent process — created in
 `lifespan` startup, stored in a module-level global, and closed in
-`lifespan` exit. Since v2.2.4, `lifespan` and all tool bodies share
+`lifespan` exit. `lifespan` and all tool bodies share
 the single user loop, so a module-level pool created in `lifespan`
 startup is the supported pattern. (FastMCP's `lifespan` receives a
 FastMCP server instance — there is no `.state` namespace as there is
@@ -401,7 +401,7 @@ streaming LLM call that runs for two minutes, the user clicking "extend
 my deadline" lands in `pending_inputs` and sits there until the next
 boundary — which may be after the event was useful.
 
-### Sub-iteration events: mesh-managed event channel (shipped in v2.2)
+### Sub-iteration events: mesh-managed event channel
 
 The sub-iteration gap above closes with **MeshJob event injection** —
 a per-job, ordered, append-only event log every running job carries.
@@ -491,8 +491,8 @@ A handful of anti-patterns this decomposition exists to prevent:
   per-attempt deadlines — in application code, and breaks horizontal
   scaling because state pins the agent to one replica. It also drags
   in hand-rolled cross-thread plumbing (`sys.modules['__main__']`
-  lookups for DI-wired functions, `dependency_kwargs.timeout` knobs
-  for long-poll). There IS a narrow class of agents where this
+  lookups for DI-wired functions, raised call timeouts for
+  long-poll). There IS a narrow class of agents where this
   pattern is the right answer (GPU contexts, real-time aggregators
   with sub-10ms latency budgets) — see
   [In-Process State](in-process-state.md) — but it should never be
@@ -506,7 +506,7 @@ A handful of anti-patterns this decomposition exists to prevent:
   bound to worker-0. The supported shape at the default is the
   FastMCP-`lifespan` + module-global pattern (binds to the single-user
   loop, used by all tools on the same loop) — see
-  [Loop topology](#loop-topology-v224) above. If you also need N>1
+  [Loop topology](#loop-topology) above. If you also need N>1
   workers for sync-blocking parallelism, switch to a per-loop dict
   cache (each worker lazily builds its own resource on first access).
 - **Putting orchestration state on the orchestrator process.** The
@@ -522,6 +522,6 @@ A handful of anti-patterns this decomposition exists to prevent:
   responses; pairs with MeshJob for live updates
 - [In-Process State (Escape Hatch)](in-process-state.md) — when even
   MeshJob can't fit your shape, with documented caveats
-- [Loop Topology](../python/dependency-injection.md#loop-topology-v224)
+- [Loop Topology](../python/dependency-injection.md#loop-topology)
   — two-loop model, default `MCP_MESH_TOOL_WORKERS=1`, when to opt into N>1
 - `meshctl man dependency-injection` — DDDI and loop topology

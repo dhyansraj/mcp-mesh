@@ -34,8 +34,7 @@ sequenceDiagram
 ```python
 @mesh.agent(
     name="my-agent",
-    health_interval=5,       # Heartbeat every 5s (default)
-    auto_run_interval=10,    # Keep-alive every 10s
+    heartbeat_interval=5,    # Heartbeat every 5s (default)
 )
 ```
 

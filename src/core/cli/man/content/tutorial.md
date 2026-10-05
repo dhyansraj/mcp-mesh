@@ -1520,7 +1520,7 @@ UI dashboard, and a full observability stack.
 
 Today has five parts:
 
-1. **Generate the compose file** -- `meshctl scaffold --compose --observability`
+1. **Generate the compose file** -- `meshctl scaffold --compose --observability --project-name trip-planner`
 2. **Start the containerized mesh** -- `docker compose up -d`
 3. **Verify** -- `meshctl list`, curl the gateway, check health
 4. **Mesh UI tour** -- agents, topology, traces at `localhost:3080`
@@ -1529,7 +1529,7 @@ Today has five parts:
 ## Part 1: Generate the compose file
 
 ```shell
-$ meshctl scaffold --compose --observability
+$ meshctl scaffold --compose --observability --project-name trip-planner
 ```
 
 The scaffold scanned every subdirectory, found `@mesh.agent` decorators in

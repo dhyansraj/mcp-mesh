@@ -67,22 +67,18 @@ dependencies: [
 | `tags: [["a"], ["b"]]`         | a OR b (full OR)                         |
 | `[{tags:["a"]}, {tags:["b"]}]` | a OR b (multiple selectors - LLM filter) |
 
-**Tag-Level OR** (v0.9.1+):
+**Tag-Level OR**:
 
-Use nested arrays in tags for OR alternatives with fallback behavior:
+Use a nested array in tags for an OR group, and mark the alternative you prefer with `+`:
 
 ```typescript
 dependencies: [
-  // Prefer python implementation, fallback to typescript
-  { capability: "math", tags: ["addition", ["python", "typescript"]] },
+  // Require addition AND (python OR typescript), preferring python
+  { capability: "math", tags: ["addition", ["+python", "typescript"]] },
 ];
 ```
 
-Resolution order:
-
-1. Try to find provider with `addition` AND `python` tags
-2. If not found, try provider with `addition` AND `typescript` tags
-3. If neither found, dependency is unresolved
+A provider qualifies if it has `addition` and at least one of `python` or `typescript`; if none qualifies, the dependency is unresolved. The alternatives are not tried in order: the registry scores every qualifying provider and the highest score wins, so `+python` is what makes the python implementation preferred (a matched `+` alternative scores more than a plain one).
 
 See `meshctl man tags` for detailed tag matching behavior.
 

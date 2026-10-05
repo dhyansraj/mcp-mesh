@@ -61,79 +61,31 @@ async def my_tool(helper: mesh.McpMeshTool = None):
 
 ## Proxy Configuration
 
-Configure via `dependency_kwargs` in the decorator:
+The Python runtime has no per-dependency proxy settings. Every outgoing call runs on one budget: `MCP_MESH_CALL_TIMEOUT` (default 300 seconds), replaced by an inbound `X-Mesh-Timeout` when the current call carries one. See `meshctl man environment`.
 
-```python
-@mesh.tool(
-    dependencies=["slow_service"],
-    dependency_kwargs={
-        "slow_service": {
-            "timeout": 60,              # Request timeout (seconds)
-            "retry_count": 3,           # Retry attempts on failure
-            "custom_headers": {         # Custom HTTP headers
-                "X-Request-ID": "...",
-            },
-            "streaming": True,          # Enable streaming responses
-            "session_required": True,   # Require session affinity
-            "auth_required": True,      # Require authentication
-            "stateful": True,           # Mark as stateful
-            "auto_session_management": True,  # Auto session lifecycle
-        }
-    },
-)
-async def my_tool(slow_service: mesh.McpMeshTool = None):
-    result = await slow_service(data="payload")
-    ...
-```
-
-## Configuration Options
-
-| Option                    | Type | Default | Description                 |
-| ------------------------- | ---- | ------- | --------------------------- |
-| `timeout`                 | int  | 30      | Request timeout in seconds  |
-| `retry_count`             | int  | 0       | Number of retry attempts    |
-| `streaming`               | bool | False   | Enable streaming responses  |
-| `session_required`        | bool | False   | Require session affinity    |
-| `auth_required`           | bool | False   | Require authentication      |
-| `stateful`                | bool | False   | Mark capability as stateful |
-| `auto_session_management` | bool | False   | Auto manage sessions        |
-| `custom_headers`          | dict | {}      | Additional HTTP headers     |
+Per-dependency options (`dependencyKwargs`) are TypeScript-only; see `meshctl man proxies --typescript`. A `dependency_kwargs` argument to any Python decorator (`@mesh.tool`, `@mesh.route`, `@mesh.llm`, ...) is dropped with a warning.
 
 ## Streaming
 
-Enable streaming for real-time data:
+`proxy.stream(...)` returns an async iterator of text chunks when the provider's tool returns `mesh.Stream[str]` (see `meshctl man streaming`):
 
 ```python
-@mesh.tool(
-    dependencies=["stream_service"],
-    dependency_kwargs={
-        "stream_service": {"streaming": True}
-    },
-)
+@mesh.tool(dependencies=["stream_service"])
 async def process_stream(stream_svc: mesh.McpMeshTool = None):
-    async for chunk in stream_svc.stream("data"):
+    async for chunk in stream_svc.stream(prompt="data"):
         process(chunk)
 ```
 
 ## Session Affinity
 
-For stateful services, ensure requests go to the same instance:
+A Python provider pins every call that carries a `session_id` argument to the replica that served that session's first call, and forwards later calls for the session there. Assignments live in Redis (`REDIS_URL`) so every replica sees them, and expire after `MCP_MESH_SESSION_TTL` seconds (default 3600). A replica records itself by its `POD_IP` (default `localhost`), so set `POD_IP` from the Kubernetes downward API when running more than one. Without Redis each replica only knows its own assignments.
 
 ```python
-@mesh.tool(
-    dependencies=["stateful_service"],
-    dependency_kwargs={
-        "stateful_service": {
-            "session_required": True,
-            "auto_session_management": True,
-        }
-    },
-)
-async def stateful_operation(svc: mesh.McpMeshTool = None):
-    # All calls routed to same instance
-    await svc.initialize()
-    result = await svc.process()
-    await svc.cleanup()
+@mesh.tool(dependencies=["stateful_service"])
+async def stateful_operation(session_id: str, svc: mesh.McpMeshTool = None):
+    # Every call with this session_id lands on the same provider replica
+    await svc(session_id=session_id, action="start")
+    return await svc(session_id=session_id, action="process")
 ```
 
 ## Error Handling

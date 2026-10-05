@@ -84,17 +84,7 @@ mesh.a2a.mount(
 
 Slots are never compacted: an unresolved dependency holds its own index as `null` and never shifts a later one up.
 
-!!! warning "Changed in 3.4.0"
-
-    Both surfaces used to hand the handler an object keyed by capability (`{ data_service, formatter }`). Reading a **declared** capability by name on the array now throws with the index and the corrected signature:
-
-    ```text
-    mesh.route dependencies are positional as of 3.4.0.
-    You accessed `deps.data_service`; "data_service" is declared dependency [0].
-    Rewrite the handler as:  async (req, res, [data_service, formatter]) => { ... }
-    ```
-
-    `RouteDependencies` and `A2ADependencies` now alias `PositionalDependencies` (`Array<McpMeshTool | null>`), so an object type argument — `mesh.a2a.mount<{ date_service: McpMeshTool }>(...)` — no longer compiles. Use per-slot tuples instead: `mount<[McpMeshTool | null]>(...)`. See [Migrating to positional DI](../migration/3.4-positional-di.md).
+Reading a **declared** capability by name on the array throws, naming its index and the corrected signature. `RouteDependencies` and `A2ADependencies` alias `PositionalDependencies` (`Array<McpMeshTool | null>`); type a handler with per-slot tuples, for example `mount<[McpMeshTool | null]>(...)`.
 
 ### Dependencies with Filters
 
@@ -132,8 +122,8 @@ agent.addTool({
   name: "calculate",
   capability: "calculator",
   dependencies: [
-    // Prefer python provider, fallback to typescript
-    { capability: "math", tags: ["addition", ["python", "typescript"]] },
+    // Require addition AND (python OR typescript), preferring python
+    { capability: "math", tags: ["addition", ["+python", "typescript"]] },
   ],
   parameters: z.object({
     a: z.number(),
@@ -147,14 +137,13 @@ agent.addTool({
 });
 ```
 
-Resolution order:
+How it resolves:
 
-1. Try to find provider with `addition` AND `python` tags
-2. If not found, try provider with `addition` AND `typescript` tags
-3. If neither found, dependency is injected as `null`
+1. Every provider with `addition` AND (`python` OR `typescript`) qualifies
+2. A provider matching `+python` scores higher than one matching only `typescript`, so it wins while it is available
+3. If no provider qualifies, the dependency is injected as `null`
 
-This is useful when you have multiple implementations of the same capability
-and want to prefer one but fallback to another if unavailable.
+The alternatives are not tried in order; the `+` is what expresses the preference.
 
 ## Injection Types
 
@@ -177,21 +166,21 @@ execute: async ({}, helper: McpMeshTool | null = null) => {
 
 ### LLM Injection
 
-For LLM agent injection in `mesh.llm()` decorated tools:
+For LLM agent injection, define the tool with `mesh.llm()` and register it on the FastMCP `server` you passed to `mesh(server, ...)`:
 
 ```typescript
-agent.addTool({
-  name: "smart_tool",
-  ...mesh.llm({
+server.addTool(
+  mesh.llm({
+    name: "smart_tool",
+    capability: "smart",
     provider: { capability: "llm", tags: ["+claude"] },
     systemPrompt: "You are a helpful assistant.",
+    parameters: z.object({ query: z.string() }),
+    execute: async ({ query }, { llm }) => {
+      return llm("Process this request: " + query);
+    },
   }),
-  capability: "smart",
-  parameters: z.object({ query: z.string() }),
-  execute: async ({ query }, { llm }) => {
-    return llm("Process this request: " + query);
-  },
-});
+);
 ```
 
 ## Graceful Degradation
@@ -306,7 +295,7 @@ The view slot expands **in place** (name-sorted), so its edges keep contiguous i
 
 - A `required` method joins the tool's pre-invoke guard: an unresolved required edge makes the tool refuse with a `UserError` carrying the structured `dependency_unavailable` payload before the handler runs (direct and claim paths). An unresolved **optional** method rejects with a `TypeError` (the null-proxy passthrough) on its own call only.
 - `minAvailable` adds a consumer-local floor: below it every facade call throws `MeshServiceUnavailableError` (settle-aware).
-- A view **forces inline execution** — per-tool worker isolation is disabled for a view-bearing tool, with a warning logged at registration when `MCP_MESH_TOOL_WORKERS>1`.
+- A view **forces inline execution** — per-tool worker isolation is disabled for a view-bearing tool, with a warning logged at registration when `MCP_MESH_TOOL_ISOLATION` is set to anything other than `false`.
 - Views are a **tool-parameter** surface only: a `mesh.serviceView(...)` in `mesh.route(...)` or `mesh.a2a.mount(...)` dependencies is rejected.
 
 ### Publishing the dotted capabilities a view binds
@@ -344,10 +333,8 @@ agent.addTool({
   dependencyKwargs: [
     {
       // Config for dependencies[0] (slow_service)
-      timeout: 60, // Request timeout in seconds (default 30)
+      timeout: 60, // Request timeout in seconds (default MCP_MESH_CALL_TIMEOUT, else 300)
       maxAttempts: 3, // Total attempts incl. the first try (default 1)
-      streaming: true, // Enable streaming (uses streamTimeout)
-      sessionRequired: true, // Require session affinity
     },
   ],
   parameters: z.object({ data: z.string() }),
@@ -360,14 +347,9 @@ agent.addTool({
 });
 ```
 
-## Proxy Types (Auto-Selected)
+## Proxy Types
 
-The mesh uses a unified proxy system:
-
-| Proxy Type                | Use Case                                        |
-| ------------------------- | ----------------------------------------------- |
-| `SelfDependencyProxy`     | Same agent (direct call, no network overhead)   |
-| `EnhancedUnifiedMCPProxy` | Cross-agent calls (auto-configured from kwargs) |
+Every injected dependency is an `McpMeshTool` proxy that calls its provider over HTTP, including a dependency on another tool of the same agent.
 
 ## Function vs Capability Names
 

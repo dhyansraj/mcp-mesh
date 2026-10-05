@@ -25,7 +25,7 @@ MCP Mesh supports multiple deployment options to fit your infrastructure needs. 
 # Quick start
 meshctl scaffold basic --name my-agent
 meshctl scaffold --compose
-docker-compose up
+docker compose up
 ```
 
 [:material-arrow-right: Docker Guide](03-docker-deployment.md){ .md-button }

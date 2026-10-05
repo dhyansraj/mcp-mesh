@@ -48,8 +48,8 @@ Background process that:
 # Heartbeat cadence to registry (overrides @mesh.agent heartbeat_interval, default 5)
 export MCP_MESH_HEALTH_INTERVAL=5
 
-# Auto-run loop interval (overrides @mesh.agent auto_run_interval, default 10)
-export MCP_MESH_AUTO_RUN_INTERVAL=10
+# How often the health check re-runs (overrides @mesh.agent health_check_ttl, default 15)
+export MCP_MESH_HEALTH_CHECK_TTL=15
 ```
 
 ### Registry Settings
@@ -61,8 +61,8 @@ export DEFAULT_TIMEOUT_THRESHOLD=20
 # How often to scan for unhealthy agents (seconds)
 export HEALTH_CHECK_INTERVAL=10
 
-# When to evict stale agents (seconds)
-export DEFAULT_EVICTION_THRESHOLD=60
+# How long unhealthy agents are kept before the sweep purges them
+export MCP_MESH_RETENTION=1h
 ```
 
 ### Performance Profiles
@@ -168,11 +168,9 @@ It is not silent, though. When the registry withdraws the last healthy provider 
 
 ### Route and A2A Agents
 
-`@mesh.route` and `@mesh.a2a` agents run the check on the same timer as a provider, and a failing one pauses their heartbeat too, so the registry ages the gateway out and stops advertising it. That is the whole effect: the heartbeat is registry traffic, so a withdrawn gateway keeps serving its own routes, keeps the dependencies it already resolved, and still answers 200 on `/ready` - it stays in its Service endpoints and keeps taking ingress. It stops being discovered; it does not go dark.
+A Python `@mesh.route` or `@mesh.a2a` agent has no health check. `health_check` is an argument to `@mesh.agent`, and that decorator cannot share a process with `@mesh.route` or `@mesh.a2a` - the runtime rejects the combination at startup - so a Python gateway has nowhere to declare one, and issue #1506 closes that as by design. (TypeScript gateways declare one in the `meshExpress` config and Java ones on any Spring bean; there a failing check pauses the gateway's heartbeat, the registry stops advertising it, and it keeps serving the ingress it already has.) Mesh gives a gateway dependency injection, not lifecycle management. It is an ordinary FastAPI application, so its startup and liveness stay yours to handle the way FastAPI already lets you: validate the configuration at import time and exit non-zero, which Kubernetes reports as `CrashLoopBackOff` with the cause in the logs.
 
-Declaring one on a gateway is another matter, and issue #1506 closes that as by design: `health_check` is an argument to `@mesh.agent`, and that decorator cannot share a process with `@mesh.route` or `@mesh.a2a` - the runtime rejects the combination at startup. Mesh gives a gateway dependency injection, not lifecycle management. It is an ordinary FastAPI application, so its startup and liveness stay yours to handle the way FastAPI already lets you: validate the configuration at import time and exit non-zero, which Kubernetes reports as `CrashLoopBackOff` with the cause in the logs.
-
-They still serve the same four probe endpoints, on your own FastAPI app: `/startupz` reports the startup check (a gateway declares none, so it passes), `/livez` answers 200 for as long as the process serves, `/ready` reports only whether the mesh runtime is running, and `/health` carries the verdict. If your app already defines one of those paths, yours is left alone and the others are still added.
+They still serve the same four probe endpoints, on your own FastAPI app: `/startupz` reports the startup check (a gateway declares none, so mesh's handler passes), `/livez` answers 200 for as long as the process serves, `/ready` reports only whether the mesh runtime is running, and mesh's `/health` reports `healthy`, since there is no check to report on. If your app already defines one of those paths, yours is left alone, answers however you wrote it, and the others are still added.
 
 ## Graceful Failure
 

@@ -20,6 +20,8 @@
 | `meshctl scaffold`       | Generate a new agent from templates                                |
 | `meshctl config`         | Show effective configuration                                       |
 | `meshctl entity`         | Manage trusted entity CAs for registration trust                   |
+| `meshctl job`            | Inspect a MeshJob (`status`) or force-reclaim its lease (`reclaim`) |
+| `meshctl registry`       | Drain, resume, or show the drain state of a running registry      |
 | `meshctl man`            | Show offline manual pages                                          |
 
 ## Lifecycle
@@ -357,6 +359,31 @@ meshctl man decorators --java        # Java/Spring Boot variant
 meshctl man --raw decorators         # Raw markdown (LLM-friendly)
 meshctl man tutorial --day 3         # Single day of the 10-day tutorial
 ```
+
+## Jobs & Registry Administration
+
+### `meshctl job`
+
+Inspects and administers MeshJobs. Full reference in `meshctl man jobs`.
+
+```bash
+meshctl job status <job_id>     # Current state, owner, lease and claim epoch
+meshctl job reclaim <job_id>    # Clear the owner and lease so the job is claimable again
+```
+
+`reclaim` takes the same path as the registry's orphan sweep; the next claim mints a new claim epoch, which fences the superseded execution. Terminal jobs cannot be reclaimed.
+
+### `meshctl registry`
+
+Drains a registry before an upgrade or restart. Full reference in `meshctl man registry`.
+
+```bash
+meshctl registry drain --wait   # Stop handing out new job claims; wait for running jobs
+meshctl registry status         # Drain state and live-claim count
+meshctl registry resume         # Resume normal job dispatch
+```
+
+When the registry serves `/admin/*` on a separate `MCP_MESH_ADMIN_PORT`, point `--registry-url` at that port.
 
 ## Trust & Security
 

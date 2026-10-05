@@ -1042,6 +1042,43 @@ def _wrap_with_isolation(final_func: Callable, func_name: str) -> Callable:
     return isolated
 
 
+_DEPENDENCY_KWARGS_WARNED: set[str] = set()
+
+
+def _pop_dependency_kwargs(kwargs: dict[str, Any]) -> bool:
+    """Remove ``dependency_kwargs`` from a decorator's ``**kwargs`` (#1610).
+
+    Every mesh decorator that takes ``**kwargs`` folds them somewhere real:
+    advertised producer/route/surface metadata, or (``@mesh.llm``,
+    ``mesh.llm_provider``) model parameters sent to the vendor. A TypeScript-only
+    ``dependency_kwargs`` must reach none of those. Returns True when it was
+    present, so the caller can warn once the target is known.
+    """
+    return (
+        kwargs.pop("dependency_kwargs", _NO_DEPENDENCY_KWARGS)
+        is not _NO_DEPENDENCY_KWARGS
+    )
+
+
+_NO_DEPENDENCY_KWARGS = object()
+
+
+def _warn_dependency_kwargs_ignored(target: Any, decorator: str = "@mesh.tool") -> None:
+    """Warn, once per decorated target, that ``dependency_kwargs`` has no effect (#1610)."""
+    name = getattr(target, "__name__", None) or "?"
+    qualname = getattr(target, "__qualname__", None) or name
+    key = f"{decorator}:{getattr(target, '__module__', '?')}.{qualname}"
+    if key in _DEPENDENCY_KWARGS_WARNED:
+        return
+    _DEPENDENCY_KWARGS_WARNED.add(key)
+    logger.warning(
+        "%s '%s': dependency_kwargs is not supported by the Python "
+        "runtime and is ignored",
+        decorator,
+        name,
+    )
+
+
 def tool(
     capability: str | None = None,
     *,
@@ -1143,8 +1180,15 @@ def tool(
         Function with dependency injection wrapper if dependencies are specified,
         otherwise the original function with metadata attached
     """
+    # Issue #1610: `dependency_kwargs` is a TypeScript-only knob. Folding it
+    # into **kwargs advertised it as producer metadata and changed nothing on
+    # any consumer, silently. Drop it from the advertised kwargs and say so.
+    ignored_dependency_kwargs = _pop_dependency_kwargs(kwargs)
 
     def decorator(target: T) -> T:
+        if ignored_dependency_kwargs:
+            _warn_dependency_kwargs_ignored(target, "@mesh.tool")
+
         # Validate optional capability
         if capability is not None and not isinstance(capability, str):
             raise ValueError("capability must be a string")
@@ -1598,7 +1642,11 @@ def agent(
         The original class/function with agent metadata attached
     """
 
+    ignored_dependency_kwargs = _pop_dependency_kwargs(kwargs)
+
     def decorator(target: T) -> T:
+        if ignored_dependency_kwargs:
+            _warn_dependency_kwargs_ignored(target, "@mesh.agent")
         # Validate required name
         if name is None:
             raise ValueError("name is required for @mesh.agent")
@@ -1890,7 +1938,11 @@ def route(
             return {"success": True}
     """
 
+    ignored_dependency_kwargs = _pop_dependency_kwargs(kwargs)
+
     def decorator(target: T) -> T:
+        if ignored_dependency_kwargs:
+            _warn_dependency_kwargs_ignored(target, "@mesh.route")
         # RFC #1280: @mesh.service views in @mesh.route are OUT OF SCOPE this
         # round — fail loudly at decoration time rather than silently ignoring
         # the parameter (which would inject nothing and surface as an
@@ -2207,7 +2259,11 @@ def a2a(
             return await generate_report(**payload)
     """
 
+    ignored_dependency_kwargs = _pop_dependency_kwargs(kwargs)
+
     def decorator(target: T) -> T:
+        if ignored_dependency_kwargs:
+            _warn_dependency_kwargs_ignored(target, "@mesh.a2a")
         # Validate path (REQUIRED, must start with /)
         if not isinstance(path, str) or not path:
             raise ValueError(
@@ -2489,7 +2545,11 @@ def a2a_consumer(
     final_skill_id = a2a_skill_id if a2a_skill_id else capability
     user_tags = list(tags) if tags is not None else []
 
+    ignored_dependency_kwargs = _pop_dependency_kwargs(kwargs)
+
     def decorator(target: T) -> T:
+        if ignored_dependency_kwargs:
+            _warn_dependency_kwargs_ignored(target, "@mesh.a2a_consumer")
         # Coupled with the marker-propagation try/except at the bottom of this
         # decorator — that block copies _mesh_a2a_consumer_metadata onto the DI
         # wrapper returned by tool() so this guard catches re-decoration.
@@ -3035,7 +3095,11 @@ def llm(
             f"got {output_mode!r}."
         )
 
+    ignored_dependency_kwargs = _pop_dependency_kwargs(kwargs)
+
     def decorator(func: T) -> T:
+        if ignored_dependency_kwargs:
+            _warn_dependency_kwargs_ignored(func, "@mesh.llm")
         # Step 1: Resolve configuration with hierarchy (ENV > decorator params)
         # Phase 1: Detect file:// prefix for template files
         is_template = False

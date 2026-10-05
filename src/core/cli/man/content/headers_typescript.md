@@ -18,9 +18,11 @@ Set the allowlist via environment variable on every agent in the chain:
 export MCP_MESH_PROPAGATE_HEADERS=authorization,x-request-id,x-tenant-id
 ```
 
-- Comma-separated header name **prefixes**
+- Comma-separated header names
+- A plain token is an exact match: `authorization` matches only `authorization`
+- A token ending in `*` is a prefix match: `x-audit-*` matches `x-audit-id`, `x-audit-source`, etc.
+- A bare `*` is rejected (it would match every header, credentials included)
 - Case-insensitive (normalized to lowercase internally)
-- Prefix matching: `x-audit` matches `x-audit-id`, `x-audit-source`, etc.
 - Whitespace around names is trimmed
 - Parsed once at startup — restart to change
 - Must be set on **every agent** in the chain that should participate
@@ -139,7 +141,7 @@ Session propagated headers (from incoming request)
 ```
 
 Per-call headers **win** on conflict. All headers (session and per-call)
-are filtered by the `MCP_MESH_PROPAGATE_HEADERS` prefix allowlist — agents
+are filtered by the `MCP_MESH_PROPAGATE_HEADERS` allowlist — agents
 cannot inject arbitrary headers unless the operator explicitly allows them.
 
 ## Example: Auth Token Forwarding
@@ -157,6 +159,31 @@ curl -H "Authorization: Bearer tok_abc123" \
 ```
 
 The `Authorization` header flows automatically through every agent call.
+
+## The Allowlist Is Not Access Control
+
+`MCP_MESH_PROPAGATE_HEADERS` is a capture-and-relay setting scoped to the agent it is set on:
+
+- It decides which inbound headers this agent captures and then sends on every outbound mesh call. It never looks at the destination, so a captured header goes to every dependency the agent calls.
+- A callee cannot refuse a header. Leaving `authorization` out of agent B's allowlist means B does not relay it to C; B still receives it on the wire and holds it for the whole call.
+- A credential that enters the chain therefore reaches every downstream agent, at every hop whose allowlist relays it.
+
+Trace headers (`X-Trace-ID`, `X-Parent-Span`) travel separately, so withholding business headers does not break tracing.
+
+### Withholding Headers from One Call
+
+There is no per-dependency setting, and per-call headers can only add. To keep a header away from one downstream, run that call under a reduced propagated set with `runWithPropagatedHeaders`:
+
+```typescript
+import { getCurrentPropagatedHeaders, runWithPropagatedHeaders } from "@mcpmesh/sdk";
+
+const { authorization, ...withoutAuth } = getCurrentPropagatedHeaders();
+const result = await runWithPropagatedHeaders(withoutAuth, () =>
+  untrustedSvc({ query }),
+);
+```
+
+Remove only the names you mean to withhold. Keys are lowercase, and the set also carries mesh infrastructure headers such as `x-mesh-timeout`, which carries the inbound call budget downstream.
 
 ## Cross-Language Behavior
 
@@ -180,7 +207,7 @@ across all SDK combinations.
 
 | Variable                     | Description                                       | Default  |
 | ---------------------------- | ------------------------------------------------- | -------- |
-| `MCP_MESH_PROPAGATE_HEADERS` | Comma-separated header name prefixes to forward   | _(none)_ |
+| `MCP_MESH_PROPAGATE_HEADERS` | Comma-separated allowlist (exact `name` or `prefix*`) | _(none)_ |
 
 ## See Also
 

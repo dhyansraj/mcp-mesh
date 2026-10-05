@@ -46,7 +46,6 @@ Configures the agent server settings. Applied to a class.
     health_check=health_fn,      # Optional health check function
     health_check_ttl=15,         # Health check cache TTL (seconds)
     auto_run=True,               # Start automatically (no main() needed)
-    auto_run_interval=10,        # Auto-run loop interval (env: MCP_MESH_AUTO_RUN_INTERVAL)
 )
 class MyAgent:
     pass

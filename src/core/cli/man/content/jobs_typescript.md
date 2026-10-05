@@ -381,11 +381,11 @@ re-classifies a conflict response into `JobTerminalError`.
 - `JobNotFoundError` — job swept or id typo
 - `JobTerminalError` — job already terminal, no more events accepted
 
-**Synthetic cancel event**. When a consumer calls `proxy.cancel(
-reason)`, the registry writes a synthetic
+**Synthetic cancel event**. When a consumer calls
+`proxy.cancel(reason)`, the registry writes a synthetic
 `{ type: "cancelled", payload: { reason: "..." } }` event into the log
-before forwarding the cancel signal. A handler parked on `recvEvent(
-["cancelled", ...])` observes it and can return cleanly instead of
+before forwarding the cancel signal. A handler parked on
+`recvEvent(["cancelled", ...])` observes it and can return cleanly instead of
 relying on the `AbortSignal`. The registry waits a small grace window
 before issuing the cancel-forward (default 200ms, tunable via
 `MCP_MESH_CANCEL_EVENT_GRACE_MS`, capped at 10s).
@@ -744,8 +744,8 @@ try {
 ```
 
 `MeshSupersededError` is distinct from a generic tool failure and from the
-`dependency_unavailable` refusal (an unresolved required dep, `meshctl man
-dependency-injection --typescript`) — it means specifically *you are running
+`dependency_unavailable` refusal (an unresolved required dep,
+`meshctl man dependency-injection --typescript`) — it means specifically *you are running
 under a superseded claim*. It does **not** change delivery: jobs remain
 **at-least-once** and a fenced re-execution still runs under the new claim;
 the typed signal only lets the stale attempt bow out on its first rejected

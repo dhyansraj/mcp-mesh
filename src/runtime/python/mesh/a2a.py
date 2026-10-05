@@ -1408,9 +1408,14 @@ def mount(
         )
 
     # Late-bind the decorator import to avoid circular import at module load.
+    from .decorators import _pop_dependency_kwargs, _warn_dependency_kwargs_ignored
     from .decorators import a2a as a2a_decorator
 
+    ignored_dependency_kwargs = _pop_dependency_kwargs(kwargs)
+
     def decorator(target: Callable) -> Callable:
+        if ignored_dependency_kwargs:
+            _warn_dependency_kwargs_ignored(target, "mesh.a2a.mount")
         # Apply @mesh.a2a(...) for DI + metadata stamping. The decorator
         # registers the surface in DecoratorRegistry under "mesh_a2a" so
         # heartbeat preparation picks it up and emits agent_type=a2a.

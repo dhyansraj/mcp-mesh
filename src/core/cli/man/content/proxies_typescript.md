@@ -24,12 +24,7 @@ MCP Mesh uses proxy objects to enable seamless communication between agents. Whe
 
 ## Proxy Types
 
-MCP Mesh uses a unified proxy system:
-
-| Proxy                     | Use Case    | Features                                   |
-| ------------------------- | ----------- | ------------------------------------------ |
-| `SelfDependencyProxy`     | Same agent  | Direct function call (no network overhead) |
-| `EnhancedUnifiedMCPProxy` | Cross-agent | All features (auto-configured from kwargs) |
+Every injected dependency is an `McpMeshTool` proxy that calls its provider over HTTP, including a dependency on another tool of the same agent. A service view (`mesh.serviceView`) injects a facade whose methods are such proxies.
 
 ## Using Proxies
 
@@ -77,28 +72,24 @@ execute: async ({}, weather: McpMeshTool | null = null) => {
 
 ## Proxy Configuration
 
-Configure via `dependencyConfig` in the tool options:
+Configure via `dependencyKwargs` in the tool options. It is an array indexed
+by position: `dependencyKwargs[i]` configures `dependencies[i]`.
 
 ```typescript
 agent.addTool({
   name: "my_tool",
   capability: "my_capability",
   dependencies: ["slow_service"],
-  dependencyConfig: {
-    slow_service: {
-      timeout: 60000, // Request timeout (ms)
-      retryCount: 3, // Retry attempts on failure
+  dependencyKwargs: [
+    {
+      timeout: 60, // Request timeout (seconds)
+      maxAttempts: 3, // Total attempts, including the first
       customHeaders: {
         // Custom HTTP headers
         "X-Request-ID": "...",
       },
-      streaming: true, // Enable streaming responses
-      sessionRequired: true, // Require session affinity
-      authRequired: true, // Require authentication
-      stateful: true, // Mark as stateful
-      autoSessionManagement: true, // Auto session lifecycle
     },
-  },
+  ],
   parameters: z.object({ data: z.string() }),
   execute: async ({ data }, slowService: McpMeshTool | null = null) => {
     if (slowService) {
@@ -111,29 +102,27 @@ agent.addTool({
 
 ## Configuration Options
 
-| Option                  | Type    | Default | Description                 |
-| ----------------------- | ------- | ------- | --------------------------- |
-| `timeout`               | number  | 30000   | Request timeout in ms       |
-| `retryCount`            | number  | 0       | Number of retry attempts    |
-| `streaming`             | boolean | false   | Enable streaming responses  |
-| `sessionRequired`       | boolean | false   | Require session affinity    |
-| `authRequired`          | boolean | false   | Require authentication      |
-| `stateful`              | boolean | false   | Mark capability as stateful |
-| `autoSessionManagement` | boolean | false   | Auto manage sessions        |
-| `customHeaders`         | object  | {}      | Additional HTTP headers     |
+| Option            | Type    | Default    | Description                                                    |
+| ----------------- | ------- | ---------- | -------------------------------------------------------------- |
+| `timeout`         | number  | 300        | Request timeout in seconds (default from `MCP_MESH_CALL_TIMEOUT`) |
+| `maxAttempts`     | number  | 1          | Total attempts; a timeout is never retried                     |
+| `retryDelay`      | number  | 0.1        | Initial delay between attempts, in seconds                     |
+| `retryBackoff`    | number  | 2.0        | Multiplier applied to the delay after each attempt             |
+| `streaming`       | boolean | false      | Run unary calls on `streamTimeout` instead of `timeout`        |
+| `streamTimeout`   | number  | 300        | Timeout for `stream()` and `streaming: true` calls, in seconds |
+| `customHeaders`   | object  | {}         | Additional HTTP headers on every call to this dependency       |
+| `maxResponseSize` | number  | 10485760   | Largest accepted response body, in bytes                       |
 
 ## Streaming
 
-Enable streaming for real-time data:
+`proxy.stream(args)` returns an `AsyncIterable<string>` of text chunks and
+always runs on `streamTimeout`:
 
 ```typescript
 agent.addTool({
   name: "process_stream",
   capability: "stream_processor",
   dependencies: ["stream_service"],
-  dependencyConfig: {
-    stream_service: { streaming: true },
-  },
   parameters: z.object({ query: z.string() }),
   execute: async ({ query }, streamService: McpMeshTool | null = null) => {
     if (streamService) {
@@ -144,35 +133,6 @@ agent.addTool({
       return chunks.join("");
     }
     return "Stream service unavailable";
-  },
-});
-```
-
-## Session Affinity
-
-For stateful services, ensure requests go to the same instance:
-
-```typescript
-agent.addTool({
-  name: "stateful_operation",
-  capability: "stateful_op",
-  dependencies: ["stateful_service"],
-  dependencyConfig: {
-    stateful_service: {
-      sessionRequired: true,
-      autoSessionManagement: true,
-    },
-  },
-  parameters: z.object({ action: z.string() }),
-  execute: async ({ action }, statefulService: McpMeshTool | null = null) => {
-    if (statefulService) {
-      // All calls routed to same instance
-      await statefulService.callTool("initialize", {});
-      const result = await statefulService.callTool("process", { action });
-      await statefulService.callTool("cleanup", {});
-      return result;
-    }
-    return "Service unavailable";
   },
 });
 ```
@@ -232,20 +192,11 @@ agent.addTool({
   capability: "data_processing",
   description: "Process data with retry and timeout",
   dependencies: ["data_source", "validator", "storage"],
-  dependencyConfig: {
-    data_source: {
-      timeout: 10000,
-      retryCount: 2,
-    },
-    validator: {
-      timeout: 5000,
-    },
-    storage: {
-      timeout: 30000,
-      retryCount: 3,
-      sessionRequired: true,
-    },
-  },
+  dependencyKwargs: [
+    { timeout: 10, maxAttempts: 3 }, // data_source
+    { timeout: 5 }, // validator
+    { timeout: 30, maxAttempts: 4 }, // storage
+  ],
   parameters: z.object({
     dataId: z.string(),
   }),

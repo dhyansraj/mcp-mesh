@@ -191,7 +191,8 @@ mesh:
   tls:
     # TLS mode: off, auto, strict
     mode: ""
-    # Credential provider: file (default), spire, vault
+    # Credential provider: file (default), spire (Python/TypeScript agents
+    # only; the Java runtime refuses to start with it), vault
     provider: ""
     # Existing secret containing agent cert/key
     certSecret: ""
@@ -200,7 +201,7 @@ mesh:
     # Existing secret containing CA certificate
     caSecret: ""
     caKey: "ca.crt"
-    # SPIRE workload API socket
+    # SPIRE workload API socket (Python/TypeScript agents only)
     spire:
       enabled: false
       socketPath: "/run/spire/agent/sockets/agent.sock"

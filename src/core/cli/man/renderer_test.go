@@ -675,10 +675,66 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // agents and `scaffold api` gateways) and that a gateway with an unreadable
 // port is skipped. Three new inline spans; the --dry-run example is fenced.
 // 1901 + 3 = 1904.
+//
+// The docs truth sweep (#1576, #1577, #1578, #1579, #1596, #1598, #1602,
+// #1610) moves all three: inline +73, list +13, markup list lines +4.
+// observability.md +13 inline (+13 list, +1 markup): the credentials and
+// trace-store bullets that replace the invented dashboards and admin/admin
+// claim. security.md +12: the Java SPIRE refusal, the registry spire-tag
+// paragraph and the "No Token Alternative" section that replaces the
+// MCP_MESH_AUTH_TOKEN claim. proxies.md +12: the Python page stops teaching
+// dependency_kwargs and states the call budget, streaming and session_id
+// affinity instead. environment.md +8 (+5 list, +6 markup): the rewrite into
+// per-component tables moves most spans into table lines, which count for
+// nothing, and the new prose (reader legend, empty-means-unset, Vertex,
+// Java provider keys) adds them back. kwargs.md +7 for the TypeScript-only
+// dependency kwargs section. cli.md +6 for meshctl job / registry. headers.md
+// +5 (+1, +1) for the capture-and-relay section. dependency-injection.md +4,
+// audit.md +2 (+2, +1) for the Unavailable reason and the
+// unresolved-to-resolved rule, capabilities.md +2 (-4 list, -2 markup) and
+// tags.md +2 for score-based OR groups, health.md +1 for the Python gateway
+// paragraph. llm.md 0 inline (-2 list, -3 markup) for the Vertex env names,
+// streaming.md -1 (-2 list) for TypeScript proxy.stream(). The removed
+// DEFAULT_EVICTION_THRESHOLD, registry.md API-table and tutorial.md
+// --project-name edits are fenced, table lines or span swaps.
+// 1904 + 73 = 1977; 537 + 13 = 550; 455 + 4 = 459.
+//
+// Follow-up on the same sweep moves the inline constant to 1969 (-8) and
+// neither list constant. headers.md -11: the v1.3 -> v1.4 migration note is
+// gone (the docs show only the current matching rules).
+// dependency-injection.md -1: the "since v2.2.4; previously ..." worker
+// default history. registry.md +4: the invented Resolution Request/Response
+// exchange is replaced by the real POST /heartbeat body and its
+// dependencies_resolved answer, whose prose names /heartbeat, the HEAD
+// variant and the response field. 1977 - 11 - 1 + 4 = 1969.
+//
+// Review of the sweep moves the inline constant to 1981 (+12), lists
+// unmoved. proxies.md +5: the session-affinity paragraph names POD_IP (the
+// address other replicas forward a pinned session to) and the
+// dependency_kwargs sentence now lists the decorators that drop it.
+// environment.md +3: the MCP_MESH_HTTP_HOST paragraph regains the
+// agent.advertisedHost and tiebreaker pointers; the restored TRACE_* /
+// OTLP_ENDPOINT / POD_* rows are table lines and the restored settle
+// caveats are fenced. kwargs.md +2 and dependency-injection.md +2: the same
+// all-decorators dependency_kwargs sentence. 1969 + 5 + 3 + 2 + 2 = 1981.
+//
+// CodeRabbit review on #1637 moves inline to 1999 (+18) and markup list lines
+// to 458 (-1); the list-span count nets to 550 unchanged. environment.md +15
+// (-1 list, -1 markup): the precedence section now separates an agent's env
+// order under meshctl (--env > --env-file > shell) from meshctl's own config,
+// read before those flags (it was a three-item list with one span; now prose
+// plus a span-free list), and the admin-port paragraph says admin HTTPS needs
+// registry TLS and that auto still admits certificate-less callers.
+// security.md +2: Java refuses SPIRE only when TLS is auto or strict.
+// observability.md +1 (+1 list): the compose bullet says port 3000 is
+// published on every interface with anonymous Admin, and names the loopback
+// mapping. health.md and deployment.md swap spans to say only mesh's own
+// gateway probe handlers always pass. 1981 + 15 + 2 + 1 = 1999;
+// 550 - 1 + 1 = 550; 459 - 1 = 458.
 const (
-	wantInlineCodeSpans = 1904
-	wantListCodeSpans   = 537
-	wantMarkupListLines = 455
+	wantInlineCodeSpans = 1999
+	wantListCodeSpans   = 550
+	wantMarkupListLines = 458
 )
 
 // assertCorpusSize replaces the t.Logf these tests used to end on.

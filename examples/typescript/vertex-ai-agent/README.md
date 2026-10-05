@@ -72,13 +72,13 @@ No other code changes required.
 
 ## Env var conventions across runtimes
 
-Each runtime follows its own ecosystem's naming convention for Vertex AI:
+Vertex AI project and location settings per runtime:
 
 | Runtime              | SDK            | Project                | Location               |
 | -------------------- | -------------- | ---------------------- | ---------------------- |
-| Python               | LiteLLM        | `VERTEXAI_PROJECT`     | `VERTEXAI_LOCATION`    |
+| Python               | google-genai   | `GOOGLE_CLOUD_PROJECT` | `GOOGLE_CLOUD_LOCATION` |
 | **TypeScript (this)** | **Vercel AI SDK** | `GOOGLE_CLOUD_PROJECT` | `GOOGLE_CLOUD_LOCATION`  |
-| Java                 | Spring AI      | `spring.ai.vertex.ai.gemini.project-id` | `spring.ai.vertex.ai.gemini.location` |
+| Java                 | Spring AI      | `spring.ai.google.genai.project-id` | `spring.ai.google.genai.location` |
 
 `GOOGLE_APPLICATION_CREDENTIALS` (or `gcloud auth application-default login`)
 works for ADC across all three.

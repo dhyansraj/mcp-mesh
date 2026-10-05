@@ -5,6 +5,7 @@ import io.mcpmesh.core.NativeLoader;
 import jnr.ffi.Pointer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.util.Locale;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -33,6 +34,67 @@ public class MeshTlsConfig {
         this.caPath = caPath;
     }
 
+    /** Issue #1596: the refusal a Java agent configured for SPIRE starts with. */
+    static final String SPIRE_UNSUPPORTED_MESSAGE =
+        "MCP_MESH_TLS_PROVIDER=spire is not supported by the Java runtime; use file or vault.";
+
+    /**
+     * Refuse a credential provider the Java runtime cannot serve, before any
+     * native call is made (issue #1596).
+     *
+     * <p>The native library the Java runtime loads is built without the
+     * {@code spire} feature, and Spring's EnvironmentPostProcessor needs TLS
+     * material before an in-process Workload API fetch could run, so
+     * {@code spire} can never succeed here. Without this check the attempt
+     * reached the core and surfaced as a Vault-specific error.
+     * A TLS mode that normalizes to off ignores the provider, as the core does.
+     */
+    static void requireSupportedProvider(String tlsMode, String provider) {
+        if ("off".equals(normalizeMode(tlsMode))) {
+            return;
+        }
+        if ("spire".equals(normalizeProvider(provider))) {
+            throw new IllegalStateException(SPIRE_UNSUPPORTED_MESSAGE);
+        }
+    }
+
+    /**
+     * Normalize {@code MCP_MESH_TLS_MODE} exactly as the native core does
+     * ({@code TlsMode::from_str_value} in {@code tls.rs}): trimmed and
+     * case-insensitive; unset, blank and unrecognized values all mean
+     * {@code off}, the last with a warning. Returns {@code off},
+     * {@code auto} or {@code strict}.
+     */
+    static String normalizeMode(String raw) {
+        if (raw == null) {
+            return "off";
+        }
+        String value = raw.trim().toLowerCase(Locale.ROOT);
+        switch (value) {
+            case "auto":
+            case "strict":
+                return value;
+            case "":
+            case "off":
+                return "off";
+            default:
+                log.warn("Unknown MCP_MESH_TLS_MODE '{}', defaulting to off", raw.trim());
+                return "off";
+        }
+    }
+
+    /**
+     * Normalize {@code MCP_MESH_TLS_PROVIDER}: trimmed and lower-cased, with
+     * unset or blank returned as {@code null} (the core then uses {@code file}).
+     */
+    static String normalizeProvider(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String value = raw.trim();
+        return value.isEmpty() ? null : value.toLowerCase(Locale.ROOT);
+    }
+
     /**
      * Prepare TLS credentials (fetch from Vault, write secure temp files).
      * Must be called before get() when using non-file providers.
@@ -40,6 +102,7 @@ public class MeshTlsConfig {
      */
     public static synchronized void prepareTls(String agentName) {
         if (cached != null) return; // Already resolved
+        requireSupportedProvider(System.getenv("MCP_MESH_TLS_MODE"), System.getenv("MCP_MESH_TLS_PROVIDER"));
 
         try {
             MeshCore core = NativeLoader.load();

@@ -97,6 +97,9 @@ Vault-issued certs include both DNS SANs (agent name) and IP SANs (advertised ho
 
 Fetches X.509-SVIDs from the SPIRE agent's Workload API via Unix domain socket.
 
+!!! warning "Python and TypeScript only"
+    The SPIRE provider works for Python and TypeScript agents, not Java: the Java runtime refuses to start with `MCP_MESH_TLS_PROVIDER=spire` whenever TLS is enabled (`auto` or `strict`). A Java agent in a SPIRE deployment uses the file provider with its SVID written to disk by a SPIRE helper (for example `spiffe-helper`), pointing `MCP_MESH_TLS_CERT`, `MCP_MESH_TLS_KEY` and `MCP_MESH_TLS_CA` at the exported certificate, key and trust bundle.
+
 ```bash
 export MCP_MESH_TLS_MODE=auto
 export MCP_MESH_TLS_PROVIDER=spire
@@ -124,7 +127,7 @@ export MCP_MESH_SPIRE_SOCKET=/run/spire/agent/sockets/agent.sock
 
 === "Kubernetes"
 
-    The SPIRE agent DaemonSet exposes the Workload API socket on each node. The Helm chart mounts it into agent pods automatically when `spire.enabled: true`.
+    The SPIRE agent DaemonSet exposes the Workload API socket on each node. The Helm chart mounts it into agent pods automatically when `spire.enabled: true`. Enable it for Python and TypeScript agents only.
 
 ### Credential Security
 
@@ -148,6 +151,8 @@ The registry validates agent certificates against one or more trust backends:
 | **spire** | Validate against SPIFFE trust bundles from Workload API | Workload identity |
 
 Backends can be chained: `MCP_MESH_TRUST_BACKEND=spire,k8s-secrets` — first match wins.
+
+The `spire` backend needs a registry built with `go build -tags spire`. The released registry binaries and container images are built without that tag, and refuse to start with `spire` in `MCP_MESH_TRUST_BACKEND`. On a released registry, trust SPIRE-issued agent certificates by exporting the SPIRE trust bundle to a PEM file and loading it with `filestore`.
 
 The registry accepts `off`, `auto` and `strict` for `MCP_MESH_TLS_MODE`, in any case, and refuses to start on any other value. When it is anything other than `off`, at least one trust backend is required. The registry refuses to start if `MCP_MESH_TRUST_BACKEND` is empty, if every listed backend is skipped for a missing prerequisite (`localca` and `filestore` need `MCP_MESH_TRUST_DIR`), or if a configured backend fails to initialize. `meshctl start --tls-auto` configures `localca,filestore` for you.
 

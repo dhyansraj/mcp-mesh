@@ -98,15 +98,18 @@ public class MeshEnvironmentPostProcessor implements EnvironmentPostProcessor {
         }
 
         // Map TLS env vars to Spring Boot SSL properties (PEM-based, Spring Boot 3.1+)
-        String tlsMode = environment.getProperty("MCP_MESH_TLS_MODE", "off");
-        if (!"off".equalsIgnoreCase(tlsMode) && !tlsMode.isEmpty()) {
-            String provider = getenv.apply("MCP_MESH_TLS_PROVIDER");
+        // Normalized once, the way the native core reads them: blank or unknown
+        // mode means off, and a blank provider means unset (file).
+        String tlsMode = MeshTlsConfig.normalizeMode(environment.getProperty("MCP_MESH_TLS_MODE"));
+        if (!"off".equals(tlsMode)) {
+            String provider = MeshTlsConfig.normalizeProvider(getenv.apply("MCP_MESH_TLS_PROVIDER"));
+            MeshTlsConfig.requireSupportedProvider(tlsMode, provider);
             String certPath = environment.getProperty("MCP_MESH_TLS_CERT");
             String keyPath = environment.getProperty("MCP_MESH_TLS_KEY");
             String caPath = environment.getProperty("MCP_MESH_TLS_CA");
 
             // For non-file providers (e.g., vault), try to prepare TLS early
-            if (provider != null && !"file".equalsIgnoreCase(provider) && (certPath == null || keyPath == null)) {
+            if (provider != null && !"file".equals(provider) && (certPath == null || keyPath == null)) {
                 String agentName = getenv.apply("MCP_MESH_AGENT_NAME");
                 if (agentName != null && !agentName.isBlank()) {
                     try {
@@ -118,9 +121,12 @@ public class MeshEnvironmentPostProcessor implements EnvironmentPostProcessor {
                             caPath = config.getCaPath();
                         }
                     } catch (Exception e) {
+                        String advice = "vault".equals(provider)
+                            ? ". Ensure Vault is reachable and VAULT_TOKEN is valid."
+                            : ".";
                         throw new IllegalStateException(
                             "MCP_MESH_TLS_PROVIDER=" + provider + " but TLS preparation failed: " + e.getMessage()
-                                + ". Ensure Vault is reachable and VAULT_TOKEN is valid.", e);
+                                + advice, e);
                     }
                 }
             }
@@ -134,7 +140,7 @@ public class MeshEnvironmentPostProcessor implements EnvironmentPostProcessor {
                     sslProps.put("server.ssl.client-auth", "need");
                 }
                 add(environment, new MapPropertySource("meshTlsProperties", sslProps), meshAgentMain);
-            } else if (provider == null || "file".equalsIgnoreCase(provider)) {
+            } else if (provider == null || "file".equals(provider)) {
                 // Only throw for file provider -- non-file providers will configure TLS later
                 throw new IllegalStateException(
                     "MCP_MESH_TLS_MODE=" + tlsMode + " but MCP_MESH_TLS_CERT or MCP_MESH_TLS_KEY is not set");

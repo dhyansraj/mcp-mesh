@@ -249,37 +249,40 @@ For the precise passthrough surface per adapter, see the
 Any kwarg outside the passthrough + handled sets emits a once-per-key WARN —
 useful diagnostic surface for callers debugging cross-vendor passthrough.
 
-## Dependency kwargs (proxy configuration)
+## Dependency kwargs (proxy configuration, TypeScript only)
 
-`model_params` above tunes the LLM *call*. A separate kwarg surface,
-`dependency_kwargs`, tunes the *proxy* for each resolved dependency — timeouts,
-retries, session affinity, and headers. It is a per-dependency map on
-`@mesh.tool`, keyed by dependency (capability) name:
+`model_params` above tunes the LLM *call*. A separate surface,
+`dependencyKwargs`, tunes the *proxy* for each resolved dependency. It is
+**TypeScript-only**: an array on `agent.addTool` (and `mesh.route`) indexed by
+dependency position, so `dependencyKwargs[i]` configures `dependencies[i]`:
 
-```python
-@mesh.tool(
-    dependencies=["slow_service"],
-    dependency_kwargs={
-        "slow_service": {
-            "timeout": 60,            # request timeout (seconds)
-            "session_required": True, # require session affinity
-        }
-    },
-)
-async def my_tool(slow_service: mesh.McpMeshTool = None): ...
+```typescript
+agent.addTool({
+  name: "my_tool",
+  dependencies: ["slow_service"],
+  dependencyKwargs: [{ timeout: 60, maxAttempts: 3 }],
+  parameters: z.object({}),
+  execute: async ({}, slowService: McpMeshTool | null = null) => slowService?.({}),
+});
 ```
 
 | Kwarg | Type | Default | Purpose |
 | --- | --- | :---: | --- |
-| `timeout` | int | 30 | Per-request timeout in seconds. |
-| `retry_count` | int | 0 | Retry attempts on failure. |
-| `streaming` | bool | False | Enable streaming responses. |
-| `session_required` | bool | False | Require session affinity (sticky routing). |
-| `auth_required` | bool | False | Require authentication on the call. |
-| `custom_headers` | dict | {} | Additional HTTP headers forwarded to the provider. |
+| `timeout` | number | 300 | Request timeout in seconds (default from `MCP_MESH_CALL_TIMEOUT`). |
+| `maxAttempts` | number | 1 | Total attempts; a timeout is never retried. |
+| `retryDelay` | number | 0.1 | Initial delay between attempts, in seconds. |
+| `retryBackoff` | number | 2.0 | Multiplier applied to the delay after each attempt. |
+| `streaming` | boolean | false | Run unary calls on `streamTimeout` instead of `timeout`. |
+| `streamTimeout` | number | 300 | Timeout for `stream()` and `streaming: true` calls, in seconds. |
+| `customHeaders` | object | {} | Additional HTTP headers on every call to this dependency. |
+| `maxResponseSize` | number | 10485760 | Largest accepted response body, in bytes. |
 
-See [Dependency Injection](../python/dependency-injection.md#proxy-configuration)
-and `meshctl man proxies` for the full options table.
+Python and Java have no per-dependency proxy settings: every outgoing call runs
+on `MCP_MESH_CALL_TIMEOUT` (default 300 seconds). Every Python decorator
+(`@mesh.tool`, `@mesh.route`, `@mesh.llm`, ...) drops a `dependency_kwargs`
+argument and logs a warning, so it never reaches advertised metadata or the
+model parameters sent to a vendor. See `meshctl man proxies --typescript` for
+the TypeScript options in context.
 
 ## See also
 

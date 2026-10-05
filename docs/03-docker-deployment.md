@@ -16,7 +16,7 @@ meshctl scaffold basic --name my-agent
 meshctl scaffold --compose --observability
 
 # Start everything (docker-compose.yml is in current directory)
-docker-compose up
+docker compose up
 ```
 
 That's it! Your agent is running with the registry and observability stack.
@@ -49,109 +49,132 @@ meshctl scaffold --compose --dry-run -o ./agents
 
 ### Generated docker-compose.yml
 
+A trimmed excerpt of what `meshctl scaffold --compose` writes for a directory named `my-project` holding one agent, `my-agent` on port 8080. Run it with `--dry-run` to print the full file for your own agents. Container and network names are prefixed with the directory name unless you pass `--project-name`; that flag sets only this prefix, not Docker Compose's own project name, which Compose takes from the directory.
+
+The infrastructure services are the same for every language:
+
+```yaml
+services:
+  # ===== INFRASTRUCTURE =====
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: my-project-postgres
+    environment:
+      POSTGRES_USER: mcpmesh
+      POSTGRES_PASSWORD: mcpmesh
+      POSTGRES_DB: mcpmesh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mcpmesh"]
+    networks:
+      - my-project-network
+
+  registry:
+    image: mcpmesh/registry:3.7.1
+    container_name: my-project-registry
+    ports:
+      - "8000:8000"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8000"
+      DATABASE_URL: postgresql://mcpmesh:mcpmesh@postgres:5432/mcpmesh?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8000/health"]
+    networks:
+      - my-project-network
+
+networks:
+  my-project-network:
+    name: my-project-network
+    driver: bridge
+```
+
+Each agent runs on its language's runtime image with its directory mounted, and is health-checked on `/livez`:
+
 === "Python"
 
     ```yaml
-    version: "3.8"
-
-    services:
-      registry:
-        image: mcpmesh/registry:3.7.1
-        ports:
-          - "8000:8000"
-        healthcheck:
-          test: ["CMD", "wget", "-q", "--spider", "http://localhost:8000/health"]
-          interval: 30s
-          timeout: 10s
-          retries: 3
-
       my-agent:
         image: mcpmesh/python-runtime:3.7.1
+        container_name: my-project-my-agent
         ports:
           - "8080:8080"
         volumes:
-          - ./my-agent:/app/agent:ro
-        command: ["python", "/app/agent/main.py"]
+          - ./my-agent:/app:ro
+          - my-agent-packages:/packages
+        working_dir: /app
+        entrypoint: ["sh", "-c"]
+        command: ["chown -R mcp-mesh:mcp-mesh /packages && su mcp-mesh -c 'if [ -f /app/requirements.txt ]; then pip install --target /packages -q -r /app/requirements.txt 2>/dev/null; fi && python main.py'"]
         environment:
-          - MCP_MESH_REGISTRY_URL=http://registry:8000
-          - MCP_MESH_HTTP_PORT=8080
-        depends_on:
-          registry:
-            condition: service_healthy
-
-    networks:
-      default:
-        name: mcp-mesh
+          PYTHONPATH: /packages
+          MCP_MESH_REGISTRY_URL: http://registry:8000
+          MCP_MESH_HTTP_HOST: my-agent
+          MCP_MESH_HTTP_PORT: "8080"
+          MCP_MESH_AGENT_NAME: my-agent
+        healthcheck:
+          test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/livez').read()"]
+          start_period: 30s
+        networks:
+          - my-project-network
     ```
 
 === "Java"
 
     ```yaml
-    version: "3.8"
-
-    services:
-      registry:
-        image: mcpmesh/registry:3.7.1
-        ports:
-          - "8000:8000"
-        healthcheck:
-          test: ["CMD", "wget", "-q", "--spider", "http://localhost:8000/health"]
-          interval: 30s
-          timeout: 10s
-          retries: 3
-
       my-agent:
-        build:
-          context: ./my-agent
-          dockerfile: Dockerfile
+        image: mcpmesh/java-runtime:3.7.1
+        container_name: my-project-my-agent
         ports:
           - "8080:8080"
+        volumes:
+          - ./my-agent:/app
+          - my-agent-maven-repo:/root/.m2
+        working_dir: /app
+        entrypoint: ["sh", "-c"]
+        command: ["mvn spring-boot:run -DskipTests -q"]
         environment:
-          - MCP_MESH_REGISTRY_URL=http://registry:8000
-          - MCP_MESH_HTTP_PORT=8080
-        depends_on:
-          registry:
-            condition: service_healthy
-
-    networks:
-      default:
-        name: mcp-mesh
+          MCP_MESH_REGISTRY_URL: http://registry:8000
+          MCP_MESH_HTTP_HOST: my-agent
+          MCP_MESH_HTTP_PORT: "8080"
+          MCP_MESH_AGENT_NAME: my-agent
+        healthcheck:
+          test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/livez"]
+          start_period: 60s
+        networks:
+          - my-project-network
     ```
 
 === "TypeScript"
 
     ```yaml
-    version: "3.8"
-
-    services:
-      registry:
-        image: mcpmesh/registry:3.7.1
-        ports:
-          - "8000:8000"
-        healthcheck:
-          test: ["CMD", "wget", "-q", "--spider", "http://localhost:8000/health"]
-          interval: 30s
-          timeout: 10s
-          retries: 3
-
       my-agent:
         image: mcpmesh/typescript-runtime:3.7.1
+        container_name: my-project-my-agent
         ports:
           - "8080:8080"
         volumes:
-          - ./my-agent:/app/agent:ro
-        command: ["npx", "tsx", "/app/agent/src/index.ts"]
+          - ./my-agent:/app
+          - my-agent-node_modules:/app/node_modules
+        working_dir: /app
+        entrypoint: ["sh", "-c"]
+        command: ["mkdir -p /home/mcp-mesh && chown -R mcp-mesh:mcp-mesh /home/mcp-mesh /app/node_modules && su mcp-mesh -c 'npm install --silent 2>/dev/null && npx tsx src/index.ts'"]
         environment:
-          - MCP_MESH_REGISTRY_URL=http://registry:8000
-          - MCP_MESH_HTTP_PORT=8080
-        depends_on:
-          registry:
-            condition: service_healthy
-
-    networks:
-      default:
-        name: mcp-mesh
+          NODE_ENV: development
+          MCP_MESH_REGISTRY_URL: http://registry:8000
+          MCP_MESH_HTTP_HOST: my-agent
+          MCP_MESH_HTTP_PORT: "8080"
+          MCP_MESH_AGENT_NAME: my-agent
+        healthcheck:
+          test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/livez"]
+          start_period: 45s
+        networks:
+          - my-project-network
     ```
+
+The generated agent services also set the mesh debug-logging variables, and every agent mounts its own named volume, declared under a top-level `volumes:` key.
 
 ## Manual Setup (Without Scaffold)
 
@@ -160,8 +183,6 @@ If you prefer manual control, here's a minimal compose file:
 === "Python"
 
     ```yaml
-    version: "3.8"
-
     services:
       registry:
         image: mcpmesh/registry:3.7.1
@@ -184,8 +205,6 @@ If you prefer manual control, here's a minimal compose file:
 === "Java"
 
     ```yaml
-    version: "3.8"
-
     services:
       registry:
         image: mcpmesh/registry:3.7.1
@@ -205,8 +224,6 @@ If you prefer manual control, here's a minimal compose file:
 === "TypeScript"
 
     ```yaml
-    version: "3.8"
-
     services:
       registry:
         image: mcpmesh/registry:3.7.1
@@ -283,8 +300,6 @@ docker run -e MCP_MESH_REGISTRY_URL=http://registry:8000 my-company/my-agent:1.0
 Run multiple agents with a single compose file:
 
 ```yaml
-version: "3.8"
-
 services:
   registry:
     image: mcpmesh/registry:3.7.1
@@ -382,8 +397,8 @@ Key environment variables for containerized agents:
 
 ```bash
 # Check registry is healthy
-docker-compose ps
-docker-compose logs registry
+docker compose ps
+docker compose logs registry
 
 # Verify network
 docker network ls
@@ -394,10 +409,10 @@ docker network inspect mcp-mesh
 
 ```bash
 # Check logs
-docker-compose logs my-agent
+docker compose logs my-agent
 
 # Run interactively
-docker-compose run --rm my-agent /bin/bash
+docker compose run --rm my-agent /bin/bash
 ```
 
 ## Next Steps
