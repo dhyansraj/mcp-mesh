@@ -274,7 +274,7 @@ func TestCreateEventDataForStatusChange(t *testing.T) {
 	oldStatus := agent.StatusHealthy
 	newStatus := agent.StatusUnhealthy
 
-	eventData := createEventDataForStatusChange(oldStatus, newStatus)
+	eventData := createEventDataForStatusChange(oldStatus, newStatus, time.Now().UTC())
 
 	// Check required fields
 	if eventData["old_status"] != "healthy" {

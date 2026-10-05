@@ -31,10 +31,9 @@ func TestCleanupStaleAgentsOnStartupPreservesUpdatedAt(t *testing.T) {
 	cfg := &RegistryConfig{
 		StartupCleanupThreshold: 30, // 30s
 	}
+	// Status change hooks stay ENABLED, as in production: the transition must
+	// still produce exactly one event (markAgentStaleAttempt's own).
 	service := NewEntService(entDB, cfg, testLogger)
-	// Status change hooks would create extra events; we assert the
-	// markAgentStaleAttempt-emitted event explicitly below.
-	service.DisableStatusChangeHooks()
 
 	ctx := context.Background()
 
@@ -79,19 +78,74 @@ func TestCleanupStaleAgentsOnStartupPreservesUpdatedAt(t *testing.T) {
 			oldUpdatedAt.Format(time.RFC3339Nano))
 	}
 
-	// Verify the unhealthy event was created with timestamp = now (not the
+	// Verify exactly one event was recorded for the transition: the explicit
+	// stale_on_startup unhealthy event, with timestamp = now (not the
 	// preserved updated_at). It records when the cleanup happened.
-	events, err := client.RegistryEvent.Query().
-		Where(registryevent.EventTypeEQ(registryevent.EventTypeUnhealthy)).
-		All(ctx)
+	events, err := client.RegistryEvent.Query().All(ctx)
 	if err != nil {
 		t.Fatalf("query events: %v", err)
 	}
 	if len(events) != 1 {
-		t.Fatalf("unhealthy events = %d, want 1", len(events))
+		t.Fatalf("registry events = %d, want exactly 1", len(events))
+	}
+	if events[0].EventType != registryevent.EventTypeUnhealthy {
+		t.Errorf("event type = %s, want unhealthy", events[0].EventType)
+	}
+	if events[0].Data["reason"] != "stale_on_startup" {
+		t.Errorf("event reason = %v, want stale_on_startup", events[0].Data["reason"])
 	}
 	if !events[0].Timestamp.After(oldUpdatedAt) {
 		t.Errorf("event timestamp %s should be after preserved updated_at %s",
 			events[0].Timestamp, oldUpdatedAt)
+	}
+}
+
+// TestMarkAgentStaleAttemptRaceLostWritesNoEvent: a heartbeat lands between
+// the startup staleness query and the conditional update, so the update
+// affects 0 rows. No event may be recorded and the agent stays healthy.
+func TestMarkAgentStaleAttemptRaceLostWritesNoEvent(t *testing.T) {
+	client, service, _ := newHealthMonitorHookedEnv(t)
+	ctx := context.Background()
+
+	staleTime := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Millisecond)
+	seedAgent(t, client, "startup-racer", agent.StatusHealthy, staleTime)
+
+	snapshot, err := client.Agent.Get(ctx, "startup-racer")
+	if err != nil {
+		t.Fatalf("load snapshot: %v", err)
+	}
+
+	// The heartbeat lands after the snapshot was taken. It is applied before
+	// the call rather than injected mid-transaction: under SQLite's shared
+	// cache, a second connection writing to agents inside that window hits a
+	// table lock, which is a test artifact, not the race under test.
+	heartbeatTime := time.Now().UTC().Truncate(time.Millisecond)
+	if _, err := client.Agent.UpdateOneID("startup-racer").
+		SetUpdatedAt(heartbeatTime).
+		Save(ctx); err != nil {
+		t.Fatalf("simulate heartbeat: %v", err)
+	}
+
+	if err := service.markAgentStaleAttempt(ctx, snapshot, 30); err != nil {
+		t.Fatalf("markAgentStaleAttempt: %v", err)
+	}
+
+	got, err := client.Agent.Get(ctx, "startup-racer")
+	if err != nil {
+		t.Fatalf("reload agent: %v", err)
+	}
+	if got.Status != agent.StatusHealthy {
+		t.Errorf("agent status = %s, want healthy", got.Status)
+	}
+	if !got.UpdatedAt.Equal(heartbeatTime) {
+		t.Errorf("agent updated_at = %v, want heartbeat time %v", got.UpdatedAt, heartbeatTime)
+	}
+
+	count, err := client.RegistryEvent.Query().Count(ctx)
+	if err != nil {
+		t.Fatalf("count events: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("race-lost startup cleanup recorded %d registry event(s), want 0", count)
 	}
 }
