@@ -155,9 +155,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned deliberately: clippy `-D warnings` on a moving `stable` goes red on every new lint; bump this (and fix the new lints) as its own step.
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.92.0
           # Not in the default (minimal) profile dtolnay/rust-toolchain installs.
           components: clippy
 
@@ -190,9 +192,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: src/runtime/core/target
-          key: ${{ runner.os }}-cargo-rust-target-${{ matrix.id }}-${{ hashFiles('src/runtime/core/Cargo.lock') }}
+          # Toolchain in the key: target/ built by another rustc is rebuilt from scratch anyway.
+          key: ${{ runner.os }}-cargo-rust-target-1.92.0-${{ matrix.id }}-${{ hashFiles('src/runtime/core/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-rust-target-${{ matrix.id }}-
+            ${{ runner.os }}-cargo-rust-target-1.92.0-${{ matrix.id }}-
 
       - name: Run Rust tests
         run: ${{ matrix.cmd }}
