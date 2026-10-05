@@ -2764,7 +2764,7 @@ calls the LLM with a single prompt, and the return type `BudgetAnalysis`
 tells mesh to validate the response as structured JSON. The `max_iterations=1`
 setting means no tool loop -- the specialist makes one LLM call and returns.
 
-Replace the prompt template at `prompts/budget_analysis.j2`:
+Create `prompts/budget_analysis.j2`, the file the `system_prompt` in `main.py` above loads (delete the scaffolded `prompts/budget-analyst.jinja2`):
 
 ```jinja
 > *See the source code in the day's example directory.*
@@ -2788,7 +2788,7 @@ The `AdventureAdvice` model returns `unique_experiences` (a list of
 `Experience` sub-models with name, description, and why_special),
 `local_gems` (list of strings), and `off_beaten_path` (a paragraph of text).
 
-Replace the prompt at `prompts/adventure_advice.j2`:
+Create `prompts/adventure_advice.j2`, which `main.py` loads (delete the scaffolded `prompts/adventure-advisor.jinja2`):
 
 ```jinja
 > *See the source code in the day's example directory.*
@@ -2812,7 +2812,7 @@ The `LogisticsPlan` model returns `daily_schedule`, `transit_tips`, and
 `time_optimization`. Each specialist follows the same pattern: define a
 Pydantic model, write a Jinja prompt, return the model type from the function.
 
-Replace the prompt at `prompts/logistics_plan.j2`:
+Create `prompts/logistics_plan.j2`, which `main.py` loads (delete the scaffolded `prompts/logistics-planner.jinja2`):
 
 ```jinja
 > *See the source code in the day's example directory.*
@@ -3165,7 +3165,7 @@ single command. Everything stops with a single command.
 
 Today has five parts:
 
-1. **Generate the compose file** -- `meshctl scaffold --compose --observability`
+1. **Generate the compose file** -- `meshctl scaffold --compose --observability --project-name trip-planner`
 2. **Start the containerized mesh** -- `docker compose up -d`
 3. **Verify** -- `meshctl list`, curl the gateway, check health
 4. **Mesh UI tour** -- agents, topology, traces at `localhost:3080`
@@ -3194,7 +3194,7 @@ $ cd day-08
 ### Run the scaffold
 
 ```shell
-$ meshctl scaffold --compose --observability
+$ meshctl scaffold --compose --observability --project-name trip-planner
 ```
 
 ```text
@@ -3236,6 +3236,12 @@ Services included:
   - user-prefs-agent (9105)
   - weather-agent (9103)
 ```
+
+`--project-name trip-planner` sets the prefix the generator uses for every
+container name (`trip-planner-registry`, `trip-planner-flight-agent`, ...)
+and for the network (`trip-planner-network`). Without it the prefix is the
+current directory's name, `day-08`. It does not set Docker Compose's own
+project name, which Compose still takes from the directory.
 
 The scaffold scanned every subdirectory, found `@mesh.agent` decorators in
 twelve Python files and the `@mesh.route` handlers in the gateway, extracted

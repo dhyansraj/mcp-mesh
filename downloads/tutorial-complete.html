@@ -2704,8 +2704,9 @@ the LLM with a single prompt, and the return type
 <code>BudgetAnalysis</code> tells mesh to validate the response as
 structured JSON. The <code>max_iterations=1</code> setting means no tool
 loop – the specialist makes one LLM call and returns.</p>
-<p>Replace the prompt template at
-<code>prompts/budget_analysis.j2</code>:</p>
+<p>Create <code>prompts/budget_analysis.j2</code>, the file the
+<code>system_prompt</code> in <code>main.py</code> above loads (delete
+the scaffolded <code>prompts/budget-analyst.jinja2</code>):</p>
 <pre class="jinja"><code>&gt; *See the source code in the day&#39;s example directory.*</code></pre>
 <h3 id="adventure-advisor">Adventure advisor</h3>
 <p>Scaffold:</p>
@@ -2718,7 +2719,9 @@ class="sourceCode python"><code class="sourceCode python"><span id="cb145-1"><a 
 sub-models with name, description, and why_special),
 <code>local_gems</code> (list of strings), and
 <code>off_beaten_path</code> (a paragraph of text).</p>
-<p>Replace the prompt at <code>prompts/adventure_advice.j2</code>:</p>
+<p>Create <code>prompts/adventure_advice.j2</code>, which
+<code>main.py</code> loads (delete the scaffolded
+<code>prompts/adventure-advisor.jinja2</code>):</p>
 <pre class="jinja"><code>&gt; *See the source code in the day&#39;s example directory.*</code></pre>
 <h3 id="logistics-planner">Logistics planner</h3>
 <p>Scaffold:</p>
@@ -2731,7 +2734,9 @@ class="sourceCode python"><code class="sourceCode python"><span id="cb148-1"><a 
 <code>time_optimization</code>. Each specialist follows the same
 pattern: define a Pydantic model, write a Jinja prompt, return the model
 type from the function.</p>
-<p>Replace the prompt at <code>prompts/logistics_plan.j2</code>:</p>
+<p>Create <code>prompts/logistics_plan.j2</code>, which
+<code>main.py</code> loads (delete the scaffolded
+<code>prompts/logistics-planner.jinja2</code>):</p>
 <pre class="jinja"><code>&gt; *See the source code in the day&#39;s example directory.*</code></pre>
 <h2 id="part-3-update-the-planner">Part 3: Update the planner</h2>
 <p>The planner needs two changes: declare the specialist capabilities as
@@ -3011,7 +3016,7 @@ with a single command. Everything stops with a single command.</p>
 <p>Today has five parts:</p>
 <ol type="1">
 <li><strong>Generate the compose file</strong> –
-<code>meshctl scaffold --compose --observability</code></li>
+<code>meshctl scaffold --compose --observability --project-name trip-planner</code></li>
 <li><strong>Start the containerized mesh</strong> –
 <code>docker compose up -d</code></li>
 <li><strong>Verify</strong> – <code>meshctl list</code>, curl the
@@ -3033,7 +3038,7 @@ directory</h3>
 $ cp -r day-07/* day-08/
 $ cd day-08</code></pre>
 <h3 id="run-the-scaffold">Run the scaffold</h3>
-<pre class="shell"><code>$ meshctl scaffold --compose --observability</code></pre>
+<pre class="shell"><code>$ meshctl scaffold --compose --observability --project-name trip-planner</code></pre>
 <pre class="text"><code>Scanning for agents...
 Found 13 agent(s):
   - adventure-advisor (port 9111) in adventure-advisor/
@@ -3071,6 +3076,14 @@ Services included:
   - poi-agent (9104)
   - user-prefs-agent (9105)
   - weather-agent (9103)</code></pre>
+<p><code>--project-name trip-planner</code> sets the prefix the
+generator uses for every container name
+(<code>trip-planner-registry</code>,
+<code>trip-planner-flight-agent</code>, …) and for the network
+(<code>trip-planner-network</code>). Without it the prefix is the
+current directory’s name, <code>day-08</code>. It does not set Docker
+Compose’s own project name, which Compose still takes from the
+directory.</p>
 <p>The scaffold scanned every subdirectory, found
 <code>@mesh.agent</code> decorators in twelve Python files and the
 <code>@mesh.route</code> handlers in the gateway, extracted each agent’s
