@@ -7,12 +7,15 @@ package registry
 
 import (
 	"bufio"
+	"bytes"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -85,7 +88,45 @@ func TestProxy_ShutdownCutsGetStream(t *testing.T) {
 	}
 }
 
+// relayLog captures the registry's relay log lines for a failure message.
+type relayLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *relayLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+// relayLines returns the captured "proxy stream" lines, which carry the
+// error the relay saw when a stream ended early.
+func (l *relayLog) relayLines() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []string
+	for _, line := range strings.Split(l.buf.String(), "\n") {
+		if strings.Contains(line, "proxy stream") {
+			out = append(out, line)
+		}
+	}
+	if len(out) == 0 {
+		return "(no relay log line)"
+	}
+	return strings.Join(out, "; ")
+}
+
 func TestProxy_ShutdownLeavesPostStreamRunning(t *testing.T) {
+	// Capture the relay's log so a failure says how the stream ended. A
+	// shutdown cut can only come through context cancellation and logs
+	// "context canceled" (as the GET test's cut does); any other error is
+	// a transport-level drop that BeginShutdown did not cause.
+	captured := &relayLog{}
+	prevLog := log.Writer()
+	log.SetOutput(io.MultiWriter(prevLog, captured))
+	t.Cleanup(func() { log.SetOutput(prevLog) })
+
 	release := make(chan struct{})
 	service, base, path := newSSEProxy(t, release)
 
@@ -101,7 +142,7 @@ func TestProxy_ShutdownLeavesPostStreamRunning(t *testing.T) {
 	service.BeginShutdown()
 	select {
 	case got := <-rest:
-		t.Fatalf("proxied POST stream was cut by BeginShutdown (read %q)", got)
+		t.Fatalf("proxied POST stream ended after BeginShutdown (read %q); relay saw: %s", got, captured.relayLines())
 	case <-time.After(300 * time.Millisecond):
 	}
 

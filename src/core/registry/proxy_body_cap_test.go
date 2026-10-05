@@ -434,9 +434,7 @@ func TestProxy_ChunkedBufferingIsBounded(t *testing.T) {
 	if len(received) != callers+1 {
 		t.Errorf("agent received %d requests, want %d", len(received), callers+1)
 	}
-	if len(proxyBufferSlots) != 0 {
-		t.Errorf("%d buffer slot(s) leaked after every request finished", len(proxyBufferSlots))
-	}
+	requireSlotsReleased(t, "after every request finished")
 }
 
 // TestProxy_StalledChunkedSenderReleasesSlotAtBudget pins that a chunked
@@ -528,7 +526,22 @@ func TestProxy_StalledChunkedSenderReleasesSlotAtBudget(t *testing.T) {
 	if n != 1 || string(bodies[0]) != `{"queued":true}` {
 		t.Fatalf("agent received %d request(s) %q; want only the queued caller's", n, bodies)
 	}
-	if len(proxyBufferSlots) != 0 {
-		t.Errorf("%d buffer slot(s) still held after both callers finished", len(proxyBufferSlots))
+	requireSlotsReleased(t, "after both callers finished")
+}
+
+// requireSlotsReleased waits for every buffer slot to come back. A slot is
+// released by the handler's deferred release, which runs after the
+// response has been written — so a client can hold its full response a
+// moment before the handler returns, and asserting at that instant races
+// the server (it failed that way on Linux CI). A real leak never releases,
+// so it still fails here, just after the grace period.
+func requireSlotsReleased(t *testing.T, when string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for len(proxyBufferSlots) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d buffer slot(s) still held %s", len(proxyBufferSlots), when)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
