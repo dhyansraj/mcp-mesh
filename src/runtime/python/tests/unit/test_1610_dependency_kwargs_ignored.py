@@ -147,7 +147,9 @@ class TestOtherDecorators:
         sys.modules["_t1610_provider"] = module
         try:
             namespace: dict = {"__name__": "_t1610_provider"}
-            exec(compile("def chat():\n    pass\n", "/agent/t1610.py", "exec"), namespace)
+            exec(
+                compile("def chat():\n    pass\n", "/agent/t1610.py", "exec"), namespace
+            )
             chat = namespace["chat"]
 
             decorator = real(
@@ -159,7 +161,9 @@ class TestOtherDecorators:
             # The decorator closes over the remaining litellm kwargs; prove the
             # key is gone from them before any provider call could use it.
             cells = [c.cell_contents for c in (decorator.__closure__ or ())]
-            litellm_kwargs = [c for c in cells if isinstance(c, dict) and "max_tokens" in c]
+            litellm_kwargs = [
+                c for c in cells if isinstance(c, dict) and "max_tokens" in c
+            ]
             assert litellm_kwargs and "dependency_kwargs" not in litellm_kwargs[0]
             decorator(chat)
         finally:

@@ -1054,7 +1054,10 @@ def _pop_dependency_kwargs(kwargs: dict[str, Any]) -> bool:
     ``dependency_kwargs`` must reach none of those. Returns True when it was
     present, so the caller can warn once the target is known.
     """
-    return kwargs.pop("dependency_kwargs", _NO_DEPENDENCY_KWARGS) is not _NO_DEPENDENCY_KWARGS
+    return (
+        kwargs.pop("dependency_kwargs", _NO_DEPENDENCY_KWARGS)
+        is not _NO_DEPENDENCY_KWARGS
+    )
 
 
 _NO_DEPENDENCY_KWARGS = object()
