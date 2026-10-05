@@ -10,7 +10,6 @@ import (
 )
 
 const (
-	defaultRegistryPort  = 8080
 	defaultUIPort        = 3080
 	registryReadyTimeout = 10 * time.Second
 	uiReadyTimeout       = 5 * time.Second
@@ -121,12 +120,10 @@ func (pm *ProcessManager) StartRegistryProcess(port int, dbPath string, metadata
 		return info, fmt.Errorf("registry process already running (PID: %d)", info.PID)
 	}
 
-	// Find available port if not specified
+	// Fall back to the configured port (always 1-65535: set from defaults,
+	// validated env, or a positive --registry-port) if not specified
 	if port == 0 {
 		port = pm.config.RegistryPort
-		if port == 0 {
-			port = defaultRegistryPort
-		}
 	}
 
 	// Use configured database path if not specified
@@ -369,9 +366,6 @@ func (pm *ProcessManager) findUIBinary() (string, error) {
 // waitForRegistryReady waits for the registry to be ready to accept connections
 func (pm *ProcessManager) waitForRegistryReady(timeout time.Duration) error {
 	registryURL := pm.config.GetRegistryURL()
-	if registryURL == "" {
-		registryURL = fmt.Sprintf("http://localhost:%d", defaultRegistryPort)
-	}
 
 	if err := waitForHTTPReady(newTLSSkipVerifyClient(), registryURL+"/health", timeout); err != nil {
 		return fmt.Errorf("registry did not become ready within timeout")

@@ -44,10 +44,9 @@ type LanguageHandler interface {
 	DetectInDirectory(dir string) bool // Check if dir contains this language
 
 	// Scaffold
-	GetTemplates() map[string]string            // Template files
-	GenerateAgent(config ScaffoldConfig) error  // Generate agent files
-	GenerateDockerfile() string                 // Dockerfile content
-	GenerateHelmValues() map[string]interface{} // Helm values
+	GetTemplates() map[string]string           // Template files
+	GenerateAgent(config ScaffoldConfig) error // Generate agent files
+	GenerateDockerfile() string                // Dockerfile content
 
 	// Compose
 	ParseAgentFile(path string) (*AgentInfo, error) // Extract name, port, caps

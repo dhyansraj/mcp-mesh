@@ -112,18 +112,6 @@ CMD ["main.py"]
 `
 }
 
-// GenerateHelmValues returns Python-specific Helm values
-func (h *PythonHandler) GenerateHelmValues() map[string]interface{} {
-	return map[string]interface{}{
-		"runtime": "python",
-		"image": map[string]interface{}{
-			"repository": "mcpmesh/python-runtime",
-			"tag":        "1.2.0",
-		},
-		"command": []string{"main.py"},
-	}
-}
-
 // ParseAgentFile extracts agent info from a Python file
 func (h *PythonHandler) ParseAgentFile(path string) (*AgentInfo, error) {
 	content, err := os.ReadFile(path)
