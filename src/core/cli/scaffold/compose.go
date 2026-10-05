@@ -1445,10 +1445,10 @@ const agentServicesTemplate = `{{- range .Agents }}
     REDIS_URL: redis://redis:6379
     MCP_MESH_DISTRIBUTED_TRACING_ENABLED: "true"
 {{- end }}
-  # /livez means "this process is serving". /health carries the verdict — it
-  # 503s while a vendor is down, blocking dependents gated on depends_on and
-  # showing a live agent as unhealthy in docker compose ps (only Swarm or an
-  # autoheal sidecar restarts on that).
+  # /livez means "this process is serving". /health carries the agent's
+  # health_check verdict: a failing check makes it 503, which would block
+  # dependents gated on depends_on and show a live agent as unhealthy in
+  # docker compose ps (only Swarm or an autoheal sidecar restarts on that).
   healthcheck:
     test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:{{ .Port }}/livez').read()"]
     interval: 5s
@@ -2327,10 +2327,10 @@ services:
       REDIS_URL: redis://redis:6379
       MCP_MESH_DISTRIBUTED_TRACING_ENABLED: "true"
 {{- end }}
-    # /livez means "this process is serving". /health carries the verdict — it
-    # 503s while a vendor is down, blocking dependents gated on depends_on and
-    # showing a live agent as unhealthy in docker compose ps (only Swarm or an
-    # autoheal sidecar restarts on that).
+    # /livez means "this process is serving". /health carries the agent's
+    # health_check verdict: a failing check makes it 503, which would block
+    # dependents gated on depends_on and show a live agent as unhealthy in
+    # docker compose ps (only Swarm or an autoheal sidecar restarts on that).
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:{{ .Port }}/livez').read()"]
       interval: 5s

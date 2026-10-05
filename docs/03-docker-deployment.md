@@ -49,7 +49,7 @@ meshctl scaffold --compose --dry-run -o ./agents
 
 ### Generated docker-compose.yml
 
-A trimmed excerpt of what `meshctl scaffold --compose` writes for a directory named `my-project` holding one agent, `my-agent` on port 8080. Run it with `--dry-run` to print the full file for your own agents. The compose project, and so every container name, takes the directory name unless you pass `--project-name`.
+A trimmed excerpt of what `meshctl scaffold --compose` writes for a directory named `my-project` holding one agent, `my-agent` on port 8080. Run it with `--dry-run` to print the full file for your own agents. Container and network names are prefixed with the directory name unless you pass `--project-name`; that flag sets only this prefix, not Docker Compose's own project name, which Compose takes from the directory.
 
 The infrastructure services are the same for every language:
 

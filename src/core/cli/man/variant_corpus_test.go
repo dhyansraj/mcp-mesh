@@ -241,7 +241,13 @@ func stripLangHeader(content string) string {
 // Review follow-up: dependency-injection_typescript.md's LLM-injection
 // lead-in now says what `server` is (`mesh.llm()` registered on the FastMCP
 // `server` passed to `mesh(server, ...)`, +2). 1812 + 2 = 1814.
-const wantVariantInlineCodeSpans = 1814
+//
+// CodeRabbit review on #1637: dependency-injection_typescript.md's OR-group
+// example no longer claims an ordered python-then-typescript fallback; the
+// "How it resolves" list states the scoring rule and the `+` preference (+2).
+// llm_typescript.md's structured example now returns the parsed object
+// (fenced, no spans). 1814 + 2 = 1816.
+const wantVariantInlineCodeSpans = 1816
 
 // TestVariantCorpusCodeSpans is TestStyleInlineCorpus plus
 // TestRenderStyledCorpusListItems, run over the pages neither of them sees.

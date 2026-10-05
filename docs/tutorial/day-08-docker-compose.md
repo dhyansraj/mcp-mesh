@@ -147,9 +147,11 @@ Services included:
   - weather-agent (9103)
 ```
 
-`--project-name trip-planner` names the compose project, and with it every
-container (`trip-planner-registry`, `trip-planner-flight-agent`, ...).
-Without it the project is named after the current directory, `day-08`.
+`--project-name trip-planner` sets the prefix the generator uses for every
+container name (`trip-planner-registry`, `trip-planner-flight-agent`, ...)
+and for the network (`trip-planner-network`). Without it the prefix is the
+current directory's name, `day-08`. It does not set Docker Compose's own
+project name, which Compose still takes from the directory.
 
 The scaffold scanned every subdirectory, found `@mesh.agent` decorators in
 twelve Python files and the `@mesh.route` handlers in the gateway, extracted

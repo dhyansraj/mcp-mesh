@@ -457,7 +457,8 @@ Invalid compose file
    ```bash
    docker compose version
 
-   # Compose v2 ships with Docker Engine and Docker Desktop; upgrade Docker if it is missing
+   # Docker Desktop includes Compose v2. On Linux with Docker Engine, install the
+   # Compose plugin if this fails, e.g. sudo apt-get install docker-compose-plugin
    ```
 
 2. **Use compatible syntax:**

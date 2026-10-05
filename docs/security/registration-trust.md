@@ -98,7 +98,7 @@ Vault-issued certs include both DNS SANs (agent name) and IP SANs (advertised ho
 Fetches X.509-SVIDs from the SPIRE agent's Workload API via Unix domain socket.
 
 !!! warning "Python and TypeScript only"
-    The SPIRE provider works for Python and TypeScript agents, not Java: the Java runtime refuses to start with `MCP_MESH_TLS_PROVIDER=spire`. A Java agent in a SPIRE deployment uses the file provider with its SVID written to disk by a SPIRE helper (for example `spiffe-helper`), pointing `MCP_MESH_TLS_CERT`, `MCP_MESH_TLS_KEY` and `MCP_MESH_TLS_CA` at the exported certificate, key and trust bundle.
+    The SPIRE provider works for Python and TypeScript agents, not Java: the Java runtime refuses to start with `MCP_MESH_TLS_PROVIDER=spire` whenever TLS is enabled (`auto` or `strict`). A Java agent in a SPIRE deployment uses the file provider with its SVID written to disk by a SPIRE helper (for example `spiffe-helper`), pointing `MCP_MESH_TLS_CERT`, `MCP_MESH_TLS_KEY` and `MCP_MESH_TLS_CA` at the exported certificate, key and trust bundle.
 
 ```bash
 export MCP_MESH_TLS_MODE=auto

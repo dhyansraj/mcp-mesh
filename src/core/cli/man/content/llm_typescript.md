@@ -157,9 +157,9 @@ server.addTool(
       query: z.string(),
     }),
     execute: async ({ query }, { llm }) => {
-      // Returns AssistResponse type
+      // llm() returns a parsed AssistResponse; return it as-is (the runtime serializes it)
       const result = await llm(query);
-      return JSON.stringify(result);
+      return result;
     },
   }),
 );

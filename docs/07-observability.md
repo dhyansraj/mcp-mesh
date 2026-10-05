@@ -31,7 +31,7 @@ meshctl scaffold --observability
 docker compose -f docker-compose.observability.yml up -d
 ```
 
-Combine with `--compose` (`meshctl scaffold --compose --observability`) to merge the stack into your main `docker-compose.yml` instead. Grafana comes up on `http://localhost:3000` with `admin` / `admin`; the generated compose file also enables anonymous access with the Admin role.
+Combine with `--compose` (`meshctl scaffold --compose --observability`) to merge the stack into your main `docker-compose.yml` instead. Grafana comes up on `http://localhost:3000` with `admin` / `admin`, and the generated compose file also enables anonymous access with the Admin role. Port 3000 is published on every host interface, so anyone who can reach the host gets Grafana Admin without a password: run the stack on a trusted machine, or change the mapping to `"127.0.0.1:3000:3000"`.
 
 ### Grafana on Kubernetes
 

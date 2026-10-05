@@ -717,10 +717,24 @@ func TestStyleInlineNoStrayItalicBetweenCodeSpans(t *testing.T) {
 // OTLP_ENDPOINT / POD_* rows are table lines and the restored settle
 // caveats are fenced. kwargs.md +2 and dependency-injection.md +2: the same
 // all-decorators dependency_kwargs sentence. 1969 + 5 + 3 + 2 + 2 = 1981.
+//
+// CodeRabbit review on #1637 moves inline to 1999 (+18) and markup list lines
+// to 458 (-1); the list-span count nets to 550 unchanged. environment.md +15
+// (-1 list, -1 markup): the precedence section now separates an agent's env
+// order under meshctl (--env > --env-file > shell) from meshctl's own config,
+// read before those flags (it was a three-item list with one span; now prose
+// plus a span-free list), and the admin-port paragraph says admin HTTPS needs
+// registry TLS and that auto still admits certificate-less callers.
+// security.md +2: Java refuses SPIRE only when TLS is auto or strict.
+// observability.md +1 (+1 list): the compose bullet says port 3000 is
+// published on every interface with anonymous Admin, and names the loopback
+// mapping. health.md and deployment.md swap spans to say only mesh's own
+// gateway probe handlers always pass. 1981 + 15 + 2 + 1 = 1999;
+// 550 - 1 + 1 = 550; 459 - 1 = 458.
 const (
-	wantInlineCodeSpans = 1981
+	wantInlineCodeSpans = 1999
 	wantListCodeSpans   = 550
-	wantMarkupListLines = 459
+	wantMarkupListLines = 458
 )
 
 // assertCorpusSize replaces the t.Logf these tests used to end on.

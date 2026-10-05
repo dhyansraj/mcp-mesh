@@ -84,14 +84,13 @@ async def calculate(a: int, b: int, math: mesh.McpMeshTool = None):
     return result
 ```
 
-Resolution order:
+How it resolves:
 
-1. Try to find provider with `addition` AND `python` tags
-2. If not found, try provider with `addition` AND `typescript` tags
-3. If neither found, dependency is unresolved (injected as `None`)
+1. Every provider with `addition` AND (`python` OR `typescript`) qualifies
+2. A provider matching `+python` scores higher than one matching only `typescript`, so it wins while it is available
+3. If no provider qualifies, the dependency is injected as `None`
 
-This is useful when you have multiple implementations of the same capability
-and want to prefer one but fallback to another if unavailable.
+The alternatives are not tried in order; the `+` is what expresses the preference.
 
 ## Injection Types
 

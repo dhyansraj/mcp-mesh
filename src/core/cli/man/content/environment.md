@@ -17,11 +17,17 @@ A variable not listed for a component has no effect on it.
 
 ## Configuration Hierarchy
 
-Configuration sources in order of precedence (highest wins):
+For an agent, the environment it starts with wins over the decorator / `mesh()` / annotation parameters in its code.
 
-1. Environment variables (system or `.env` files)
-2. meshctl `--env` flags
-3. Decorator / `mesh()` / annotation parameters (lowest priority)
+When `meshctl start` launches an agent, the agent's environment is built in this order (highest wins):
+
+1. `--env KEY=VALUE` flags
+2. `--env-file` entries
+3. Variables exported in the shell that runs meshctl
+
+`MCP_MESH_REGISTRY_URL`, `MCP_MESH_LOG_LEVEL` and `MCP_MESH_DEBUG_MODE` are then set by meshctl from its own configuration, so for those three only an `--env` flag overrides meshctl.
+
+meshctl reads its own settings (the `meshctl` table below) from the shell environment when it starts, before it applies `--env-file` or `--env`. Those flags change what the agents see, not meshctl itself.
 
 ## Empty Values Mean Unset
 
@@ -361,7 +367,7 @@ In distributed deployments (Docker, Kubernetes), all agents that read or write m
 | `MCP_MESH_VAULT_TTL`      | All SDKs | `24h` | Certificate TTL |
 | `MCP_MESH_SPIRE_SOCKET`   | Py, TS, registry | `/run/spire/agent/sockets/agent.sock` | SPIRE Workload API socket |
 
-The Java runtime refuses to start with `MCP_MESH_TLS_PROVIDER=spire`; see `meshctl man security`.
+The Java runtime refuses to start with `MCP_MESH_TLS_PROVIDER=spire` when `MCP_MESH_TLS_MODE` is `auto` or `strict`; with TLS `off` it ignores the provider. See `meshctl man security`.
 
 ### Per-Service TLS
 
@@ -384,9 +390,9 @@ Each of these prefixes reads `<PREFIX>_CA`, `<PREFIX>_CERT`, `<PREFIX>_KEY` and 
 | `MCP_MESH_K8S_NAMESPACE`      | registry | Namespace for `k8s-secrets` |
 | `MCP_MESH_K8S_LABEL_SELECTOR` | registry | Label selector for `k8s-secrets` |
 | `MCP_MESH_ADMIN_PORT`         | registry | Serve `/admin/*` only on this port |
-| `MCP_MESH_ADMIN_TLS`          | registry | Admin port uses the main port's TLS and client-certificate policy (default `false`) |
+| `MCP_MESH_ADMIN_TLS`          | registry | Admin port uses the main port's TLS certificate and client-certificate policy, when registry TLS is configured (default `false`) |
 
-The admin port is plain HTTP and unauthenticated unless `MCP_MESH_ADMIN_TLS=true`: restrict it at the network layer. The registry's only enforcement is client-certificate verification under `MCP_MESH_TLS_MODE`; there is no token alternative.
+The admin port is plain HTTP and unauthenticated unless `MCP_MESH_ADMIN_TLS=true` and the registry itself has TLS configured; with `MCP_MESH_ADMIN_TLS=true` but no registry TLS it stays plain HTTP. With admin TLS on, `MCP_MESH_TLS_MODE=auto` still admits callers without a client certificate (so anyone who reaches the port can, for example, drain the registry), and only `strict` requires a trusted one. Restrict the port at the network layer in every mode. The registry's only enforcement is client-certificate verification under `MCP_MESH_TLS_MODE`; there is no token alternative.
 
 ## MeshJob event channel
 
