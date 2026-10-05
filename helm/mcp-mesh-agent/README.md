@@ -59,7 +59,7 @@ helm uninstall my-agent -n mcp-mesh
 | Parameter          | Description                                         | Default                        |
 | ------------------ | --------------------------------------------------- | ------------------------------ |
 | `image.repository` | Container image repository                          | `"mcpmesh/python-runtime"`     |
-| `image.tag`        | Image tag (overrides chart appVersion)              | `"3.7"`                        |
+| `image.tag`        | Image tag (overrides chart appVersion)              | `"3.8"`                        |
 | `agent.name`       | Agent name for registry                             | `""`                           |
 | `agent.command`    | Container command override (empty = use Docker CMD) | `[]`                           |
 | `registry.host`    | MCP Mesh Registry host                              | `"mcp-core-mcp-mesh-registry"` |
@@ -112,7 +112,7 @@ The agent binds `0.0.0.0` in the pod; the address it advertises to consumers is
 | `strategy`                  | Deployment update strategy (unset = Kubernetes default `RollingUpdate`; pin `rollingUpdate.maxSurge: 0` for ReadWriteOnce `persistence`) | `{}` |
 | `image.repository`          | Container image repository             | `"mcpmesh/python-runtime"` |
 | `image.pullPolicy`          | Image pull policy                      | `IfNotPresent`             |
-| `image.tag`                 | Image tag (overrides chart appVersion) | `"3.7"`                    |
+| `image.tag`                 | Image tag (overrides chart appVersion) | `"3.8"`                    |
 | `resources.limits.cpu`      | CPU limit                              | `1`                        |
 | `resources.limits.memory`   | Memory limit                           | `1Gi`                      |
 | `resources.requests.cpu`    | CPU request                            | `100m`                     |
@@ -268,7 +268,7 @@ existingSecret: my-secret
 ### Python
 
 ```dockerfile
-FROM mcpmesh/python-runtime:3.7.1
+FROM mcpmesh/python-runtime:3.8.0
 
 COPY . /app/
 CMD ["-m", "myagent"]
@@ -277,7 +277,7 @@ CMD ["-m", "myagent"]
 ### TypeScript
 
 ```dockerfile
-FROM mcpmesh/typescript-runtime:3.7.1
+FROM mcpmesh/typescript-runtime:3.8.0
 
 COPY . /app/
 CMD ["src/index.ts"]
@@ -286,7 +286,7 @@ CMD ["src/index.ts"]
 ### Java
 
 ```dockerfile
-FROM mcpmesh/java-runtime:3.7.1
+FROM mcpmesh/java-runtime:3.8.0
 
 COPY target/myagent.jar /app/
 CMD ["/app/myagent.jar"]

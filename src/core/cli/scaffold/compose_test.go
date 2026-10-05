@@ -54,9 +54,9 @@ services:
     environment:
       POSTGRES_USER: customuser
   registry:
-    image: mcpmesh/registry:3.7.1
+    image: mcpmesh/registry:3.8.0
   agent1:
-    image: mcpmesh/python-runtime:3.7.1
+    image: mcpmesh/python-runtime:3.8.0
     container_name: test-agent1
     environment:
       CUSTOM_VAR: "user-added-value"
@@ -112,9 +112,9 @@ func TestGenerateDockerCompose_ForceRegenerate(t *testing.T) {
   postgres:
     image: postgres:15-alpine
   registry:
-    image: mcpmesh/registry:3.7.1
+    image: mcpmesh/registry:3.8.0
   agent1:
-    image: mcpmesh/python-runtime:3.7.1
+    image: mcpmesh/python-runtime:3.8.0
     environment:
       CUSTOM_VAR: "should-be-gone"
 networks:
@@ -159,9 +159,9 @@ func TestGenerateDockerCompose_NoNewAgents(t *testing.T) {
   postgres:
     image: postgres:15-alpine
   registry:
-    image: mcpmesh/registry:3.7.1
+    image: mcpmesh/registry:3.8.0
   agent1:
-    image: mcpmesh/python-runtime:3.7.1
+    image: mcpmesh/python-runtime:3.8.0
     environment:
       CUSTOM_VAR: "preserved"
 networks:

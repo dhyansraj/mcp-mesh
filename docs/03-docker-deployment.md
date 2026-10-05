@@ -27,10 +27,10 @@ MCP Mesh publishes official images to Docker Hub:
 
 | Image                            | Purpose                                          |
 | -------------------------------- | ------------------------------------------------ |
-| `mcpmesh/registry:3.7.1`           | Go-based registry service                        |
-| `mcpmesh/python-runtime:3.7.1`     | Python agent runtime (includes mcp-mesh SDK)     |
-| `mcpmesh/java-runtime:3.7.1`       | Java agent runtime (includes mcp-mesh SDK)       |
-| `mcpmesh/typescript-runtime:3.7.1` | TypeScript agent runtime (includes @mcpmesh/sdk) |
+| `mcpmesh/registry:3.8.0`           | Go-based registry service                        |
+| `mcpmesh/python-runtime:3.8.0`     | Python agent runtime (includes mcp-mesh SDK)     |
+| `mcpmesh/java-runtime:3.8.0`       | Java agent runtime (includes mcp-mesh SDK)       |
+| `mcpmesh/typescript-runtime:3.8.0` | TypeScript agent runtime (includes @mcpmesh/sdk) |
 
 ## Using Scaffold to Generate Compose Files
 
@@ -70,7 +70,7 @@ services:
       - my-project-network
 
   registry:
-    image: mcpmesh/registry:3.7.1
+    image: mcpmesh/registry:3.8.0
     container_name: my-project-registry
     ports:
       - "8000:8000"
@@ -98,7 +98,7 @@ Each agent runs on its language's runtime image with its directory mounted, and 
 
     ```yaml
       my-agent:
-        image: mcpmesh/python-runtime:3.7.1
+        image: mcpmesh/python-runtime:3.8.0
         container_name: my-project-my-agent
         ports:
           - "8080:8080"
@@ -125,7 +125,7 @@ Each agent runs on its language's runtime image with its directory mounted, and 
 
     ```yaml
       my-agent:
-        image: mcpmesh/java-runtime:3.7.1
+        image: mcpmesh/java-runtime:3.8.0
         container_name: my-project-my-agent
         ports:
           - "8080:8080"
@@ -151,7 +151,7 @@ Each agent runs on its language's runtime image with its directory mounted, and 
 
     ```yaml
       my-agent:
-        image: mcpmesh/typescript-runtime:3.7.1
+        image: mcpmesh/typescript-runtime:3.8.0
         container_name: my-project-my-agent
         ports:
           - "8080:8080"
@@ -185,12 +185,12 @@ If you prefer manual control, here's a minimal compose file:
     ```yaml
     services:
       registry:
-        image: mcpmesh/registry:3.7.1
+        image: mcpmesh/registry:3.8.0
         ports:
           - "8000:8000"
 
       my-agent:
-        image: mcpmesh/python-runtime:3.7.1
+        image: mcpmesh/python-runtime:3.8.0
         volumes:
           - ./agent.py:/app/agent.py:ro
         command: ["python", "/app/agent.py"]
@@ -207,7 +207,7 @@ If you prefer manual control, here's a minimal compose file:
     ```yaml
     services:
       registry:
-        image: mcpmesh/registry:3.7.1
+        image: mcpmesh/registry:3.8.0
         ports:
           - "8000:8000"
 
@@ -226,12 +226,12 @@ If you prefer manual control, here's a minimal compose file:
     ```yaml
     services:
       registry:
-        image: mcpmesh/registry:3.7.1
+        image: mcpmesh/registry:3.8.0
         ports:
           - "8000:8000"
 
       my-agent:
-        image: mcpmesh/typescript-runtime:3.7.1
+        image: mcpmesh/typescript-runtime:3.8.0
         volumes:
           - ./my-agent:/app/agent:ro
         command: ["npx", "tsx", "/app/agent/src/index.ts"]
@@ -252,7 +252,7 @@ If you didn't use scaffold, here's a sample Dockerfile:
 === "Python"
 
     ```dockerfile
-    FROM mcpmesh/python-runtime:3.7.1
+    FROM mcpmesh/python-runtime:3.8.0
 
     COPY ./my-agent /app/agent
 
@@ -277,7 +277,7 @@ If you didn't use scaffold, here's a sample Dockerfile:
 === "TypeScript"
 
     ```dockerfile
-    FROM mcpmesh/typescript-runtime:3.7.1
+    FROM mcpmesh/typescript-runtime:3.8.0
 
     WORKDIR /app/agent
     COPY ./my-agent/package*.json ./
@@ -302,12 +302,12 @@ Run multiple agents with a single compose file:
 ```yaml
 services:
   registry:
-    image: mcpmesh/registry:3.7.1
+    image: mcpmesh/registry:3.8.0
     ports:
       - "8000:8000"
 
   auth-agent:
-    image: mcpmesh/python-runtime:3.7.1
+    image: mcpmesh/python-runtime:3.8.0
     volumes:
       - ./agents/auth:/app/agent:ro
     command: ["python", "/app/agent/main.py"]
@@ -316,7 +316,7 @@ services:
       - MCP_MESH_HTTP_PORT=8080
 
   data-agent:
-    image: mcpmesh/python-runtime:3.7.1
+    image: mcpmesh/python-runtime:3.8.0
     volumes:
       - ./agents/data:/app/agent:ro
     command: ["python", "/app/agent/main.py"]
@@ -325,7 +325,7 @@ services:
       - MCP_MESH_HTTP_PORT=8080
 
   api-agent:
-    image: mcpmesh/python-runtime:3.7.1
+    image: mcpmesh/python-runtime:3.8.0
     volumes:
       - ./agents/api:/app/agent:ro
     command: ["python", "/app/agent/main.py"]

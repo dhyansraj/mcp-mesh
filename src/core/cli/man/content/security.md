@@ -249,7 +249,7 @@ Two things to know before enabling it. The admin port's scheme becomes `https://
 ```yaml
 services:
   registry:
-    image: mcpmesh/registry:3.7.1
+    image: mcpmesh/registry:3.8.0
     command: ["--tls-auto"]
     ports: ["8000:8000"]
     volumes:

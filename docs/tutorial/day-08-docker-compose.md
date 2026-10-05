@@ -377,7 +377,7 @@ $ docker compose down -v
 ## Troubleshooting
 
 **Docker build fails with missing requirements.** The compose file uses
-`mcpmesh/python-runtime:3.7.1` images with a dev-mode entrypoint that
+`mcpmesh/python-runtime:3.8.0` images with a dev-mode entrypoint that
 installs `requirements.txt` on startup. If an agent has dependencies not
 in the base image, check that `requirements.txt` exists in the agent
 directory and lists all dependencies.
