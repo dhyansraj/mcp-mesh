@@ -849,9 +849,11 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
 
                 log.debug("Executing tool {} at endpoint {} with args: {}", toolName, endpoint, argsJson);
 
-                // callTool returns a String for text-only results, a List<Map>
-                // for mixed content (text + resource_link), and — for JSON tool
-                // outputs on the untyped/dynamic path — a parsed Map/List/scalar.
+                // callTool returns a String for a single text block, a parsed
+                // Map/List/scalar for a single JSON text block, and a List<Map>
+                // of raw content items for several blocks (several texts, or
+                // text + resource_link/image). Non-strings are re-serialized
+                // below, so the LLM sees every block.
                 Object result = mcpClient.callTool(endpoint, toolName, args);
 
                 // Resolve resource_links to provider-native multimodal content

@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -31,6 +32,11 @@ import java.util.Map;
  *       {@code McpMeshTool<List<Object>>} (previously threw Jackson
  *       {@code MismatchedInputException} on empty content)</li>
  * </ul>
+ *
+ * <p>Two more probes cover issue #1630 (a provider returning several text
+ * content blocks): {@code probeMultiText} (untyped - must receive every
+ * block, in order) and {@code probeMultiTextAsString} (typed String - must
+ * fail clearly instead of truncating to the first block).
  *
  * <p>Each probe reports EXACTLY what arrived: {@code valueJson} is compact
  * Jackson JSON of the received value, so a collapsed or misparsed value is
@@ -97,6 +103,85 @@ public class EmptyConsumerApplication {
         List<Object> value = source.call("kind", "empty_list");
         log.info("probe_typed_empty_list received: {}", value);
         return new ProbeResult("typed_empty_list", value == null, typeName(value), toJson(value));
+    }
+
+    /**
+     * What a consumer received from a provider returning several text
+     * content blocks (issue #1630).
+     *
+     * @param valueType  Java type of the received value (list, string, ...)
+     * @param blockCount number of received items when a List arrived, else -1
+     * @param texts      the {@code text} of each received block, in order
+     * @param valueJson  compact Jackson JSON of the received value
+     * @param error      exception message chain if the call threw, else null
+     */
+    public record MultiTextResult(String valueType, int blockCount, List<String> texts,
+                                  String valueJson, String error) {}
+
+    /**
+     * Call multi_text_source through an untyped proxy and report every block
+     * that arrived. Before #1630 only the first block ("alpha") survived.
+     *
+     * @param source Injected multi_text_source tool (untyped)
+     * @return Report of exactly what arrived
+     */
+    @MeshTool(
+        capability = "multi_text_probe",
+        description = "Call multi_text_source and report every text block received (untyped proxy)",
+        tags = {"multi-text", "roundtrip", "java"},
+        dependencies = @Selector(capability = "multi_text_source")
+    )
+    public MultiTextResult probeMultiText(
+        McpMeshTool<Object> source
+    ) {
+        Object value = source.call();
+        log.info("probe_multi_text received: {}", value);
+        List<String> texts = new ArrayList<>();
+        int blockCount = -1;
+        if (value instanceof List<?> items) {
+            blockCount = items.size();
+            for (Object item : items) {
+                if (item instanceof Map<?, ?> block) {
+                    texts.add(String.valueOf(block.get("text")));
+                } else {
+                    texts.add(String.valueOf(item));
+                }
+            }
+        }
+        return new MultiTextResult(typeName(value), blockCount, texts, toJson(value), null);
+    }
+
+    /**
+     * Call multi_text_source through a {@code McpMeshTool<String>} proxy. A
+     * String cannot hold several blocks, so the call must fail clearly
+     * rather than silently return only the first block.
+     *
+     * @param source Injected multi_text_source tool, typed as String
+     * @return Report of the value (if any) and the error message chain
+     */
+    @MeshTool(
+        capability = "multi_text_probe_string",
+        description = "Call multi_text_source through a typed String proxy and report the outcome",
+        tags = {"multi-text", "roundtrip", "java", "typed"},
+        dependencies = @Selector(capability = "multi_text_source")
+    )
+    public MultiTextResult probeMultiTextAsString(
+        McpMeshTool<String> source
+    ) {
+        try {
+            String value = source.call();
+            log.info("probe_multi_text_as_string received: {}", value);
+            return new MultiTextResult(typeName(value), -1, List.of(), toJson(value), null);
+        } catch (RuntimeException e) {
+            log.info("probe_multi_text_as_string failed: {}", e.toString());
+            StringBuilder chain = new StringBuilder();
+            for (Throwable t = e; t != null; t = t.getCause()) {
+                if (chain.length() > 0) chain.append(" <- ");
+                chain.append(t.getClass().getSimpleName()).append(": ").append(t.getMessage());
+                if (t.getCause() == t) break;
+            }
+            return new MultiTextResult("error", -1, List.of(), null, chain.toString());
+        }
     }
 
     private static String typeName(Object value) {

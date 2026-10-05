@@ -7,10 +7,14 @@ None -> null. Emptiness and absence are different values.
 get_value deliberately has NO return type annotation: the untyped return
 path is where FastMCP collapsed [] into an empty content array, making it
 indistinguishable from None on the wire.
+
+get_text_blocks (issue #1630) returns several explicit MCP text content
+blocks; consumers must receive every block, in order, not just the first.
 """
 
 import mesh
 from fastmcp import FastMCP
+from mcp.types import TextContent
 
 app = FastMCP("py-empty-provider")
 
@@ -45,6 +49,27 @@ def get_value(kind: str):
 def get_empty_list() -> list[int]:
     """Typed empty-list return - exercises the structuredContent seam."""
     return []
+
+
+@app.tool()
+@mesh.tool(
+    capability="multi_text_source",
+    description="Return three explicit MCP text content blocks (issue #1630)",
+    tags=["multi-text", "roundtrip"],
+)
+def get_text_blocks():
+    """Return alpha, beta, gamma as three separate text content blocks.
+
+    Deliberately unannotated: FastMCP passes MCP content blocks through
+    verbatim and emits NO structuredContent, so the wire result is
+    content=[{text: alpha}, {text: beta}, {text: gamma}]. (A list[str]
+    return would instead serialize to ONE JSON text block.)
+    """
+    return [
+        TextContent(type="text", text="alpha"),
+        TextContent(type="text", text="beta"),
+        TextContent(type="text", text="gamma"),
+    ]
 
 
 @mesh.agent(

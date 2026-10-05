@@ -74,8 +74,9 @@ class McpHttpClientResourceLinkTest {
         }
 
         @Test
-        @DisplayName("multiple text items returns first as string")
-        void multipleTextItemsReturnsFirstAsString() {
+        @DisplayName("multiple text items return every item as a list (#1630)")
+        @SuppressWarnings("unchecked")
+        void multipleTextItemsReturnAllAsList() {
             String jsonResponse = """
                 {
                     "jsonrpc": "2.0",
@@ -95,8 +96,11 @@ class McpHttpClientResourceLinkTest {
             String endpoint = server.url("/").toString();
             Object result = client.callTool(endpoint, "test_tool", Map.of());
 
-            assertInstanceOf(String.class, result);
-            assertEquals("first", result);
+            assertInstanceOf(List.class, result);
+            List<Map<String, Object>> content = (List<Map<String, Object>>) result;
+            assertEquals(2, content.size());
+            assertEquals("first", content.get(0).get("text"));
+            assertEquals("second", content.get(1).get("text"));
         }
     }
 
