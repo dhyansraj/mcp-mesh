@@ -1,8 +1,11 @@
 package io.mcpmesh.spring;
 
 import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.JavaType;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.ObjectNode;
 import io.mcpmesh.JobContext;
 import io.mcpmesh.core.MeshCore;
 import io.mcpmesh.core.MeshCoreBridge;
@@ -18,6 +21,8 @@ import org.slf4j.LoggerFactory;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.lang.reflect.Type;
+import java.lang.reflect.TypeVariable;
+import java.lang.reflect.WildcardType;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.security.KeyFactory;
@@ -33,6 +38,7 @@ import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -633,6 +639,7 @@ public class McpHttpClient {
                     // Detect whether all content items are text-only or mixed (resource_link, image, etc.)
                     String textContent = null;
                     List<Map<String, Object>> mixedContent = null;
+                    List<Map<String, Object>> multiTextContent = null;
                     boolean emptyContent = false;
                     if (result.has("content") && result.get("content").isArray()) {
                         JsonNode content = result.get("content");
@@ -648,19 +655,19 @@ public class McpHttpClient {
                             }
 
                             if (allText) {
-                                // Backward compatible: extract first text content as string
+                                // A single text block is the value. With several,
+                                // the first text is kept only for error reporting;
+                                // the value is every block (#1630).
                                 JsonNode firstContent = content.get(0);
                                 if (firstContent.has("text")) {
                                     textContent = firstContent.get("text").asText();
                                 }
+                                if (content.size() > 1) {
+                                    multiTextContent = toRawContentItems(content);
+                                }
                             } else {
                                 // Mixed content: preserve full content array
-                                mixedContent = new ArrayList<>();
-                                for (int i = 0; i < content.size(); i++) {
-                                    mixedContent.add(objectMapper.treeToValue(content.get(i),
-                                        objectMapper.getTypeFactory().constructMapType(
-                                            LinkedHashMap.class, String.class, Object.class)));
-                                }
+                                mixedContent = toRawContentItems(content);
                                 // Also extract text from first item for error reporting
                                 JsonNode firstContent = content.get(0);
                                 if (firstContent.has("text")) {
@@ -698,6 +705,13 @@ public class McpHttpClient {
                         @SuppressWarnings("unchecked")
                         T mixed = (T) mixedContent;
                         return mixed;
+                    }
+
+                    // Several text blocks (#1630): never drop blocks. See
+                    // multiTextResult for which targets get the blocks and
+                    // which fall back to structuredContent.
+                    if (multiTextContent != null) {
+                        return multiTextResult(functionName, multiTextContent, result, returnType);
                     }
 
                     // Empty content array (#1250): recover the return value from
@@ -1397,6 +1411,122 @@ public class McpHttpClient {
         }
     }
 
+    /** Convert an MCP {@code content} array to its raw items, one map per block, in order. */
+    private List<Map<String, Object>> toRawContentItems(JsonNode content) {
+        List<Map<String, Object>> items = new ArrayList<>(content.size());
+        for (int i = 0; i < content.size(); i++) {
+            items.add(objectMapper.treeToValue(content.get(i),
+                objectMapper.getTypeFactory().constructMapType(
+                    LinkedHashMap.class, String.class, Object.class)));
+        }
+        return items;
+    }
+
+    /**
+     * The value of a result made of several text blocks (#1630).
+     *
+     * <p>A target that can hold every block gets them all, in order, as raw
+     * MCP content items, even when {@code structuredContent} is present
+     * (content wins, as in Python):
+     * <ul>
+     *   <li>untyped, {@code Object}, or an unbounded type variable/wildcard:
+     *       the {@code List<Map<String, Object>>} itself;</li>
+     *   <li>a {@code List}/{@code Collection} (not a {@code Set}, which could
+     *       collapse equal blocks) whose element type can hold a content item
+     *       ({@code Object}, a {@code Map}, a {@code JsonNode}, or raw): the
+     *       items converted to that collection type;</li>
+     *   <li>a {@code JsonNode}/{@code ArrayNode}: a JSON array of the items.</li>
+     * </ul>
+     *
+     * <p>A {@code void}/{@code Void} target returns {@code null}. Any other
+     * target (a {@code String}, a record, a {@code Map}, a {@code List<Record>},
+     * a bounded type variable resolved through its bound) cannot hold several
+     * blocks: it is deserialized from {@code structuredContent} when present,
+     * and otherwise the call fails with a {@link MeshToolCallException} rather
+     * than returning a partial value. The element-type check matters because
+     * a lenient mapper (unknown properties ignored) would otherwise turn each
+     * content item into a null-filled record without failing.
+     */
+    @SuppressWarnings("unchecked")
+    private <T> T multiTextResult(String functionName, List<Map<String, Object>> items,
+                                  JsonNode result, Type returnType) {
+        Type target = resolveBound(returnType);
+        if (target == null || target == Object.class) {
+            return (T) items;
+        }
+        Class<?> raw = getRawType(target);
+        if (raw == void.class || raw == Void.class) {
+            return null;
+        }
+        if (JsonNode.class.isAssignableFrom(raw) && raw.isAssignableFrom(ArrayNode.class)) {
+            return (T) objectMapper.valueToTree(items);
+        }
+        if (isCollectionTarget(raw)) {
+            JavaType javaType = objectMapper.getTypeFactory().constructType(target);
+            if (holdsContentItem(javaType.getContentType())) {
+                try {
+                    return objectMapper.convertValue(items, javaType);
+                } catch (RuntimeException e) {
+                    throw new MeshToolCallException(functionName, functionName,
+                        multiTextMismatch(items.size(), returnType, false) + ": " + e.getMessage());
+                }
+            }
+        }
+        JsonNode recovered = recoverStructuredContent(result);
+        if (recovered != null && !recovered.isNull()) {
+            return deserializeResult(null, recovered, target);
+        }
+        throw new MeshToolCallException(functionName, functionName,
+            multiTextMismatch(items.size(), returnType, true));
+    }
+
+    /**
+     * Resolve a type variable or wildcard to its upper bound: an unbounded
+     * one becomes {@code Object}, a bounded {@code T extends Foo} becomes
+     * {@code Foo}. Other types are returned as-is.
+     */
+    private static Type resolveBound(Type type) {
+        Type t = type;
+        for (int depth = 0; depth < 8; depth++) {
+            if (t instanceof TypeVariable<?> tv) {
+                Type[] bounds = tv.getBounds();
+                t = bounds.length == 0 ? Object.class : bounds[0];
+            } else if (t instanceof WildcardType wt) {
+                Type[] upper = wt.getUpperBounds();
+                t = upper.length == 0 ? Object.class : upper[0];
+            } else {
+                return t;
+            }
+        }
+        return Object.class;
+    }
+
+    private static boolean isCollectionTarget(Class<?> raw) {
+        if (Set.class.isAssignableFrom(raw)) {
+            return false;
+        }
+        return Collection.class.isAssignableFrom(raw)
+            || (Iterable.class.isAssignableFrom(raw) && raw.isAssignableFrom(ArrayList.class));
+    }
+
+    private static boolean holdsContentItem(JavaType element) {
+        if (element == null) {
+            return true;
+        }
+        Class<?> c = element.getRawClass();
+        return c == Object.class
+            || (Map.class.isAssignableFrom(c) && c.isAssignableFrom(LinkedHashMap.class))
+            || (JsonNode.class.isAssignableFrom(c) && c.isAssignableFrom(ObjectNode.class));
+    }
+
+    private static String multiTextMismatch(int blocks, Type returnType, boolean noStructuredContent) {
+        return "tool returned " + blocks + " text content blocks"
+            + (noStructuredContent ? " and no structuredContent" : "")
+            + ", which cannot be converted to " + returnType.getTypeName()
+            + " without dropping blocks; declare the dependency as McpMeshTool<Object> or "
+            + "a List<Map<String, Object>> to receive every block as an MCP content item";
+    }
+
     /**
      * Deserialize the result to the specified type.
      *
@@ -1470,6 +1600,10 @@ public class McpHttpClient {
                 // Object.class — because getRawType falls back to Object.class for
                 // erased/unresolvable targets (TypeVariable/WildcardType), which
                 // must instead reach the strict readValue below (#1250 / uc32).
+                // This is the single-text-block path only: for several text
+                // blocks, multiTextResult resolves a variable/wildcard through
+                // its bound (unbounded -> Object -> the List of blocks; bounded
+                // -> the bound, strict) (#1630).
                 if (returnType == null || returnType == Object.class) {
                     return deserializeDynamic(textContent);
                 }
