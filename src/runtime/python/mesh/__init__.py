@@ -89,8 +89,6 @@ def create_server(name: str | None = None) -> "FastMCP":
 
 # Make decorators available as mesh.tool, mesh.agent, mesh.route, mesh.llm, and mesh.llm_provider
 def __getattr__(name):
-    import warnings
-
     if name == "tool":
         return decorators.tool
     elif name == "agent":
@@ -166,14 +164,6 @@ def __getattr__(name):
         return llm_provider
     elif name == "McpMeshTool":
         return McpMeshTool
-    elif name == "McpMeshAgent":
-        warnings.warn(
-            "McpMeshAgent is deprecated, use McpMeshTool instead. "
-            "McpMeshAgent will be removed in a future version.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return McpMeshAgent
     elif name == "MeshContextModel":
         return MeshContextModel
     elif name == "MeshJob":
