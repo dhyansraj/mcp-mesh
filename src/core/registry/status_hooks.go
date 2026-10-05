@@ -19,7 +19,13 @@ type StatusChangeHookConfig struct {
 }
 
 // CreateAgentStatusChangeHook creates a hook that monitors agent status changes
-// and automatically creates registry events when the status field changes
+// and automatically creates registry events when the status field changes.
+//
+// The hook reads each agent's old status before the mutation runs (it cannot
+// be recovered afterwards), runs the mutation, and only then writes events,
+// and only for rows the mutation actually changed. A conditional update that
+// loses a race (e.g. the health monitor's markAgentUnhealthyIfUnchanged
+// against a concurrent heartbeat) affects 0 rows and so records nothing.
 func CreateAgentStatusChangeHook(config *StatusChangeHookConfig) entgo.Hook {
 	return func(next entgo.Mutator) entgo.Mutator {
 		return entgo.MutateFunc(func(ctx context.Context, m entgo.Mutation) (entgo.Value, error) {
@@ -41,54 +47,84 @@ func CreateAgentStatusChangeHook(config *StatusChangeHookConfig) entgo.Hook {
 				return next.Mutate(ctx, m)
 			}
 
-			// Handle the status change before the mutation
-			_, err := handleAgentStatusChange(ctx, agentMutation, config)
-			if err != nil {
-				config.Logger.Warning("Status change hook failed: %v", err)
-				// Don't fail the mutation if hook fails
+			if statusChangeEventsSuppressed(ctx) {
+				return next.Mutate(ctx, m)
 			}
 
-			// Continue with the normal mutation
-			return next.Mutate(ctx, m)
+			pending, matched := prepareStatusChangeEvents(ctx, agentMutation, config)
+
+			value, err := next.Mutate(ctx, m)
+			if err != nil || len(pending) == 0 {
+				return value, err
+			}
+
+			// Event-write failures are logged inside and never fail the
+			// mutation, which has already been applied at this point.
+			writeStatusChangeEvents(ctx, agentMutation, value, pending, matched, config)
+			return value, nil
 		})
 	}
 }
 
-// handleAgentStatusChange processes agent status changes and creates appropriate events
-func handleAgentStatusChange(ctx context.Context, m *ent.AgentMutation, config *StatusChangeHookConfig) (ent.Value, error) {
+type suppressStatusChangeEventsKey struct{}
+
+// withoutStatusChangeEvents marks ctx so the status change hook writes no
+// event for mutations run with it. For callers that record their own, richer
+// event for the same transition in the same transaction (startup cleanup's
+// stale_on_startup event), so the transition is recorded exactly once.
+func withoutStatusChangeEvents(ctx context.Context) context.Context {
+	return context.WithValue(ctx, suppressStatusChangeEventsKey{}, true)
+}
+
+func statusChangeEventsSuppressed(ctx context.Context) bool {
+	suppressed, _ := ctx.Value(suppressStatusChangeEventsKey{}).(bool)
+	return suppressed
+}
+
+// pendingStatusEvent is an event computed from the pre-mutation state, to be
+// written only if the mutation actually changes the agent's row.
+type pendingStatusEvent struct {
+	agentID   string
+	oldStatus agent.Status
+	newStatus agent.Status
+	eventType registryevent.EventType
+}
+
+// prepareStatusChangeEvents reads the current (pre-mutation) state of every
+// agent the mutation targets and returns the events the status change would
+// produce, plus the number of agents the mutation matched at this point.
+// Nothing is written here.
+func prepareStatusChangeEvents(ctx context.Context, m *ent.AgentMutation, config *StatusChangeHookConfig) ([]pendingStatusEvent, int) {
 	if !config.Enabled {
-		// Hook is disabled, proceed with normal mutation
-		return nil, nil
+		return nil, 0
 	}
 
 	// Get the new status value
 	newStatus, exists := m.Status()
 	if !exists {
 		// Status field isn't being updated, shouldn't happen due to condition but safety check
-		return nil, nil
+		return nil, 0
 	}
 
 	// Get the agent IDs (handles both single and bulk operations)
 	agentIDs, err := m.IDs(ctx)
 	if err != nil {
 		config.Logger.Error("Failed to get agent IDs for status change hook: %v", err)
-		return nil, nil
+		return nil, 0
 	}
 
 	if len(agentIDs) == 0 {
-		config.Logger.Warning("Agent status change hook triggered but no agent IDs found")
-		return nil, nil
+		config.Logger.Debug("Agent status change hook: mutation matches no agents, no events to create")
+		return nil, 0
 	}
 
-	// Handle each agent that will be affected by this status change
+	var pending []pendingStatusEvent
 	for _, agentID := range agentIDs {
-		// Get the old status by querying the current agent
-		// Note: This happens before the mutation is applied, so we get the current state
+		// Read the old status. This runs before the mutation is applied, so
+		// it is the current state.
 		oldAgent, err := m.Client().Agent.Get(ctx, agentID)
 		if err != nil {
 			if ent.IsNotFound(err) {
-				// Agent doesn't exist yet, this might be a create operation
-				// But our condition should prevent this, so log and continue
 				config.Logger.Debug("Agent %s not found during status change hook, skipping event creation", agentID)
 				continue
 			}
@@ -103,9 +139,6 @@ func handleAgentStatusChange(ctx context.Context, m *ent.AgentMutation, config *
 			config.Logger.Debug("Agent %s status unchanged (%s), skipping event creation", agentID, newStatus)
 			continue
 		}
-
-		// Log the status transition
-		config.Logger.Info("Agent %s status changing: %s → %s", agentID, oldStatus, newStatus)
 
 		// Check if this is a graceful shutdown scenario (healthy → unhealthy)
 		// and if an explicit unregister event already exists
@@ -125,39 +158,103 @@ func handleAgentStatusChange(ctx context.Context, m *ent.AgentMutation, config *
 			}
 		}
 
-		// Create the appropriate registry event (skip for API services). This is
-		// only atomic with the status update when the mutation itself runs in a
-		// transaction (m.Client() is then tx-bound). On non-transactional paths
-		// such as the health monitor's conditional update, it is a separate
-		// write made before the update runs.
+		// Skip API services.
 		// Note: a2a-typed agents still generate lifecycle events because they can hold
 		// mesh capabilities alongside their A2A surfaces (see A2A_SURFACE_DESIGN.org —
 		// "agent_type=a2a" is additive over mesh-tool handling).
-		if oldAgent.AgentType.String() != "api" {
-			eventType := getEventTypeForStatusChange(oldStatus, newStatus)
-			eventData := createEventDataForStatusChange(oldStatus, newStatus)
+		if oldAgent.AgentType.String() == "api" {
+			continue
+		}
 
-			_, err = m.Client().RegistryEvent.Create().
-				SetEventType(eventType).
-				SetAgentID(agentID).
-				SetTimestamp(time.Now().UTC()).
-				SetData(eventData).
-				Save(ctx)
+		pending = append(pending, pendingStatusEvent{
+			agentID:   agentID,
+			oldStatus: oldStatus,
+			newStatus: newStatus,
+			eventType: getEventTypeForStatusChange(oldStatus, newStatus),
+		})
+	}
 
-			if err != nil {
-				config.Logger.Error("Failed to create registry event for agent %s status change (%s → %s): %v",
-					agentID, oldStatus, newStatus, err)
-				// Don't fail the mutation if event creation fails
-				// This ensures the status update still happens even if audit fails
-			} else {
-				config.Logger.Info("Created %s event for agent %s status change (%s → %s)",
-					eventType, agentID, oldStatus, newStatus)
-			}
+	return pending, len(agentIDs)
+}
+
+// writeStatusChangeEvents writes the pending events for the agents whose rows
+// the mutation actually changed. value is the mutation's result: the updated
+// entity for UpdateOne, the affected row count for Update. matched is the
+// number of agents the mutation matched before it ran; it, not len(pending),
+// is what the affected count is comparable to, because pending leaves out
+// agents that produce no event (api agents, agents already at the target
+// status, unregister-suppressed agents) while the update still counts them.
+//
+// The event timestamp is taken after the update has been applied. A consumer
+// whose full refresh lands before that point saw the agent's old status and
+// recorded a LastFullRefresh earlier than the event, so HasTopologyChanges
+// (TimestampGT(LastFullRefresh)) still reports the change to it. A heartbeat
+// that reverses the change can only observe the new status after this
+// update, so its own event still sorts later.
+//
+// When the mutation runs in a transaction, m.Client() is tx-bound and the
+// events commit or roll back with the status change. Otherwise each event is
+// its own write, made after the status update has already committed.
+func writeStatusChangeEvents(ctx context.Context, m *ent.AgentMutation, value entgo.Value, pending []pendingStatusEvent, matched int, config *StatusChangeHookConfig) {
+	now := time.Now().UTC()
+
+	applied := pending
+	if m.Op() == ent.OpUpdate {
+		affected, ok := value.(int)
+		if !ok {
+			config.Logger.Warning("Agent status change hook: unexpected bulk update result %T, skipping event creation", value)
+			return
+		}
+		if affected == 0 {
+			// The update's predicates no longer matched (e.g. a conditional
+			// update lost a race). Nothing changed, so nothing to record.
+			config.Logger.Debug("Agent status change hook: update affected 0 rows, skipping event creation")
+			return
+		}
+		if affected != matched {
+			applied = confirmAppliedStatusChanges(ctx, m, pending, config)
 		}
 	}
 
-	// Return nil to continue with the normal mutation
-	return nil, nil
+	for _, ev := range applied {
+		config.Logger.Info("Agent %s status changed: %s → %s", ev.agentID, ev.oldStatus, ev.newStatus)
+
+		_, err := m.Client().RegistryEvent.Create().
+			SetEventType(ev.eventType).
+			SetAgentID(ev.agentID).
+			SetTimestamp(now).
+			SetData(createEventDataForStatusChange(ev.oldStatus, ev.newStatus, now)).
+			Save(ctx)
+		if err != nil {
+			config.Logger.Error("Failed to create registry event for agent %s status change (%s → %s): %v",
+				ev.agentID, ev.oldStatus, ev.newStatus, err)
+			// Don't fail the mutation if event creation fails
+			// This ensures the status update still happens even if audit fails
+		} else {
+			config.Logger.Info("Created %s event for agent %s status change (%s → %s)",
+				ev.eventType, ev.agentID, ev.oldStatus, ev.newStatus)
+		}
+	}
+}
+
+// confirmAppliedStatusChanges handles a bulk update whose affected count
+// differs from the number of agents it matched before running, so the count
+// alone cannot say which rows changed. It keeps the agents whose stored status now equals
+// the new status. Every status update in the registry targets a single agent
+// ID, so this path only serves ad-hoc bulk updates.
+func confirmAppliedStatusChanges(ctx context.Context, m *ent.AgentMutation, pending []pendingStatusEvent, config *StatusChangeHookConfig) []pendingStatusEvent {
+	var applied []pendingStatusEvent
+	for _, ev := range pending {
+		current, err := m.Client().Agent.Get(ctx, ev.agentID)
+		if err != nil {
+			config.Logger.Warning("Failed to re-read agent %s after bulk status update, skipping event creation: %v", ev.agentID, err)
+			continue
+		}
+		if current.Status == ev.newStatus {
+			applied = append(applied, ev)
+		}
+	}
+	return applied
 }
 
 // getEventTypeForStatusChange determines the appropriate event type for a status transition
@@ -188,12 +285,12 @@ func getEventTypeForStatusChange(oldStatus, newStatus agent.Status) registryeven
 }
 
 // createEventDataForStatusChange creates the event data payload for status changes
-func createEventDataForStatusChange(oldStatus, newStatus agent.Status) map[string]interface{} {
+func createEventDataForStatusChange(oldStatus, newStatus agent.Status, detectedAt time.Time) map[string]interface{} {
 	eventData := map[string]interface{}{
 		"reason":           "status_change",
 		"old_status":       oldStatus.String(),
 		"new_status":       newStatus.String(),
-		"detected_at":      time.Now().UTC().Format(time.RFC3339),
+		"detected_at":      detectedAt.Format(time.RFC3339),
 		"source":           "status_change_hook",
 		"transition_type":  fmt.Sprintf("%s_to_%s", oldStatus.String(), newStatus.String()),
 	}

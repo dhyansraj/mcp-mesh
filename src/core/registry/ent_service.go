@@ -2456,6 +2456,11 @@ func (s *EntService) markAgentStaleAttempt(ctx context.Context, staleAgent *ent.
 	// would make every just-marked-stale agent survive the immediate sweep
 	// tick even if it had been silent for hours/days. The status change is
 	// still recorded via the RegistryEvent below, which uses `now`.
+	//
+	// The status change hook is suppressed for this update: the explicit
+	// stale_on_startup event below is the one record of this transition (its
+	// reason drives the meshui "Expired (stale)" label), and the hook would
+	// otherwise add a second, generic unhealthy event.
 	affected, err := tx.Agent.
 		Update().
 		Where(
@@ -2464,7 +2469,7 @@ func (s *EntService) markAgentStaleAttempt(ctx context.Context, staleAgent *ent.
 			agent.StatusEQ(staleAgent.Status),
 		).
 		SetStatus(agent.StatusUnhealthy).
-		Save(ctx)
+		Save(withoutStatusChangeEvents(ctx))
 	if err != nil {
 		return fmt.Errorf("failed to update agent: %w", err)
 	}

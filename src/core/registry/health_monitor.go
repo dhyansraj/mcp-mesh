@@ -161,6 +161,10 @@ func (h *AgentHealthMonitor) checkUnhealthyAgents() {
 // update affects 0 rows and we report the race as lost instead of overwriting
 // the heartbeat and rolling the timestamp back.
 //
+// The unhealthy registry event is written by the status change hook, which
+// records it only when this update actually changes the row (#1641): a lost
+// race leaves no event behind.
+//
 // The original updated_at is deliberately preserved on success: that field is
 // the agent's last-heartbeat timestamp from the sweep job's perspective
 // (purgeStaleAgents filters on UpdatedAtLT(now-retention)); bumping it would
