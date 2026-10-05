@@ -430,6 +430,8 @@ jobs:
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         if: matrix.python-version == '3.11'
+        # A Codecov outage can crash the action despite fail_ci_if_error: false; never let it fail CI.
+        continue-on-error: true
         with:
           file: ./coverage.xml
           flags: ${{ matrix.test-group }}
