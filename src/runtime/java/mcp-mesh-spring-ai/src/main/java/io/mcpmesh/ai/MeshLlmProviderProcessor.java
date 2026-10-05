@@ -68,6 +68,8 @@ import java.util.concurrent.CompletableFuture;
 public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationContextAware {
 
     private static final Logger log = LoggerFactory.getLogger(MeshLlmProviderProcessor.class);
+    private static final java.util.concurrent.atomic.AtomicBoolean BUILD_TOOL_SPEC_WARNED =
+        new java.util.concurrent.atomic.AtomicBoolean(false);
     private static final ObjectMapper objectMapper = MeshObjectMappers.create();
 
     /** Default tool name for LLM provider (matches Python/TypeScript SDKs). */
@@ -950,6 +952,60 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
         }
 
         return result;
+    }
+
+    /**
+     * Build tool specification for MCP registration.
+     *
+     * <p>Unused by the SDK and slated for removal.
+     *
+     * @deprecated Unused; will be removed in a future release.
+     */
+    @Deprecated(forRemoval = true)
+    public Map<String, Object> buildToolSpec(LlmProviderConfig config) {
+        if (BUILD_TOOL_SPEC_WARNED.compareAndSet(false, true)) {
+            log.warn("MeshLlmProviderProcessor.buildToolSpec() is deprecated and will be removed in a future release");
+        }
+        Map<String, Object> spec = new LinkedHashMap<>();
+        spec.put("name", "llm_generate");
+        spec.put("description", "Generate LLM response using " + config.provider() + "/" + config.modelName());
+
+        Map<String, Object> parameters = new LinkedHashMap<>();
+        parameters.put("type", "object");
+
+        Map<String, Object> properties = new LinkedHashMap<>();
+
+        // messages parameter
+        Map<String, Object> messagesSchema = new LinkedHashMap<>();
+        messagesSchema.put("type", "array");
+        messagesSchema.put("description", "Conversation messages");
+        Map<String, Object> messageItem = new LinkedHashMap<>();
+        messageItem.put("type", "object");
+        Map<String, Object> messageProps = new LinkedHashMap<>();
+        messageProps.put("role", Map.of("type", "string", "enum", List.of("system", "user", "assistant", "tool")));
+        messageProps.put("content", Map.of("type", "string"));
+        messageItem.put("properties", messageProps);
+        messagesSchema.put("items", messageItem);
+        properties.put("messages", messagesSchema);
+
+        // tools parameter (optional)
+        Map<String, Object> toolsSchema = new LinkedHashMap<>();
+        toolsSchema.put("type", "array");
+        toolsSchema.put("description", "Available tools (optional)");
+        properties.put("tools", toolsSchema);
+
+        // max_tokens parameter
+        properties.put("max_tokens", Map.of("type", "integer", "default", 4096));
+
+        // temperature parameter
+        properties.put("temperature", Map.of("type", "number", "default", 0.7));
+
+        parameters.put("properties", properties);
+        parameters.put("required", List.of("messages"));
+
+        spec.put("parameters", parameters);
+
+        return spec;
     }
 
     /**

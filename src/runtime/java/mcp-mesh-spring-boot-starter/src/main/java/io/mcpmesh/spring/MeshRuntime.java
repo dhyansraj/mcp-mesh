@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.SmartLifecycle;
 
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -28,6 +29,7 @@ public class MeshRuntime implements SmartLifecycle {
     private final AgentSpec agentSpec;
     private final ObjectMapper objectMapper;
     private final AtomicBoolean running = new AtomicBoolean(false);
+    private static final AtomicBoolean UPDATE_TOOLS_WARNED = new AtomicBoolean(false);
 
     // Volatile + local-snapshot access pattern: stop() nulls this field
     // concurrently with accessors (nextEvent on the event-loop thread, health
@@ -217,5 +219,22 @@ public class MeshRuntime implements SmartLifecycle {
      */
     public AgentSpec getAgentSpec() {
         return agentSpec;
+    }
+
+    /**
+     * Update tool specifications at runtime. This has always been a no-op:
+     * tools are fixed at startup.
+     *
+     * <p>Unused by the SDK and slated for removal.
+     *
+     * @param tools Updated tool specs (ignored)
+     * @deprecated No-op and unused; will be removed in a future release.
+     */
+    @Deprecated(forRemoval = true)
+    public void updateTools(List<AgentSpec.ToolSpec> tools) {
+        if (UPDATE_TOOLS_WARNED.compareAndSet(false, true)) {
+            log.warn("MeshRuntime.updateTools() is deprecated and will be removed in a future release; "
+                + "it is a no-op (tools are fixed at startup)");
+        }
     }
 }
